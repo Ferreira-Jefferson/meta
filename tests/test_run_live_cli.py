@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -59,6 +60,14 @@ def _args(**overrides) -> argparse.Namespace:
     )
     base.update(overrides)
     return argparse.Namespace(**base)
+
+
+def _sacar_args(valor, intent_id=None, data=None, **overrides) -> argparse.Namespace:
+    args = _args(**overrides)
+    args.valor = valor
+    args.intent_id = intent_id
+    args.data = data
+    return args
 
 
 # ---------- dispatch de build() (1.2) ---------------------------------------
@@ -184,6 +193,66 @@ def test_cmd_loop_valueerror_de_conta_broker_divergente_e_fatal(cli, isolated_db
     level, source, message = fake_rt.notifier.calls[0]
     assert level == "error"
     assert "FATAL" in message
+
+
+# ---------- cmd_sacar: confirma recomendacao de saque pendente (passo 13) --
+
+def _create_account_com_recomendacao(cli, isolated_db, amount=500.0):
+    """Cria a conta via CLI e grava uma recomendacao de saque PENDING direto
+    no diario -- mais simples que rodar `close_and_decide` real para exercitar
+    so o dispatch do `cmd_sacar`, sem depender de dado de mercado/politica."""
+    from core.live_models import Intent, IntentKind, RobotRole
+
+    rt = cli.build(_args(mode="manual", capital=1_000.0))
+    rt.ensure_account()
+    with live_store.live_journal(isolated_db) as conn:
+        acc = live_store.load_account(conn, cli.ACCOUNT)
+        intent = Intent(
+            robot="withdrawal:teste", role=RobotRole.WITHDRAWAL, kind=IntentKind.WITHDRAW,
+            decided_on=date(2026, 8, 3), execute_on=date(2026, 8, 4), amount=amount,
+            reason="teste",
+        )
+        live_store.record_intent(conn, acc.id, intent)
+    return intent
+
+
+def test_cmd_sacar_confirma_recomendacao_pendente_debita_caixa(cli, isolated_db, capsys):
+    _create_account_com_recomendacao(cli, isolated_db, amount=500.0)
+    args = _sacar_args(500.0, mode="manual", capital=1_000.0)
+
+    cli.cmd_sacar(args)
+
+    with live_store.live_journal(isolated_db) as conn:
+        acc = live_store.load_account(conn, cli.ACCOUNT)
+    assert acc.cash == pytest.approx(500.0)
+    assert acc.external_cash == pytest.approx(500.0)
+    captured = capsys.readouterr()
+    assert "withdraw_confirm" in captured.out
+
+
+def test_cmd_sacar_sem_recomendacao_pendente_sai_com_erro(cli, isolated_db):
+    rt = cli.build(_args(mode="manual", capital=1_000.0))
+    rt.ensure_account()
+    args = _sacar_args(500.0, mode="manual", capital=1_000.0)
+
+    with pytest.raises(SystemExit):
+        cli.cmd_sacar(args)
+
+    with live_store.live_journal(isolated_db) as conn:
+        acc = live_store.load_account(conn, cli.ACCOUNT)
+    assert acc.cash == pytest.approx(1_000.0)
+
+
+def test_cmd_sacar_com_intent_id_errado_sai_com_erro_sem_mexer_no_caixa(cli, isolated_db):
+    _create_account_com_recomendacao(cli, isolated_db, amount=500.0)
+    args = _sacar_args(500.0, intent_id=999_999, mode="manual", capital=1_000.0)
+
+    with pytest.raises(SystemExit):
+        cli.cmd_sacar(args)
+
+    with live_store.live_journal(isolated_db) as conn:
+        acc = live_store.load_account(conn, cli.ACCOUNT)
+    assert acc.cash == pytest.approx(1_000.0)
 
 
 def test_cmd_loop_outros_erros_continuam_com_retry(cli, isolated_db, monkeypatch):
