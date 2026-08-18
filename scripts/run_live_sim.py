@@ -115,6 +115,15 @@ def main() -> None:
     if SIM_DB.exists() and not args.keep:
         print(f"[sim] apagando banco de simulacao anterior ({SIM_DB})")
         SIM_DB.unlink()
+        # WAL/SHM sidecars (journal.live_store liga journal_mode=WAL): apagar
+        # so o arquivo principal e deixar esses dois para tras pode fazer o
+        # SQLite recriar dado a partir de um WAL orfao na proxima conexao.
+        # Nao e erro nenhum dos dois nao existir (rodada anterior pode ja ter
+        # feito checkpoint e fechado limpo).
+        for suffix in ("-wal", "-shm"):
+            sidecar = SIM_DB.with_name(SIM_DB.name + suffix)
+            if sidecar.exists():
+                sidecar.unlink()
 
     print(f"[sim] janela {start_ts.date()} -> {end_ts.date()} | capital R$ {args.capital:,.2f}"
           .replace(",", "."))
