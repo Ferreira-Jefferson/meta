@@ -365,26 +365,44 @@ def test_intencao_atrasada_expira_em_vez_de_executar(tmp_path, universe):
 
 # ---------- saque: emissao, execucao, persistencia entre restarts ---------
 
-def test_withdrawal_flui_e_estado_sobrevive_a_restart(tmp_path, universe):
-    """A politica de saque decide, o runtime executa, e o estado dela
-    (`_pool`, `_paid_month`, etc.) sobrevive a uma instancia NOVA de
-    `LiveRuntime` apontando para o mesmo banco — simula um restart do processo."""
-    data_dir, days = universe
-    d0, d1 = days[0], days[1]
-    # piso baixo: qualquer capital > 100 ja saca 50% no fecho de d0.
+def test_withdrawal_flui_e_estado_sobrevive_a_restart(tmp_path):
+    """A politica de saque decide (recomendacao), a confirmacao humana move
+    o dinheiro, e o estado da politica (`_pool`, `_paid_month`, etc.)
+    sobrevive a uma instancia NOVA de `LiveRuntime` apontando para o mesmo
+    banco — simula um restart do processo.
+
+    Datas FIXADAS pelo proprio teste (defeito apontado no Lote 5 do plano
+    original): em vez de confiar que `days[2]` do calendario sintetico caia
+    no mesmo mes civil de `days[0]`/`days[1]` (as vezes nao caia, e a
+    asserção da garantia real ficava condicional/pulada), filtra os pregoes
+    reais para um bloco garantidamente dentro do MESMO mes civil."""
+    dias_candidatos = clock.sessions_between(date(2030, 1, 1), date(2030, 6, 1))
+    mesmo_mes = [d for d in dias_candidatos
+                 if (d.year, d.month) == (dias_candidatos[0].year, dias_candidatos[0].month)]
+    assert len(mesmo_mes) >= 3  # premissa do teste: mes com pregoes suficientes
+    d0, d1, d2 = mesmo_mes[0], mesmo_mes[1], mesmo_mes[2]
+
+    data_dir = tmp_path / "dados"
+    data_dir.mkdir()
+    _write_parquet(data_dir, TICKER, dias_candidatos[:20], [100.0] * 20)
+    _write_parquet(data_dir, BENCHMARK, dias_candidatos[:20], [50_000.0] * 20)
+
+    # piso baixo: qualquer capital > 100 ja recomenda sacar 50% no fecho de d0.
     policy = FloorSkim(pct=0.5, floor=100.0, day=1, min_amount=0.0)
-    script: dict = {}  # nenhuma acao do robo de investimento — so testa saque
-    rt = _runtime(tmp_path, data_dir, script, policy=policy, capital=10_000.0)
+    rt = _runtime(tmp_path, data_dir, {}, policy=policy, capital=10_000.0)
     rt.ensure_account()
 
     rt.close_and_decide(d0)
     with store.live_journal(rt.db_path) as conn:
         acc = store.load_account(conn, "teste")
-        pend = store.pending_intents(conn, acc.id, d1)
+        pend = store.pending_withdraw_intents(conn, acc.id)
     assert len(pend) == 1
-    assert pend[0].amount == pytest.approx(5_000.0)  # 50% de 10.000
+    intent = pend[0]
+    assert intent.amount == pytest.approx(5_000.0)  # 50% de 10.000
 
-    rt.execute_session(d1)
+    # confirmacao humana move o dinheiro -- nunca execute_session/_withdraw.
+    report = rt.confirm_withdrawal(5_000.0, session=d1, intent_id=intent.id)
+    assert report.action == "withdraw_confirm"
     with store.live_journal(rt.db_path) as conn:
         acc = store.load_account(conn, "teste")
         saques = store.withdrawals(conn, acc.id)
@@ -395,21 +413,18 @@ def test_withdrawal_flui_e_estado_sobrevive_a_restart(tmp_path, universe):
 
     # "restart": nova instancia de LiveRuntime, nova FloorSkim (estado zerado
     # em memoria), mesmo banco. Sem reidratar, a politica achara que "hoje" e
-    # o primeiro pregao que ela ve e tentara sacar nao respeitando o mes ja
-    # pago em d0 (mesma tupla ano/mes).
+    # o primeiro pregao que ela ve e recomendaria sacar de novo, nao
+    # respeitando o mes ja pago em d0 (mesma tupla ano/mes).
     policy2 = FloorSkim(pct=0.5, floor=100.0, day=1, min_amount=0.0)
-    rt2 = _runtime(tmp_path, data_dir, script, policy=policy2, capital=10_000.0)
-    d2 = days[2]
+    rt2 = _runtime(tmp_path, data_dir, {}, policy=policy2, capital=10_000.0)
     r = rt2.close_and_decide(d2)
     assert r.action == "decide"
     with store.live_journal(rt2.db_path) as conn:
         acc = store.load_account(conn, "teste")
-        pend2 = store.pending_intents(conn, acc.id, days[3])
-    # so verifica a garantia real quando d2 cai no mesmo mes civil de d0/d1
-    # (nao garantido pelo calendario sintetico de pregoes): o que importa e
-    # a politica restaurada NAO re-pagar o mes ja pago.
-    if d2.year == d0.year and d2.month == d0.month:
-        assert len(pend2) == 0
+        pend2 = store.pending_withdraw_intents(conn, acc.id)
+    # d2 e mesmo mes civil de d0/d1 por construcao (nao condicional): a
+    # politica restaurada NAO re-recomenda o mes ja pago.
+    assert pend2 == []
 
 
 # ---------- reconcile_pending_fills nao pode apagar o estado da politica --
@@ -526,183 +541,6 @@ def test_run_once_reconcilia_sozinho(tmp_path, universe):
     with store.live_journal(rt.db_path) as conn:
         acc = store.load_account(conn, "teste")
     assert TICKER in acc.positions
-
-
-# ---------- saque que precisa liquidar posicao sob corretora manual --------
-
-def test_saque_manual_liquidacao_fica_pendente_e_completa_apos_confirmacao(tmp_path, universe):
-    """Caixa nao cobre o saque, corretora e manual: a liquidacao vira UMA
-    ordem de venda pendente (nao um cancelamento) e o saque so fecha quando
-    o humano confirma o fill, via `reconcile_pending_fills` — o mesmo
-    contrato que ja vale para ENTER/EXIT (`test_manual_broker_fill_so_...`)."""
-    data_dir, days = universe
-    d0, d1 = days[0], days[1]
-    # piso baixo: pede 90% do equity de 10.000 = 9.000, e o caixa tem so 1.000.
-    policy = FloorSkim(pct=0.9, floor=100.0, day=1, min_amount=0.0)
-    rt = _runtime(tmp_path, data_dir, {}, policy=policy, mode="manual", capital=10_000.0)
-    rt.ensure_account()
-
-    with store.live_journal(rt.db_path) as conn:
-        acc = store.load_account(conn, "teste")
-        acc.cash = 1_000.0
-        pos = LivePosition(ticker=TICKER, quantity=90, entry_date=d0, entry_price=100.0,
-                           capital_allocated=9_000.0, current_stop=50.0,
-                           max_price_seen=100.0, min_price_seen=100.0)
-        store.upsert_position(conn, acc.id, pos)
-        store.save_account(conn, acc)
-
-    rt.feed.set(TICKER, 100.0)
-    decide = rt.close_and_decide(d0)
-    assert decide.action == "decide"
-
-    with store.live_journal(rt.db_path) as conn:
-        acc = store.load_account(conn, "teste")
-        pend = store.pending_intents(conn, acc.id, d1)
-    assert len(pend) == 1
-    intent = pend[0]
-    assert intent.amount == pytest.approx(9_000.0)  # 90% de 10.000 de equity
-
-    execu = rt.execute_session(d1)
-    assert execu.detail["saques"] == 0
-    assert execu.detail["rejeitadas"] == 0
-    assert execu.detail["aguardando"] == 1
-
-    with store.live_journal(rt.db_path) as conn:
-        acc = store.load_account(conn, "teste")
-        executando = store.intents_by_status(conn, acc.id, IntentStatus.EXECUTING)
-        abertas = store.open_orders(conn, acc.id)
-    assert TICKER in acc.positions            # nada vendido de fato ainda
-    assert acc.cash == pytest.approx(1_000.0)  # efeito NAO aplicado
-    assert acc.external_cash == pytest.approx(0.0)
-    assert len(executando) == 1
-    assert executando[0].id == intent.id
-    assert executando[0].kind == IntentKind.WITHDRAW
-    assert len(abertas) == 1
-    order = abertas[0]
-    assert order.side == OrderSide.SELL
-    assert order.ticker == TICKER
-    assert order.status == OrderStatus.SENT
-
-    # humano confirma a venda na corretora, fora do processo do supervisor
-    rt.broker.confirm(order, filled_qty=order.quantity, avg_price=100.0, fees=5.0)
-    with store.live_journal(rt.db_path) as conn:
-        store.update_order(conn, order)
-
-    now = datetime.combine(d1, datetime.min.time().replace(hour=20))
-    reconcile = rt.reconcile_pending_fills(now=now)
-    assert reconcile.detail["aplicadas"] == 1
-
-    with store.live_journal(rt.db_path) as conn:
-        acc = store.load_account(conn, "teste")
-        executando_depois = store.intents_by_status(conn, acc.id, IntentStatus.EXECUTING)
-        done = store.intents_by_status(conn, acc.id, IntentStatus.DONE)
-        saques = store.withdrawals(conn, acc.id)
-    assert not executando_depois
-    assert any(i.id == intent.id for i in done)
-    assert acc.external_cash == pytest.approx(9_000.0)
-    assert acc.withdrawn_total == pytest.approx(9_000.0)
-    # cash final: 1.000 (caixa original) + liquido da venda (100*qtd - 5) - 9.000 sacado
-    liquido = 100.0 * order.filled_qty - 5.0
-    assert acc.cash == pytest.approx(1_000.0 + liquido - 9_000.0)
-    assert len(saques) == 1
-    assert saques[0]["liquidated"] == [[TICKER, order.filled_qty, 100.0]]
-    assert rt.withdrawal.policy._requested == 0.0  # on_executed rodou e zerou
-
-
-def test_saque_manual_liquidacao_em_duas_pernas(tmp_path):
-    """Uma posicao so nao cobre o saque: a segunda perna so e enviada DEPOIS
-    que a primeira confirma (opcao (a) do gap — nunca manda duas ordens de
-    uma vez para um humano que ainda nao olhou a primeira)."""
-    days = _sessions(8)
-    _write_parquet(tmp_path, TICKER, days, [100.0] * len(days))
-    _write_parquet(tmp_path, "BBB.SA", days, [50.0] * len(days))
-    _write_parquet(tmp_path, BENCHMARK, days, [50_000.0] * len(days))
-    d0, d1 = days[0], days[1]
-
-    policy = FloorSkim(pct=1.0, floor=0.0, day=1, min_amount=0.0)  # saca tudo
-    feed = ReplayFeed()
-    broker = ManualBroker()
-    rt = LiveRuntime(
-        account_name="teste", strategy=ScriptedStrategy({}), policy=policy,
-        feed=feed, broker=broker, config=BacktestConfig(initial_capital=10_000.0, lot_size=1),
-        tickers=(TICKER, "BBB.SA"), db_path=tmp_path / "live.sqlite", data_dir=tmp_path,
-    )
-    rt.ensure_account()
-
-    with store.live_journal(rt.db_path) as conn:
-        acc = store.load_account(conn, "teste")
-        acc.cash = 0.0
-        pos_a = LivePosition(ticker=TICKER, quantity=60, entry_date=d0, entry_price=100.0,
-                             capital_allocated=6_000.0, current_stop=50.0,
-                             max_price_seen=100.0, min_price_seen=100.0)
-        pos_b = LivePosition(ticker="BBB.SA", quantity=80, entry_date=d0, entry_price=50.0,
-                             capital_allocated=4_000.0, current_stop=25.0,
-                             max_price_seen=50.0, min_price_seen=50.0)
-        store.upsert_position(conn, acc.id, pos_a)
-        store.upsert_position(conn, acc.id, pos_b)
-        store.save_account(conn, acc)
-
-    rt.feed.set(TICKER, 100.0)
-    rt.feed.set("BBB.SA", 50.0)
-    decide = rt.close_and_decide(d0)
-    assert decide.action == "decide"
-    with store.live_journal(rt.db_path) as conn:
-        acc = store.load_account(conn, "teste")
-        pend = store.pending_intents(conn, acc.id, d1)
-    assert len(pend) == 1
-    intent = pend[0]
-    assert intent.amount == pytest.approx(10_000.0)  # 100% do equity (0 + 6.000 + 4.000)
-
-    execu = rt.execute_session(d1)
-    assert execu.detail["aguardando"] == 1
-
-    with store.live_journal(rt.db_path) as conn:
-        acc = store.load_account(conn, "teste")
-        abertas = store.open_orders(conn, acc.id)
-    assert len(abertas) == 1  # so UMA ordem enviada, nunca as duas de saida
-    first = abertas[0]
-    assert first.ticker == TICKER  # maior posicao (6.000 > 4.000) primeiro
-    assert first.quantity == 60    # 6.000 sozinho nao cobre 10.000: vende tudo
-
-    rt.broker.confirm(first, filled_qty=first.quantity, avg_price=100.0, fees=0.0)
-    with store.live_journal(rt.db_path) as conn:
-        store.update_order(conn, first)
-
-    now = datetime.combine(d1, datetime.min.time().replace(hour=20))
-    reconcile1 = rt.reconcile_pending_fills(now=now)
-    assert reconcile1.detail["aplicadas"] == 0  # 1a perna resolvida, saque ainda no ar
-
-    with store.live_journal(rt.db_path) as conn:
-        acc = store.load_account(conn, "teste")
-        executando = store.intents_by_status(conn, acc.id, IntentStatus.EXECUTING)
-        abertas2 = store.open_orders(conn, acc.id)
-    assert TICKER not in acc.positions        # AAA liquidada por completo
-    assert acc.cash == pytest.approx(6_000.0)  # creditado, mas saque nao fechou
-    assert acc.external_cash == pytest.approx(0.0)
-    assert len(executando) == 1 and executando[0].id == intent.id
-    assert len(abertas2) == 1  # a 2a perna so foi enviada AGORA, apos a 1a confirmar
-    second = abertas2[0]
-    assert second.ticker == "BBB.SA"
-    assert second.quantity == 80  # 4.000 restantes nao cobrem os 4.000 que faltam sem custo zero
-
-    rt.broker.confirm(second, filled_qty=second.quantity, avg_price=50.0, fees=0.0)
-    with store.live_journal(rt.db_path) as conn:
-        store.update_order(conn, second)
-
-    reconcile2 = rt.reconcile_pending_fills(now=now)
-    assert reconcile2.detail["aplicadas"] == 1
-
-    with store.live_journal(rt.db_path) as conn:
-        acc = store.load_account(conn, "teste")
-        executando_depois = store.intents_by_status(conn, acc.id, IntentStatus.EXECUTING)
-        saques = store.withdrawals(conn, acc.id)
-    assert not executando_depois
-    assert "BBB.SA" not in acc.positions
-    assert acc.cash == pytest.approx(0.0)
-    assert acc.external_cash == pytest.approx(10_000.0)
-    assert acc.withdrawn_total == pytest.approx(10_000.0)
-    assert len(saques) == 1
-    assert saques[0]["liquidated"] == [[TICKER, 60, 100.0], ["BBB.SA", 80, 50.0]]
 
 
 def test_saque_recomendado_nao_move_caixa_nem_gera_ordem(tmp_path, universe):
@@ -919,46 +757,6 @@ def test_confirm_withdrawal_acima_do_caixa_debita_mesmo_assim_e_avisa(tmp_path, 
         eventos = store.recent_events(conn, acc.id)
     assert acc.cash < 0
     assert any(e["level"] == "warn" and "negativ" in e["message"] for e in eventos)
-
-
-def test_saque_automatico_com_liquidacao_permanece_sincrono(tmp_path, universe):
-    """Regressao: sob corretora automatica (paper/MT5) a liquidacao continua
-    acontecendo TODA dentro do mesmo `execute_session` — sem passar por
-    `EXECUTING`/`reconcile_pending_fills` — exatamente como antes desta
-    mudanca (que so afeta o caminho MANUAL)."""
-    data_dir, days = universe
-    d0, d1 = days[0], days[1]
-    policy = FloorSkim(pct=0.9, floor=100.0, day=1, min_amount=0.0)
-    rt = _runtime(tmp_path, data_dir, {}, policy=policy, mode="mt5", capital=10_000.0)
-    rt.ensure_account()
-
-    with store.live_journal(rt.db_path) as conn:
-        acc = store.load_account(conn, "teste")
-        acc.cash = 1_000.0
-        pos = LivePosition(ticker=TICKER, quantity=90, entry_date=d0, entry_price=100.0,
-                           capital_allocated=9_000.0, current_stop=50.0,
-                           max_price_seen=100.0, min_price_seen=100.0)
-        store.upsert_position(conn, acc.id, pos)
-        store.save_account(conn, acc)
-
-    rt.feed.set(TICKER, 100.0)
-    rt.close_and_decide(d0)
-    execu = rt.execute_session(d1)
-    assert execu.detail["saques"] == 1
-    assert execu.detail["aguardando"] == 0
-
-    with store.live_journal(rt.db_path) as conn:
-        acc = store.load_account(conn, "teste")
-        executando = store.intents_by_status(conn, acc.id, IntentStatus.EXECUTING)
-        saques = store.withdrawals(conn, acc.id)
-    assert not executando  # resolvido na hora, nunca fica pendente
-    assert TICKER in acc.positions       # so vendeu o suficiente, nao tudo
-    assert acc.positions[TICKER].quantity < 90
-    assert acc.external_cash == pytest.approx(9_000.0)
-    assert acc.withdrawn_total == pytest.approx(9_000.0)
-    assert len(saques) == 1
-    assert len(saques[0]["liquidated"]) == 1
-    assert saques[0]["liquidated"][0][0] == TICKER
 
 
 # ---------- regressao: fim-de-mes tem que disparar no ULTIMO dia truncado -
