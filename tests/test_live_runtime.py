@@ -97,6 +97,31 @@ def _runtime(tmp_path, days_dir, script, policy=None, db_name="live.sqlite",
     )
 
 
+# ---------- separação física do banco ao vivo (FEAT-000) -------------------
+
+def test_db_path_default_e_live_db_path():
+    """P3 — sem isso, `runtime.py` continuaria importando `DB_PATH` de
+    backtest e toda a operação real seguiria gravando no banco compartilhado."""
+    from core.config import LIVE_DB_PATH
+    from live import runtime as live_runtime
+
+    feed = ReplayFeed()
+    broker = PaperBroker(feed)
+    rt = LiveRuntime(
+        account_name="teste_db_path_default",
+        strategy=ScriptedStrategy({}),
+        policy=FloorSkim(pct=0.5, floor=1e12),
+        feed=feed, broker=broker,
+        config=BacktestConfig(initial_capital=1_000.0, lot_size=1),
+        tickers=(TICKER,), db_path=None,
+    )
+    assert rt.db_path == LIVE_DB_PATH
+    # o nome do módulo permanece `DB_PATH` só por compatibilidade com o
+    # monkeypatch de tests/test_dashboard_app.py (premissa 4) — mas aponta
+    # para o mesmo objeto que core.config.LIVE_DB_PATH.
+    assert live_runtime.DB_PATH is LIVE_DB_PATH
+
+
 # ---------- ciclo completo: decide -> executa -> stop intra-dia ------------
 
 def test_enter_execute_and_intraday_stop(tmp_path, universe):
