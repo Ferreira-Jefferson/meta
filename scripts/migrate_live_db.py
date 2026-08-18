@@ -38,17 +38,26 @@ vazias via `CREATE TABLE IF NOT EXISTS` não grava nenhuma linha nem toca
 destino elegível para uma nova tentativa de migração normal (schema presente,
 sem dado, sem marcador).
 
-Relatório de divergência (correção pós-code-review, hipótese-agente F1/A5/A6)
+Relatório de divergência (correção pós-code-review, hipótese-agente F1/A5/A6;
+CORRIGIDO numa 2ª rodada de code-review — ver abaixo)
 -----------------------------------------------------------------------------
-Depois de copiar cada tabela, o número de linhas na ORIGEM (lido antes da
-cópia, via conexão somente-leitura) é comparado com o número de linhas no
-DESTINO logo após a cópia. Se o destino ficou com MENOS linhas do que a
-origem tinha — sinal de que `INSERT OR IGNORE` descartou alguma linha por
-violar CHECK/UNIQUE/NOT NULL —, o script imprime um `AVISO` por tabela
-afetada e o processo termina com código de saída 1 (o que já foi copiado
-com sucesso permanece commitado — isto NÃO é um rollback, é um relatório
-loud: silêncio sobre dinheiro perdido/duplicado é exatamente o que esta run
-existe para evitar).
+A primeira versão desta checagem comparava `COUNT(*)` TOTAL da origem com o
+`COUNT(*)` do destino pós-cópia. Isso NÃO pega o caso que mais importa: se o
+destino já tinha uma linha com o MESMO `id` de uma linha da origem (ex.:
+conta `principal` id=1 criada pelo robô real, e a origem também tem uma
+conta id=1, com dinheiro de verdade), `INSERT OR IGNORE` descarta a linha da
+ORIGEM e preserva a do DESTINO — a CONTAGEM total bate (nenhuma linha "some"
+em número), o aviso não disparava, e a conta real era perdida em silêncio.
+Por isso a checagem agora é linha a linha: depois do commit, para cada
+tabela, compara-se `SELECT * FROM src_ro.<tabela> EXCEPT SELECT * FROM
+<tabela>` — linhas da origem que não têm um equivalente EXATO (mesmos
+valores em TODAS as colunas) no destino. Um resultado != 0 significa "linha
+da origem não aterrissou intacta", e pega tanto o descarte por
+CHECK/UNIQUE/NOT NULL quanto a colisão de id com conteúdo divergente. Nesse
+caso o script imprime um `AVISO` por tabela afetada e o processo termina com
+código de saída 1 (o que já foi copiado com sucesso permanece commitado —
+isto NÃO é um rollback, é um relatório loud: silêncio sobre dinheiro
+perdido/duplicado é exatamente o que esta run existe para evitar).
 
 Arquivo de origem ausente vs. origem sem tabelas `live_*` (hipótese-agente A7)
 -----------------------------------------------------------------------------
@@ -126,20 +135,22 @@ class MigrationRefused(RuntimeError):
 
 
 class MigrationIncomplete(RuntimeError):
-    """Levantada DEPOIS do commit quando alguma tabela terminou com menos
-    linhas no destino do que existiam na origem (perda silenciosa via
-    `INSERT OR IGNORE`). `.result` guarda o que foi de fato commitado;
-    `.mismatches` guarda `(tabela, linhas_na_origem, linhas_no_destino)` por
-    tabela afetada. Não é rollback — o dado copiado com sucesso permanece."""
+    """Levantada DEPOIS do commit quando alguma tabela terminou com linha(s)
+    da origem sem equivalente EXATO no destino (perda silenciosa via
+    `INSERT OR IGNORE` — seja por violação de CHECK/UNIQUE/NOT NULL, seja
+    por colisão de `id` com conteúdo divergente). `.result` guarda o que foi
+    de fato commitado; `.mismatches` guarda `(tabela,
+    linhas_da_origem_sem_par_exato)` por tabela afetada. Não é rollback — o
+    dado copiado com sucesso permanece."""
 
-    def __init__(self, result: dict[str, int], mismatches: list[tuple[str, int, int]]) -> None:
+    def __init__(self, result: dict[str, int], mismatches: list[tuple[str, int]]) -> None:
         self.result = result
         self.mismatches = mismatches
         resumo = "; ".join(
-            f"{table} (origem={source_count}, destino={dest_count})"
-            for table, source_count, dest_count in mismatches
+            f"{table} ({not_landed} linha(s) sem par exato no destino)"
+            for table, not_landed in mismatches
         )
-        super().__init__(f"migração incompleta — divergência de contagem em: {resumo}")
+        super().__init__(f"migração incompleta — divergência em: {resumo}")
 
 
 def migrate(source: Path = DB_PATH, dest: Path = LIVE_DB_PATH, force: bool = False) -> dict[str, int]:
@@ -149,18 +160,23 @@ def migrate(source: Path = DB_PATH, dest: Path = LIVE_DB_PATH, force: bool = Fal
     as tabelas `live_*` que de fato existem em `source` (banco existente sem
     nenhuma tabela `live_*` devolve `{}` sem levantar exceção).
 
-    Levanta `FileNotFoundError` se `source` não existir no disco (ver
-    docstring do módulo — A7). Levanta `MigrationRefused` se `dest` tiver
-    `user_version == 0` e já contiver linhas em `live_accounts` e `force`
-    for `False`. Levanta `MigrationIncomplete` (depois de já ter commitado o
-    que copiou) se alguma tabela ficou com menos linhas no destino do que na
-    origem.
+    Levanta `FileNotFoundError` se `source` não existir no disco, ou
+    `IsADirectoryError` se `source` existir mas não for um arquivo (ex.:
+    `--source db/` por engano, sem o nome do arquivo — sem esta checagem
+    cai num erro cru do sqlite em vez de mensagem amigável). Levanta
+    `MigrationRefused` se `dest` tiver `user_version == 0` e já contiver
+    linhas em `live_accounts` e `force` for `False`. Levanta
+    `MigrationIncomplete` (depois de já ter commitado o que copiou) se
+    alguma tabela ficou com linha(s) da origem sem equivalente exato no
+    destino.
     """
     source = Path(source)
     dest = Path(dest)
 
     if not source.exists():
         raise FileNotFoundError(f"origem não existe: {source}")
+    if not source.is_file():
+        raise IsADirectoryError(f"origem não é um arquivo: {source}")
 
     dest.parent.mkdir(parents=True, exist_ok=True)
 
@@ -186,8 +202,13 @@ def migrate(source: Path = DB_PATH, dest: Path = LIVE_DB_PATH, force: bool = Fal
                     f"destino '{dest}' já contém {existing_accounts} conta(s) em "
                     "live_accounts sem marcador de migração (PRAGMA user_version = 0) "
                     "— provavelmente o robô real (ou outro processo) já escreveu neste "
-                    "banco por fora desta migração. Rode com --force só se tiver "
-                    "certeza de que é seguro sobrescrever."
+                    "banco por fora desta migração. --force NÃO sobrescreve: em caso "
+                    "de conflito de id (mesmo id na origem e no destino), a linha do "
+                    "DESTINO é mantida e a linha da ORIGEM é DESCARTADA (INSERT OR "
+                    "IGNORE nunca sobrescreve) — ou seja, dado real pode ser PERDIDO, "
+                    "não sobrescrito. Use --force só se tiver certeza de que essa "
+                    "perda é aceitável (o relatório de divergência avisa o que foi "
+                    "descartado)."
                 )
 
         source_uri = f"file:{source.resolve().as_posix()}?mode=ro"
@@ -206,21 +227,15 @@ def migrate(source: Path = DB_PATH, dest: Path = LIVE_DB_PATH, force: bool = Fal
                 return {}
 
             result: dict[str, int] = {}
-            mismatches: list[tuple[str, int, int]] = []
             dest_conn.execute("BEGIN")
             try:
                 for table in existing:
-                    source_count = dest_conn.execute(
-                        f"SELECT COUNT(*) FROM src_ro.{table}"
-                    ).fetchone()[0]
                     before = dest_conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
                     dest_conn.execute(
                         f"INSERT OR IGNORE INTO {table} SELECT * FROM src_ro.{table}"
                     )
                     after = dest_conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
                     result[table] = after - before
-                    if after < source_count:
-                        mismatches.append((table, source_count, after))
 
                 if user_version == 0:
                     dest_conn.execute("PRAGMA user_version = 1")
@@ -229,13 +244,31 @@ def migrate(source: Path = DB_PATH, dest: Path = LIVE_DB_PATH, force: bool = Fal
                 dest_conn.execute("ROLLBACK")
                 raise
 
+            # Checagem de divergência linha a linha (correção pós-code-review,
+            # rodada 2 — ver docstring do módulo): comparar só o COUNT(*)
+            # total não pega colisão de `id` com conteúdo divergente (a
+            # contagem bate porque `INSERT OR IGNORE` preserva a linha do
+            # destino no lugar da da origem). Aqui comparamos, por tabela,
+            # linha a linha em TODAS as colunas: uma linha da origem sem
+            # equivalente exato no destino foi descartada — por
+            # CHECK/UNIQUE/NOT NULL ou por colisão de id.
+            mismatches: list[tuple[str, int]] = []
+            for table in existing:
+                not_landed = dest_conn.execute(
+                    f"SELECT COUNT(*) FROM "
+                    f"(SELECT * FROM src_ro.{table} EXCEPT SELECT * FROM {table})"
+                ).fetchone()[0]
+                if not_landed:
+                    mismatches.append((table, not_landed))
+
             if mismatches:
-                for table, source_count, dest_count in mismatches:
-                    missing = source_count - dest_count
+                for table, not_landed in mismatches:
                     print(
-                        f"AVISO: {table} tem {source_count} linhas na origem mas só "
-                        f"{dest_count} no destino — {missing} linha(s) não copiada(s), "
-                        "possivelmente por violação de CHECK/UNIQUE/NOT NULL"
+                        f"AVISO: {table} tem {not_landed} linha(s) da origem sem "
+                        "equivalente exato no destino — descartada(s) por violação "
+                        "de CHECK/UNIQUE/NOT NULL, ou por colisão de id com "
+                        "conteúdo divergente (INSERT OR IGNORE preserva a linha do "
+                        "destino e descarta a da origem)"
                     )
                 raise MigrationIncomplete(result, mismatches)
 
@@ -255,13 +288,16 @@ def main() -> None:
     parser.add_argument(
         "--force", action="store_true",
         help="ignora a recusa de destino já povoado sem marcador de migração "
-             "(user_version == 0 com live_accounts não vazia) — use só se "
-             "tiver certeza de que é seguro sobrescrever",
+             "(user_version == 0 com live_accounts não vazia) — NÃO sobrescreve: "
+             "em caso de conflito de id, a linha do DESTINO é mantida e a linha "
+             "da ORIGEM é descartada (INSERT OR IGNORE nunca sobrescreve), ou "
+             "seja, dado real pode ser PERDIDO. Use só se tiver certeza de que "
+             "essa perda é aceitável",
     )
     args = parser.parse_args()
     try:
         result = migrate(source=args.source, dest=args.dest, force=args.force)
-    except FileNotFoundError as exc:
+    except (FileNotFoundError, IsADirectoryError) as exc:
         print(f"[migrate] ERRO: {exc}", file=sys.stderr)
         sys.exit(1)
     except MigrationRefused as exc:

@@ -265,7 +265,9 @@ def test_migrate_destino_ja_migrado_nao_exige_force(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# relatório de divergência de contagem (correção pós-code-review, F1/A5/A6)
+# relatório de divergência (correção pós-code-review, F1/A5/A6; checagem
+# trocada de COUNT(*) total para EXCEPT linha a linha numa 2ª rodada de
+# code-review -- ver docstring de scripts/migrate_live_db.py)
 # ---------------------------------------------------------------------------
 
 def test_migrate_reporta_divergencia_e_levanta_incompleto(tmp_path, capsys):
@@ -307,7 +309,9 @@ def test_migrate_reporta_divergencia_e_levanta_incompleto(tmp_path, capsys):
         migrate(source=source, dest=dest)
 
     assert exc_info.value.result["live_accounts"] == 1  # só a linha válida entrou
-    assert exc_info.value.mismatches == [("live_accounts", 2, 1)]
+    # 1 linha da origem (id=2, mode inválido) sem equivalente exato no
+    # destino -- a linha id=1 (válida) foi copiada intacta e não conta.
+    assert exc_info.value.mismatches == [("live_accounts", 1)]
 
     captured = capsys.readouterr()
     assert "AVISO" in captured.out
@@ -318,6 +322,70 @@ def test_migrate_reporta_divergencia_e_levanta_incompleto(tmp_path, capsys):
     try:
         rows = conn.execute("SELECT name FROM live_accounts").fetchall()
         assert [r[0] for r in rows] == ["principal"]
+    finally:
+        conn.close()
+
+
+def test_migrate_force_detecta_colisao_de_id_com_conteudo_divergente(tmp_path, capsys):
+    """Caso realista apontado pelo code-reviewer: destino já tem uma conta
+    `live_accounts` id=1 criada pelo ROBÔ REAL (cash=1.000,00) e a ORIGEM
+    também tem uma linha id=1, mas com dinheiro de verdade (cash=47.321,55) e
+    um intent pendurado nesse id. `INSERT OR IGNORE` descarta a linha da
+    ORIGEM e preserva a do DESTINO -- a CONTAGEM TOTAL de linhas bate
+    (nenhuma linha "some" em número), então a checagem antiga (COUNT(*)
+    origem vs. destino) NÃO detectava nada e a conta real era perdida em
+    silêncio. Aqui confirmamos que a checagem por EXCEPT (linha a linha, em
+    todas as colunas) detecta a divergência e a reporta, mesmo com
+    --force."""
+    source = tmp_path / "journal.sqlite"
+    dest = tmp_path / "live.sqlite"
+
+    # destino: conta "principal" já criada pelo robô real, ANTES desta
+    # migração rodar (user_version continua 0 -- nunca passou por este
+    # script).
+    with store.live_journal(dest) as conn:
+        robot_account = store.ensure_account(
+            conn, name="principal", mode="paper", initial_capital=1_000.0,
+            investment_robot="dip2_hw40", withdrawal_robot="official_policy",
+        )
+        assert robot_account.id == 1
+
+    # origem: MESMO id=1 (mesmo nome), mas dinheiro de verdade e um intent
+    # pendurado nesse id.
+    with store.live_journal(source) as conn:
+        real_account = store.ensure_account(
+            conn, name="principal", mode="paper", initial_capital=47_321.55,
+            investment_robot="dip2_hw40", withdrawal_robot="official_policy",
+        )
+        assert real_account.id == 1
+        intent = Intent(
+            robot="dip2_hw40", role=RobotRole.INVESTMENT, kind=IntentKind.ENTER,
+            decided_on=date(2026, 8, 10), execute_on=date(2026, 8, 11),
+            ticker="WEGE3.SA", reason="dip_confirmed", size_hint=0.2,
+        )
+        store.record_intent(conn, real_account.id, intent)
+
+    with pytest.raises(MigrationIncomplete) as exc_info:
+        migrate(source=source, dest=dest, force=True)
+
+    assert ("live_accounts", 1) in exc_info.value.mismatches
+
+    captured = capsys.readouterr()
+    assert "AVISO" in captured.out
+    assert "live_accounts" in captured.out
+
+    # a conta do destino (criada pelo robô real) continua com o cash
+    # ORIGINAL -- nunca foi sobrescrita (INSERT OR IGNORE não sobrescreve).
+    # A divergência foi DETECTADA e reportada, em vez de sair em silêncio.
+    conn = sqlite3.connect(dest)
+    try:
+        cash = conn.execute("SELECT cash FROM live_accounts WHERE id = 1").fetchone()[0]
+        assert cash == 1_000.0
+        # o intent da origem, pendurado no id=1, não colide por PK própria
+        # -- entrou normalmente. Confirma que só a tabela com colisão real
+        # de conteúdo (live_accounts) aparece nas divergências.
+        count_intents = conn.execute("SELECT COUNT(*) FROM live_intents").fetchone()[0]
+        assert count_intents == 1
     finally:
         conn.close()
 
