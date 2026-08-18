@@ -19,12 +19,12 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
-from datetime import date
 from pathlib import Path
 
 import pytest
 
 from journal import live_store
+from live import clock
 from live import runtime as live_runtime
 
 _RUN_LIVE_PATH = Path(__file__).resolve().parents[1] / "scripts" / "run_live.py"
@@ -200,16 +200,23 @@ def test_cmd_loop_valueerror_de_conta_broker_divergente_e_fatal(cli, isolated_db
 def _create_account_com_recomendacao(cli, isolated_db, amount=500.0):
     """Cria a conta via CLI e grava uma recomendacao de saque PENDING direto
     no diario -- mais simples que rodar `close_and_decide` real para exercitar
-    so o dispatch do `cmd_sacar`, sem depender de dado de mercado/politica."""
+    so o dispatch do `cmd_sacar`, sem depender de dado de mercado/politica.
+
+    `decided_on` e derivado do mes CIVIL da sessao corrente (`clock.
+    session_date()`, o mesmo relogio que `cmd_sacar` usa quando `--data` nao
+    e passado) -- nunca um mes fixo hardcodado a mao: uma `decided_on` de mes
+    civil distante e fixo viraria recomendacao ja EXPIRADA assim que o mes
+    civil real virasse, quebrando o teste sem nenhuma mudanca de codigo."""
     from core.live_models import Intent, IntentKind, RobotRole
 
     rt = cli.build(_args(mode="manual", capital=1_000.0))
     rt.ensure_account()
+    mes_corrente = clock.session_date().replace(day=1)
     with live_store.live_journal(isolated_db) as conn:
         acc = live_store.load_account(conn, cli.ACCOUNT)
         intent = Intent(
             robot="withdrawal:teste", role=RobotRole.WITHDRAWAL, kind=IntentKind.WITHDRAW,
-            decided_on=date(2026, 8, 3), execute_on=date(2026, 8, 4), amount=amount,
+            decided_on=mes_corrente, execute_on=clock.next_session(mes_corrente), amount=amount,
             reason="teste",
         )
         live_store.record_intent(conn, acc.id, intent)
