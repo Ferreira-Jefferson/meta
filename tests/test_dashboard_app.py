@@ -67,6 +67,37 @@ def _create_account(db_path) -> int:
         return acc.id
 
 
+def _create_mt5_account(db_path, capital: float = 50_000.0) -> int:
+    with live_store.live_journal(db_path) as conn:
+        acc = live_store.ensure_account(
+            conn, name=live_service.ACCOUNT_NAME, mode="mt5",
+            initial_capital=capital, investment_robot="dip2_hw40",
+            withdrawal_robot="official_policy",
+        )
+        return acc.id
+
+
+# Schema MINIMO no vocabulario ANTIGO (so o suficiente para
+# `_legacy_check_present` detectar via a substring `'broker'` no DDL) --
+# usado so para simular uma conta legada `mode='paper'` bloqueando o rebuild.
+_LEGACY_DDL_MIN = """
+CREATE TABLE live_accounts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    mode TEXT NOT NULL CHECK (mode IN ('paper','manual','broker')),
+    initial_capital REAL NOT NULL,
+    cash REAL NOT NULL,
+    investment_robot TEXT NOT NULL DEFAULT '',
+    withdrawal_robot TEXT NOT NULL DEFAULT '',
+    withdrawn_total REAL NOT NULL DEFAULT 0,
+    external_cash REAL NOT NULL DEFAULT 0,
+    policy_state TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+"""
+
+
 def test_operacao_aportar_credita_caixa_e_grava_deposito(isolated_journal, client):
     db_path = isolated_journal
     account_id = _create_account(db_path)
@@ -182,3 +213,109 @@ def test_operacao_aportar_sem_conta_devolve_erro_sem_criar_deposito(isolated_jou
     with live_store.live_journal(isolated_journal) as conn:
         rows = conn.execute("SELECT * FROM live_deposits").fetchall()
     assert rows == []
+
+
+# ---------- botão "Iniciar" morto numa conta mt5 existente (bloqueante nº1) --
+
+def test_operacao_iniciar_retoma_conta_mt5_existente_com_shares_per_lot_do_form(
+    isolated_journal, client, monkeypatch,
+):
+    """Correção pós-code-review (bloqueante nº1 do code-reviewer): o form de
+    RETOMADA agora manda `mt5_shares_per_lot` visível (ver
+    operacao_body.html) -- POST /operacao/iniciar sobre uma conta mt5 JÁ
+    EXISTENTE (robô parado) chega em `live_control.start` com o valor certo
+    vindo do FORM, sem depender de nenhum fallback."""
+    db_path = isolated_journal
+    _create_mt5_account(db_path)
+
+    captured: list = []
+    monkeypatch.setattr(live_control, "start", lambda cfg: captured.append(cfg))
+
+    resp = client.post("/operacao/iniciar", data={"mt5_shares_per_lot": "3.5"})
+
+    assert resp.status_code == 200
+    assert len(captured) == 1
+    assert captured[0].mode == "mt5"
+    assert captured[0].mt5_shares_per_lot == pytest.approx(3.5)
+
+
+def test_operacao_iniciar_retoma_conta_mt5_existente_com_shares_per_lot_via_last_config(
+    isolated_journal, client, monkeypatch, tmp_path,
+):
+    """Fallback do bloqueante nº1: se o form não trouxer `mt5_shares_per_lot`
+    (ou vier vazio), `operacao_iniciar` tenta `live_control.last_config()`
+    antes de declarar erro -- só recusa se NEM o form NEM o `last_config()`
+    tiverem o valor."""
+    db_path = isolated_journal
+    _create_mt5_account(db_path)
+
+    state_path = tmp_path / "live_process.json"
+    state_path.write_text(json.dumps({
+        "pid": None, "started_at": None,
+        "config": {
+            "mode": "mt5", "capital": 50_000.0, "floor": None,
+            "daily_loss_limit": None, "monthly_loss_limit": None,
+            "notify_min_level": "warn", "mt5_shares_per_lot": 7.0,
+        },
+    }), encoding="utf-8")
+    monkeypatch.setattr(live_control, "_STATE_PATH", state_path)
+
+    captured: list = []
+    monkeypatch.setattr(live_control, "start", lambda cfg: captured.append(cfg))
+
+    resp = client.post("/operacao/iniciar", data={})  # sem mt5_shares_per_lot
+
+    assert resp.status_code == 200
+    assert len(captured) == 1
+    assert captured[0].mt5_shares_per_lot == pytest.approx(7.0)
+
+
+def test_operacao_iniciar_mt5_shares_per_lot_zero_pede_campo_sem_iniciar(
+    isolated_journal, client, monkeypatch,
+):
+    """Item 2 da correção pós-code-review (hipótese-agente): `0`/negativo tem
+    de ser recusado igual a ausente -- um valor assim causaria
+    `ZeroDivisionError` em `MT5Broker._to_volume` na hora de mandar ordem
+    real (`volume = quantity / shares_per_lot`)."""
+    called: list = []
+    monkeypatch.setattr(live_control, "start", lambda cfg: called.append(cfg))
+
+    resp = client.post("/operacao/iniciar", data={
+        "mode": "mt5", "capital": "1000", "confirmar_real": "1",
+        "mt5_shares_per_lot": "0",
+    })
+
+    assert resp.status_code == 200
+    assert "lote" in resp.text.lower()
+    assert called == []
+
+
+# ---------- LegacyPaperAccountError não pode virar 500 cru (item 5) ---------
+
+def test_operacao_com_conta_legada_paper_devolve_pagina_com_mensagem_sem_500(
+    isolated_journal, client,
+):
+    """Item 5 da correção pós-code-review (hipótese-agente):
+    `LegacyPaperAccountError` é um `RuntimeError` levantado dentro de
+    `_connect`/`live_journal`, chamado ANTES de qualquer try/except nos
+    handlers de `/operacao` -- sem tratamento específico, uma conta legada
+    `mode='paper'` no banco fazia GET /operacao estourar 500 cru. Agora
+    devolve a página normal (200) com a mensagem clara no banner de erro."""
+    import sqlite3
+
+    conn = sqlite3.connect(isolated_journal)
+    try:
+        conn.executescript(_LEGACY_DDL_MIN)
+        conn.execute(
+            "INSERT INTO live_accounts (name, mode, initial_capital, cash) "
+            "VALUES ('principal', 'paper', 1000.0, 1000.0)"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    resp = client.get("/operacao")
+
+    assert resp.status_code == 200
+    assert "principal" in resp.text
+    assert "simula" in resp.text.lower() or "paper" in resp.text.lower()
