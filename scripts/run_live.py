@@ -1,6 +1,6 @@
 """Linha de comando da operacao ao vivo.
 
-    python scripts/run_live.py init --capital 50000 --mode paper
+    python scripts/run_live.py init --capital 50000 --mode manual
     python scripts/run_live.py status
     python scripts/run_live.py step                 # um passo do supervisor
     python scripts/run_live.py decide               # forca o fecho do pregao
@@ -18,9 +18,6 @@ so para constatar que nao ha nada a fazer.
 
 Modos de corretora
 ------------------
-  paper   `PaperBroker` — preenche contra o feed usando os MESMOS custos do
-          backtest. Serve para validar o encanamento e para acompanhar o robo
-          sem dinheiro em risco.
   manual  `ManualBroker` — nao envia nada. Emite ticket legivel, voce executa na
           corretora e confirma com `confirm`. E o modo para comecar a operar de
           verdade sem depender de integracao.
@@ -94,7 +91,7 @@ if hasattr(sys.stdout, "reconfigure"):
 from backtest.withdrawal import FloorSkim, official_policy
 from core.config import WATCHLIST, BacktestConfig
 from journal import live_store as store
-from live.broker import ManualBroker, PaperBroker
+from live.broker import ManualBroker
 from live.feed import ParquetCloseFeed, YFinanceFeed
 from live.notify import (
     CompositeNotifier,
@@ -162,12 +159,21 @@ def build(args) -> LiveRuntime:
     if args.mode == "manual":
         broker = ManualBroker()
     elif args.mode == "mt5":
+        if args.mt5_shares_per_lot is None:
+            raise ValueError(
+                "--mt5-shares-per-lot é obrigatório no modo mt5 — confira o "
+                "symbol_info do SEU terminal MT5 antes de operar (não há "
+                "valor universal, ver docstring de live/broker_mt5.py)."
+            )
         from live.broker_mt5 import MT5Broker  # import tardio: so quando de fato usado
         symbol_map = json.loads(args.mt5_symbol_map) if args.mt5_symbol_map else None
         broker = MT5Broker(magic=args.mt5_magic, shares_per_lot=args.mt5_shares_per_lot,
                            symbol_map=symbol_map, **_mt5_credentials())
     else:
-        broker = PaperBroker(feed)
+        raise ValueError(
+            f"--mode inválido ou ausente: {args.mode!r} — use 'manual' ou 'mt5' "
+            "(ver core.live_models.BrokerMode)."
+        )
     policy = (FloorSkim(floor=args.floor) if args.floor is not None
               else official_policy(initial_capital=args.capital))
     return LiveRuntime(
@@ -240,8 +246,28 @@ def cmd_unfreeze(args) -> None:
     print("disjuntor destravado.")
 
 
-def cmd_tickets(args) -> None:
+def _require_manual_account(args) -> None:
+    """Recusa (`SystemExit`) se a conta '{ACCOUNT}' não existir ou se o modo
+    REAL dela não for `manual` — antes disso, `cmd_tickets`/`cmd_confirm`
+    faziam `args.mode = "manual"` incondicionalmente, então uma conta em
+    modo `mt5` (dinheiro real via corretora automática) rodava `tickets`/
+    `confirm` como se fosse manual, sem nenhum aviso. Só depois de validar
+    isso é que `args.mode` é fixado em `"manual"`, para `build()` funcionar."""
+    with store.live_journal() as conn:
+        acc = store.load_account(conn, ACCOUNT)
+    if acc is None:
+        raise SystemExit(f"conta '{ACCOUNT}' não existe — rode 'init' primeiro.")
+    if acc.mode != "manual":
+        raise SystemExit(
+            f"conta '{ACCOUNT}' está em modo {acc.mode!r}, não 'manual' — "
+            "'tickets'/'confirm' só fazem sentido para corretora manual "
+            "(uma corretora automática, como mt5, preenche sozinha)."
+        )
     args.mode = "manual"
+
+
+def cmd_tickets(args) -> None:
+    _require_manual_account(args)
     rt = build(args)
     with store.live_journal() as conn:
         acc = store.load_account(conn, ACCOUNT)
@@ -260,7 +286,7 @@ def cmd_tickets(args) -> None:
 
 
 def cmd_confirm(args) -> None:
-    args.mode = "manual"
+    _require_manual_account(args)
     rt = build(args)
     with store.live_journal() as conn:
         acc = store.load_account(conn, ACCOUNT)
@@ -309,7 +335,7 @@ def cmd_loop(args) -> None:
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--mode", default="paper", choices=("paper", "manual", "mt5"))
+    p.add_argument("--mode", default=None, choices=("manual", "mt5"))
     p.add_argument("--capital", type=float, default=1_000.0)
     p.add_argument("--floor", type=float, default=None,
                    help="piso do saque em R$ absoluto (default: 55x o capital)")
@@ -322,8 +348,9 @@ def main() -> None:
     p.add_argument("--monthly-loss-limit", type=float, default=None,
                    help="ex.: 0.15 = mesma ideia, base mensal — precisa de 'unfreeze' manual")
     p.add_argument("--mt5-magic", type=int, default=20260817)
-    p.add_argument("--mt5-shares-per-lot", type=float, default=1.0,
-                   help="confira em symbol_info do SEU terminal MT5 antes de operar")
+    p.add_argument("--mt5-shares-per-lot", type=float, default=None,
+                   help="obrigatorio no modo mt5 — confira em symbol_info do SEU "
+                        "terminal MT5 antes de operar, nao ha valor universal")
     p.add_argument("--mt5-symbol-map", default=None,
                    help='JSON, ex.: \'{"WEGE3.SA": "WEGE3F"}\'')
     sub = p.add_subparsers(dest="cmd", required=True)
