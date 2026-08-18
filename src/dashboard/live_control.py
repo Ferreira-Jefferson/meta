@@ -16,6 +16,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,6 +27,13 @@ _STATE_PATH = _ROOT / "db" / "live_process.json"
 _LOG_PATH = _ROOT / "db" / "live_process.log"
 _SCRIPT = _ROOT / "scripts" / "run_live.py"
 _SECRETS_PATH = _ROOT / "db" / "live_secrets.json"
+
+# Segundos entre o `Popen` do supervisor e a checagem de prova de vida
+# (`start()`, ver docstring lá embaixo) — módulo-nível, monkeypatchável em
+# teste (senão o teste esperaria de verdade). Um processo que vai falhar cedo
+# (terminal MT5 ausente, credencial errada) normalmente já morreu bem antes
+# disso; 2s é suficiente sem atrasar o clique "Iniciar" de forma perceptível.
+_STARTUP_GRACE_SECONDS = 2.0
 
 # Campos aceitos em `save_credentials`/exibidos no form. `_SECRET_FIELDS` sao
 # os que NUNCA voltam para o HTML (nem mascarados) — so um booleano
@@ -51,15 +59,28 @@ _ENV_VAR_BY_FIELD = {
 }
 
 
+_CLI_MODULE = None
+
+
 def _load_cli():
     """Importa `scripts/run_live.py` como módulo — reusa o MESMO `build()`
     que a linha de comando usa para montar o `LiveRuntime`, para o clique do
     botão criar a conta exatamente como `run_live.py init` criaria (sem
-    duplicar a lógica de qual broker/política/disjuntor montar)."""
-    spec = importlib.util.spec_from_file_location("run_live_cli", _SCRIPT)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    duplicar a lógica de qual broker/política/disjuntor montar).
+
+    Memoizado num cache de módulo: `_resolve_risk_guard()` (usado por
+    `live_service.get_status()`) passou a chamar isto em CADA poll HTMX de
+    `/operacao/fragment` — sem memoizar, isso re-executaria `run_live.py`
+    inteiro (todos os imports de topo, `sys.path.insert`) várias vezes por
+    minuto numa página de leitura, custo e efeito colateral gratuitos.
+    """
+    global _CLI_MODULE
+    if _CLI_MODULE is None:
+        spec = importlib.util.spec_from_file_location("run_live_cli", _SCRIPT)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _CLI_MODULE = module
+    return _CLI_MODULE
 
 
 @dataclass
@@ -70,6 +91,10 @@ class ProcessConfig:
     daily_loss_limit: Optional[float] = None
     monthly_loss_limit: Optional[float] = None
     notify_min_level: str = "warn"
+    # Obrigatório quando `mode == "mt5"` (sem valor universal — ver docstring
+    # de `live/broker_mt5.py`); `create_account()`/`start()` recusam cedo se
+    # vier `None` nesse modo, em vez de herdar o default `1.0` do argparse.
+    mt5_shares_per_lot: Optional[float] = None
 
 
 def _read_state() -> Optional[dict]:
@@ -87,6 +112,18 @@ def _write_state(state: Optional[dict]) -> None:
         _STATE_PATH.unlink(missing_ok=True)
         return
     _STATE_PATH.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _tail_log(max_chars: int = 2_000) -> str:
+    """Últimos `max_chars` de `db/live_process.log` — usado para explicar
+    POR QUE o processo morreu logo após subir (ver `start()`)."""
+    if not _LOG_PATH.exists():
+        return "(sem log — o processo morreu antes de escrever qualquer coisa)"
+    try:
+        text = _LOG_PATH.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return "(não foi possível ler o log)"
+    return text[-max_chars:]
 
 
 def _pid_alive(pid: int) -> bool:
@@ -200,7 +237,7 @@ def create_account(config: ProcessConfig):
         mode=config.mode, capital=config.capital, floor=config.floor,
         feed="parquet", notify_min_level=config.notify_min_level,
         daily_loss_limit=config.daily_loss_limit, monthly_loss_limit=config.monthly_loss_limit,
-        mt5_magic=20260817, mt5_shares_per_lot=1.0, mt5_symbol_map=None,
+        mt5_magic=20260817, mt5_shares_per_lot=config.mt5_shares_per_lot, mt5_symbol_map=None,
     )
     rt = cli.build(args)
     return rt.ensure_account()
@@ -208,9 +245,22 @@ def create_account(config: ProcessConfig):
 
 def start(config: ProcessConfig) -> dict:
     """Cria a conta se preciso e sobe `scripts/run_live.py loop` como
-    processo próprio, sobrevivendo ao dashboard fechar."""
+    processo próprio, sobrevivendo ao dashboard fechar.
+
+    Prova de vida (correção pós-code-review, crítico nº1): grava PID/estado
+    só DEPOIS de esperar `_STARTUP_GRACE_SECONDS` e confirmar que o processo
+    ainda está de pé (`proc.poll() is None`). Sem isso, um processo que
+    morre na hora (terminal MT5 fechado, credencial errada, `--mode`
+    recusado) fazia o dashboard gravar PID normalmente e continuar
+    mostrando "robô ativo" para sempre — o botão "Iniciar" mentindo sobre um
+    processo morto."""
     if status() is not None:
         raise RuntimeError("já existe um robô rodando — pare antes de iniciar outro.")
+    if config.mode == "mt5" and (config.mt5_shares_per_lot is None or config.mt5_shares_per_lot <= 0):
+        raise RuntimeError(
+            "modo mt5 exige o campo 'ações por lote' (mt5_shares_per_lot) — "
+            "não há valor universal, confira o symbol_info do seu terminal MT5."
+        )
 
     create_account(config)
 
@@ -225,6 +275,8 @@ def start(config: ProcessConfig) -> dict:
         argv += ["--daily-loss-limit", str(config.daily_loss_limit)]
     if config.monthly_loss_limit is not None:
         argv += ["--monthly-loss-limit", str(config.monthly_loss_limit)]
+    if config.mode == "mt5":
+        argv += ["--mt5-shares-per-lot", str(config.mt5_shares_per_lot)]
     argv += ["loop", "--seconds", "60"]
 
     _LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -238,6 +290,18 @@ def start(config: ProcessConfig) -> dict:
         argv, cwd=str(_ROOT), stdout=log, stderr=subprocess.STDOUT,
         stdin=subprocess.DEVNULL, creationflags=creationflags, env=env,
     )
+
+    time.sleep(_STARTUP_GRACE_SECONDS)
+    exit_code = proc.poll()
+    if exit_code is not None:
+        # Já saiu (qualquer código, inclusive 0 — sair na hora também é
+        # falha de subida) — não grava estado nenhum, o clique tem de
+        # mostrar o erro real em vez de "rodando".
+        raise RuntimeError(
+            f"o processo do robô saiu logo após iniciar (código {exit_code}) — "
+            f"últimas linhas do log:\n{_tail_log()}"
+        )
+
     state = {
         "pid": proc.pid,
         "started_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),

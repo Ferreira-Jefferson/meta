@@ -41,6 +41,13 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+# Raiz do repo (nao so `src/`), para `tests.doubles` resolver como pacote —
+# EXCECAO DELIBERADA (FEAT-001): este script simula com o MESMO test double
+# que a suite de testes usa (`PaperBroker`/`ReplayFeed`, corretora/feed que
+# preenchem sozinhos contra dado historico), nunca em producao real. Ver
+# docstring de `tests/doubles.py` para o porque dessas classes nao morarem
+# mais em `src/`.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -52,9 +59,8 @@ from backtest.withdrawal import official_policy
 from core.config import BENCHMARK, DB_PATH, HISTORY_START, LIVE_DB_PATH, ROOT, WATCHLIST, BacktestConfig
 from core.live_models import IntentKind, IntentStatus
 from journal import live_store as store
-from live.broker import PaperBroker
-from live.feed import ReplayFeed
 from live.runtime import LiveRuntime
+from tests.doubles import PaperBroker, ReplayFeed
 from market_data.loader import load_universe
 from scheduler import latest_common_date
 from strategy.portfolio_dip2_hw40 import DipTop1Portfolio

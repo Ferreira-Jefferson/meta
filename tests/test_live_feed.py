@@ -14,8 +14,9 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from live.feed import ParquetCloseFeed, QuoteFeed, ReplayFeed, YFinanceFeed, staleness_report
+from live.feed import ParquetCloseFeed, QuoteFeed, YFinanceFeed, staleness_report
 from core.live_models import Quote
+from tests.doubles import ReplayFeed
 
 
 def _save_panel(path: Path, ticker: str, last_close: float, last_date: str) -> None:

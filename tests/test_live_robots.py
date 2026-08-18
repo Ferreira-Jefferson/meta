@@ -54,7 +54,7 @@ class _ScriptedStrategy(Strategy):
 
 def _account(cash: float = 100_000.0, positions: dict | None = None) -> AccountState:
     return AccountState(
-        name="conta-teste", mode="paper", initial_capital=100_000.0,
+        name="conta-teste", mode="manual", initial_capital=100_000.0,
         cash=cash, positions=positions or {},
     )
 

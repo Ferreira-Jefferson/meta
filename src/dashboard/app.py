@@ -333,9 +333,24 @@ def _operacao_ctx(**extra) -> dict:
     """Contexto comum a toda rota que renderiza `operacao.html`/
     `operacao_body.html` — evita repetir as 4 chamadas em cada handler e
     esquecer uma delas (já aconteceu com `creds`/`creds_status` antes de
-    virar helper)."""
+    virar helper).
+
+    Correção pós-code-review (item 5, hipótese-agente): `live_service.
+    get_status()` pode levantar `journal.live_store.LegacyPaperAccountError`
+    (conta legada `mode='paper'` bloqueando o rebuild do vocabulário) — sem
+    capturar isso aqui, ela subia crua até o handler e virava um 500 em
+    `/operacao`. Captura ESPECIFICAMENTE essa exceção (não `Exception`
+    genérico) e degrada para o estado "sem conta" com a mensagem real no
+    banner de erro, em vez de estourar."""
+    from journal import live_store
+
+    try:
+        status_payload = live_service.get_status()
+    except live_store.LegacyPaperAccountError as e:
+        status_payload = {"conta": live_service.ACCOUNT_NAME, "existe": False}
+        extra.setdefault("erro", str(e))
     return {
-        "status": live_service.get_status(),
+        "status": status_payload,
         "proc": live_control.status(),
         "config_anterior": live_control.last_config(),
         "creds": live_control.display_credentials(),
@@ -367,19 +382,43 @@ async def operacao_iniciar(request: Request):
     form = await request.form()
     from journal import live_store
 
-    with live_store.live_journal() as conn:
-        conta = live_store.load_account(conn, live_service.ACCOUNT_NAME)
+    try:
+        with live_store.live_journal() as conn:
+            conta = live_store.load_account(conn, live_service.ACCOUNT_NAME)
+    except live_store.LegacyPaperAccountError as e:
+        # Correção pós-code-review (item 5): renderiza a mensagem no banner
+        # de erro em vez de deixar a exceção subir crua até virar 500.
+        ctx = _operacao_ctx(erro=str(e))
+        return TEMPLATES.TemplateResponse(request, "partials/operacao_body.html", ctx)
 
     erro = None
+    mt5_shares_per_lot = None
     if conta is not None:
         # conta já existe: modo/capital são da conta, NUNCA do form — evita
         # subir o loop com um broker que não bate com o que a conta espera.
         mode, capital = conta.mode, conta.initial_capital
+        if mode == "mt5":
+            mt5_shares_per_lot = _parse_optional_float(form.get("mt5_shares_per_lot"))
+            if mt5_shares_per_lot is None:
+                # Correção pós-code-review (bloqueante nº1): o form de
+                # RETOMADA agora manda o campo (ver operacao_body.html), mas
+                # se por algum motivo vier vazio/ausente, tenta o último
+                # valor usado por esta conta antes de declarar erro — sem
+                # isso o botão "Iniciar" ficava morto para sempre numa conta
+                # mt5 já existente.
+                mt5_shares_per_lot = (live_control.last_config() or {}).get("mt5_shares_per_lot")
+            if mt5_shares_per_lot is None or mt5_shares_per_lot <= 0:
+                erro = "Informe quantas ações por lote o seu terminal MT5 usa para este símbolo."
     else:
-        mode = form.get("mode", "paper")
+        mode = form.get("mode", "manual")
         capital = float(form.get("capital") or live_service.DEFAULT_CAPITAL)
-        if mode == "mt5" and not form.get("confirmar_real"):
-            erro = "Para operar em MT5 (dinheiro real), marque a confirmação antes de iniciar."
+        if mode == "mt5":
+            if not form.get("confirmar_real"):
+                erro = "Para operar em MT5 (dinheiro real), marque a confirmação antes de iniciar."
+            else:
+                mt5_shares_per_lot = _parse_optional_float(form.get("mt5_shares_per_lot"))
+                if mt5_shares_per_lot is None or mt5_shares_per_lot <= 0:
+                    erro = "Informe quantas ações por lote o seu terminal MT5 usa para este símbolo."
 
     if erro is None:
         try:
@@ -389,9 +428,17 @@ async def operacao_iniciar(request: Request):
                 daily_loss_limit=_parse_optional_pct(form.get("daily_loss_limit")),
                 monthly_loss_limit=_parse_optional_pct(form.get("monthly_loss_limit")),
                 notify_min_level=form.get("notify_min_level") or "warn",
+                mt5_shares_per_lot=mt5_shares_per_lot,
             )
-            live_control.start(cfg)
-        except RuntimeError as e:
+            # Correção pós-code-review (item 7): `live_control.start()` faz
+            # `time.sleep(_STARTUP_GRACE_SECONDS)` de forma SÍNCRONA (prova
+            # de vida do processo) — chamado direto dentro deste handler
+            # `async def`, isso travava o event loop inteiro (todas as
+            # outras rotas/polls do dashboard) por ~2s a cada clique em
+            # "Iniciar". `asyncio.to_thread` roda a chamada bloqueante numa
+            # thread separada, sem travar o loop.
+            await asyncio.to_thread(live_control.start, cfg)
+        except (RuntimeError, ValueError) as e:
             erro = str(e)
 
     ctx = _operacao_ctx(erro=erro)
@@ -430,16 +477,21 @@ async def operacao_aportar(request: Request):
     if amount is None or amount <= 0:
         erro = "Informe um valor de aporte maior que zero."
     else:
-        with live_store.live_journal() as conn:
-            conta = live_store.load_account(conn, live_service.ACCOUNT_NAME)
-            if conta is None:
-                erro = "Nenhuma conta de operação ainda — inicie a operação primeiro."
-            else:
-                conta.cash += amount
-                live_store.save_account(conn, conta)
-                live_store.record_deposit(conn, conta.id, clock.session_date(), amount,
-                                          origin="manual", note="registrado via /operacao")
-                aporte_msg = f"Aporte de R$ {amount:.2f} registrado."
+        try:
+            with live_store.live_journal() as conn:
+                conta = live_store.load_account(conn, live_service.ACCOUNT_NAME)
+                if conta is None:
+                    erro = "Nenhuma conta de operação ainda — inicie a operação primeiro."
+                else:
+                    conta.cash += amount
+                    live_store.save_account(conn, conta)
+                    live_store.record_deposit(conn, conta.id, clock.session_date(), amount,
+                                              origin="manual", note="registrado via /operacao")
+                    aporte_msg = f"Aporte de R$ {amount:.2f} registrado."
+        except live_store.LegacyPaperAccountError as e:
+            # Correção pós-code-review (item 5): mensagem amigável em vez de
+            # 500 cru.
+            erro = str(e)
 
     ctx = _operacao_ctx(erro=erro, aporte_msg=aporte_msg)
     return TEMPLATES.TemplateResponse(request, "partials/operacao_body.html", ctx)
@@ -696,17 +748,23 @@ def operacao_historico(request: Request):
     `/operacao` — nunca cria a conta."""
     from journal import live_store
 
-    with live_store.live_journal() as conn:
-        account = live_store.load_account(conn, live_service.ACCOUNT_NAME)
-        if account is None:
-            ctx = {"existe": False}
-        else:
-            ctx = {
-                "existe": True,
-                "conta": account.name,
-                "capital_inicial": account.initial_capital,
-                "equity_json": json.dumps(live_store.equity_series(conn, account.id)),
-                "intents": live_store.all_intents(conn, account.id, limit=200),
-                "withdrawals": live_store.withdrawals(conn, account.id),
-            }
+    try:
+        with live_store.live_journal() as conn:
+            account = live_store.load_account(conn, live_service.ACCOUNT_NAME)
+            if account is None:
+                ctx = {"existe": False}
+            else:
+                ctx = {
+                    "existe": True,
+                    "conta": account.name,
+                    "capital_inicial": account.initial_capital,
+                    "equity_json": json.dumps(live_store.equity_series(conn, account.id)),
+                    "intents": live_store.all_intents(conn, account.id, limit=200),
+                    "withdrawals": live_store.withdrawals(conn, account.id),
+                }
+    except live_store.LegacyPaperAccountError as e:
+        # Correção pós-code-review (item 5): mensagem amigável em vez de 500
+        # cru — este endpoint só lê, não tem template com banner de erro
+        # próprio, então devolve texto simples em vez de estourar.
+        return PlainTextResponse(str(e), status_code=200)
     return TEMPLATES.TemplateResponse(request, "historico.html", ctx)

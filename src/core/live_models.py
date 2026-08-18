@@ -81,6 +81,27 @@ class SessionPhase(str, Enum):
     POST_CLOSE = "post_close"             # pregao encerrado, dia ainda corrente
 
 
+class BrokerMode(str, Enum):
+    """Vocabulário CANÔNICO de modo de corretora — o único que existe a
+    partir de FEAT-001.
+
+    Antes desta feature o vocabulário estava fraturado em três grafias:
+    `paper`/`manual`/`mt5` no CLI e no `<select>` do dashboard, mas
+    `paper`/`manual`/`broker` no `Broker.mode`/`live_accounts.mode` (schema).
+    Essa fratura é a causa-raiz do crítico nº1 da revisão: o botão "Iniciar"
+    do dashboard emitia `--mode broker` para uma conta MT5 real, o argparse
+    recusava (só aceitava `paper`/`manual`/`mt5`), o processo morria na hora,
+    e o dashboard continuava mostrando "rodando". `PaperBroker` sai de
+    produção junto (vira dublê de teste, ver `tests/doubles.py`) — sem
+    simulação no vocabulário, só sobram os dois modos que uma conta real
+    pode ter: um humano confirma cada ordem (`MANUAL`) ou a corretora executa
+    sozinha (`MT5`).
+    """
+
+    MANUAL = "manual"
+    MT5 = "mt5"
+
+
 class RobotRole(str, Enum):
     """Papel do robo dentro da conta. Um robo por papel, no maximo."""
 
@@ -275,7 +296,7 @@ class AccountState:
     """
 
     name: str
-    mode: str                            # 'paper' | 'manual' | 'broker'
+    mode: str                            # 'manual' | 'mt5' (ver BrokerMode)
     initial_capital: float
     cash: float
     investment_robot: str = ""

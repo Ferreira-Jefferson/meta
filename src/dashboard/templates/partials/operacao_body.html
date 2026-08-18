@@ -124,8 +124,7 @@
       <label>
         <span class="k">Modo</span>
         <select name="mode" onchange="document.getElementById('ops-mt5-confirm').style.display = this.value === 'mt5' ? 'flex' : 'none';">
-          <option value="paper" selected>Paper — simulado, sem risco</option>
-          <option value="manual">Manual — você confirma cada ordem</option>
+          <option value="manual" selected>Manual — você confirma cada ordem</option>
           <option value="mt5">MetaTrader 5 — dinheiro real</option>
         </select>
       </label>
@@ -155,6 +154,11 @@
     </details>
 
     <div id="ops-mt5-confirm" class="ops-mt5-confirm" style="display: none;">
+      <label>
+        <span class="k">Ações por lote (mt5_shares_per_lot)</span>
+        <input type="number" name="mt5_shares_per_lot" min="0.01" step="0.01"
+               placeholder="confira o symbol_info do SEU terminal MT5" />
+      </label>
       <label class="switch">
         <input type="checkbox" name="confirmar_real" value="1" />
         <span class="switch-track"><span class="switch-dot"></span></span>
@@ -183,12 +187,24 @@
     </span>
     <form hx-post="/operacao/iniciar" hx-target="#ops-body" hx-swap="outerHTML">
       {# retoma com o mesmo piso/disjuntor da última vez que rodou — modo e
-         capital vêm sempre da conta, nunca do form (ver rota no app.py) #}
+         capital vêm sempre da conta, nunca do form (ver rota no app.py).
+         mt5_shares_per_lot e EXCECAO: a conta nao guarda esse valor (so o
+         processo supervisor guarda, em config_anterior) — sem o campo
+         visivel aqui, o botao "Iniciar" ficava morto para sempre numa conta
+         mt5 existente (correcao pos-code-review, bloqueante nº1). #}
       {% if config_anterior %}
       <input type="hidden" name="floor" value="{{ config_anterior.floor or '' }}" />
       <input type="hidden" name="daily_loss_limit" value="{{ (config_anterior.daily_loss_limit * 100) if config_anterior.daily_loss_limit else '' }}" />
       <input type="hidden" name="monthly_loss_limit" value="{{ (config_anterior.monthly_loss_limit * 100) if config_anterior.monthly_loss_limit else '' }}" />
       <input type="hidden" name="notify_min_level" value="{{ config_anterior.notify_min_level or 'warn' }}" />
+      {% endif %}
+      {% if s.modo == "mt5" %}
+      <label>
+        <span class="k">Ações por lote (mt5_shares_per_lot)</span>
+        <input type="number" name="mt5_shares_per_lot" min="0.01" step="0.01"
+               placeholder="confira o symbol_info do SEU terminal MT5"
+               value="{{ (config_anterior or {}).get('mt5_shares_per_lot') or '' }}" required />
+      </label>
       {% endif %}
       <button type="submit">▶ Iniciar operação</button>
     </form>
