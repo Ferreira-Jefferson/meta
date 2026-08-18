@@ -78,6 +78,19 @@ def test_build_mt5_sem_shares_per_lot_levanta_valueerror(cli, isolated_db):
         cli.build(_args(mode="mt5", mt5_shares_per_lot=None))
 
 
+def test_build_mt5_com_shares_per_lot_zero_ou_negativo_levanta_valueerror(cli, isolated_db):
+    """Item 2 da correção pós-code-review (hipótese-agente): as 3 validações
+    de `mt5_shares_per_lot` (aqui, em `dashboard.live_control.start` e em
+    `dashboard.app.operacao_iniciar`) checavam só `is None` -- um valor `0`
+    ou negativo passava direto e causaria `ZeroDivisionError` em
+    `MT5Broker._to_volume` na hora de mandar ordem real (`volume = quantity /
+    shares_per_lot`)."""
+    with pytest.raises(ValueError):
+        cli.build(_args(mode="mt5", mt5_shares_per_lot=0))
+    with pytest.raises(ValueError):
+        cli.build(_args(mode="mt5", mt5_shares_per_lot=-1.0))
+
+
 def test_build_manual_monta_manual_broker(cli, isolated_db):
     rt = cli.build(_args(mode="manual"))
     assert rt.broker.mode == "manual"
@@ -122,3 +135,88 @@ def test_cmd_confirm_recusa_conta_nao_manual(cli, isolated_db):
         acc = live_store.load_account(conn, cli.ACCOUNT)
         abertas = live_store.open_orders(conn, acc.id)
     assert abertas == []
+
+
+# ---------- cmd_loop: ValueError de conta/broker divergente e FATAL (item 6) --
+
+class _FakeNotifier:
+    def __init__(self):
+        self.calls: list = []
+
+    def notify(self, level, source, message):
+        self.calls.append((level, source, message))
+
+
+class _FakeRuntimeValueError:
+    """Simula um `LiveRuntime` cujo `run_once()` levanta o `ValueError` da
+    guarda de conta/broker divergente (`LiveRuntime._load_account`) -- sem
+    montar um runtime de verdade, so o suficiente para exercitar o dispatch
+    de excecao do `cmd_loop`."""
+
+    def __init__(self):
+        self.notifier = _FakeNotifier()
+
+    def run_once(self):
+        raise ValueError("conta 'principal' esta em modo 'manual', broker instanciado e 'mt5'")
+
+
+def test_cmd_loop_valueerror_de_conta_broker_divergente_e_fatal(cli, isolated_db, monkeypatch):
+    """Correcao pos-code-review (item 6, hipotese-agente): antes desta
+    correcao, um `ValueError` de conta/broker divergente caia no `except
+    Exception` generico do loop, que loga, notifica, dorme 60s e tenta de
+    novo -- para sempre, com o processo vivo e o painel mostrando "ativo"
+    enquanto nada e decidido. Agora o loop distingue esse erro como FATAL:
+    notifica em nivel error e ENCERRA o processo (exit != 0) em vez de
+    continuar tentando."""
+    fake_rt = _FakeRuntimeValueError()
+    monkeypatch.setattr(cli, "build", lambda args: fake_rt)
+
+    from live import clock as live_clock
+    monkeypatch.setattr(live_clock, "seconds_until_active_window", lambda: 0)
+
+    args = _args(seconds=60)
+    with pytest.raises(SystemExit) as exc_info:
+        cli.cmd_loop(args)
+    assert exc_info.value.code != 0
+
+    # notificou (nivel error) antes de encerrar -- nao e um erro silencioso.
+    assert fake_rt.notifier.calls
+    level, source, message = fake_rt.notifier.calls[0]
+    assert level == "error"
+    assert "FATAL" in message
+
+
+def test_cmd_loop_outros_erros_continuam_com_retry(cli, isolated_db, monkeypatch):
+    """Contraste com o teste acima: outras excecoes (rede, dado, etc.) NAO
+    podem virar fatais por causa desta correcao -- continuam no `except
+    Exception` generico, que loga/notifica e deixa o loop tentar de novo.
+    Aqui a 2a chamada de `run_once()` levanta `KeyboardInterrupt` (em vez de
+    monkeypatchar `time.sleep`, que roda FORA do bloco try/except e nao seria
+    capturado do jeito certo) so para o loop parar e o teste nao rodar para
+    sempre."""
+
+    class _FakeRuntimeGenericError:
+        def __init__(self):
+            self.notifier = _FakeNotifier()
+            self.calls = 0
+
+        def run_once(self):
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("erro transitorio de rede")
+            raise KeyboardInterrupt
+
+    fake_rt = _FakeRuntimeGenericError()
+    monkeypatch.setattr(cli, "build", lambda args: fake_rt)
+
+    from live import clock as live_clock
+    monkeypatch.setattr(live_clock, "seconds_until_active_window", lambda: 0)
+    monkeypatch.setattr(cli.time, "sleep", lambda seconds: None)  # nao dorme de verdade
+
+    args = _args(seconds=60)
+    cli.cmd_loop(args)  # KeyboardInterrupt tratado dentro do loop, retorna normal
+
+    assert fake_rt.calls == 2  # continuou tentando apos o 1o erro generico
+    assert fake_rt.notifier.calls  # notificou o erro generico, mas nao fatal
+    level, _source, message = fake_rt.notifier.calls[0]
+    assert "RuntimeError" in message

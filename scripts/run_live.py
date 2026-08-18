@@ -159,7 +159,7 @@ def build(args) -> LiveRuntime:
     if args.mode == "manual":
         broker = ManualBroker()
     elif args.mode == "mt5":
-        if args.mt5_shares_per_lot is None:
+        if args.mt5_shares_per_lot is None or args.mt5_shares_per_lot <= 0:
             raise ValueError(
                 "--mt5-shares-per-lot é obrigatório no modo mt5 — confira o "
                 "symbol_info do SEU terminal MT5 antes de operar (não há "
@@ -322,6 +322,19 @@ def cmd_loop(args) -> None:
         except KeyboardInterrupt:
             print("\nencerrado")
             return
+        except ValueError as e:
+            # Correcao pos-code-review (item 6, hipotese-agente): ValueError
+            # aqui e a guarda de conta/broker divergente (`LiveRuntime.
+            # _load_account`) ou de modo invalido -- um bug ESTRUTURAL que
+            # nao se resolve sozinho no proximo passo. Deixar isso cair no
+            # `except Exception` generico abaixo faria o loop dormir e
+            # tentar de novo para sempre, com o processo vivo e o painel
+            # mostrando "ativo" enquanto nada e decidido. Encerra o processo
+            # (exit != 0) em vez de retry silencioso infinito -- so um
+            # humano pode corrigir conta x broker divergentes.
+            print(f"[erro fatal] {type(e).__name__}: {e}", flush=True)
+            rt.notifier.notify("error", "loop", f"FATAL: {type(e).__name__}: {e}")
+            sys.exit(1)
         except Exception as e:  # noqa: BLE001
             # Um erro num passo nao pode matar o supervisor: amanha ha outro
             # pregao. O evento fica no diario para diagnostico. Notifica
