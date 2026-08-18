@@ -159,7 +159,7 @@ def main() -> None:
     )
     rt.ensure_account()
 
-    entradas = saidas = stops = saques = expiradas = 0
+    entradas = saidas = stops = recomendacoes_saque = expiradas = 0
     for i, d in enumerate(all_dates):
         today = d.date()
         df_by_ticker = {t: universe[t] for t in tickers}
@@ -171,7 +171,7 @@ def main() -> None:
         exec_report = rt.execute_session(today)
         entradas += exec_report.detail.get("entradas", 0)
         saidas += exec_report.detail.get("saidas", 0)
-        saques += exec_report.detail.get("saques", 0)
+        recomendacoes_saque += exec_report.detail.get("recomendacoes_saque", 0)
         expiradas += exec_report.detail.get("expiradas", 0)
 
         # intra-dia: cotacao no minimo do dia, checagem conservadora de stop
@@ -207,7 +207,7 @@ def main() -> None:
     print(f"entradas executadas      {entradas}")
     print(f"saídas executadas        {saidas}")
     print(f"stops disparados intra-dia {stops}")
-    print(f"saques executados        {saques}")
+    print(f"recomendações de saque   {recomendacoes_saque}  (saque nunca é executado pela máquina)")
     print(f"intenções expiradas      {expiradas}  (deveria ser 0 — indicaria bug de atraso)")
     print(f"posições abertas no fim  {len(acc.positions)}")
     print(f"caixa final              {money(acc.cash)}")

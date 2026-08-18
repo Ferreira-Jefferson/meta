@@ -636,18 +636,6 @@ def claim_intent(
     return cur.rowcount == 1
 
 
-def set_intent_payload(conn: sqlite3.Connection, intent_id: int, payload: dict) -> None:
-    """Sobrescreve o `payload` de uma intent já gravada.
-
-    A intent em si é imutável (é o registro do CÉREBRO — ver `core.live_models`),
-    mas `payload` é o campo pensado para metadado de execução que só existe
-    DEPOIS da decisão (ex.: `equity_before` capturado no primeiro ciclo de um
-    saque que precisa de várias rodadas de liquidação sob corretora manual —
-    ver `live.runtime._withdraw_manual_step`). Sobrescreve inteiro, não faz
-    merge: quem chama é o único dono do payload desta intent neste momento."""
-    conn.execute("UPDATE live_intents SET payload = ? WHERE id = ?", (_dumps(payload), intent_id))
-
-
 def intents_by_status(conn: sqlite3.Connection, account_id: int, status: IntentStatus) -> list[Intent]:
     """Intents da conta num status qualquer — usada por `live.runtime.reconcile_pending_fills`
     para achar as `EXECUTING` (ordem no ar, aguardando confirmacao que chegou depois
