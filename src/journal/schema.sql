@@ -165,7 +165,8 @@ CREATE INDEX IF NOT EXISTS idx_equity_run ON equity_curve(run_id);
 CREATE TABLE IF NOT EXISTS live_accounts (
     id                 INTEGER PRIMARY KEY AUTOINCREMENT,
     name               TEXT    NOT NULL UNIQUE,
-    mode               TEXT    NOT NULL CHECK (mode IN ('paper','manual','broker')),
+    -- Vocabulário canônico: ver `core.live_models.BrokerMode` (FEAT-001).
+    mode               TEXT    NOT NULL CHECK (mode IN ('manual','mt5')),
     initial_capital    REAL    NOT NULL,
     cash               REAL    NOT NULL,
     investment_robot   TEXT    NOT NULL DEFAULT '',
