@@ -782,6 +782,18 @@ class LiveRuntime:
         quebrada: loga `error` (nao deveria acontecer nunca) em vez de passar
         batido.
 
+        PERSISTE sempre que de fato expirar alguma coisa (mesmo padrao de
+        `unfreeze()`: restaura -> muta -> persiste): `on_executed(intent,
+        0.0)` muta a politica SO em memoria (`self.withdrawal`); sem gravar
+        `account.policy_state`/`store.save_account` aqui dentro, um chamador
+        que rejeita/retorna logo em seguida (ex.: `confirm_withdrawal`, que
+        chama este helper e pode nao ter mais recomendacao PENDING para
+        confirmar depois da expiracao) perderia o valor devolvido a fila em
+        silencio -- o evento diria "volta pra fila" mas o banco continuaria
+        com o `_requested` antigo. Nao depende de cada chamador lembrar de
+        persistir: e o proprio helper que garante isso sempre que muda o
+        estado da politica.
+
         Devolve quantas recomendacoes expirou.
         """
         pendentes = store.pending_withdraw_intents(conn, account.id)
@@ -804,6 +816,10 @@ class LiveRuntime:
                             "para a fila da politica",
                             {"intent_id": intent.id, "valor": intent.amount})
             expiradas += 1
+
+        if expiradas:
+            account.policy_state = self._robot_state()
+            store.save_account(conn, account)
         return expiradas
 
     def _last_equity_before(self, conn, account: AccountState, session: date) -> float:
