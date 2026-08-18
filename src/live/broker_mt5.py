@@ -81,7 +81,7 @@ class MT5Broker(Broker):
     """
 
     name = "mt5"
-    mode = "broker"
+    mode = "mt5"
 
     def __init__(
         self,

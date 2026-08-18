@@ -424,7 +424,7 @@ def test_poll_e_no_op_sincrono(fake_mt5):
 def test_supports_automation_true_e_metadados():
     broker = MT5Broker()
     assert broker.supports_automation() is True
-    assert broker.mode == "broker"
+    assert broker.mode == "mt5"
     assert broker.name == "mt5"
 
 
