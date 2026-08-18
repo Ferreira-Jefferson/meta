@@ -530,9 +530,14 @@ def test_migrate_vocabulario_rebuild_converte_broker_em_mt5_sem_repontuar_fks(tm
 
 def test_migrate_vocabulario_recusa_quando_ha_conta_paper(tmp_path):
     """Passo 3(b): tabela com CHECK antigo + linha mode='paper' -> `ensure_tables`
-    levanta `LegacyPaperAccountError` citando o nome da conta e as opcoes
-    arquivar/apagar, tabela intacta (nao converte simulacao em conta real em
-    silencio)."""
+    levanta `LegacyPaperAccountError` citando o nome da conta, deixando claro
+    que RENOMEAR nao resolve (o CHECK novo rejeita pelo VALOR de `mode`, nao
+    pelo nome) e apontando as saidas reais (apagar a linha, UPDATE manual, ou
+    apagar o banco de SIMULACAO inteiro se for esse o caso) -- correcao
+    pos-code-review (item 4/8): a mensagem antiga prometia "arquivar
+    (renomear)" como solucao, mas isso nunca funcionaria (a excecao
+    continuaria disparando para sempre), e nao mencionava a saida do banco de
+    simulacao. Tabela permanece intacta."""
     db_path = tmp_path / "legacy_paper.sqlite"
     _write_legacy_db(db_path, account_mode="paper", account_name="principal")
 
@@ -543,11 +548,77 @@ def test_migrate_vocabulario_recusa_quando_ha_conta_paper(tmp_path):
             ensure_tables(conn)
         message = str(exc_info.value)
         assert "principal" in message
-        assert "arquivar" in message.lower()
         assert "apagar" in message.lower()
+        assert "renomear" in message.lower()
+        assert "não resolve" in message.lower()
+        assert "live_sim.sqlite" in message
 
         # nada foi alterado: schema E dado continuam no formato antigo.
         row = conn.execute("SELECT mode FROM live_accounts WHERE name = 'principal'").fetchone()
         assert row["mode"] == "paper"
+    finally:
+        conn.close()
+
+
+def test_migrate_vocabulario_rebuild_limpa_live_accounts_new_orfa(tmp_path):
+    """Item 9(a) da correcao pos-code-review (hipotese-agente): uma execucao
+    anterior do rebuild interrompida no meio (crash, kill) pode deixar
+    `live_accounts_new` para tras -- criada, mas nunca dropada/renomeada.
+    Sem um `DROP TABLE IF EXISTS` antes de criar, a proxima tentativa
+    quebraria com "table live_accounts_new already exists" em vez de
+    recomecar do zero."""
+    db_path = tmp_path / "legacy_orphan_new.sqlite"
+    _write_legacy_db(db_path, account_mode="broker")
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        # simula o lixo de uma execucao interrompida: live_accounts_new ja
+        # existe (schema irrelevante -- so precisa estar no caminho).
+        conn.execute("CREATE TABLE live_accounts_new (id INTEGER PRIMARY KEY)")
+        conn.commit()
+
+        ensure_tables(conn)  # nao pode levantar "table already exists"
+
+        row = conn.execute("SELECT mode FROM live_accounts WHERE name = 'legado'").fetchone()
+        assert row["mode"] == "mt5"
+    finally:
+        conn.close()
+
+
+def test_migrate_vocabulario_rebuild_aborta_antes_do_commit_se_fk_invalida(tmp_path):
+    """Item 9(b) da correcao pos-code-review (hipotese-agente): `PRAGMA
+    foreign_key_check` passa a rodar ANTES do commit, dentro da mesma
+    transacao do rebuild -- uma violacao (aqui, uma `live_positions` orfa
+    apontando para um account_id inexistente) tem de ABORTAR o rebuild
+    inteiro (rollback) em vez de so ser reportada DEPOIS de o schema novo ja
+    estar commitado. Falsificacao: com o check rodando depois do commit (
+    comportamento antigo), o schema chegaria a virar o CHECK novo mesmo com a
+    excecao subindo em seguida; aqui `live_accounts` tem de continuar
+    exatamente no formato ANTIGO."""
+    db_path = tmp_path / "legacy_broken_fk.sqlite"
+    _write_legacy_db(db_path, account_mode="broker")
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("PRAGMA foreign_keys = OFF")
+        # posicao orfa: aponta para uma conta que nao existe.
+        conn.execute(
+            "INSERT INTO live_positions "
+            "(account_id, ticker, quantity, entry_date, entry_price, capital_allocated) "
+            "VALUES (9999, 'PETR4.SA', 10, '2026-08-10', 30.0, 300.0)"
+        )
+        conn.commit()
+
+        with pytest.raises(RuntimeError, match="referência"):
+            ensure_tables(conn)
+
+        # rebuild abortado ANTES do commit: schema continua o ANTIGO (ainda
+        # tem 'broker' no CHECK), nao o novo com 'manual','mt5' ja gravado.
+        ddl = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'live_accounts'"
+        ).fetchone()["sql"]
+        assert "'broker'" in ddl
     finally:
         conn.close()

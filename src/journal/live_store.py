@@ -127,8 +127,10 @@ class LegacyPaperAccountError(RuntimeError):
     Não é seguro converter isso em silêncio para o vocabulário canônico
     (`manual`/`mt5`, ver `core.live_models.BrokerMode`) — uma conta de
     simulação virar conta real por engano é o tipo de bug que só aparece
-    quando já é tarde. O operador precisa decidir explicitamente: ARQUIVAR
-    (renomear a conta) ou APAGAR essa(s) linha(s) antes do rebuild continuar.
+    quando já é tarde. Renomear a conta NÃO desbloqueia nada (o CHECK novo
+    rejeita pelo VALOR da coluna `mode`, não pelo nome) — a única saída real
+    é apagar a(s) linha(s), ou um `UPDATE` manual de `mode` feito com decisão
+    humana consciente. Ver a mensagem da exceção para o texto completo.
     """
 
 
@@ -194,14 +196,23 @@ def _migrate_account_mode_vocabulary(conn: sqlite3.Connection, schema_path: Path
         nomes = ", ".join(str(row[0]) for row in legacy_paper)
         raise LegacyPaperAccountError(
             "live_accounts tem conta(s) de SIMULAÇÃO (mode='paper') que o "
-            f"vocabulário canônico (manual/mt5) não cobre: {nomes}. Decida "
-            "explicitamente antes de continuar — arquivar (ex.: UPDATE "
-            "live_accounts SET name = name || '_arquivada' WHERE mode = "
-            "'paper') ou apagar a(s) linha(s); esta migração nunca converte "
-            "simulação em conta real em silêncio."
+            f"vocabulário canônico (manual/mt5) não cobre: {nomes}. Renomear "
+            "a conta NÃO resolve — o CHECK novo rejeita pelo VALOR da coluna "
+            "mode, não pelo nome da conta. As únicas saídas reais são: "
+            "apagar a(s) linha(s) (perde o histórico dela), ou, com decisão "
+            "humana consciente de que é seguro tratar essa conta como real, "
+            "um UPDATE manual de mode para 'manual' ou 'mt5' depois de "
+            "confirmar isso. Se esta conexão é para o banco de SIMULAÇÃO "
+            "(db/live_sim.sqlite), a saída mais simples é apagar esse "
+            "arquivo inteiro — não mexa na conta real por engano."
         )
 
     conn.execute("PRAGMA foreign_keys = OFF")
+    # Uma execução anterior interrompida no meio do rebuild pode ter deixado
+    # `live_accounts_new` para trás (criada, mas nunca dropada/renomeada) —
+    # sem este DROP, a tentativa seguinte quebraria com "table already
+    # exists" em vez de recomeçar do zero.
+    conn.execute("DROP TABLE IF EXISTS live_accounts_new")
     conn.executescript(_live_accounts_rebuild_ddl(schema_path))
     conn.execute(
         """INSERT INTO live_accounts_new
@@ -214,17 +225,24 @@ def _migrate_account_mode_vocabulary(conn: sqlite3.Connection, schema_path: Path
     )
     conn.execute("DROP TABLE live_accounts")
     conn.execute("ALTER TABLE live_accounts_new RENAME TO live_accounts")
+
+    # `PRAGMA foreign_key_check` ANTES do commit, ainda dentro da mesma
+    # transação aberta pelo INSERT acima: uma violação tem de ABORTAR o
+    # rebuild (rollback) em vez de só ser reportada depois de o schema novo
+    # já estar gravado — checar depois do commit não desfaz nada, só avisa
+    # tarde demais.
+    fk_problems = conn.execute("PRAGMA foreign_key_check").fetchall()
+    if fk_problems:
+        conn.rollback()
+        raise RuntimeError(
+            f"rebuild de live_accounts deixou referência(s) inválida(s): {fk_problems}"
+        )
+
     # Commit ANTES de religar o pragma: `PRAGMA foreign_keys` é um no-op
     # dentro de uma transação aberta (a que o INSERT acima começou) — sem
     # commitar primeiro, `foreign_keys=ON` abaixo não teria efeito nenhum
     # pelo resto da vida desta conexão.
     conn.commit()
-
-    fk_problems = conn.execute("PRAGMA foreign_key_check").fetchall()
-    if fk_problems:
-        raise RuntimeError(
-            f"rebuild de live_accounts deixou referência(s) inválida(s): {fk_problems}"
-        )
     conn.execute("PRAGMA foreign_keys = ON")
 
 
