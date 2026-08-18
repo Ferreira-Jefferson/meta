@@ -497,6 +497,54 @@ async def operacao_aportar(request: Request):
     return TEMPLATES.TemplateResponse(request, "partials/operacao_body.html", ctx)
 
 
+@app.post("/operacao/sacar", response_class=HTMLResponse)
+async def operacao_sacar(request: Request):
+    """Confirma uma recomendacao de saque pendente -- o UNICO caminho que
+    move dinheiro de verdade desde que o saque virou recomendacao (ver
+    `live/runtime.py`). Espelha `operacao_aportar` na forma (parse do form,
+    guarda de conta inexistente, captura de `LegacyPaperAccountError`), mas
+    -- ao contrario daquele, que so soma ao caixa -- precisa da POLITICA DE
+    SAQUE real (`WithdrawalRobot.on_executed` devolve a diferenca a fila do
+    minimo se confirmar menos que o recomendado), entao monta um
+    `LiveRuntime` completo via `live_service._build_runtime` em vez de mexer
+    direto no diario."""
+    form = await request.form()
+    from journal import live_store
+
+    erro = None
+    saque_msg = None
+    try:
+        amount = _parse_optional_float(form.get("amount"))
+    except ValueError:
+        amount = None
+    intent_id_raw = form.get("intent_id")
+    try:
+        intent_id = int(intent_id_raw) if intent_id_raw not in (None, "") else None
+    except ValueError:
+        intent_id = None
+
+    if amount is None or amount <= 0:
+        erro = "Informe um valor de saque maior que zero."
+    else:
+        try:
+            with live_store.live_journal() as conn:
+                conta = live_store.load_account(conn, live_service.ACCOUNT_NAME)
+            if conta is None:
+                erro = "Nenhuma conta de operação ainda — inicie a operação primeiro."
+            else:
+                rt = live_service._build_runtime(conta.mode, conta.initial_capital)
+                report = rt.confirm_withdrawal(amount, intent_id=intent_id)
+                if report.action != "withdraw_confirm":
+                    erro = report.detail.get("motivo", "não foi possível confirmar o saque.")
+                else:
+                    saque_msg = f"Saque de R$ {amount:.2f} confirmado."
+        except live_store.LegacyPaperAccountError as e:
+            erro = str(e)
+
+    ctx = _operacao_ctx(erro=erro, saque_msg=saque_msg)
+    return TEMPLATES.TemplateResponse(request, "partials/operacao_body.html", ctx)
+
+
 @app.post("/operacao/credenciais", response_class=HTMLResponse)
 async def operacao_credenciais(request: Request):
     """Login da corretora (MT5) e canais de alerta (Telegram/e-mail) — salvos

@@ -32,7 +32,10 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
+from datetime import date
+
 from backtest.withdrawal import OFFICIAL_FLOOR_MULTIPLE
+from core.live_models import Intent, IntentKind, RobotRole
 from dashboard import app as dashboard_app
 from dashboard import live_control, live_service
 from journal import live_store
@@ -213,6 +216,106 @@ def test_operacao_aportar_sem_conta_devolve_erro_sem_criar_deposito(isolated_jou
     with live_store.live_journal(isolated_journal) as conn:
         rows = conn.execute("SELECT * FROM live_deposits").fetchall()
     assert rows == []
+
+
+# ---------- /operacao/sacar: confirma recomendacao de saque (passo 14) ------
+
+def _create_withdraw_intent(db_path, account_id, amount=500.0) -> int:
+    """Grava uma recomendacao de saque PENDING direto no diario -- mais
+    simples que rodar `close_and_decide` real para exercitar so a rota."""
+    with live_store.live_journal(db_path) as conn:
+        intent = Intent(
+            robot="withdrawal:teste", role=RobotRole.WITHDRAWAL, kind=IntentKind.WITHDRAW,
+            decided_on=date(2026, 8, 3), execute_on=date(2026, 8, 4),
+            amount=amount, reason="teste",
+        )
+        return live_store.record_intent(conn, account_id, intent)
+
+
+def test_operacao_sacar_confirma_recomendacao_pendente_debita_caixa_e_credita_externo(
+    isolated_journal, client,
+):
+    db_path = isolated_journal
+    account_id = _create_account(db_path)
+    intent_id = _create_withdraw_intent(db_path, account_id, amount=500.0)
+
+    resp = client.post("/operacao/sacar", data={"amount": "500.00", "intent_id": str(intent_id)})
+    assert resp.status_code == 200
+    assert "confirmado" in resp.text.lower()
+
+    with live_store.live_journal(db_path) as conn:
+        acc = live_store.load_account(conn, live_service.ACCOUNT_NAME)
+        rows = conn.execute(
+            "SELECT * FROM live_withdrawals WHERE account_id = ?", (account_id,)
+        ).fetchall()
+    assert acc.cash == pytest.approx(500.0)
+    assert acc.external_cash == pytest.approx(500.0)
+    assert len(rows) == 1
+    assert rows[0]["executed"] == pytest.approx(500.0)
+
+
+def test_operacao_sacar_sem_recomendacao_pendente_devolve_erro_sem_mexer_no_caixa(
+    isolated_journal, client,
+):
+    db_path = isolated_journal
+    _create_account(db_path)
+
+    resp = client.post("/operacao/sacar", data={"amount": "500.00"})
+    assert resp.status_code == 200
+
+    with live_store.live_journal(db_path) as conn:
+        acc = live_store.load_account(conn, live_service.ACCOUNT_NAME)
+    assert acc.cash == pytest.approx(1_000.0)
+
+
+def test_operacao_sacar_valor_invalido_nao_mexe_no_caixa(isolated_journal, client):
+    db_path = isolated_journal
+    account_id = _create_account(db_path)
+    _create_withdraw_intent(db_path, account_id, amount=500.0)
+
+    resp = client.post("/operacao/sacar", data={"amount": "-10"})
+    assert resp.status_code == 200
+    assert "Informe um valor de saque" in resp.text
+
+    with live_store.live_journal(db_path) as conn:
+        acc = live_store.load_account(conn, live_service.ACCOUNT_NAME)
+    assert acc.cash == pytest.approx(1_000.0)
+
+
+def test_operacao_sacar_sem_conta_devolve_erro_sem_criar_saque(isolated_journal, client):
+    resp = client.post("/operacao/sacar", data={"amount": "100"})
+    assert resp.status_code == 200
+    assert "Nenhuma conta de operação" in resp.text
+
+    with live_store.live_journal(isolated_journal) as conn:
+        rows = conn.execute("SELECT * FROM live_withdrawals").fetchall()
+    assert rows == []
+
+
+def test_operacao_sacar_duplo_post_debita_uma_so_vez(isolated_journal, client):
+    """Falsificacao do achado nº5 (duplo-clique): dois POSTs identicos com o
+    MESMO `intent_id` so debitam o caixa UMA vez -- o 2o perde a corrida do
+    `claim_intent` e devolve erro."""
+    db_path = isolated_journal
+    account_id = _create_account(db_path)
+    intent_id = _create_withdraw_intent(db_path, account_id, amount=500.0)
+
+    resp1 = client.post("/operacao/sacar", data={"amount": "500.00", "intent_id": str(intent_id)})
+    assert resp1.status_code == 200
+    with live_store.live_journal(db_path) as conn:
+        acc_apos_1 = live_store.load_account(conn, live_service.ACCOUNT_NAME)
+    assert acc_apos_1.cash == pytest.approx(500.0)
+
+    resp2 = client.post("/operacao/sacar", data={"amount": "500.00", "intent_id": str(intent_id)})
+    assert resp2.status_code == 200
+
+    with live_store.live_journal(db_path) as conn:
+        acc_apos_2 = live_store.load_account(conn, live_service.ACCOUNT_NAME)
+        rows = conn.execute(
+            "SELECT * FROM live_withdrawals WHERE account_id = ?", (account_id,)
+        ).fetchall()
+    assert acc_apos_2.cash == pytest.approx(500.0)  # nao debitou de novo
+    assert len(rows) == 1
 
 
 # ---------- botão "Iniciar" morto numa conta mt5 existente (bloqueante nº1) --
