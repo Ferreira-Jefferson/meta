@@ -52,6 +52,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
+from pathlib import Path
 from typing import Optional, Sequence
 
 import pandas as pd
@@ -163,6 +164,25 @@ class LiveRuntime:
         # construtor aceitar "usa o padrao" sem cada chamador ter que
         # importar `core.config.DB_PATH` por conta propria.
         self.db_path = db_path if db_path is not None else DB_PATH
+        # Item 0.3 herdado de FEAT-000 (só possível agora que `PaperBroker`
+        # saiu de produção, FEAT-001): um broker de TESTE nunca pode operar
+        # sobre o banco de produção. Comparação por caminho RESOLVIDO (nunca
+        # `==` cru) — senão bastaria passar o mesmo arquivo como string
+        # relativa para driblar a guarda (mesmo precedente de
+        # `scripts/run_live_sim.py::_ensure_disposable_sim_db`). `DB_PATH` é
+        # lido do MÓDULO em tempo de chamada (não capturado em import-time),
+        # porque o monkeypatch de teste depende disso.
+        if getattr(broker, "is_test_double", False):
+            # `DB_PATH` é lido como nome de MÓDULO (não capturado antes) —
+            # mesmo mecanismo de `self.db_path` acima — para o monkeypatch de
+            # teste (`monkeypatch.setattr(live_runtime, "DB_PATH", tmp)`) valer.
+            producao = Path(DB_PATH).resolve()
+            if Path(self.db_path).resolve() == producao:
+                raise ValueError(
+                    f"broker de teste ({type(broker).__name__}, is_test_double=True) "
+                    f"não pode operar sobre o banco de produção ({producao}) — "
+                    "aponte para um banco descartável (tmp_path/simulação)."
+                )
         # Injetavel para teste (universo sintetico em tmp_path) sem tocar em
         # `data/raw` real. `None` preserva o default de `market_data.loader`
         # (DATA_DIR) em producao.
@@ -345,6 +365,28 @@ class LiveRuntime:
         self._restore_robot_state(acc.policy_state)
         return acc
 
+    def _load_account(self, conn) -> Optional[AccountState]:
+        """`store.load_account`, mas recusando operar quando o modo real da
+        conta diverge do modo do broker instanciado neste `LiveRuntime`.
+
+        Devolve `None` quando a conta não existe (preserva o skip limpo que
+        os 8 call-sites abaixo dependem: "conta inexistente" não é erro, é
+        estado inicial) — só levanta `ValueError` quando a conta EXISTE e o
+        modo dela é diferente de `self.broker.mode` (duas instâncias de
+        `LiveRuntime`, brokers diferentes, mesmo banco/conta — nunca podem
+        operar juntas)."""
+        account = store.load_account(conn, self.account_name)
+        if account is None:
+            return None
+        if account.mode != self.broker.mode:
+            raise ValueError(
+                f"conta '{self.account_name}' está em modo {account.mode!r}, "
+                f"mas este LiveRuntime foi instanciado com um broker de modo "
+                f"{self.broker.mode!r} — uma conta e um broker divergentes "
+                "nunca podem operar juntos."
+            )
+        return account
+
     def unfreeze(self) -> None:
         """Reset manual do disjuntor de risco — humano revisou, pode operar de novo.
 
@@ -363,7 +405,7 @@ class LiveRuntime:
         if self.risk_guard is None:
             return
         with store.live_journal(self.db_path) as conn:
-            account = store.load_account(conn, self.account_name)
+            account = self._load_account(conn)
             if account is None:
                 return
             self._restore_robot_state(account.policy_state)
@@ -390,7 +432,7 @@ class LiveRuntime:
         self._load(session, universe)
 
         with store.live_journal(self.db_path) as conn:
-            account = store.load_account(conn, self.account_name)
+            account = self._load_account(conn)
             if account is None:
                 return StepReport("decide_skip", session, detail={"motivo": "conta inexistente"})
             if any(d == session.isoformat() for d, _e, _p in store.equity_series(conn, account.id)):
@@ -476,7 +518,7 @@ class LiveRuntime:
                "rejeitadas": 0, "aguardando": 0}
 
         with store.live_journal(self.db_path) as conn:
-            account = store.load_account(conn, self.account_name)
+            account = self._load_account(conn)
             if account is None:
                 return StepReport("execute_skip", session, detail={"motivo": "conta inexistente"})
             self._restore_robot_state(account.policy_state)
@@ -879,7 +921,7 @@ class LiveRuntime:
         now = now or datetime.now(timezone.utc)
         aplicadas = 0
         with store.live_journal(self.db_path) as conn:
-            account = store.load_account(conn, self.account_name)
+            account = self._load_account(conn)
             if account is None:
                 return StepReport("reconcile_skip", detail={"motivo": "conta inexistente"})
             for intent in store.intents_by_status(conn, account.id, IntentStatus.EXECUTING):
@@ -981,7 +1023,7 @@ class LiveRuntime:
         now = now or datetime.now(timezone.utc)
         session = now.date()
         with store.live_journal(self.db_path) as conn:
-            account = store.load_account(conn, self.account_name)
+            account = self._load_account(conn)
             if account is None:
                 return StepReport("reconcile_cash_skip", detail={"motivo": "conta inexistente"})
 
@@ -1009,7 +1051,7 @@ class LiveRuntime:
         velhas = staleness_report(quotes, now, self.max_quote_age)
 
         with store.live_journal(self.db_path) as conn:
-            account = store.load_account(conn, self.account_name)
+            account = self._load_account(conn)
             if account is None:
                 return StepReport("intraday_skip", session, detail={"motivo": "conta inexistente"})
 
@@ -1087,7 +1129,7 @@ class LiveRuntime:
         """
         session = clock.session_date()
         with store.live_journal(self.db_path) as conn:
-            account = store.load_account(conn, self.account_name)
+            account = self._load_account(conn)
             if account is None:
                 return {"conta": self.account_name, "existe": False}
 
@@ -1099,7 +1141,7 @@ class LiveRuntime:
         # ao feed passaria uma falsa sensacao de frescor.
         self.feed.quotes(self.tickers)
         with store.live_journal(self.db_path) as conn:
-            account = store.load_account(conn, self.account_name)
+            account = self._load_account(conn)
             if account is None:
                 return {"conta": self.account_name, "existe": False}
             self._restore_robot_state(account.policy_state)
