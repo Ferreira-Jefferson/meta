@@ -29,13 +29,13 @@ from core.live_models import (
 from core.models import ExitReason
 from journal import live_store as store
 from live import clock
-from live.broker import Broker, ManualBroker, PaperBroker
-from live.feed import ReplayFeed
+from live.broker import Broker, ManualBroker
 from live.notify import Notifier
 from live.riskguard import CircuitBreaker
 from live.runtime import LiveRuntime
 from strategy.base import AdjustStop, Enter, Exit, Strategy
 from strategy.buy_the_dip import BuyTheDip
+from tests.doubles import PaperBroker, ReplayFeed
 
 TICKER = "AAA.SA"
 
@@ -85,7 +85,7 @@ def universe(tmp_path):
 
 
 def _runtime(tmp_path, days_dir, script, policy=None, db_name="live.sqlite",
-            mode="paper", capital=10_000.0) -> LiveRuntime:
+            mode="mt5", capital=10_000.0) -> LiveRuntime:
     feed = ReplayFeed()
     broker = ManualBroker() if mode == "manual" else PaperBroker(feed)
     return LiveRuntime(
@@ -125,8 +125,14 @@ def test_db_path_default_e_live_db_path(tmp_path, monkeypatch):
     fake_db_path = tmp_path / "live_test.sqlite"
     monkeypatch.setattr(live_runtime, "DB_PATH", fake_db_path)
 
+    # `ManualBroker` (nao `PaperBroker`): este teste e sobre a RESOLUCAO do
+    # `db_path` default, nao sobre o tipo de broker — e `PaperBroker` (dublê,
+    # `is_test_double = True`) e exatamente o caso que a guarda nova do passo
+    # 10 (item 0.3 herdado) passa a recusar quando `db_path` resolve para
+    # `DB_PATH` (ver `test_guarda_recusa_test_double_sobre_db_path_producao`
+    # abaixo, que herda este cenario original como teste POSITIVO da guarda).
     feed = ReplayFeed()
-    broker = PaperBroker(feed)
+    broker = ManualBroker()
     rt = LiveRuntime(
         account_name="teste_db_path_default",
         strategy=ScriptedStrategy({}),
@@ -136,6 +142,107 @@ def test_db_path_default_e_live_db_path(tmp_path, monkeypatch):
         tickers=(TICKER,), db_path=None,
     )
     assert rt.db_path == fake_db_path
+
+
+# ---------- guarda 0.3 (herdada de FEAT-000): dublê nunca opera sobre o banco
+# de producao -----------------------------------------------------------------
+
+def test_guarda_recusa_test_double_sobre_db_path_producao(tmp_path, monkeypatch):
+    """Item 0.3 herdado: um broker `is_test_double=True` (ex.: `PaperBroker`)
+    nunca pode instanciar um `LiveRuntime` que resolve para o mesmo arquivo de
+    `DB_PATH` (o banco de producao) — mesmo se o caminho vier escrito
+    diferente (string relativa/absoluta), porque a comparacao e por caminho
+    RESOLVIDO, nunca por igualdade crua."""
+    from live import runtime as live_runtime
+
+    fake_db_path = tmp_path / "live_producao.sqlite"
+    monkeypatch.setattr(live_runtime, "DB_PATH", fake_db_path)
+
+    feed = ReplayFeed()
+
+    # (a) db_path=None cai no DB_PATH monkeypatchado -> recusado.
+    with pytest.raises(ValueError):
+        LiveRuntime(
+            account_name="teste_guarda", strategy=ScriptedStrategy({}),
+            policy=FloorSkim(pct=0.5, floor=1e12), feed=feed, broker=PaperBroker(feed),
+            config=BacktestConfig(initial_capital=1_000.0, lot_size=1),
+            tickers=(TICKER,), db_path=None,
+        )
+
+    # (b) mesmo caminho, so que como STRING relativa equivalente -> recusado
+    # tambem (prova que a comparacao e por caminho resolvido, nao por
+    # igualdade crua de objeto/string).
+    import os
+    relative_equivalent = os.path.relpath(fake_db_path, start=tmp_path)
+    with pytest.raises(ValueError):
+        LiveRuntime(
+            account_name="teste_guarda", strategy=ScriptedStrategy({}),
+            policy=FloorSkim(pct=0.5, floor=1e12), feed=feed, broker=PaperBroker(feed),
+            config=BacktestConfig(initial_capital=1_000.0, lot_size=1),
+            tickers=(TICKER,), db_path=str(tmp_path / relative_equivalent),
+        )
+
+    # (c) broker de PRODUCAO (ManualBroker, is_test_double=False default) sobre
+    # o MESMO db_path -> aceito normalmente.
+    rt = LiveRuntime(
+        account_name="teste_guarda", strategy=ScriptedStrategy({}),
+        policy=FloorSkim(pct=0.5, floor=1e12), feed=feed, broker=ManualBroker(),
+        config=BacktestConfig(initial_capital=1_000.0, lot_size=1),
+        tickers=(TICKER,), db_path=fake_db_path,
+    )
+    assert rt.db_path == fake_db_path
+
+
+# ---------- guarda: conta e broker divergentes nunca operam juntos ----------
+
+def test_load_account_recusa_quando_broker_diverge_do_modo_da_conta(tmp_path, universe):
+    """Passo 11(a): conta criada com `ManualBroker` (`mode="manual"`); um
+    SEGUNDO `LiveRuntime`, sobre o MESMO banco/conta, mas com um broker de
+    modo diferente (`PaperBroker`, `mode="mt5"`) tem de recusar operar —
+    `close_and_decide`/`status()` levantam `ValueError` em vez de aplicar
+    decisao de um robo sobre uma conta que nao e a dele."""
+    data_dir, days = universe
+    d0 = days[0]
+    db_path = tmp_path / "live.sqlite"
+
+    manual_rt = LiveRuntime(
+        account_name="teste_divergencia", strategy=ScriptedStrategy({}),
+        policy=FloorSkim(pct=0.5, floor=1e12), feed=ReplayFeed(), broker=ManualBroker(),
+        config=BacktestConfig(initial_capital=10_000.0, lot_size=1),
+        tickers=(TICKER,), db_path=db_path, data_dir=data_dir,
+    )
+    manual_rt.ensure_account()
+
+    mt5_feed = ReplayFeed()
+    mt5_rt = LiveRuntime(
+        account_name="teste_divergencia", strategy=ScriptedStrategy({}),
+        policy=FloorSkim(pct=0.5, floor=1e12), feed=mt5_feed, broker=PaperBroker(mt5_feed),
+        config=BacktestConfig(initial_capital=10_000.0, lot_size=1),
+        tickers=(TICKER,), db_path=db_path, data_dir=data_dir,
+    )
+
+    with pytest.raises(ValueError):
+        mt5_rt.close_and_decide(d0)
+    with pytest.raises(ValueError):
+        mt5_rt.status()
+
+
+def test_load_account_ausente_continua_sendo_skip_nao_excecao(tmp_path, universe):
+    """Passo 11(b): sobre banco vazio (conta nunca criada), `status()` continua
+    devolvendo `{"existe": False}` — a guarda de divergencia NAO pode
+    transformar "conta ausente" em excecao, senao os 8 call-sites que dependem
+    do ramo `if account is None` (skip limpo) quebrariam."""
+    data_dir, days = universe
+    db_path = tmp_path / "live_vazio.sqlite"
+    feed = ReplayFeed()
+    rt = LiveRuntime(
+        account_name="conta_nunca_criada", strategy=ScriptedStrategy({}),
+        policy=FloorSkim(pct=0.5, floor=1e12), feed=feed, broker=PaperBroker(feed),
+        config=BacktestConfig(initial_capital=10_000.0, lot_size=1),
+        tickers=(TICKER,), db_path=db_path, data_dir=data_dir,
+    )
+    status = rt.status()
+    assert status == {"conta": "conta_nunca_criada", "existe": False}
 
 
 # ---------- ciclo completo: decide -> executa -> stop intra-dia ------------
@@ -567,7 +674,7 @@ def test_saque_automatico_com_liquidacao_permanece_sincrono(tmp_path, universe):
     data_dir, days = universe
     d0, d1 = days[0], days[1]
     policy = FloorSkim(pct=0.9, floor=100.0, day=1, min_amount=0.0)
-    rt = _runtime(tmp_path, data_dir, {}, policy=policy, mode="paper", capital=10_000.0)
+    rt = _runtime(tmp_path, data_dir, {}, policy=policy, mode="mt5", capital=10_000.0)
     rt.ensure_account()
 
     with store.live_journal(rt.db_path) as conn:
@@ -767,7 +874,7 @@ class _FakeCashBroker(Broker):
     `poll` nunca sao chamados nestes testes (nenhum deles executa ordem)."""
 
     name = "fakecash"
-    mode = "broker"
+    mode = "mt5"
 
     def __init__(self, cash: Optional[float]) -> None:
         self._cash = cash

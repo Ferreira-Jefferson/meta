@@ -47,7 +47,7 @@ def _seed(source: Path) -> None:
         account = store.ensure_account(
             conn,
             name="principal",
-            mode="paper",
+            mode="manual",
             initial_capital=10_000.0,
             investment_robot="dip2_hw40",
             withdrawal_robot="official_policy",
@@ -293,10 +293,11 @@ def test_migrate_reporta_divergencia_e_levanta_incompleto(tmp_path, capsys):
         )
         source_conn.execute(
             "INSERT INTO live_accounts (id, name, mode, initial_capital, cash) "
-            "VALUES (1, 'principal', 'paper', 1000.0, 1000.0)"
+            "VALUES (1, 'principal', 'manual', 1000.0, 1000.0)"
         )
-        # dest exige mode IN ('paper','manual','broker') -- este valor só
-        # existia porque a origem é de ANTES do CHECK ter sido acrescentado.
+        # dest exige mode IN ('manual','mt5') -- este valor é do vocabulário
+        # canônico atual (`core.live_models.BrokerMode`); o valor abaixo
+        # simula um modo que nunca foi válido em nenhum vocabulário.
         source_conn.execute(
             "INSERT INTO live_accounts (id, name, mode, initial_capital, cash) "
             "VALUES (2, 'legado', 'modo_invalido_pre_check', 500.0, 500.0)"
@@ -345,7 +346,7 @@ def test_migrate_force_detecta_colisao_de_id_com_conteudo_divergente(tmp_path, c
     # script).
     with store.live_journal(dest) as conn:
         robot_account = store.ensure_account(
-            conn, name="principal", mode="paper", initial_capital=1_000.0,
+            conn, name="principal", mode="manual", initial_capital=1_000.0,
             investment_robot="dip2_hw40", withdrawal_robot="official_policy",
         )
         assert robot_account.id == 1
@@ -354,7 +355,7 @@ def test_migrate_force_detecta_colisao_de_id_com_conteudo_divergente(tmp_path, c
     # pendurado nesse id.
     with store.live_journal(source) as conn:
         real_account = store.ensure_account(
-            conn, name="principal", mode="paper", initial_capital=47_321.55,
+            conn, name="principal", mode="manual", initial_capital=47_321.55,
             investment_robot="dip2_hw40", withdrawal_robot="official_policy",
         )
         assert real_account.id == 1

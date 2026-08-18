@@ -11,8 +11,8 @@ import pytest
 
 from core.config import CostModel
 from core.live_models import Order, OrderSide, OrderStatus, OrderType
-from live.broker import Broker, ManualBroker, PaperBroker
-from live.feed import ReplayFeed
+from live.broker import Broker, ManualBroker
+from tests.doubles import PaperBroker, ReplayFeed
 
 
 def _feed_with(ticker: str, price: float) -> ReplayFeed:
@@ -143,7 +143,8 @@ def test_paper_broker_cancel_ordem_terminal_nao_muda():
 def test_paper_broker_supports_automation():
     broker = PaperBroker(ReplayFeed())
     assert broker.supports_automation() is True
-    assert broker.mode == "paper"
+    assert broker.mode == "mt5"
+    assert broker.is_test_double is True
 
 
 def test_manual_broker_place_gera_ticket_legivel_e_broker_ref():

@@ -9,29 +9,27 @@ diario sem passar pelo unico lugar que sabe como fazer isso direito
 (`journal/writer.py`), e o broker deixaria de ser uma peca trocavel (paper
 hoje, corretora real amanha) para virar um segundo dono de estado de conta.
 
-Implementacoes nesta ordem:
+Implementacoes de producao (`src/`), nesta ordem:
 
-  - `PaperBroker`  — preenche contra um `QuoteFeed`, aplicando o MESMO
-    `CostModel` do backtest (`backtest/costs.py`). Ver docstring da classe
-    para o porque disso ser inegociavel.
   - `ManualBroker` — para quem opera na mao pela corretora: gera um ticket
     legivel, e um humano confirma o fill depois via `confirm()`.
+  - Corretora real (`live.broker_mt5.MT5Broker`, via pip `MetaTrader5`) fala
+    com um terminal MT5 ja aberto na mesma maquina.
 
-  - Corretora real (MetaTrader5 via pip `MetaTrader5`, ou API REST de uma
-    corretora) entraria aqui como uma TERCEIRA classe que implementa o mesmo
-    port (`place`/`poll`/`cancel`). Esse e o ponto de existir o port: nem o
-    runtime nem os robos de `strategy/` precisam mudar uma linha para trocar
-    de paper para corretora real — so troca qual `Broker` e instanciado.
+Nenhuma classe que preenche sozinha contra um feed (simulacao) mora em
+`src/` — isso e, por definicao, um dublê de teste, nunca uma corretora real
+(ver `tests/doubles.py::PaperBroker`, movida para la em FEAT-001: mante-la
+aqui era o que permitia o dashboard/CLI cair nela por um fallback silencioso
+sempre que o modo pedido nao batia com nenhum broker real). Esse e o ponto de
+existir o port: nem o runtime nem os robos de `strategy/` precisam mudar uma
+linha para trocar de broker — so troca qual `Broker` e instanciado.
 """
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from typing import Optional
 
-from backtest.costs import apply_slippage, fees_for_leg
-from core.config import CostModel
 from core.live_models import Order, OrderSide, OrderStatus, OrderType
-from live.feed import QuoteFeed
 
 
 class Broker(ABC):
@@ -39,7 +37,12 @@ class Broker(ABC):
     `Order` mutada com o resultado. Nao guarda historico, nao escreve banco."""
 
     name: str
-    mode: str  # 'paper' | 'manual' | 'broker'
+    mode: str  # 'manual' | 'mt5' (ver core.live_models.BrokerMode)
+    # `True` só em dublês de teste (ex.: `tests/doubles.PaperBroker`) — nunca
+    # em broker de produção. `LiveRuntime.__init__` recusa instanciar um
+    # dublê apontando para o banco de produção (`core.config.LIVE_DB_PATH`),
+    # ver `live/runtime.py` (item 0.3 herdado de FEAT-000).
+    is_test_double: bool = False
 
     @abstractmethod
     def place(self, order: Order) -> Order:
@@ -71,82 +74,12 @@ class Broker(ABC):
     def cash_balance(self) -> Optional[float]:
         """Saldo de caixa segundo uma fonte EXTERNA e independente da conta
         interna (`AccountState.cash`), se este broker tiver uma. Default
-        `None`: nem `PaperBroker` (simula contra um feed, nao existe conta
-        real por tras) nem `ManualBroker` (nao fala com corretora nenhuma)
-        tem algo para comparar — `None` significa "nao tenta reconciliar
-        deposito contra este broker", nunca "saldo zero". So uma conexao de
-        corretora de verdade (ver `MT5Broker.cash_balance`) sabe responder
-        isto de fato."""
+        `None`: `ManualBroker` (nao fala com corretora nenhuma) nao tem algo
+        para comparar — `None` significa "nao tenta reconciliar deposito
+        contra este broker", nunca "saldo zero". So uma conexao de corretora
+        de verdade (ver `MT5Broker.cash_balance`) sabe responder isto de
+        fato."""
         return None
-
-
-class PaperBroker(Broker):
-    """Preenche a ordem contra um `QuoteFeed`, com o MESMO custo do backtest.
-
-    Por que reusar `apply_slippage`/`fees_for_leg` de `backtest/costs.py` em
-    vez de ter uma conta propria aqui: o proposito do paper trading e validar
-    a operacao contra o que o backtest promete. Se o paper usasse um modelo de
-    custo diferente (mesmo que "mais realista" na opiniao de alguem), o
-    resultado do paper deixaria de ser comparavel ao resultado do backtest —
-    e e exatamente essa comparacao (paper bateu o backtest? ficou atras?
-    quanto?) que da confianca para ligar dinheiro real. Custo tem que ser o
-    mesmo numero, sempre.
-    """
-
-    name = "paper"
-    mode = "paper"
-
-    def __init__(self, feed: QuoteFeed, cost_model: Optional[CostModel] = None) -> None:
-        self._feed = feed
-        self._costs = cost_model or CostModel()
-        self._next_ref = 1
-
-    def place(self, order: Order) -> Order:
-        quote = self._feed.quote(order.ticker)
-        if quote is None:
-            order.status = OrderStatus.REJECTED
-            order.note = f"sem cotacao para {order.ticker} no feed {self._feed.name}"
-            return order
-
-        price = quote.price
-        if order.order_type == OrderType.LIMIT and order.limit_price is not None:
-            # compra so executa a <= limite; venda so executa a >= limite.
-            # fora disso a ordem fica viva (SENT), nao rejeitada — e assim que
-            # uma limitada real se comporta na corretora: espera o preco.
-            if order.side == OrderSide.BUY and price > order.limit_price:
-                order.status = OrderStatus.SENT
-                order.note = (
-                    f"limite {order.limit_price} nao atingido "
-                    f"(cotacao {price} > limite)"
-                )
-                return order
-            if order.side == OrderSide.SELL and price < order.limit_price:
-                order.status = OrderStatus.SENT
-                order.note = (
-                    f"limite {order.limit_price} nao atingido "
-                    f"(cotacao {price} < limite)"
-                )
-                return order
-
-        side = "buy" if order.side == OrderSide.BUY else "sell"
-        fill_price = apply_slippage(price, side, self._costs)
-        gross = fill_price * order.quantity
-        fees = fees_for_leg(gross, self._costs)
-
-        order.status = OrderStatus.FILLED
-        order.filled_qty = order.quantity
-        order.avg_price = fill_price
-        order.slippage = abs(fill_price - price) * order.quantity
-        order.fees = fees
-        order.broker_ref = f"PAPER-{self._next_ref}"
-        self._next_ref += 1
-        order.note = f"fill @ {fill_price:.4f} contra cotacao {price:.4f} ({quote.source})"
-        return order
-
-    def poll(self, order: Order) -> Order:
-        """Paper e sincrono: `place` ja decidiu tudo. `poll` so devolve o
-        estado atual, sem reprocessar."""
-        return order
 
 
 class ManualBroker(Broker):

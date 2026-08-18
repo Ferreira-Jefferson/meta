@@ -6,14 +6,16 @@ atraso — o atraso declarado (`delay_seconds`) e o que permite ao runtime
 recusar decisao intra-dia sobre dado velho (ver `staleness_report` abaixo e
 `Quote.staleness_seconds` em `core/live_models.py`).
 
-Tres implementacoes:
+Duas implementacoes de producao (`src/`):
 
   - `ParquetCloseFeed`  — dado historico (D-1 ou mais velho), honesto por
     construcao: `delay_seconds` e a IDADE REAL do dado, calculada contra
     `now`, nao um numero fixo.
   - `YFinanceFeed`      — intradiario, best-effort, ~15min de atraso conhecido
     e documentado (ver docstring da classe).
-  - `ReplayFeed`        — dirigido a mao, para teste e simulacao.
+
+`ReplayFeed` (dirigido a mao, para teste e simulacao deterministica) mora em
+`tests/doubles.py` (FEAT-001) — nunca em `src/`.
 """
 from __future__ import annotations
 
@@ -205,55 +207,6 @@ class YFinanceFeed(QuoteFeed):
     def _report_error(self, ticker: str, exc: Exception) -> None:
         if self._on_error is not None:
             self._on_error(ticker, exc)
-
-
-class ReplayFeed(QuoteFeed):
-    """Feed dirigido a mao — para teste e para simulacao determinística.
-
-    `set(ticker, price, ts=None)` define/atualiza a cotacao corrente de um
-    ticker. `advance()` avanca uma sequencia pre-carregada (se usada nesse
-    modo) — util para simular varias barras em teste sem precisar de rede
-    nem de parquet."""
-
-    name = "replay"
-    source = "replay"
-
-    def __init__(self, now_fn: Callable[[], datetime] = lambda: datetime.now(timezone.utc)) -> None:
-        self._now_fn = now_fn
-        self._quotes: dict[str, Quote] = {}
-        self._sequences: dict[str, list[tuple[float, Optional[datetime]]]] = {}
-
-    @property
-    def delay_seconds(self) -> float:
-        return 0.0
-
-    def set(self, ticker: str, price: float, ts: Optional[datetime] = None) -> None:
-        """Define a cotacao corrente de `ticker`."""
-        resolved_ts = ts if ts is not None else self._now_fn()
-        self._quotes[ticker] = Quote(
-            ticker=ticker,
-            price=float(price),
-            ts=resolved_ts,
-            source=self.source,
-            delay_seconds=0.0,
-        )
-
-    def queue(self, ticker: str, sequence: list[tuple[float, Optional[datetime]]]) -> None:
-        """Carrega uma sequencia de (preco, ts) a ser consumida por `advance()`."""
-        self._sequences[ticker] = list(sequence)
-
-    def advance(self, ticker: str) -> Optional[Quote]:
-        """Consome o proximo (preco, ts) da fila de `ticker`, se houver, e o
-        torna a cotacao corrente. Devolve `None` se a fila estiver vazia."""
-        seq = self._sequences.get(ticker)
-        if not seq:
-            return None
-        price, ts = seq.pop(0)
-        self.set(ticker, price, ts)
-        return self._quotes[ticker]
-
-    def quotes(self, tickers: Sequence[str]) -> dict[str, Quote]:
-        return {t: self._quotes[t] for t in tickers if t in self._quotes}
 
 
 def staleness_report(
