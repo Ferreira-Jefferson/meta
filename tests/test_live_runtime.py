@@ -99,11 +99,31 @@ def _runtime(tmp_path, days_dir, script, policy=None, db_name="live.sqlite",
 
 # ---------- separação física do banco ao vivo (FEAT-000) -------------------
 
-def test_db_path_default_e_live_db_path():
+def test_db_path_default_e_live_db_path(tmp_path, monkeypatch):
     """P3 — sem isso, `runtime.py` continuaria importando `DB_PATH` de
-    backtest e toda a operação real seguiria gravando no banco compartilhado."""
+    backtest e toda a operação real seguiria gravando no banco compartilhado.
+
+    Correção pós-code-review (E3): a asserção original comparava
+    `rt.db_path` contra o caminho REAL de produção (`core.config.LIVE_DB_PATH`)
+    ao instanciar um `LiveRuntime` de verdade com `db_path=None` — o teste
+    passava, mas o `LiveRuntime` nunca chegava a abrir aquele arquivo (nada
+    aqui chama `ensure_account`/`close_and_decide`), então o risco era baixo;
+    ainda assim, um teste que referencia o caminho real de produção é frágil
+    por princípio (basta alguém adicionar uma chamada que abre a conexão
+    para o teste tocar `db/live.sqlite` de verdade). Agora o `DB_PATH` do
+    módulo é monkeypatchado para um arquivo em `tmp_path` (mesma convenção de
+    `tests/test_dashboard_app.py:46`) ANTES de instanciar o `LiveRuntime`, e
+    a comparação usa esse valor — nunca o caminho real."""
     from core.config import LIVE_DB_PATH
     from live import runtime as live_runtime
+
+    # Prova a ligação (import `LIVE_DB_PATH as DB_PATH` em runtime.py) ANTES
+    # do monkeypatch, sem instanciar nenhum LiveRuntime apontando pro caminho
+    # real.
+    assert live_runtime.DB_PATH is LIVE_DB_PATH
+
+    fake_db_path = tmp_path / "live_test.sqlite"
+    monkeypatch.setattr(live_runtime, "DB_PATH", fake_db_path)
 
     feed = ReplayFeed()
     broker = PaperBroker(feed)
@@ -115,11 +135,7 @@ def test_db_path_default_e_live_db_path():
         config=BacktestConfig(initial_capital=1_000.0, lot_size=1),
         tickers=(TICKER,), db_path=None,
     )
-    assert rt.db_path == LIVE_DB_PATH
-    # o nome do módulo permanece `DB_PATH` só por compatibilidade com o
-    # monkeypatch de tests/test_dashboard_app.py (premissa 4) — mas aponta
-    # para o mesmo objeto que core.config.LIVE_DB_PATH.
-    assert live_runtime.DB_PATH is LIVE_DB_PATH
+    assert rt.db_path == fake_db_path
 
 
 # ---------- ciclo completo: decide -> executa -> stop intra-dia ------------
