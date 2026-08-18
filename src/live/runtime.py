@@ -200,6 +200,25 @@ class LiveRuntime:
         self._panels: dict[str, pd.DataFrame] = {}
         self._ibov: Optional[pd.DataFrame] = None
         self._prepared_through: Optional[date] = None
+        # Marcador de dedupe do skip por dado incompleto (achado E2,
+        # FEAT-003): guarda o ultimo `{"session": ..., "faltando": [...]}`
+        # notificado, para `close_and_decide` nao repetir o mesmo alerta a
+        # cada chamada de `run_once` (a cada minuto). Persistido em
+        # `policy_state["skip_avisado"]` para sobreviver a um restart.
+        self._skip_avisado: Optional[dict] = None
+        # Dedupe do warn "disjuntor nao observou o tick: sem base do fecho
+        # anterior" (mitigacao obrigatoria do passo 8, ver ACTION-PLAN §5):
+        # sem isso, um mes inteiro sem `close_and_decide` bem-sucedido faria
+        # `intraday_tick` logar/notificar esse warn A CADA CHAMADA de
+        # `run_once` (a cada minuto) -- reintroduziria o achado E2 por outra
+        # porta. So em memoria (nao persistido): o pior caso de um restart
+        # no meio do dia e um warn extra, nao uma inundacao.
+        self._risk_sem_base_avisado: Optional[date] = None
+        # Aviso "conta de dinheiro real sem canal de notificacao" (achado
+        # E7): uma vez por PROCESSO (nao persistido, nao por sessao) --
+        # senao repetiria em todo `close_and_decide` de uma conta manual/mt5
+        # sem `notifier` configurado.
+        self._null_notifier_warned: bool = False
 
     # ---------- log + alerta (sempre juntos) -------------------------------
 
@@ -219,24 +238,41 @@ class LiveRuntime:
     # ---------- estado dos robos (persistencia aninhada) --------------------
 
     def _restore_robot_state(self, policy_state: dict) -> None:
-        """Reidrata a politica de saque e o circuit breaker a partir do
-        `policy_state` da conta (JSON aninhado: `{"withdrawal": ..., "risk_guard": ...}`).
+        """Reidrata a politica de saque, o circuit breaker e a estrategia de
+        investimento a partir do `policy_state` da conta (JSON aninhado:
+        `{"withdrawal": ..., "risk_guard": ..., "investment": {"robot": ...,
+        "state": ...}, "skip_avisado": ...}`).
 
         Aninhado (em vez de gravar so o estado da politica direto, como era
-        antes do circuit breaker existir) porque agora sao DOIS objetos com
-        estado proprio dividindo a mesma coluna — sem o aninhamento, um
-        sobrescreveria o outro."""
+        antes do circuit breaker existir) porque agora sao objetos
+        DIFERENTES com estado proprio dividindo a mesma coluna — sem o
+        aninhamento, um sobrescreveria o outro.
+
+        O bloco `"investment"` (FEAT-003, item 3.2) carrega o CARIMBO do
+        robo que gravou aquele estado (`self.investment.key`, achado C4) —
+        se divergir do robo atual, o estado e DESCARTADO silenciosamente
+        (nao ha `conn` aqui para logar, e o caminho e so leitura): sem o
+        carimbo, trocar de estrategia (ou reapontar a conta por engano)
+        importaria o `_pending_rebalance` de um robo completamente
+        diferente."""
         if not policy_state:
             return
         self.withdrawal.restore(policy_state.get("withdrawal") or {})
         if self.risk_guard is not None:
             self.risk_guard.restore(policy_state.get("risk_guard") or {})
+        bloco = policy_state.get("investment") or {}
+        robo_gravado = bloco.get("robot")
+        if robo_gravado is None or robo_gravado == self.investment.key:
+            self.investment.restore(bloco.get("state") or {})
+        self._skip_avisado = policy_state.get("skip_avisado")
 
     def _robot_state(self) -> dict:
         """Inverso de `_restore_robot_state` — o que persistir em `policy_state`."""
         return {
             "withdrawal": self.withdrawal.state(),
             "risk_guard": self.risk_guard.state() if self.risk_guard is not None else {},
+            "investment": {"robot": self.investment.key, "state": self.investment.state()},
+            "skip_avisado": self._skip_avisado,
         }
 
     # ---------- infraestrutura de dado ------------------------------------
@@ -405,6 +441,16 @@ class LiveRuntime:
         banco. Persistir sem restaurar primeiro sobrescreveria o estado real
         da politica de saque (fila do minimo, mes ja pago) com um objeto
         recem-construido e vazio — perderia dado de producao por engano.
+
+        RE-ANCORA as bases do disjuntor no patrimonio corrente (item F2,
+        FEAT-003): sem isso, com o disjuntor agora observado a cada minuto
+        (`intraday_tick`), o PROXIMO tick recalcularia a MESMA perda contra
+        a MESMA base antiga e recongelaria em segundos — o botao de panico
+        viraria inoperante durante o pregao. O calculo do patrimonio
+        corrente (paineis + cotacao intra-dia) e melhor-esforco: se painel
+        ou feed falharem, destrava sem re-ancorar (comportamento antigo) e
+        avisa que a trava pode voltar no proximo tick, em vez de abortar o
+        destravamento inteiro por uma falha de leitura de dado.
         """
         if self.risk_guard is None:
             return
@@ -413,10 +459,94 @@ class LiveRuntime:
             if account is None:
                 return
             self._restore_robot_state(account.policy_state)
-            self.risk_guard.unfreeze()
+            hoje = clock.session_date()
+            try:
+                self._load(hoje)
+                quotes = self.feed.quotes(self.tickers)
+                stale = staleness_report(quotes, datetime.now(timezone.utc), self.max_quote_age)
+                marks = self._intraday_marks(hoje, quotes, stale=stale)
+                patrimonio = account.patrimonio(marks)
+                self.risk_guard.unfreeze(hoje, patrimonio)
+            except Exception as exc:
+                self.risk_guard.unfreeze()
+                self._log(conn, account.id, "warn", "riskguard",
+                                f"destravado sem re-ancorar: {exc} — a trava pode "
+                                "voltar no proximo tick")
             account.policy_state = self._robot_state()
             store.save_account(conn, account)
             self._log(conn, account.id, "info", "riskguard", "disjuntor destravado manualmente")
+
+    # ---------- disjuntor: base do dia -------------------------------------
+
+    def _previous_close_patrimonio(self, conn, account_id: int, session: date) -> Optional[float]:
+        """Patrimonio do FECHO ANTERIOR a `session` — a base de comparacao
+        correta do disjuntor diario (item 3.1: usar o patrimonio do proprio
+        `session` como base faz a perda do dia ser sempre 0%, porque a base
+        e fixada no mesmo `observe()` que a compara).
+
+        So aceita a linha se a data for EXATAMENTE `clock.previous_session(session)`
+        e o valor for `> 0` (achados A2/A4): uma linha de dias atras (processo
+        fora do ar, ou pregoes pulados por dado incompleto) transformaria
+        deriva normal em "perda do dia"; uma base `<= 0` faria
+        `CircuitBreaker.observe` pular a avaliacao de perda NAS DUAS travas
+        em silencio (`riskguard.py`, guarda `_daily_ref_equity > 0`)."""
+        anterior = clock.previous_session(session)
+        row = store.last_equity(conn, account_id, anterior.isoformat())
+        if row is None:
+            return None
+        data, _equity, patrimonio = row
+        if data != anterior.isoformat() or patrimonio <= 0:
+            return None
+        return float(patrimonio)
+
+    def _intraday_marks(self, session: date, quotes: dict, stale=()) -> dict[str, float]:
+        """`_marks(session)` sobrescrito pela cotacao intra-dia, descartando
+        as cotacoes que `staleness_report` ja apontou como velhas (achado B2):
+        uma cotacao velha/absurda nao pode alimentar o disjuntor mensal, que
+        exige revisao humana para destravar."""
+        marks = dict(self._marks(session))
+        velhas = set(stale)
+        marks.update({t: q.price for t, q in quotes.items() if t not in velhas})
+        return marks
+
+    def _observe_risk(self, conn, account: AccountState, session: date,
+                      patrimonio: float, *, may_anchor: bool) -> None:
+        """Alimenta `risk_guard.observe()` com a base correta (achados 3.1,
+        A2, A4, F1).
+
+        `may_anchor=True` (caminho de FECHO, `close_and_decide`): se houver
+        uma base confiavel do fecho anterior, observa ela PRIMEIRO (fixa/
+        confirma a base do dia/mes) e so depois o patrimonio corrente — as
+        duas chamadas no mesmo dia sao seguras porque a segunda so compara
+        contra a base ja fixada pela primeira (ver `CircuitBreaker.observe`).
+        Sem base confiavel, cai no comportamento antigo (observa so o
+        patrimonio corrente — nao ideal, mas nao desliga a trava).
+
+        `may_anchor=False` (caminho INTRA-DIA, `intraday_tick`): NUNCA cria
+        a âncora do dia/mes a partir de uma leitura intra-dia (achado F1) —
+        `run_once` roda OPEN antes de POST_CLOSE, entao no 1o pregao de um
+        mes novo um tick poderia ser o PRIMEIRO `observe()` do mes; se a base
+        nao for confiavel aqui, o tick simplesmente NAO observa (fica sem
+        proteção intra-dia neste dia especifico, mas nunca ancora errado o
+        mes inteiro)."""
+        if self.risk_guard is None:
+            return
+        base = self._previous_close_patrimonio(conn, account.id, session)
+        if base is not None:
+            self.risk_guard.observe(session, base)
+            self.risk_guard.observe(session, patrimonio)
+        elif may_anchor:
+            self.risk_guard.observe(session, patrimonio)
+            self._log(conn, account.id, "warn", "riskguard",
+                            "disjuntor sem base do fecho anterior — usando patrimonio do dia")
+        elif self._risk_sem_base_avisado != session:
+            # dedupe por sessao (mitigacao obrigatoria, ver ACTION-PLAN §5,
+            # "riscos ATIVOS" do passo 8) -- sem isso, um mes inteiro sem
+            # `close_and_decide` bem-sucedido inundaria o canal de alerta a
+            # cada tick, reintroduzindo o achado E2 por outra porta.
+            self._risk_sem_base_avisado = session
+            self._log(conn, account.id, "warn", "riskguard",
+                            "disjuntor nao observou o tick: sem base do fecho anterior")
 
     # ---------- fecho: os robos decidem -----------------------------------
 
@@ -430,21 +560,69 @@ class LiveRuntime:
         `PENDING`. A politica de saque decide ANTES da estrategia porque no
         engine ela ve o equity do fecho antes de qualquer acao nova ser
         enfileirada; trocar a ordem mudaria o valor sacado.
+
+        Ordem das GUARDAS (achado E3, FEAT-003): idempotencia ("ja decidido")
+        roda ANTES de `data_is_ready`. Sem essa inversao, o gap-flapping
+        conhecido do yfinance (o parquet perde retroativamente a barra do
+        dia entre um download e outro) geraria um `error` de "rotacao pode
+        ter sido PERDIDA" para uma sessao que JA foi decidida com sucesso,
+        so porque o dado sumiu DEPOIS.
+
+        Skip por dado incompleto (item 3.3): grava evento + notifica, com
+        DEDUPE por `(sessao, faltantes)` persistido em `policy_state` (achado
+        E2) — sem isso, `run_once` chamado a cada minuto inundaria o canal de
+        alerta. Escala para `error` quando o pregao pulado for o ULTIMO do
+        mes (`clock.next_session(session).month != session.month`): nesse
+        caso a rotacao nao e adiada, e PERDIDA. Este `error` so ESCALA o
+        NIVEL da notificacao (achado E1) — `run_once` continua chamando
+        `reconcile_pending_fills`, `execute_session`, `intraday_tick` e a
+        confirmacao de saque normalmente, nunca aborta por causa dele.
         """
         universe = self._load_universe()
-        ready, faltando = self._data_is_ready(session, universe)
-        if not ready:
-            return StepReport("decide_skip", session,
-                              detail={"motivo": "dado incompleto", "faltando": ",".join(faltando)})
-        self._load(session, universe)
 
         with store.live_journal(self.db_path) as conn:
             account = self._load_account(conn)
             if account is None:
                 return StepReport("decide_skip", session, detail={"motivo": "conta inexistente"})
-            if any(d == session.isoformat() for d, _e, _p in store.equity_series(conn, account.id)):
-                return StepReport("decide_skip", session, detail={"motivo": "ja decidido"})
+
             self._restore_robot_state(account.policy_state)
+
+            # E7: aviso UNICO por processo se a conta e de dinheiro real
+            # (manual/mt5) e nao ha canal de notificacao configurado -- sem
+            # isso, o alerta mais importante do lote sairia so para um log
+            # que ninguem le.
+            if (account.mode in ("manual", "mt5") and isinstance(self.notifier, NullNotifier)
+                    and not self._null_notifier_warned):
+                self._null_notifier_warned = True
+                self._log(conn, account.id, "warn", "runtime",
+                                "conta de dinheiro real sem canal de notificacao configurado "
+                                "— alertas so ficam no diario")
+
+            # E3: idempotencia ANTES do dado -- ver docstring.
+            ja_decidida = store.last_equity(conn, account.id, session.isoformat())
+            if ja_decidida is not None and ja_decidida[0] == session.isoformat():
+                return StepReport("decide_skip", session, detail={"motivo": "ja decidido"})
+
+            ready, faltando = self._data_is_ready(session, universe)
+            if not ready:
+                fim_de_mes = clock.next_session(session).month != session.month
+                nivel = "error" if fim_de_mes else "warn"
+                marcador = {"session": session.isoformat(), "faltando": sorted(faltando)}
+                if self._skip_avisado != marcador:
+                    msg = f"dado incompleto para {session}: faltando {', '.join(sorted(faltando))}"
+                    if fim_de_mes:
+                        msg += " — FIM DE MES: a rotacao pode ter sido PERDIDA, nao so adiada"
+                    self._log(conn, account.id, nivel, "runtime", msg, marcador)
+                    self._skip_avisado = marcador
+                account.policy_state = self._robot_state()
+                store.save_account(conn, account)
+                return StepReport("decide_skip", session, detail={
+                    "motivo": "dado incompleto", "faltando": ",".join(faltando),
+                    "fim_de_mes": fim_de_mes,
+                })
+
+            self._load(session, universe)
+
             saques_expirados = self._expire_withdraw_advice(conn, account, session)
 
             marks = self._marks(session)
@@ -456,9 +634,9 @@ class LiveRuntime:
             # Circuit breaker: observa o patrimonio do fecho ANTES de colher
             # decisoes, para o veto (se houver) valer para as intencoes que
             # vao ser geradas agora — nao para as do fecho anterior, que ja
-            # foram gravadas.
-            if self.risk_guard is not None:
-                self.risk_guard.observe(session, patrimonio)
+            # foram gravadas. `may_anchor=True`: este e o caminho de FECHO, o
+            # unico que pode criar a ancora do dia/mes (achado F1).
+            self._observe_risk(conn, account, session, patrimonio, may_anchor=True)
 
             execute_on = clock.next_session(session)
             ctx = self._context(session, account, SessionPhase.POST_CLOSE)
@@ -508,6 +686,9 @@ class LiveRuntime:
                 pos.bars_held += 1
                 store.upsert_position(conn, account.id, pos)
 
+            # A sessao decidiu com sucesso -- o marcador de dedupe do skip
+            # nao pode calar o PROXIMO skip (de uma sessao futura).
+            self._skip_avisado = None
             account.policy_state = self._robot_state()
             store.save_account(conn, account)
             self._log(conn, account.id, "info", "runtime",
@@ -1053,15 +1234,46 @@ class LiveRuntime:
     # ---------- intra-dia --------------------------------------------------
 
     def intraday_tick(self, session: date, now: Optional[datetime] = None) -> StepReport:
-        """Acompanha preco e dispara stop. Nao toma nenhuma decisao propria."""
+        """Acompanha preco, dispara stop e observa o disjuntor de risco.
+
+        FEAT-003 (item 3.1, achado B1): antes desta feature, este metodo nao
+        chamava `risk_guard.observe()` — um crash intra-dia que se
+        recuperasse ate o fecho nunca era visto pelo disjuntor. Carrega os
+        paineis (`_load`) ANTES de observar: sem isso, `self._panels` fica
+        vazio num processo recem-reiniciado, `_marks()` devolve `{}`, e
+        `AccountState.invested` cai no fallback `marks.get(t, p.entry_price)`
+        — toda posicao aberta valeria o preco de ENTRADA, lendo como perda
+        instantanea e travando o disjuntor por engano (e essa trava
+        fantasma seria PERSISTIDA por este mesmo metodo). Falha de painel
+        NUNCA pode derrubar o processamento de stop (que so depende de
+        `quotes`) — por isso o `try/except` isolado abaixo.
+
+        `may_anchor=False`: um tick NUNCA cria a ancora do dia/mes sozinho
+        (achado F1) — so `close_and_decide` pode.
+
+        Divergencia HONESTA com o backtest, documentada aqui (achado B4): a
+        protecao intra-dia so cobre entradas ainda NAO processadas neste
+        ciclo de `run_once` — `execute_session` roda antes de
+        `intraday_tick` na fase OPEN, entao uma entrada ja executada hoje
+        nao e desfeita, e uma ordem `Enter` ja em voo nao e cancelada quando
+        a trava fecha (mesmo comportamento de `_buy`, que so veta ANTES do
+        envio).
+        """
         now = now or datetime.now(timezone.utc)
         quotes = self.feed.quotes(self.tickers)
         velhas = staleness_report(quotes, now, self.max_quote_age)
+
+        paineis_ok = True
+        try:
+            self._load(clock.previous_session(session))
+        except Exception:
+            paineis_ok = False
 
         with store.live_journal(self.db_path) as conn:
             account = self._load_account(conn)
             if account is None:
                 return StepReport("intraday_skip", session, detail={"motivo": "conta inexistente"})
+            self._restore_robot_state(account.policy_state)
 
             if velhas:
                 # Nao aborta: registra. Um stop sobre dado atrasado dispara no
@@ -1088,6 +1300,16 @@ class LiveRuntime:
                     self._log(conn, account.id, "warn", "runtime",
                                     f"stop disparado em {intent.ticker} "
                                     f"(feed {self.feed.name}, atraso {self.feed.delay_seconds:.0f}s)")
+
+            if paineis_ok:
+                marks = self._intraday_marks(session, quotes, stale=velhas)
+                self._observe_risk(conn, account, session, account.patrimonio(marks),
+                                   may_anchor=False)
+            else:
+                self._log(conn, account.id, "warn", "riskguard",
+                                "disjuntor nao observou o tick: paineis indisponiveis")
+
+            account.policy_state = self._robot_state()
             store.save_account(conn, account)
 
         return StepReport("intraday", session, phase=SessionPhase.OPEN,
@@ -1161,6 +1383,21 @@ class LiveRuntime:
                     if i.kind != IntentKind.WITHDRAW]
             pend_saque = store.pending_withdraw_intents(conn, account.id)
             eventos = store.recent_events(conn, account.id, limit=10)
+
+            # Todos os pregoes sem decisao (achado E4) — nao so `session`: um
+            # pregao pulado (skip por dado incompleto, processo fora do ar)
+            # ficaria visivel por menos de 24h se so a referencia atual fosse
+            # mostrada. Teto de 30: conta nova/processo fora do ar por meses
+            # nao pode gerar uma lista sem fim.
+            ultima = store.last_equity(conn, account.id, session.isoformat())
+            if ultima is None:
+                pendentes = [session.isoformat()]
+            else:
+                pendentes = []
+                d = clock.next_session(date.fromisoformat(ultima[0]))
+                while d <= session and len(pendentes) < 30:
+                    pendentes.append(d.isoformat())
+                    d = clock.next_session(d)
         return {
             "conta": account.name,
             "existe": True,
@@ -1169,6 +1406,8 @@ class LiveRuntime:
             "robo_saque": account.withdrawal_robot,
             "pregao": session.isoformat(),
             "fase": clock.phase().value,
+            "decisao_pendente": pendentes,
+            "notificador": type(self.notifier).__name__,
             "feed": {"nome": self.feed.name, "tempo_real": self.feed.is_realtime,
                      "atraso_s": self.feed.delay_seconds},
             "corretora": {"nome": self.broker.name, "modo": self.broker.mode,

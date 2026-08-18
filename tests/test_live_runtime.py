@@ -9,6 +9,7 @@ Esse comportamento ja e validado pelo backtest; aqui o alvo e o encanamento.
 """
 from __future__ import annotations
 
+import json
 from datetime import date, datetime, timedelta
 from typing import Optional
 
@@ -30,7 +31,7 @@ from core.models import ExitReason
 from journal import live_store as store
 from live import clock
 from live.broker import Broker, ManualBroker
-from live.notify import Notifier
+from live.notify import NullNotifier, Notifier
 from live.riskguard import CircuitBreaker
 from live.runtime import LiveRuntime
 from strategy.base import AdjustStop, Enter, Exit, Strategy
@@ -1217,3 +1218,500 @@ def test_run_once_aciona_reconcile_broker_cash_no_pre_open(tmp_path, universe):
     with store.live_journal(rt.db_path) as conn:
         acc = store.load_account(conn, "teste")
     assert acc.cash == pytest.approx(10_000.0)  # nao creditado sozinho
+
+
+# ---------- FEAT-003: Strategy.state()/restore() e lista branca ------------
+
+def test_strategy_state_e_lista_branca_json_segura():
+    """Passo 1/2 (RED antes de GREEN): `Strategy.state()`/`restore()` sao
+    genericos sobre `_stateful_keys` (lista branca), NUNCA `vars(self)` cru
+    -- `BuyTheDip` guarda `_scores`/`_dist_from_high` (`dict[str, pd.Series]`),
+    que quebrariam `json.dumps`. `restore()` tambem coage o tipo pelo default
+    da classe (achado C2): uma string `"false"` persistida vira `bool False`,
+    nao a string truthy."""
+    strat = BuyTheDip()
+    snapshot = strat.state()
+    assert snapshot == {"_pending_rebalance": False}
+    json.dumps(snapshot)  # nao pode levantar -- so o essencial esta na lista branca
+
+    strat2 = BuyTheDip()
+    strat2.restore({"_pending_rebalance": True})
+    assert strat2._pending_rebalance is True
+
+    # achado C2: coercao de tipo pelo default -- "false" e truthy em Python.
+    strat3 = BuyTheDip()
+    strat3.restore({"_pending_rebalance": "false"})
+    assert strat3._pending_rebalance is False
+
+    # chave fora da lista branca e ignorada silenciosamente.
+    strat4 = BuyTheDip()
+    strat4.restore({"_scores": {"AAA.SA": [1, 2, 3]}})
+    assert strat4._scores == {}
+
+
+# ---------- FEAT-003: item 3.2 -- estado da estrategia sobrevive a restart -
+
+def _pregao_fim_de_mes_em_blackout() -> date:
+    """Espelha `_pregao_fim_de_mes_limpo()`, mas para o cenario OPOSTO: um
+    fim de mes que CAI dentro do blackout de resultados e cujo pregao
+    seguinte esta FORA do blackout -- a terceira clausula e obrigatoria
+    (premissa 7): o robo so EXECUTA a rotacao adiada num pregao fora de
+    blackout; sem ela o teste veria um segundo adiamento, nao uma execucao,
+    e viraria falso-negativo silencioso."""
+    d = date(2028, 1, 2)
+    for _ in range(800):
+        nxt = clock.next_session(d)
+        if nxt.month != d.month and is_earnings_blackout(d) and not is_earnings_blackout(nxt):
+            return d
+        d = nxt
+    raise AssertionError("nao achou fim de mes em blackout em 800 pregoes -- calendario mudou?")
+
+
+def _painel_dip_para(tmp_path, ultimo_dia: date, tickers_extra: tuple[str, ...] = ("BBB.SA",)):
+    """Painel sintetico com dip claro em AAA.SA (favorito do ranking top_n=1
+    de `BuyTheDip`) cobrindo `ultimo_dia`. Mesma receita de
+    `test_fim_de_mes_dispara_no_ultimo_dia_disponivel`."""
+    dias = pd.bdate_range(end=pd.Timestamp(ultimo_dia), periods=301)
+    n = len(dias)
+    aaa = [100.0 + i * 0.7 for i in range(n)]
+    peak = aaa[n - 11]
+    for i in range(n - 10, n):
+        aaa[i] = peak * 0.93
+    data_dir = tmp_path / "dados"
+    data_dir.mkdir(exist_ok=True)
+    _write_parquet(data_dir, "AAA.SA", [d.date() for d in dias], aaa)
+    for extra in tickers_extra:
+        _write_parquet(data_dir, extra, [d.date() for d in dias], [50.0] * n)
+    _write_parquet(data_dir, BENCHMARK, [d.date() for d in dias], [50_000.0] * n)
+    return data_dir
+
+
+def test_pending_rebalance_de_marco_sobrevive_a_restart_do_processo(tmp_path):
+    """Passo 4 (RED antes de GREEN, item 3.2 do plano original): um restart
+    do processo durante o blackout de marco nao pode apagar o adiamento
+    (`_pending_rebalance`) da campeã -- hoje `InvestmentRobot.state()`
+    devolve `{}` sempre, entao a rotacao adiada se perde em silencio, e o
+    mes inteiro de marco nunca roda a rotacao que deveria ter sido adiada
+    para abril."""
+    session = _pregao_fim_de_mes_em_blackout()
+    proximo = clock.next_session(session)
+    data_dir = _painel_dip_para(tmp_path, proximo)
+
+    def _nova_estrategia():
+        return BuyTheDip(top_n=1, dip_pct=0.03, high_window=20,
+                         selic_path=str(tmp_path / "selic_inexistente.parquet"))
+
+    feed1 = ReplayFeed()
+    rt1 = LiveRuntime(
+        account_name="teste", strategy=_nova_estrategia(), policy=FloorSkim(pct=0.5, floor=1e12),
+        feed=feed1, broker=PaperBroker(feed1), config=BacktestConfig(initial_capital=10_000.0, lot_size=1),
+        tickers=("AAA.SA", "BBB.SA"), db_path=tmp_path / "live.sqlite", data_dir=data_dir,
+    )
+    rt1.ensure_account()
+
+    result1 = rt1.close_and_decide(session)
+    assert result1.action == "decide"
+    assert result1.detail["intencoes"] == 0, "fim de mes em blackout deveria ADIAR, nao decidir"
+
+    # "restart": processo NOVO, BuyTheDip NOVA (_pending_rebalance=False por
+    # construcao), mesmo banco.
+    feed2 = ReplayFeed()
+    rt2 = LiveRuntime(
+        account_name="teste", strategy=_nova_estrategia(), policy=FloorSkim(pct=0.5, floor=1e12),
+        feed=feed2, broker=PaperBroker(feed2), config=BacktestConfig(initial_capital=10_000.0, lot_size=1),
+        tickers=("AAA.SA", "BBB.SA"), db_path=tmp_path / "live.sqlite", data_dir=data_dir,
+    )
+
+    result2 = rt2.close_and_decide(proximo)
+    assert result2.action == "decide"
+    assert result2.detail["intencoes"] >= 1, (
+        "_pending_rebalance nao sobreviveu ao restart -- rotacao de marco perdida"
+    )
+
+
+def test_estado_de_outro_robo_e_descartado_no_restore(tmp_path, universe):
+    """Passo 4 (RED antes de GREEN, achado C4): `policy_state["investment"]`
+    tem de carregar a CHAVE do robo (`self.investment.key`). Se o `robot`
+    gravado divergir do robo atual, o estado NAO pode ser herdado -- senao
+    uma troca de estrategia (ou uma conta reapontada por engano) importaria
+    o `_pending_rebalance` de um robo completamente diferente."""
+    data_dir, days = universe
+    strat = BuyTheDip()   # key == "buy_the_dip" -- tem `_pending_rebalance` de verdade
+    feed = ReplayFeed()
+    rt = LiveRuntime(
+        account_name="teste", strategy=strat, policy=FloorSkim(pct=0.5, floor=1e12),
+        feed=feed, broker=PaperBroker(feed), config=BacktestConfig(initial_capital=10_000.0, lot_size=1),
+        tickers=(TICKER,), db_path=tmp_path / "live.sqlite", data_dir=data_dir,
+    )
+    rt.ensure_account()
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, "teste")
+        acc.policy_state = {
+            **acc.policy_state,
+            "investment": {"robot": "outro_robo_completamente_diferente",
+                          "state": {"_pending_rebalance": True}},
+        }
+        store.save_account(conn, acc)
+        acc_recarregada = store.load_account(conn, "teste")
+
+    rt._restore_robot_state(acc_recarregada.policy_state)
+
+    assert strat._pending_rebalance is False, (
+        "estado de outro robo foi herdado -- carimbo da chave nao esta sendo checado"
+    )
+
+
+# ---------- FEAT-003: item 3.1 -- disjuntor diario usa a base certa --------
+
+def test_disjuntor_diario_usa_patrimonio_do_fecho_anterior_como_base(tmp_path, universe):
+    """Passo 8 (RED antes de GREEN, achado/item 3.1 do plano original): antes
+    da correcao, `close_and_decide` observava o disjuntor com o patrimonio do
+    PROPRIO dia sendo decidido -- a base do dia so e fixada no primeiro
+    `observe()`, com o MESMO valor passado nessa chamada, entao a perda
+    calculada e sempre 0% nesse (unico) contato do dia. A correcao usa o
+    patrimonio do FECHO ANTERIOR como base de comparacao."""
+    data_dir, days = universe
+    d0, d1 = days[0], days[1]
+    script = {pd.Timestamp(d1): [Enter(ticker=TICKER, initial_stop=None, size_hint=None)]}
+    rt = _runtime(tmp_path, data_dir, script, capital=10_000.0)
+    rt.ensure_account()
+
+    r0 = rt.close_and_decide(d0)
+    assert r0.action == "decide"
+    assert r0.detail["equity"] == pytest.approx(10_000.0)
+
+    # simula perda REAL entre os dois fechos (crash intra-dia nao observado
+    # ainda, ou qualquer outro efeito que consuma caixa) -- grava direto no
+    # banco, fora do fluxo normal do supervisor.
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, "teste")
+        acc.cash = 5_000.0   # metade do patrimonio evaporou
+        store.save_account(conn, acc)
+
+    guard = CircuitBreaker(daily_loss_pct=0.05, monthly_loss_pct=0.99)
+    rt.risk_guard = guard
+
+    result = rt.close_and_decide(d1)
+    assert result.action == "decide"
+    assert guard.is_frozen is True, (
+        "disjuntor deveria ter usado o patrimonio do FECHO ANTERIOR (10.000) "
+        "como base, nao o do proprio dia (5.000) -- perda de -50% > limite de 5%"
+    )
+    assert result.detail["intencoes"] == 0, "ENTER deveria ter sido vetado pelo disjuntor"
+
+
+def test_disjuntor_recusa_base_do_fecho_anterior_velha_ou_zerada(tmp_path, universe):
+    """Passo 8(a) (RED antes de GREEN, achados A2/A4): `_previous_close_patrimonio`
+    so aceita a linha do fecho IMEDIATAMENTE anterior (`clock.previous_session`),
+    e so se o valor for `> 0`. Sem o limite de idade, uma base de dias atras
+    transformaria deriva normal em "perda do dia"; sem o piso `> 0`, uma base
+    zerada desligaria as DUAS travas em silencio (`CircuitBreaker.observe` so
+    avalia perda quando a base e `> 0`)."""
+    data_dir, days = universe
+    d0 = days[0]
+    d5 = days[5]
+    rt = _runtime(tmp_path, data_dir, {}, capital=10_000.0)
+    rt.ensure_account()
+
+    with store.live_journal(rt.db_path) as conn:
+        account = store.load_account(conn, "teste")
+
+        # (a) linha de 5 pregoes atras -- velha demais para servir de base
+        # do fecho ANTERIOR de d5 (que e `clock.previous_session(d5)`, nao d0).
+        store.record_equity(conn, account.id, d0, cash=10_000.0, invested=0.0,
+                            equity=10_000.0, external_cash=0.0)
+        base_a = rt._previous_close_patrimonio(conn, account.id, d5)
+        assert base_a is None, "base velha (5 pregoes atras) deveria ser recusada"
+
+        # (b) linha do fecho IMEDIATAMENTE anterior, mas patrimonio = 0.0.
+        anterior = clock.previous_session(d5)
+        store.record_equity(conn, account.id, anterior, cash=0.0, invested=0.0,
+                            equity=0.0, external_cash=0.0)
+        base_b = rt._previous_close_patrimonio(conn, account.id, d5)
+        assert base_b is None, "base zerada deveria ser recusada (desligaria as duas travas)"
+
+        # controle: mesma data, valor > 0 -> aceita.
+        store.record_equity(conn, account.id, anterior, cash=8_000.0, invested=0.0,
+                            equity=8_000.0, external_cash=0.0)
+        base_ok = rt._previous_close_patrimonio(conn, account.id, d5)
+        assert base_ok == pytest.approx(8_000.0)
+
+
+# ---------- FEAT-003: item 3.1 -- disjuntor intra-dia ----------------------
+
+def test_disjuntor_dispara_em_crash_intradia_e_estado_sobrevive_a_restart(tmp_path, universe):
+    """Passo 9 (RED antes de GREEN, item 3.1 e achado B1): `intraday_tick`
+    hoje NAO chama `observe()` -- um crash intra-dia que se recupera ate o
+    fecho nunca e visto pelo disjuntor. E o congelamento acionado por
+    `intraday_tick` tem de PERSISTIR: um `LiveRuntime` novo (restart) que
+    restaura o estado ve o disjuntor travado."""
+    data_dir, days = universe
+    d0, d1 = days[0], days[1]
+    rt = _runtime(tmp_path, data_dir, {}, capital=10_000.0)
+    guard = CircuitBreaker(daily_loss_pct=0.05, monthly_loss_pct=0.99)
+    rt.risk_guard = guard
+    rt.ensure_account()
+
+    r0 = rt.close_and_decide(d0)
+    assert r0.action == "decide"
+    assert guard.is_frozen is False   # premissa
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, "teste")
+        acc.cash = 5_000.0    # "crash" intra-dia: metade do patrimonio evapora
+        store.save_account(conn, acc)
+
+    rt.intraday_tick(d1)
+    assert guard.is_frozen is True, "intraday_tick deveria ter observado o disjuntor e travado"
+
+    # a mutacao tem de sobreviver a um restart do processo: rt2 e um
+    # LiveRuntime NOVO, CircuitBreaker NOVO em memoria, mesmo banco.
+    # `reconcile_pending_fills` (metodo publico) ja restaura o estado dos
+    # robos antes de rodar.
+    rt2 = _runtime(tmp_path, data_dir, {}, capital=10_000.0)
+    rt2.risk_guard = CircuitBreaker(daily_loss_pct=0.05, monthly_loss_pct=0.99)
+    rt2.reconcile_pending_fills()
+    assert rt2.risk_guard.is_frozen is True, "congelamento de intraday_tick nao persistiu"
+
+
+def test_intraday_tick_carrega_paineis_antes_de_observar_o_disjuntor(tmp_path, universe):
+    """Passo 9(a) (RED antes de GREEN, achado B1): `intraday_tick` chamado
+    isoladamente (sem `execute_session` antes -- processo recem-reiniciado)
+    tem de carregar os paineis (`_load`) ANTES de observar o disjuntor. Sem
+    isso, `self._panels` fica vazio, `_marks()` devolve `{}`, e
+    `AccountState.invested` cai no fallback `marks.get(t, p.entry_price)` --
+    uma posicao em LUCRO passaria a valer o preco de ENTRADA, lendo como
+    perda instantanea e travando o disjuntor por engano (e agora essa trava
+    fantasma seria PERSISTIDA)."""
+    data_dir, days = universe   # AAA.SA fecha a 100.0 em todos os 8 pregoes
+    d0, d1 = days[0], days[1]
+
+    rt = _runtime(tmp_path, data_dir, {}, capital=10_000.0)
+    rt.ensure_account()
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, "teste")
+        acc.cash = 1_000.0
+        pos = LivePosition(ticker=TICKER, quantity=90, entry_date=d0, entry_price=50.0,
+                           capital_allocated=4_500.0, current_stop=None,
+                           max_price_seen=100.0, min_price_seen=100.0)
+        store.upsert_position(conn, acc.id, pos)
+        # base do fecho anterior: patrimonio real com a posicao marcada a
+        # mercado (100.0) = 1.000 (cash) + 90*100 (posicao) = 10.000.
+        store.record_equity(conn, acc.id, d0, cash=1_000.0, invested=9_000.0,
+                            equity=10_000.0, external_cash=0.0)
+        store.save_account(conn, acc)
+
+    # runtime NOVO (processo recem-reiniciado): nunca chamou `_load`/
+    # `execute_session`. NENHUMA cotacao intra-dia definida para o ticker --
+    # forca `_intraday_marks` a depender de `_marks()` (que precisa de
+    # `self._panels` carregado).
+    feed2 = ReplayFeed()
+    rt2 = LiveRuntime(
+        account_name="teste", strategy=ScriptedStrategy({}), policy=FloorSkim(pct=0.5, floor=1e12),
+        feed=feed2, broker=PaperBroker(feed2), config=BacktestConfig(initial_capital=10_000.0, lot_size=1),
+        tickers=(TICKER,), db_path=rt.db_path, data_dir=data_dir,
+    )
+    rt2.risk_guard = CircuitBreaker(daily_loss_pct=0.05, monthly_loss_pct=0.99)
+
+    rt2.intraday_tick(d1)
+
+    assert rt2.risk_guard.is_frozen is False, (
+        "posicao em lucro foi lida como perda -- paineis nao foram carregados "
+        "antes de observar o disjuntor"
+    )
+
+
+def test_unfreeze_durante_o_pregao_nao_recongela_no_tick_seguinte(tmp_path, universe, monkeypatch):
+    """Passo 6/7/9 (RED antes de GREEN, item F2): sem re-ancorar as bases no
+    momento do destravamento, o TICK SEGUINTE recalcula a mesma perda contra
+    a mesma base antiga e recongela em segundos -- o botao de panico
+    documentado vira inoperante durante o pregao."""
+    from live import clock as live_clock
+    data_dir, days = universe
+    d0, d1 = days[0], days[1]
+    # `unfreeze()` usa `clock.session_date()` (relogio real) para saber o
+    # patrimonio "de agora" -- casa com `d1` para o cenario sintetico.
+    monkeypatch.setattr(live_clock, "session_date", lambda *a, **k: d1)
+
+    rt = _runtime(tmp_path, data_dir, {}, capital=10_000.0)
+    guard = CircuitBreaker(daily_loss_pct=0.05, monthly_loss_pct=0.99)
+    rt.risk_guard = guard
+    rt.ensure_account()
+
+    rt.close_and_decide(d0)
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, "teste")
+        acc.cash = 5_000.0   # crash: metade do patrimonio evapora
+        store.save_account(conn, acc)
+
+    rt.intraday_tick(d1)
+    assert guard.is_frozen is True   # premissa do teste
+
+    rt.unfreeze()   # humano revisou -- patrimonio ainda deprimido (5.000)
+    assert guard.is_frozen is False   # premissa: destravou
+
+    rt.intraday_tick(d1)   # tick seguinte, MESMO patrimonio deprimido
+    assert guard.is_frozen is False, (
+        "unfreeze() nao re-ancorou -- o tick seguinte recongelou contra a mesma base antiga"
+    )
+
+
+# ---------- FEAT-003: item 3.3 -- skip por dado incompleto e visivel -------
+
+def _universe_com_lacuna(tmp_path, dias_completos, ticker_incompleto: str, dia_faltando: date):
+    """Painel onde `ticker_incompleto` NAO tem barra em `dia_faltando` --
+    fura `data_is_ready` de proposito, para exercitar o skip."""
+    data_dir = tmp_path / "dados"
+    data_dir.mkdir(exist_ok=True)
+    outro = "AAA.SA" if ticker_incompleto != "AAA.SA" else "BBB.SA"
+    _write_parquet(data_dir, outro, dias_completos, [100.0] * len(dias_completos))
+    dias_incompleto = [d for d in dias_completos if d != dia_faltando]
+    _write_parquet(data_dir, ticker_incompleto, dias_incompleto, [50.0] * len(dias_incompleto))
+    _write_parquet(data_dir, BENCHMARK, dias_completos, [50_000.0] * len(dias_completos))
+    return data_dir
+
+
+def test_skip_por_dado_incompleto_notifica_uma_vez_e_escala_no_fim_de_mes(tmp_path):
+    """Passo 10 (RED antes de GREEN, achado E2, item 3.3): o skip por dado
+    incompleto hoje NAO grava evento nem notifica -- se o pregao pulado for
+    o ultimo do mes, a rotacao nao e adiada, e PERDIDA, em silencio. A
+    correcao grava + notifica, com DEDUPE por (sessao, faltantes) -- uma
+    vez, nao a cada chamada -- e escala para `error` em fim de mes."""
+    dias = _sessions(10)
+    d0 = dias[0]
+    data_dir = _universe_com_lacuna(tmp_path, dias, "BBB.SA", d0)
+    notifier = _RecordingNotifier()
+    feed = ReplayFeed()
+    rt = LiveRuntime(
+        account_name="teste", strategy=ScriptedStrategy({}), policy=FloorSkim(pct=0.5, floor=1e12),
+        feed=feed, broker=PaperBroker(feed), config=BacktestConfig(initial_capital=10_000.0, lot_size=1),
+        tickers=("AAA.SA", "BBB.SA"), db_path=tmp_path / "live.sqlite", data_dir=data_dir,
+    )
+    rt.notifier = notifier
+    rt.ensure_account()
+
+    # (a) pregao comum: hoje NENHUM evento e gravado e o notifier NAO e
+    # chamado -- depois da correcao, 1 evento warn + 1 notificacao.
+    r1 = rt.close_and_decide(d0)
+    assert r1.action == "decide_skip"
+    assert r1.detail["motivo"] == "dado incompleto"
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, "teste")
+        eventos = [e for e in store.recent_events(conn, acc.id) if e["source"] == "runtime"]
+    assert len(eventos) == 1
+    assert eventos[0]["level"] == "warn"
+    assert len(notifier.calls) == 1
+
+    # (b) 3 chamadas SEGUIDAS do MESMO pregao -> continua 1 evento, 1 notificacao.
+    rt.close_and_decide(d0)
+    rt.close_and_decide(d0)
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, "teste")
+        eventos2 = [e for e in store.recent_events(conn, acc.id) if e["source"] == "runtime"]
+    assert len(eventos2) == 1
+    assert len(notifier.calls) == 1
+
+    # gap-flapping: a lista de faltantes MUDA (BBB.SA passa a ter o dado,
+    # AAA.SA perde) -- dispara um evento NOVO, o marcador (sessao, faltantes)
+    # e diferente do anterior.
+    _write_parquet(data_dir, "BBB.SA", dias, [50.0] * len(dias))
+    aaa_sem_d0 = [d for d in dias if d != d0]
+    _write_parquet(data_dir, "AAA.SA", aaa_sem_d0, [100.0] * len(aaa_sem_d0))
+    rt.close_and_decide(d0)
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, "teste")
+        eventos3 = [e for e in store.recent_events(conn, acc.id) if e["source"] == "runtime"]
+    assert len(eventos3) == 2
+    assert len(notifier.calls) == 2
+
+    # (c) fim de mes com dado incompleto -> nivel error, nao warn.
+    d_fim = _pregao_fim_de_mes_limpo()
+    dias_fim = [d.date() for d in pd.bdate_range(end=pd.Timestamp(d_fim), periods=5)]
+    data_dir2 = tmp_path / "dados_fim"
+    data_dir2.mkdir()
+    _write_parquet(data_dir2, "AAA.SA", dias_fim, [100.0] * len(dias_fim))
+    dias_fim_bbb = [d for d in dias_fim if d != d_fim]
+    _write_parquet(data_dir2, "BBB.SA", dias_fim_bbb, [50.0] * len(dias_fim_bbb))
+    _write_parquet(data_dir2, BENCHMARK, dias_fim, [50_000.0] * len(dias_fim))
+
+    notifier2 = _RecordingNotifier()
+    feed2 = ReplayFeed()
+    rt2 = LiveRuntime(
+        account_name="teste2", strategy=ScriptedStrategy({}), policy=FloorSkim(pct=0.5, floor=1e12),
+        feed=feed2, broker=PaperBroker(feed2), config=BacktestConfig(initial_capital=10_000.0, lot_size=1),
+        tickers=("AAA.SA", "BBB.SA"), db_path=tmp_path / "live2.sqlite", data_dir=data_dir2,
+    )
+    rt2.notifier = notifier2
+    rt2.ensure_account()
+
+    result_fim = rt2.close_and_decide(d_fim)
+    assert result_fim.action == "decide_skip"
+    assert result_fim.detail.get("fim_de_mes") is True
+    with store.live_journal(rt2.db_path) as conn:
+        acc2 = store.load_account(conn, "teste2")
+        eventos_fim = [e for e in store.recent_events(conn, acc2.id) if e["source"] == "runtime"]
+    assert len(eventos_fim) == 1
+    assert eventos_fim[0]["level"] == "error"
+
+
+def test_skip_por_dado_incompleto_nao_dispara_apos_sessao_ja_decidida(tmp_path, universe):
+    """Passo 10 (RED antes de GREEN, achado E3): a checagem de idempotencia
+    ("ja decidido") tem de rodar ANTES de `data_is_ready`. Sem essa ordem, o
+    gap-flapping conhecido do yfinance (o parquet perde retroativamente a
+    barra do dia entre um download e outro) dispararia um `error` de
+    "rotacao pode ter sido PERDIDA" para uma rotacao que JA aconteceu com
+    sucesso, so porque o dado sumiu DEPOIS."""
+    data_dir, days = universe
+    d0 = days[0]
+    notifier = _RecordingNotifier()
+    rt = _runtime(tmp_path, data_dir, {}, capital=10_000.0)
+    rt.notifier = notifier
+    rt.ensure_account()
+
+    r1 = rt.close_and_decide(d0)
+    assert r1.action == "decide"
+
+    # gap-flapping: a barra de d0 some do parquet DEPOIS de ja ter sido
+    # decidida com sucesso.
+    _write_parquet(data_dir, TICKER, days[1:], [100.0] * (len(days) - 1))
+
+    r2 = rt.close_and_decide(d0)
+    assert r2.detail["motivo"] == "ja decidido"
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, "teste")
+        eventos = [e for e in store.recent_events(conn, acc.id)
+                  if e["level"] in ("warn", "error") and e["source"] == "runtime"]
+    assert eventos == []
+
+
+# ---------- FEAT-003: status() expoe pregoes pendentes e o notificador ----
+
+def test_status_lista_todos_os_pregoes_sem_decisao_e_o_notificador(tmp_path, universe, monkeypatch):
+    """Passo 11 (RED antes de GREEN, achado E4/E7): `status()` hoje so mostra
+    o pregao de REFERENCIA (a sessao atual), nao a lista de TODOS os pregoes
+    sem decisao -- um pregao perdido ficaria visivel por menos de 24h. Passa
+    a expor `decisao_pendente` (lista completa) e `notificador` (canal em
+    uso, achado E7)."""
+    from live import clock as live_clock
+    data_dir, days = universe
+    d0, d1, d2 = days[0], days[1], days[2]
+    rt = _runtime(tmp_path, data_dir, {}, capital=10_000.0)
+    rt.ensure_account()
+
+    monkeypatch.setattr(live_clock, "session_date", lambda *a, **k: d0)
+    status0 = rt.status()
+    assert status0["decisao_pendente"] == [d0.isoformat()]
+    assert status0["notificador"] == "NullNotifier"
+
+    rt.close_and_decide(d0)
+    status1 = rt.status()
+    assert status1["decisao_pendente"] == []
+
+    # d1 e d2 pulados (nunca decididos) -- `session_date` agora aponta para
+    # d2: hoje so d2 apareceria (visivel por menos de 24h); a lista completa
+    # tem que trazer os DOIS.
+    monkeypatch.setattr(live_clock, "session_date", lambda *a, **k: d2)
+    status2 = rt.status()
+    assert status2["decisao_pendente"] == [d1.isoformat(), d2.isoformat()]
