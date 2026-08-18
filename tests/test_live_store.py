@@ -21,6 +21,7 @@ from core.live_models import (
 )
 from journal import live_store as store
 from journal.live_store import (
+    claim_intent,
     delete_position,
     ensure_account,
     ensure_tables,
@@ -31,6 +32,7 @@ from journal.live_store import (
     live_journal,
     open_orders,
     pending_intents,
+    pending_withdraw_intents,
     record_equity,
     record_fill,
     record_deposit,
@@ -217,6 +219,23 @@ def test_record_intent_aceita_excecoes_de_is_immediate(db_path):
         stop_id = record_intent(conn, account.id, stop_exit)
         assert stop_id == stop_exit.id
 
+        # Passo 3 (RED antes de GREEN): recomendacao de saque por evento de
+        # liquidez nasce na mesma barra (paridade com on_liquidity_event,
+        # robots.py:207-219) -- terceira excecao de Intent.is_immediate. Antes
+        # da mudanca do passo 3, isto levanta ValueError (premissa 9: e o bug
+        # PRE-EXISTENTE que mataria o supervisor via cmd_loop).
+        withdraw_liquidez = Intent(
+            robot="withdrawal:piso_55000_1.00pct_mes_min1000",
+            role=RobotRole.WITHDRAWAL,
+            kind=IntentKind.WITHDRAW,
+            decided_on=d,
+            execute_on=d,
+            reason="piso_55000_1.00pct_mes_min1000",
+            amount=1_000.0,
+        )
+        withdraw_id = record_intent(conn, account.id, withdraw_liquidez)
+        assert withdraw_id == withdraw_liquidez.id
+
 
 def test_pending_and_stale_intents_e_transicao_status(db_path):
     with live_journal(db_path) as conn:
@@ -243,6 +262,69 @@ def test_pending_and_stale_intents_e_transicao_status(db_path):
 
         stale2 = stale_intents(conn, account.id, before=date(2026, 8, 16))
         assert [i.ticker for i in stale2] == ["RADL3.SA"]
+
+
+def _withdraw_intent(decided_on, execute_on, amount=1_000.0, reason="piso_55000_1.00pct_mes_min1000") -> Intent:
+    return Intent(
+        robot="withdrawal:piso_55000_1.00pct_mes_min1000",
+        role=RobotRole.WITHDRAWAL,
+        kind=IntentKind.WITHDRAW,
+        decided_on=decided_on,
+        execute_on=execute_on,
+        reason=reason,
+        amount=amount,
+    )
+
+
+def test_stale_intents_nunca_expira_recomendacao_de_saque(db_path):
+    """Passo 2(c): uma recomendação de saque com `execute_on` no passado NÃO é
+    stale — ela só expira na virada do mês, via `LiveRuntime._expire_withdraw_advice`,
+    nunca por `stale_intents` (que é o mecanismo de dia-a-dia usado por
+    ENTER/EXIT)."""
+    with live_journal(db_path) as conn:
+        account = _account(conn)
+        old = date(2026, 8, 1)
+        w = _withdraw_intent(decided_on=old, execute_on=old)
+        record_intent(conn, account.id, w)
+
+        stale = stale_intents(conn, account.id, before=date(2026, 8, 18))
+        assert stale == []
+
+
+def test_pending_withdraw_intents_devolve_mais_antiga_primeiro(db_path):
+    with live_journal(db_path) as conn:
+        account = _account(conn)
+        d1 = date(2026, 8, 3)
+        d2 = date(2026, 8, 10)
+        w1 = _withdraw_intent(decided_on=d1, execute_on=d1, amount=1_000.0)
+        record_intent(conn, account.id, w1)
+        w2 = _withdraw_intent(decided_on=d2, execute_on=d2, amount=2_000.0)
+        record_intent(conn, account.id, w2)
+
+        pend = pending_withdraw_intents(conn, account.id)
+        assert [i.id for i in pend] == [w1.id, w2.id]
+
+        set_intent_status(conn, w1.id, IntentStatus.DONE)
+        pend2 = pending_withdraw_intents(conn, account.id)
+        assert [i.id for i in pend2] == [w2.id]
+
+
+def test_claim_intent_so_transiciona_uma_vez(db_path):
+    with live_journal(db_path) as conn:
+        account = _account(conn)
+        d = date(2026, 8, 3)
+        w = _withdraw_intent(decided_on=d, execute_on=d)
+        record_intent(conn, account.id, w)
+
+        first = claim_intent(conn, w.id, IntentStatus.PENDING, IntentStatus.DONE)
+        assert first is True
+        row = conn.execute("SELECT status FROM live_intents WHERE id = ?", (w.id,)).fetchone()
+        assert row["status"] == IntentStatus.DONE.value
+
+        second = claim_intent(conn, w.id, IntentStatus.PENDING, IntentStatus.DONE)
+        assert second is False
+        row2 = conn.execute("SELECT status FROM live_intents WHERE id = ?", (w.id,)).fetchone()
+        assert row2["status"] == IntentStatus.DONE.value  # nao mudou de novo
 
 
 # ---------------------------------------------------------------------------

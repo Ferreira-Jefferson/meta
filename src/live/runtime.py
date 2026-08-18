@@ -57,7 +57,7 @@ from typing import Optional, Sequence
 
 import pandas as pd
 
-from backtest.sizing import has_free_slot, initial_stop, liquidation_quantity, plan_entry
+from backtest.sizing import has_free_slot, initial_stop, plan_entry
 # `LIVE_DB_PATH as DB_PATH`: o NOME do atributo de módulo permanece `DB_PATH`
 # de propósito (FEAT-000, ver ACTION-PLAN — premissa 4) — `tests/test_dashboard_app.py`
 # faz `monkeypatch.setattr(live_runtime, "DB_PATH", tmp)` e depende desse nome
@@ -715,185 +715,6 @@ class LiveRuntime:
         store.set_intent_status(conn, intent.id, IntentStatus.DONE)
         return "done"
 
-    def _withdraw(self, conn, account: AccountState, session: date,
-                  intent: Intent, quotes: dict) -> str:
-        """Retira caixa do sistema: caixa primeiro, depois liquida a maior posicao.
-
-        Espelha `_execute_withdrawal` do engine, incluindo o detalhe que custa
-        dinheiro: quando o caixa nao cobre, vender para sacar paga corretagem e
-        slippage normais. Se nem liquidando der, registra o `shortfall` em vez de
-        inventar caixa — e a politica devolve a diferenca para a fila.
-
-        Sob corretora AUTOMATICA (paper/MT5) o fill e sincrono: a liquidacao
-        acontece toda dentro desta chamada, igual sempre foi. Sob corretora
-        MANUAL, `place()` nunca preenche na hora — quem confirma e um humano,
-        depois, via `ManualBroker.confirm()` + `reconcile_pending_fills`. Este
-        metodo entao delega ao mesmo `_withdraw_manual_step` que a
-        reconciliacao usa: manda UMA perna de liquidacao, deixa a intencao
-        `EXECUTING` (nao `CANCELLED`) e devolve `'pending'`. Quando aquela
-        perna confirmar, `reconcile_pending_fills` credita o fill e chama
-        `_withdraw_manual_step` de novo — que decide se falta mais uma perna
-        ou se ja da para fechar o saque. Ver docstring de `_withdraw_manual_step`
-        para o raciocinio completo (inclusive por que so uma perna por vez).
-        """
-        want = float(intent.amount or 0.0)
-        if want <= 0:
-            store.set_intent_status(conn, intent.id, IntentStatus.CANCELLED)
-            return "rejected"
-
-        marks = {t: (quotes[t].price if t in quotes else m)
-                 for t, m in self._marks(session).items()}
-        equity_before = account.equity(marks)
-        falta = want - account.cash
-
-        if falta > 0 and account.positions:
-            if not self.broker.supports_automation():
-                price_ref = {t: q.price for t, q in quotes.items()}
-                return self._withdraw_manual_step(conn, account, session, intent,
-                                                   price_ref, equity_before)
-            por_valor = sorted(account.positions.values(),
-                               key=lambda p: p.market_value(marks.get(p.ticker, p.entry_price)),
-                               reverse=True)
-            for pos in por_valor:
-                if falta <= 1e-9:
-                    break
-                quote = quotes.get(pos.ticker)
-                if quote is None:
-                    continue
-                qty = liquidation_quantity(falta, quote.price, pos.quantity, self.config)
-                if qty <= 0:
-                    continue
-                order = self._place(conn, account, intent, pos.ticker, OrderSide.SELL,
-                                    qty, note="liquidacao para saque")
-                if order.filled_qty <= 0:
-                    continue
-                liquido = self._apply_liquidation_fill(conn, account, pos, order)
-                falta -= liquido
-
-        return self._finish_withdrawal(conn, account, session, intent, want, equity_before)
-
-    def _apply_liquidation_fill(self, conn, account: AccountState,
-                                pos: LivePosition, order: Order) -> float:
-        """Credita ao caixa o fill de UMA venda de liquidacao para saque e
-        ajusta/remove a posicao. Devolve o liquido creditado.
-
-        Compartilhado entre o laco sincrono de `_withdraw` (corretora
-        automatica, fill na hora) e `reconcile_pending_fills` (fill de uma
-        perna manual confirmado depois) — o efeito sobre caixa/posicao e o
-        MESMO nos dois casos, so muda QUANDO ele acontece (mesma razao de
-        `_resolve_sell` ser compartilhado entre `_sell` e a reconciliacao)."""
-        liquido = (order.avg_price or 0.0) * order.filled_qty - order.fees
-        account.cash += liquido
-        if order.filled_qty >= pos.quantity:
-            store.delete_position(conn, account.id, pos.ticker, pos.kind)
-            account.positions.pop(pos.ticker, None)
-        else:
-            fora = order.filled_qty / pos.quantity
-            pos.quantity -= order.filled_qty
-            pos.capital_allocated *= (1.0 - fora)
-            store.upsert_position(conn, account.id, pos)
-        return liquido
-
-    def _withdraw_manual_step(self, conn, account: AccountState, session: date,
-                              intent: Intent, price_ref: dict[str, float],
-                              equity_before: float) -> str:
-        """Um passo (uma perna) da liquidacao de saque sob corretora MANUAL.
-
-        Por que so UMA perna por vez, em vez de calcular de saida todas as
-        vendas necessarias e mandar todas como ticket: confirmar um fill
-        manual e um HUMANO indo na corretora de verdade depois — mandar N
-        ordens de uma vez seria pedir para ele vender N posicoes so porque a
-        conta fechou assim ANTES de saber se a primeira ja bastou (o preco
-        real pode vir melhor ou pior que a cotacao de referencia). Enviar uma
-        de cada vez e mais devagar mas nunca pede confirmacao de venda que
-        pode nao ser necessaria.
-
-        Fluxo: acha a maior posicao com preco de referencia disponivel, manda
-        UMA ordem de venda dimensionada para o que falta, grava `equity_before`
-        no `payload` da intent (unico jeito de o valor sobreviver entre esta
-        chamada — ao executar a saida — e a chamada futura de
-        `reconcile_pending_fills`, que pode acontecer dias depois, num
-        processo novo) e deixa a intencao `EXECUTING`. Quando chamado de novo
-        (pela reconciliacao, apos um fill ja creditado ao caixa) recalcula
-        `falta` do zero a partir do caixa ATUAL — se ja cobre, fecha; senao
-        busca a proxima posicao. Termina fechando com o que houver (mesmo
-        aquem do pedido, shortfall registrado por `_finish_withdrawal`) se
-        nao sobrar posicao vendavel (sem preco de referencia ou sem lote).
-        """
-        want = float(intent.amount or 0.0)
-        falta = want - account.cash
-        if falta <= 1e-9 or not account.positions:
-            return self._finish_withdrawal(conn, account, session, intent, want, equity_before)
-
-        por_valor = sorted(account.positions.values(),
-                           key=lambda p: p.market_value(price_ref.get(p.ticker, p.entry_price)),
-                           reverse=True)
-        for pos in por_valor:
-            price = price_ref.get(pos.ticker)
-            if price is None:
-                continue
-            qty = liquidation_quantity(falta, price, pos.quantity, self.config)
-            if qty <= 0:
-                continue
-            order = self._place(conn, account, intent, pos.ticker, OrderSide.SELL,
-                                qty, note="liquidacao para saque")
-            store.set_intent_payload(conn, intent.id, {"equity_before": equity_before})
-            if order.filled_qty <= 0:
-                store.set_intent_status(conn, intent.id, IntentStatus.EXECUTING)
-                self._log(conn, account.id, "info", "runtime",
-                                f"saque de {want:.2f} precisa liquidar posicao e a corretora "
-                                f"e manual — venda de {qty} {pos.ticker} enviada "
-                                f"(ordem #{order.id}), aguardando confirmacao")
-                return "pending"
-            # Defensivo: o `ManualBroker` de hoje nunca fecha na hora (so um
-            # humano confirma depois), mas se algum dia existir uma variante
-            # que as vezes preenche sincrono, o fluxo tem que continuar
-            # tentando cobrir `falta` em vez de parar cedo demais.
-            self._apply_liquidation_fill(conn, account, pos, order)
-            return self._withdraw_manual_step(conn, account, session, intent,
-                                              price_ref, equity_before)
-
-        # Nenhuma posicao restante tem preco de referencia ou lote vendavel
-        # agora: mesma filosofia do caminho automatico (que tambem so pula
-        # tickers sem cotacao e fecha com o caixa que conseguiu reunir) — nao
-        # e um erro, fecha com o que ha, mesmo que fique aquem do pedido.
-        return self._finish_withdrawal(conn, account, session, intent, want, equity_before)
-
-    def _finish_withdrawal(self, conn, account: AccountState, session: date,
-                           intent: Intent, want: float, equity_before: float) -> str:
-        """Fecha a intencao de saque: move o caixa disponivel (ate `want`) para
-        caixa externo e registra a auditoria.
-
-        `taxas`/`liquidado` vem das ORDENS da intencao (`orders_for_intent`),
-        nao de um acumulador em memoria passado de chamada em chamada — uma
-        liquidacao manual pode se estender por varias rodadas de
-        `reconcile_pending_fills`, em processos diferentes; reconstruir da
-        fonte e mais robusto do que carregar estado entre elas. Usada tanto
-        pelo caminho sincrono (`_withdraw`, tudo numa chamada so) quanto pelo
-        fim de uma liquidacao manual resolvida por `_withdraw_manual_step` —
-        os dois caminhos terminam na MESMA contabilidade, so em momentos
-        diferentes.
-        """
-        ordens = store.orders_for_intent(conn, intent.id)
-        preenchidas = [o for o in ordens if o.filled_qty > 0]
-        taxas = float(sum(o.fees for o in preenchidas))
-        liquidado = [[o.ticker, o.filled_qty, o.avg_price] for o in preenchidas]
-
-        executado = max(0.0, min(want, account.cash))
-        account.cash -= executado
-        account.external_cash += executado
-        account.withdrawn_total += executado
-        store.record_withdrawal(conn, account.id, session, want, executado,
-                                equity_before, taxas, liquidado)
-        # A politica precisa saber quanto SAIU de fato: se saiu menos, a
-        # diferenca volta para a fila do minimo em vez de desaparecer.
-        self.withdrawal.on_executed(intent, executado)
-        store.set_intent_status(conn, intent.id, IntentStatus.DONE)
-        if executado < want:
-            self._log(conn, account.id, "warn", "runtime",
-                            f"saque parcial: pedido {want:.2f}, saiu {executado:.2f}")
-        return "done" if executado > 0 else "rejected"
-
     # ---------- reconciliacao (fills que chegaram depois) ------------------
 
     def reconcile_pending_fills(self, now: Optional[datetime] = None) -> StepReport:
@@ -908,15 +729,20 @@ class LiveRuntime:
         `EXECUTING` quando ha mesmo algo pendente.
 
         ENTER/EXIT geram exatamente um `Order` por `Intent`, entao olhar so o
-        ultimo (`orders[-1]`) basta. WITHDRAW e diferente: uma liquidacao sob
-        corretora manual pode precisar de VARIAS pernas (uma posicao nao
-        cobre o saque inteiro), enviadas uma de cada vez por
-        `_withdraw_manual_step` — `orders[-1]` ainda e a perna relevante (a
-        mais recente), mas resolver o fill dela nao fecha a intencao sozinho:
-        credita o caixa e chama `_withdraw_manual_step` de novo, que decide
-        se falta mais uma perna (manda outra ordem, intent continua
-        `EXECUTING`) ou se ja da para fechar (`_finish_withdrawal`, intent
-        vira `DONE`).
+        ultimo (`orders[-1]`) basta. WITHDRAW nao aparece mais aqui: desde que
+        o saque virou recomendacao (nunca executada pela maquina), nenhuma
+        intent WITHDRAW chega a `EXECUTING` — ver `execute_session` e
+        `confirm_withdrawal`.
+
+        Restaura o estado dos robos (`_restore_robot_state`) ANTES do laco,
+        replicando o padrao ja documentado em `unfreeze()`: esta chamada pode
+        vir de um processo NOVO (cron, restart do supervisor), cujo
+        `self.withdrawal`/`self.risk_guard` em memoria ainda nao viram o que
+        esta gravado no banco. Sem isso, a linha `account.policy_state =
+        self._robot_state()` no fim do metodo (fora do laco — roda mesmo sem
+        nenhuma intent EXECUTING) gravaria uma politica de saque VIRGEM por
+        cima do estado real, apagando `_paid_month`/`_pool`/`_requested` e
+        fazendo a politica recomendar o mesmo mes de novo.
         """
         now = now or datetime.now(timezone.utc)
         aplicadas = 0
@@ -924,6 +750,7 @@ class LiveRuntime:
             account = self._load_account(conn)
             if account is None:
                 return StepReport("reconcile_skip", detail={"motivo": "conta inexistente"})
+            self._restore_robot_state(account.policy_state)
             for intent in store.intents_by_status(conn, account.id, IntentStatus.EXECUTING):
                 orders = store.orders_for_intent(conn, intent.id)
                 if not orders:
@@ -941,28 +768,6 @@ class LiveRuntime:
                 elif intent.kind == IntentKind.ENTER:
                     resultado = self._resolve_buy(conn, account, intent, order,
                                                   now.date(), order.avg_price or 0.0)
-                elif intent.kind == IntentKind.WITHDRAW:
-                    if order.filled_qty > 0:
-                        pos = account.positions.get(order.ticker)
-                        if pos is not None:
-                            self._apply_liquidation_fill(conn, account, pos, order)
-                    # `clock.session_date(now)` ja devolve o ultimo pregao
-                    # FECHADO (ver docstring da funcao) — igual `status()`,
-                    # carrega ate ele mesmo (nao ate o anterior: nao ha "dia
-                    # ainda em curso" aqui como em `execute_session`, so o
-                    # ultimo fecho disponivel para servir de preco de
-                    # referencia da proxima perna, se houver).
-                    ref_session = clock.session_date(now)
-                    self._load(ref_session)
-                    price_ref = self._marks(ref_session)
-                    equity_before = (intent.payload or {}).get("equity_before")
-                    if equity_before is None:
-                        # Nao deveria faltar (gravado por `_withdraw_manual_step`
-                        # antes da primeira perna) — cai para o equity atual em
-                        # vez de travar a reconciliacao se o payload sumir.
-                        equity_before = account.equity(price_ref)
-                    resultado = self._withdraw_manual_step(conn, account, now.date(), intent,
-                                                           price_ref, equity_before)
                 else:
                     resultado = "rejected"
                     store.set_intent_status(conn, intent.id, IntentStatus.REJECTED)

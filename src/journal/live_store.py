@@ -518,9 +518,10 @@ def record_intent(conn: sqlite3.Connection, account_id: int, intent: Intent) -> 
     vivo essa regra vira uma disciplina de relógio (ver docstring de
     `core.live_models`), e o ponto mais barato para impedi-la de vazar é aqui,
     na gravação — se `execute_on <= decided_on` para uma intent que NÃO é
-    imediata (`Intent.is_immediate` cobre as duas exceções legítimas,
-    ADJUST_STOP e reason == 'stop'), é bug de look-ahead e a gravação é
-    rejeitada antes de virar linha no diário.
+    imediata (`Intent.is_immediate` cobre as três exceções legítimas,
+    ADJUST_STOP, reason == 'stop' e WITHDRAW same-day por evento de
+    liquidez), é bug de look-ahead e a gravação é rejeitada antes de virar
+    linha no diário.
     """
     if not intent.is_immediate and intent.execute_on <= intent.decided_on:
         raise ValueError(
@@ -528,7 +529,8 @@ def record_intent(conn: sqlite3.Connection, account_id: int, intent: Intent) -> 
             f"decided_on ({intent.decided_on.isoformat()}) para intent "
             f"kind={intent.kind.value!r} reason={intent.reason!r}. Regra 4 do "
             "AGENTS.md: decisão no fecho de D só executa em D+1 (exceções: "
-            "ADJUST_STOP e reason='stop', ver Intent.is_immediate)."
+            "ADJUST_STOP, reason='stop' e WITHDRAW same-day por liquidez, "
+            "ver Intent.is_immediate)."
         )
     cur = conn.execute(
         """INSERT INTO live_intents
@@ -576,18 +578,62 @@ def stale_intents(conn: sqlite3.Connection, account_id: int, before: date) -> li
     Existe porque decisão atrasada não executa (regra 7 do AGENTS.md): o
     runtime usa isto para achar intents que ficaram para trás (máquina fora do
     ar) e marcá-las como `EXPIRED` em vez de executá-las tarde.
+
+    `kind != 'withdraw'` exclui recomendações de saque de propósito: elas não
+    expiram por dia (uma recomendação decidida ontem continua válida hoje,
+    amanhã, até o fim do mês) — quem expira recomendação de saque é
+    `LiveRuntime._expire_withdraw_advice`, na virada do mês civil, não este
+    filtro por data de execução.
     """
     rows = conn.execute(
         """SELECT * FROM live_intents
-           WHERE account_id = ? AND status = ? AND execute_on < ?
+           WHERE account_id = ? AND status = ? AND execute_on < ? AND kind != ?
            ORDER BY id""",
-        (account_id, IntentStatus.PENDING.value, before.isoformat()),
+        (account_id, IntentStatus.PENDING.value, before.isoformat(), IntentKind.WITHDRAW.value),
+    ).fetchall()
+    return [_row_to_intent(row) for row in rows]
+
+
+def pending_withdraw_intents(conn: sqlite3.Connection, account_id: int) -> list[Intent]:
+    """Todas as recomendações de saque (`kind='withdraw'`) ainda PENDING, de
+    qualquer dia — ao contrário de `pending_intents`, que filtra por uma
+    `execute_on` exata. Uma recomendação de saque fica visível/confirmável
+    o mês inteiro (ver `stale_intents` acima e `LiveRuntime.
+    _expire_withdraw_advice`), então quem precisa saber "o que está esperando
+    confirmação humana agora" pergunta aqui, não a `pending_intents`.
+    Ordenada por `id` (mais antiga primeiro).
+    """
+    rows = conn.execute(
+        """SELECT * FROM live_intents
+           WHERE account_id = ? AND status = ? AND kind = ?
+           ORDER BY id""",
+        (account_id, IntentStatus.PENDING.value, IntentKind.WITHDRAW.value),
     ).fetchall()
     return [_row_to_intent(row) for row in rows]
 
 
 def set_intent_status(conn: sqlite3.Connection, intent_id: int, status: IntentStatus) -> None:
     conn.execute("UPDATE live_intents SET status = ? WHERE id = ?", (status.value, intent_id))
+
+
+def claim_intent(
+    conn: sqlite3.Connection, intent_id: int, from_status: IntentStatus, to_status: IntentStatus
+) -> bool:
+    """Transição de status ATÔMICA — `UPDATE ... WHERE id=? AND status=?`,
+    devolve `cur.rowcount == 1`.
+
+    Esta é a TRAVA contra duplo-clique/confirmação concorrente: duas chamadas
+    disputando a mesma intent (um humano clicando duas vezes, um `sacar` de
+    CLI repetido, dois processos) só deixam UMA vencer — quem recebe `False`
+    perdeu a corrida e NÃO pode mover dinheiro (`set_intent_status` continua
+    existindo para as transições onde não há corrida, como marcar EXECUTING/
+    DONE/EXPIRED em fluxos que já são de dono único).
+    """
+    cur = conn.execute(
+        "UPDATE live_intents SET status = ? WHERE id = ? AND status = ?",
+        (to_status.value, intent_id, from_status.value),
+    )
+    return cur.rowcount == 1
 
 
 def set_intent_payload(conn: sqlite3.Connection, intent_id: int, payload: dict) -> None:

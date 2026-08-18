@@ -412,6 +412,45 @@ def test_withdrawal_flui_e_estado_sobrevive_a_restart(tmp_path, universe):
         assert len(pend2) == 0
 
 
+# ---------- reconcile_pending_fills nao pode apagar o estado da politica --
+
+def test_reconcile_pending_fills_nao_apaga_estado_da_politica_de_saque(tmp_path, universe):
+    """Passo 5 (RED antes de GREEN, hipotese nº1 do plan-reviewer):
+    `reconcile_pending_fills` grava `account.policy_state = self._robot_state()`
+    no fim do metodo, FORA do laco de intents EXECUTING -- roda mesmo sem
+    nenhuma intent pendente. Sem restaurar o estado da politica ANTES (mesmo
+    padrao ja documentado em `unfreeze()`), um `LiveRuntime` NOVO (processo
+    recem-iniciado, como um `step` de cron ou um restart) sobrescreve
+    `policy_state["withdrawal"]` com uma `FloorSkim` VIRGEM -- apagando
+    `_paid_month`/`_pool` gravados por uma decisao anterior."""
+    data_dir, days = universe
+    d0 = days[0]
+    policy = FloorSkim(pct=0.5, floor=100.0, day=1, min_amount=0.0)
+    rt = _runtime(tmp_path, data_dir, {}, policy=policy, capital=10_000.0)
+    rt.ensure_account()
+
+    # Decide um saque em d0 (fecho) -- isso grava `_paid_month`/`_pool` nao
+    # triviais no `policy_state` persistido (via `_robot_state()`).
+    rt.close_and_decide(d0)
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, "teste")
+    estado_gravado = acc.policy_state["withdrawal"]
+    assert estado_gravado.get("_paid_month") is not None  # premissa do teste
+
+    # "processo novo": LiveRuntime recem-instanciado, FloorSkim em memoria
+    # ainda VIRGEM (nunca viu o `_paid_month` gravado acima). Nenhuma intent
+    # EXECUTING existe -- o cenario e so "reconciliar" sem nada pendente,
+    # como um `step` de cron faria apos um restart.
+    policy2 = FloorSkim(pct=0.5, floor=100.0, day=1, min_amount=0.0)
+    rt2 = _runtime(tmp_path, data_dir, {}, policy=policy2, capital=10_000.0)
+
+    rt2.reconcile_pending_fills()
+
+    with store.live_journal(rt2.db_path) as conn:
+        acc2 = store.load_account(conn, "teste")
+    assert acc2.policy_state["withdrawal"] == estado_gravado
+
+
 # ---------- corretora manual: ordem fica no ar, confirmacao aplica depois -
 
 def test_manual_broker_fill_so_aplica_apos_confirmacao(tmp_path, universe):

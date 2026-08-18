@@ -156,12 +156,24 @@ class Intent:
     def is_immediate(self) -> bool:
         """Intencoes que NAO esperam o dia seguinte.
 
-        Duas excecoes legitimas a regra do D+1, ambas herdadas do backtest:
-        `ADJUST_STOP` nao movimenta dinheiro (o engine tambem aplica na hora), e
-        o stop intra-dia dispara na propria barra — no backtest quando
-        `low[D] <= stop`, ao vivo quando o preco negociado toca o stop.
+        Tres excecoes legitimas a regra do D+1: `ADJUST_STOP` nao movimenta
+        dinheiro (o engine tambem aplica na hora); o stop intra-dia dispara na
+        propria barra — no backtest quando `low[D] <= stop`, ao vivo quando o
+        preco negociado toca o stop; e uma recomendacao de `WITHDRAW` por
+        evento de liquidez (`execute_on == decided_on`), que nasce na mesma
+        barra em que o robo de investimento acabou de vender — paridade com
+        `WithdrawalRobot.on_liquidity` (`live/robots.py`), que ja antecipa a
+        data da recomendacao para o dia da venda, e com
+        `policy.on_liquidity_event` no engine de backtest. Isto NAO e
+        look-ahead de verdade: a recomendacao nao executa nada sozinha, so
+        notifica um humano — quem move dinheiro de fato e
+        `LiveRuntime.confirm_withdrawal`, depois, por decisao explicita.
         """
-        return self.kind == IntentKind.ADJUST_STOP or self.reason == "stop"
+        return (
+            self.kind == IntentKind.ADJUST_STOP
+            or self.reason == "stop"
+            or (self.kind == IntentKind.WITHDRAW and self.execute_on == self.decided_on)
+        )
 
 
 # ---------- ordem (execucao na corretora) ---------------------------------
