@@ -256,7 +256,7 @@ def start(config: ProcessConfig) -> dict:
     processo morto."""
     if status() is not None:
         raise RuntimeError("já existe um robô rodando — pare antes de iniciar outro.")
-    if config.mode == "mt5" and config.mt5_shares_per_lot is None:
+    if config.mode == "mt5" and (config.mt5_shares_per_lot is None or config.mt5_shares_per_lot <= 0):
         raise RuntimeError(
             "modo mt5 exige o campo 'ações por lote' (mt5_shares_per_lot) — "
             "não há valor universal, confira o symbol_info do seu terminal MT5."

@@ -95,6 +95,25 @@ def test_start_mt5_sem_shares_per_lot_recusa_antes_do_popen(isolated, monkeypatc
     assert called == []  # Popen nunca chamado
 
 
+def test_start_mt5_com_shares_per_lot_zero_ou_negativo_recusa_antes_do_popen(isolated, monkeypatch):
+    """Item 2 da correção pós-code-review (hipótese-agente): a checagem
+    antiga só olhava `is None` -- um valor `0` ou negativo passava direto e
+    causaria `ZeroDivisionError` em `MT5Broker._to_volume` na hora de mandar
+    ordem real (`volume = quantity / shares_per_lot`)."""
+    called = []
+    monkeypatch.setattr(
+        live_control.subprocess, "Popen",
+        lambda *a, **k: called.append((a, k)) or _FakeProc(pid=1, poll_value=None),
+    )
+
+    for valor in (0, -1.0):
+        cfg = live_control.ProcessConfig(mode="mt5", capital=1_000.0, mt5_shares_per_lot=valor)
+        with pytest.raises(RuntimeError):
+            live_control.start(cfg)
+
+    assert called == []  # Popen nunca chamado
+
+
 def test_start_mt5_inclui_shares_per_lot_no_argv(isolated, monkeypatch):
     captured: list = []
     monkeypatch.setattr(
