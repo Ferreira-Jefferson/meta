@@ -134,6 +134,20 @@ class MigrationRefused(RuntimeError):
     `--force`/`force=True` ignora só esta checagem."""
 
 
+class LegacySourceAccountError(RuntimeError):
+    """`live_accounts` da ORIGEM tem conta(s) fora do vocabulário canônico
+    (`manual`/`mt5`, ver `core.live_models.BrokerMode`) — tipicamente
+    `mode='paper'`, uma conta de SIMULAÇÃO do vocabulário antigo.
+
+    Correção pós-code-review (hipótese-agente, item 3): a origem é aberta via
+    `ATTACH ... mode=ro`, então NUNCA passa por `journal.live_store.
+    ensure_tables`/`_migrate_account_mode_vocabulary` — sem esta checagem
+    explícita, uma conta REAL `mode='paper'` na origem seria descartada em
+    silêncio pelo CHECK novo do destino via `INSERT OR IGNORE` (caindo só no
+    aviso genérico de divergência linha a linha, que não nomeia a conta nem
+    sugere o que fazer). Recusa ANTES de copiar qualquer coisa."""
+
+
 class MigrationIncomplete(RuntimeError):
     """Levantada DEPOIS do commit quando alguma tabela terminou com linha(s)
     da origem sem equivalente EXATO no destino (perda silenciosa via
@@ -226,6 +240,24 @@ def migrate(source: Path = DB_PATH, dest: Path = LIVE_DB_PATH, force: bool = Fal
             if not existing:
                 return {}
 
+            if "live_accounts" in existing:
+                legacy = dest_conn.execute(
+                    "SELECT name, mode FROM src_ro.live_accounts "
+                    "WHERE mode NOT IN ('manual', 'mt5')"
+                ).fetchall()
+                if legacy:
+                    nomes = ", ".join(f"{name!r} (mode={mode!r})" for name, mode in legacy)
+                    raise LegacySourceAccountError(
+                        f"live_accounts na ORIGEM '{source}' tem conta(s) fora "
+                        f"do vocabulário canônico (manual/mt5): {nomes}. O "
+                        "destino descartaria essa(s) linha(s) em silêncio "
+                        "(INSERT OR IGNORE nunca sobrescreve nem avisa qual "
+                        "conta sumiu) — decida antes de migrar: apague "
+                        "manualmente essa(s) linha(s) na ORIGEM, ou arquive-a "
+                        "(trate essa conta separadamente, fora desta "
+                        "migração) antes de rodar de novo."
+                    )
+
             result: dict[str, int] = {}
             dest_conn.execute("BEGIN")
             try:
@@ -301,6 +333,9 @@ def main() -> None:
         print(f"[migrate] ERRO: {exc}", file=sys.stderr)
         sys.exit(1)
     except MigrationRefused as exc:
+        print(f"[migrate] RECUSADO: {exc}", file=sys.stderr)
+        sys.exit(1)
+    except LegacySourceAccountError as exc:
         print(f"[migrate] RECUSADO: {exc}", file=sys.stderr)
         sys.exit(1)
     except MigrationIncomplete as exc:

@@ -35,6 +35,7 @@ from core.live_models import (
 from journal import live_store as store
 
 from migrate_live_db import (  # type: ignore[import-not-found]
+    LegacySourceAccountError,
     MigrationIncomplete,
     MigrationRefused,
     migrate,
@@ -271,12 +272,85 @@ def test_migrate_destino_ja_migrado_nao_exige_force(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_migrate_reporta_divergencia_e_levanta_incompleto(tmp_path, capsys):
-    """Origem simula um schema mais antigo (sem o CHECK de `mode` que a
-    tabela `live_accounts` de verdade aplica -- ver schema.sql) contendo uma
-    linha com `mode` inválido. `INSERT OR IGNORE` descarta essa linha em
+    """Origem simula um schema mais antigo (sem o CHECK de `kind` que a
+    tabela `live_intents` de verdade aplica -- ver schema.sql) contendo uma
+    linha com `kind` inválido. `INSERT OR IGNORE` descarta essa linha em
     silêncio contra o destino (schema atual, mais estrito) -- em vez de
     silêncio, o script tem que AVISAR por tabela e sinalizar (via exceção,
-    depois de já ter commitado o resto) que a migração ficou incompleta."""
+    depois de já ter commitado o resto) que a migração ficou incompleta.
+
+    Nota (correção pós-code-review, item 3): a divergência aqui é colocada em
+    `live_intents.kind`, não em `live_accounts.mode` -- desde a checagem nova
+    de `LegacySourceAccountError` (que recusa ANTES de copiar qualquer conta
+    fora do vocabulário manual/mt5), usar um `mode` inválido aqui pegaria
+    aquela checagem em vez de chegar a esta, que testa o relatório de
+    divergência GENÉRICO (qualquer tabela, não só contas)."""
+    source = tmp_path / "journal.sqlite"
+    dest = tmp_path / "live.sqlite"
+
+    source_conn = sqlite3.connect(source)
+    try:
+        source_conn.executescript(
+            "CREATE TABLE live_accounts (id INTEGER PRIMARY KEY, name TEXT UNIQUE, "
+            "mode TEXT, initial_capital REAL, cash REAL, "
+            "investment_robot TEXT DEFAULT '', withdrawal_robot TEXT DEFAULT '', "
+            "withdrawn_total REAL DEFAULT 0, external_cash REAL DEFAULT 0, "
+            "policy_state TEXT DEFAULT '{}', "
+            "created_at TEXT DEFAULT (datetime('now')), "
+            "updated_at TEXT DEFAULT (datetime('now')));"
+            "CREATE TABLE live_intents (id INTEGER PRIMARY KEY, account_id INTEGER, "
+            "robot TEXT, role TEXT, kind TEXT, decided_on TEXT, execute_on TEXT, "
+            "ticker TEXT, reason TEXT DEFAULT '', size_hint REAL, stop_price REAL, "
+            "amount REAL, status TEXT DEFAULT 'pending', payload TEXT DEFAULT '{}', "
+            "created_at TEXT DEFAULT (datetime('now')));"
+        )
+        source_conn.execute(
+            "INSERT INTO live_accounts (id, name, mode, initial_capital, cash) "
+            "VALUES (1, 'principal', 'manual', 1000.0, 1000.0)"
+        )
+        # dest exige kind IN ('enter','exit','adjust_stop','withdraw') -- o
+        # valor abaixo simula um kind que nunca foi válido em nenhum
+        # vocabulário.
+        source_conn.execute(
+            "INSERT INTO live_intents (id, account_id, robot, role, kind, decided_on, execute_on) "
+            "VALUES (1, 1, 'dip2_hw40', 'investment', 'kind_invalido_pre_check', "
+            "'2026-08-10', '2026-08-11')"
+        )
+        source_conn.commit()
+    finally:
+        source_conn.close()
+
+    with pytest.raises(MigrationIncomplete) as exc_info:
+        migrate(source=source, dest=dest)
+
+    assert exc_info.value.result["live_accounts"] == 1  # a conta valida entrou
+    # 1 linha da origem (id=1 de live_intents, kind inválido) sem equivalente
+    # exato no destino -- a conta (válida) foi copiada intacta e não conta.
+    assert exc_info.value.mismatches == [("live_intents", 1)]
+
+    captured = capsys.readouterr()
+    assert "AVISO" in captured.out
+    assert "live_intents" in captured.out
+
+    # o que já estava certo continua commitado -- não é rollback.
+    conn = sqlite3.connect(dest)
+    try:
+        rows = conn.execute("SELECT name FROM live_accounts").fetchall()
+        assert [r[0] for r in rows] == ["principal"]
+        intents = conn.execute("SELECT COUNT(*) FROM live_intents").fetchone()[0]
+        assert intents == 0
+    finally:
+        conn.close()
+
+
+def test_migrate_recusa_quando_origem_tem_conta_paper(tmp_path):
+    """Item 3 da correção pós-code-review (hipótese-agente): a origem é
+    aberta via `ATTACH ... mode=ro`, então nunca passa por `ensure_tables`/
+    `_migrate_account_mode_vocabulary` -- uma conta REAL `mode='paper'` na
+    origem seria descartada em silêncio pelo CHECK novo do destino (via
+    `INSERT OR IGNORE`), sem nomear a conta nem sugerir o que fazer.
+    `migrate()` tem de recusar ANTES de copiar qualquer coisa, com mensagem
+    clara nomeando a conta."""
     source = tmp_path / "journal.sqlite"
     dest = tmp_path / "live.sqlite"
 
@@ -293,36 +367,20 @@ def test_migrate_reporta_divergencia_e_levanta_incompleto(tmp_path, capsys):
         )
         source_conn.execute(
             "INSERT INTO live_accounts (id, name, mode, initial_capital, cash) "
-            "VALUES (1, 'principal', 'manual', 1000.0, 1000.0)"
-        )
-        # dest exige mode IN ('manual','mt5') -- este valor é do vocabulário
-        # canônico atual (`core.live_models.BrokerMode`); o valor abaixo
-        # simula um modo que nunca foi válido em nenhum vocabulário.
-        source_conn.execute(
-            "INSERT INTO live_accounts (id, name, mode, initial_capital, cash) "
-            "VALUES (2, 'legado', 'modo_invalido_pre_check', 500.0, 500.0)"
+            "VALUES (1, 'principal', 'paper', 10000.0, 10000.0)"
         )
         source_conn.commit()
     finally:
         source_conn.close()
 
-    with pytest.raises(MigrationIncomplete) as exc_info:
+    with pytest.raises(LegacySourceAccountError, match="principal"):
         migrate(source=source, dest=dest)
 
-    assert exc_info.value.result["live_accounts"] == 1  # só a linha válida entrou
-    # 1 linha da origem (id=2, mode inválido) sem equivalente exato no
-    # destino -- a linha id=1 (válida) foi copiada intacta e não conta.
-    assert exc_info.value.mismatches == [("live_accounts", 1)]
-
-    captured = capsys.readouterr()
-    assert "AVISO" in captured.out
-    assert "live_accounts" in captured.out
-
-    # o que já estava certo continua commitado -- não é rollback.
+    # nada foi copiado -- só o schema (vazio) foi criado no destino.
     conn = sqlite3.connect(dest)
     try:
-        rows = conn.execute("SELECT name FROM live_accounts").fetchall()
-        assert [r[0] for r in rows] == ["principal"]
+        count = conn.execute("SELECT COUNT(*) FROM live_accounts").fetchone()[0]
+        assert count == 0
     finally:
         conn.close()
 
