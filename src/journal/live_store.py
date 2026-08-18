@@ -135,10 +135,15 @@ def _connect(db_path: Path = LIVE_DB_PATH) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
     # WAL + busy_timeout: o motivo desta feature. Sem os dois, um backtest
     # longo em `threading.Thread` e a gravação de uma ordem real disputam
-    # lock do arquivo (WAL permite leitor+escritor concorrentes; busy_timeout
-    # faz quem perder a corrida ESPERAR em vez de estourar "database is
-    # locked" na hora). `journal_mode=WAL` devolve uma linha com o modo
-    # resultante — precisa ser lida, senão o cursor fica pendente.
+    # lock do arquivo (WAL permite leitor+escritor concorrentes). O
+    # `sqlite3.connect` do Python já usa `timeout=5.0` (5s) por padrão — a
+    # linha abaixo NÃO é a origem da proteção atual contra "database is
+    # locked"; ela é uma defesa EXPLÍCITA para o dia em que alguém, no
+    # futuro, passar `timeout=0` (ou outro valor baixo) ao conectar sem notar
+    # que isso reduz o busy_timeout do driver junto — fixar o PRAGMA aqui
+    # garante os 5s independente do que `connect()` receber. `journal_mode=
+    # WAL` devolve uma linha com o modo resultante — precisa ser lida, senão
+    # o cursor fica pendente.
     conn.execute("PRAGMA journal_mode=WAL").fetchone()
     conn.execute("PRAGMA busy_timeout=5000")
     conn.execute("PRAGMA foreign_keys = ON")
