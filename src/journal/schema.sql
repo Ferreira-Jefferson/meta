@@ -136,6 +136,13 @@ CREATE INDEX IF NOT EXISTS idx_equity_run ON equity_curve(run_id);
 -- descrevem dinheiro de verdade: a conta que opera, as posições que a
 -- corretora confirmou, as decisões do robô e as ordens que tentam cumpri-las.
 --
+-- FEAT-000: estas tabelas continuam definidas AQUI (fonte única de verdade
+-- do DDL, extraída por `journal.live_store._live_ddl`), mas fisicamente
+-- passam a viver em um arquivo `.sqlite` SEPARADO do backtest —
+-- `db/live.sqlite` (`core.config.LIVE_DB_PATH`), não mais `db/journal.sqlite`
+-- (`core.config.DB_PATH`). Nenhuma mudança de DDL veio com essa separação;
+-- só o arquivo físico onde `journal.live_store.ensure_tables` as cria mudou.
+--
 -- `live_intents` e `live_orders` são tabelas SEPARADAS de propósito.
 -- Intent é o registro do CÉREBRO ("o robô decidiu X, para valer no pregão Y");
 -- Order é o registro do BRAÇO ("mandei isso para a corretora, e ela respondeu

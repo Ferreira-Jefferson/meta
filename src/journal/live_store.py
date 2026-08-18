@@ -28,10 +28,12 @@ Por que este módulo NÃO reusa `journal.writer._connect`/`journal`
 -----------------------------------------------------------------------------
 `writer._connect` roda `_migrate`, que só sabe sobre as colunas de `runs`
 (schema de backtest). Reusá-lo criaria acoplamento entre o schema de
-backtest e o de operação ao vivo por nenhum motivo — são dois domínios que só
-compartilham o arquivo `.sqlite`. Este módulo define seu próprio `_connect`/
-`live_journal` no mesmo estilo (mesmo contextmanager, mesmo commit/rollback),
-mas chamando `ensure_tables(conn)` em vez de `_migrate`.
+backtest e o de operação ao vivo por nenhum motivo — são dois domínios que,
+desde a separação física do banco (FEAT-000), nem sequer compartilham o
+mesmo arquivo `.sqlite` (backtest fica em `core.config.DB_PATH`, operação
+real em `core.config.LIVE_DB_PATH`). Este módulo define seu próprio
+`_connect`/`live_journal` no mesmo estilo (mesmo contextmanager, mesmo
+commit/rollback), mas chamando `ensure_tables(conn)` em vez de `_migrate`.
 
 Por que `ensure_tables(conn)` roda a cada conexão
 -----------------------------------------------------------------------------
@@ -58,7 +60,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Iterator, Optional
 
-from core.config import DB_PATH, SCHEMA_PATH
+from core.config import LIVE_DB_PATH, SCHEMA_PATH
 from core.live_models import (
     AccountState,
     Fill,
@@ -128,9 +130,22 @@ def ensure_tables(conn: sqlite3.Connection, schema_path: Path = SCHEMA_PATH) -> 
         conn.commit()
 
 
-def _connect(db_path: Path = DB_PATH) -> sqlite3.Connection:
+def _connect(db_path: Path = LIVE_DB_PATH) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
+    # WAL + busy_timeout: o motivo desta feature. Sem os dois, um backtest
+    # longo em `threading.Thread` e a gravação de uma ordem real disputam
+    # lock do arquivo (WAL permite leitor+escritor concorrentes). O
+    # `sqlite3.connect` do Python já usa `timeout=5.0` (5s) por padrão — a
+    # linha abaixo NÃO é a origem da proteção atual contra "database is
+    # locked"; ela é uma defesa EXPLÍCITA para o dia em que alguém, no
+    # futuro, passar `timeout=0` (ou outro valor baixo) ao conectar sem notar
+    # que isso reduz o busy_timeout do driver junto — fixar o PRAGMA aqui
+    # garante os 5s independente do que `connect()` receber. `journal_mode=
+    # WAL` devolve uma linha com o modo resultante — precisa ser lida, senão
+    # o cursor fica pendente.
+    conn.execute("PRAGMA journal_mode=WAL").fetchone()
+    conn.execute("PRAGMA busy_timeout=5000")
     conn.execute("PRAGMA foreign_keys = ON")
     conn.row_factory = sqlite3.Row
     ensure_tables(conn)
@@ -138,7 +153,7 @@ def _connect(db_path: Path = DB_PATH) -> sqlite3.Connection:
 
 
 @contextmanager
-def live_journal(db_path: Path = DB_PATH) -> Iterator[sqlite3.Connection]:
+def live_journal(db_path: Path = LIVE_DB_PATH) -> Iterator[sqlite3.Connection]:
     """Contextmanager de transação, no mesmo estilo de `journal.writer.journal`."""
     conn = _connect(db_path)
     try:

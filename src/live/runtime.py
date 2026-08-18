@@ -57,7 +57,12 @@ from typing import Optional, Sequence
 import pandas as pd
 
 from backtest.sizing import has_free_slot, initial_stop, liquidation_quantity, plan_entry
-from core.config import BENCHMARK, DB_PATH, WATCHLIST, BacktestConfig
+# `LIVE_DB_PATH as DB_PATH`: o NOME do atributo de módulo permanece `DB_PATH`
+# de propósito (FEAT-000, ver ACTION-PLAN — premissa 4) — `tests/test_dashboard_app.py`
+# faz `monkeypatch.setattr(live_runtime, "DB_PATH", tmp)` e depende desse nome
+# continuar existindo aqui. O VALOR, porém, passa a ser o banco separado da
+# operação real (antes era o mesmo arquivo do backtest).
+from core.config import BENCHMARK, LIVE_DB_PATH as DB_PATH, WATCHLIST, BacktestConfig
 from core.live_models import (
     AccountState,
     Intent,

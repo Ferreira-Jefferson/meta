@@ -49,7 +49,7 @@ import pandas as pd
 
 from backtest.runner import run as run_backtest_dispatch
 from backtest.withdrawal import official_policy
-from core.config import BENCHMARK, HISTORY_START, WATCHLIST, BacktestConfig
+from core.config import BENCHMARK, DB_PATH, HISTORY_START, LIVE_DB_PATH, ROOT, WATCHLIST, BacktestConfig
 from core.live_models import IntentKind, IntentStatus
 from journal import live_store as store
 from live.broker import PaperBroker
@@ -60,7 +60,31 @@ from scheduler import latest_common_date
 from strategy.portfolio_dip2_hw40 import DipTop1Portfolio
 
 ACCOUNT_NAME = "simulacao"
-SIM_DB = Path("db/live_sim.sqlite")
+# Absoluto (ROOT, não `Path("db/...")` relativo ao cwd) — FEAT-000: rodar
+# `python scripts/run_live_sim.py` de outro diretório criava (e apagava) um
+# `db/` no lugar errado.
+SIM_DB = ROOT / "db" / "live_sim.sqlite"
+
+
+def _ensure_disposable_sim_db(path: Path) -> None:
+    """Recusa `path` se ele coincidir com um banco NÃO-descartável.
+
+    `main()` apaga `SIM_DB` no início de cada rodada (é um artefato
+    descartável do próprio script — ver docstring do módulo). Esta função
+    existe para o dia em que `SIM_DB` apontar, por engano, para o banco ao
+    vivo real (`LIVE_DB_PATH`) ou para o de backtest (`DB_PATH`) — sem ela, o
+    `.unlink()` de `main()` apagaria dado de produção sem aviso nenhum.
+
+    `SystemExit` (nunca `assert`): uma salvaguarda contra apagar o banco real
+    não pode evaporar sob `python -O`, que remove `assert` do bytecode.
+    """
+    resolved = path.resolve()
+    for guarded in (LIVE_DB_PATH, DB_PATH):
+        if resolved == guarded.resolve():
+            raise SystemExit(
+                f"[sim] recusando: {path} resolve para {guarded}, que NÃO é "
+                "descartável (banco de operação real ou de backtest)."
+            )
 
 
 def money(v: float) -> str:
@@ -68,6 +92,7 @@ def money(v: float) -> str:
 
 
 def main() -> None:
+    _ensure_disposable_sim_db(SIM_DB)
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--capital", type=float, default=1_000.0)
@@ -90,6 +115,20 @@ def main() -> None:
     if SIM_DB.exists() and not args.keep:
         print(f"[sim] apagando banco de simulacao anterior ({SIM_DB})")
         SIM_DB.unlink()
+
+    if not args.keep:
+        # WAL/SHM sidecars (journal.live_store liga journal_mode=WAL): fora do
+        # `if SIM_DB.exists()` acima de proposito -- se alguem apagar so o
+        # arquivo principal a mao (sem apagar os sidecars), SIM_DB.exists()
+        # da False e os sidecars orfaos sobreviveriam sem esta limpeza rodar.
+        # Apagar so o arquivo principal e deixar os dois para tras pode fazer
+        # o SQLite recriar dado a partir de um WAL orfao na proxima conexao.
+        # Nao e erro nenhum dos dois nao existir (rodada anterior pode ja ter
+        # feito checkpoint e fechado limpo).
+        for suffix in ("-wal", "-shm"):
+            sidecar = SIM_DB.with_name(SIM_DB.name + suffix)
+            if sidecar.exists():
+                sidecar.unlink()
 
     print(f"[sim] janela {start_ts.date()} -> {end_ts.date()} | capital R$ {args.capital:,.2f}"
           .replace(",", "."))

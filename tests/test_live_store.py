@@ -4,6 +4,7 @@ from datetime import date, datetime
 
 import pytest
 
+from core.config import LIVE_DB_PATH
 from core.live_models import (
     AccountState,
     Fill,
@@ -17,6 +18,7 @@ from core.live_models import (
     OrderType,
     RobotRole,
 )
+from journal import live_store as store
 from journal.live_store import (
     delete_position,
     ensure_account,
@@ -335,6 +337,31 @@ def test_record_deposit(db_path):
             "SELECT * FROM live_deposits WHERE account_id = ? ORDER BY id", (account.id,)
         ).fetchall()
         assert rows2[1]["note"] == ""
+
+
+# ---------------------------------------------------------------------------
+# separação física do banco ao vivo (FEAT-000)
+# ---------------------------------------------------------------------------
+
+def test_default_do_diario_ao_vivo_e_live_db_path():
+    """P1 — o coração da feature: sem isso, dava para criar `LIVE_DB_PATH`,
+    ligar WAL e escrever a migração, e o diário ao vivo continuaria gravando
+    em `journal.sqlite` por padrão."""
+    assert store._connect.__defaults__[0] == LIVE_DB_PATH
+    assert store.live_journal.__wrapped__.__defaults__[0] == LIVE_DB_PATH
+
+
+def test_connect_liga_wal_e_busy_timeout(db_path):
+    """P2 — sem WAL/busy_timeout, a disputa de lock entre o backtest em
+    thread e a gravação de uma ordem real (o motivo desta feature) continua."""
+    conn = store._connect(db_path)
+    try:
+        mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+        assert mode.lower() == "wal"
+        timeout = conn.execute("PRAGMA busy_timeout").fetchone()[0]
+        assert timeout == 5000
+    finally:
+        conn.close()
 
 
 # ---------------------------------------------------------------------------
