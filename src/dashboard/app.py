@@ -371,15 +371,25 @@ async def operacao_iniciar(request: Request):
         conta = live_store.load_account(conn, live_service.ACCOUNT_NAME)
 
     erro = None
+    mt5_shares_per_lot = None
     if conta is not None:
         # conta já existe: modo/capital são da conta, NUNCA do form — evita
         # subir o loop com um broker que não bate com o que a conta espera.
         mode, capital = conta.mode, conta.initial_capital
+        if mode == "mt5":
+            mt5_shares_per_lot = _parse_optional_float(form.get("mt5_shares_per_lot"))
+            if mt5_shares_per_lot is None:
+                erro = "Informe quantas ações por lote o seu terminal MT5 usa para este símbolo."
     else:
-        mode = form.get("mode", "paper")
+        mode = form.get("mode", "manual")
         capital = float(form.get("capital") or live_service.DEFAULT_CAPITAL)
-        if mode == "mt5" and not form.get("confirmar_real"):
-            erro = "Para operar em MT5 (dinheiro real), marque a confirmação antes de iniciar."
+        if mode == "mt5":
+            if not form.get("confirmar_real"):
+                erro = "Para operar em MT5 (dinheiro real), marque a confirmação antes de iniciar."
+            else:
+                mt5_shares_per_lot = _parse_optional_float(form.get("mt5_shares_per_lot"))
+                if mt5_shares_per_lot is None:
+                    erro = "Informe quantas ações por lote o seu terminal MT5 usa para este símbolo."
 
     if erro is None:
         try:
@@ -389,9 +399,10 @@ async def operacao_iniciar(request: Request):
                 daily_loss_limit=_parse_optional_pct(form.get("daily_loss_limit")),
                 monthly_loss_limit=_parse_optional_pct(form.get("monthly_loss_limit")),
                 notify_min_level=form.get("notify_min_level") or "warn",
+                mt5_shares_per_lot=mt5_shares_per_lot,
             )
             live_control.start(cfg)
-        except RuntimeError as e:
+        except (RuntimeError, ValueError) as e:
             erro = str(e)
 
     ctx = _operacao_ctx(erro=erro)

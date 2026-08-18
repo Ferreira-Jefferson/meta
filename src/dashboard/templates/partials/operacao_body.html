@@ -124,8 +124,7 @@
       <label>
         <span class="k">Modo</span>
         <select name="mode" onchange="document.getElementById('ops-mt5-confirm').style.display = this.value === 'mt5' ? 'flex' : 'none';">
-          <option value="paper" selected>Paper — simulado, sem risco</option>
-          <option value="manual">Manual — você confirma cada ordem</option>
+          <option value="manual" selected>Manual — você confirma cada ordem</option>
           <option value="mt5">MetaTrader 5 — dinheiro real</option>
         </select>
       </label>
@@ -155,6 +154,11 @@
     </details>
 
     <div id="ops-mt5-confirm" class="ops-mt5-confirm" style="display: none;">
+      <label>
+        <span class="k">Ações por lote (mt5_shares_per_lot)</span>
+        <input type="number" name="mt5_shares_per_lot" min="0.01" step="0.01"
+               placeholder="confira o symbol_info do SEU terminal MT5" />
+      </label>
       <label class="switch">
         <input type="checkbox" name="confirmar_real" value="1" />
         <span class="switch-track"><span class="switch-dot"></span></span>
