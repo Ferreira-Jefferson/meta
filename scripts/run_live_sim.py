@@ -115,9 +115,14 @@ def main() -> None:
     if SIM_DB.exists() and not args.keep:
         print(f"[sim] apagando banco de simulacao anterior ({SIM_DB})")
         SIM_DB.unlink()
-        # WAL/SHM sidecars (journal.live_store liga journal_mode=WAL): apagar
-        # so o arquivo principal e deixar esses dois para tras pode fazer o
-        # SQLite recriar dado a partir de um WAL orfao na proxima conexao.
+
+    if not args.keep:
+        # WAL/SHM sidecars (journal.live_store liga journal_mode=WAL): fora do
+        # `if SIM_DB.exists()` acima de proposito -- se alguem apagar so o
+        # arquivo principal a mao (sem apagar os sidecars), SIM_DB.exists()
+        # da False e os sidecars orfaos sobreviveriam sem esta limpeza rodar.
+        # Apagar so o arquivo principal e deixar os dois para tras pode fazer
+        # o SQLite recriar dado a partir de um WAL orfao na proxima conexao.
         # Nao e erro nenhum dos dois nao existir (rodada anterior pode ja ter
         # feito checkpoint e fechado limpo).
         for suffix in ("-wal", "-shm"):
