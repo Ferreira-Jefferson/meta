@@ -1028,10 +1028,13 @@ def _cash_runtime(tmp_path, data_dir, broker, capital=10_000.0) -> LiveRuntime:
     )
 
 
-def test_reconcile_broker_cash_credita_deposito_e_e_idempotente(tmp_path, universe):
-    """Saldo real 500 acima do esperado -> credita exatamente 500, grava UMA
-    linha em `live_deposits`; chamar de novo com o MESMO saldo real (agora
-    que o caixa ja alcancou ele) nao credita de novo nem duplica a linha."""
+def test_reconcile_broker_cash_nunca_credita_so_avisa_pra_mais_ou_pra_menos(tmp_path, universe):
+    """Achado nº2 da revisao original: `reconcile_broker_cash` e um detector
+    PURO -- diferenca POSITIVA (saldo real 500 acima do esperado) NUNCA mais
+    credita `account.cash` sozinha (antes disso inflava o patrimonio a cada
+    saque confirmado direto na corretora MT5, sem ninguem ter aportado nada).
+    So loga `warn`; `live_deposits` continua vazia; chamar de novo com o
+    MESMO saldo real e idempotente (novo evento, mesmo nao-efeito)."""
     data_dir, days = universe
     broker = _FakeCashBroker(10_500.0)
     rt = _cash_runtime(tmp_path, data_dir, broker)
@@ -1039,29 +1042,29 @@ def test_reconcile_broker_cash_credita_deposito_e_e_idempotente(tmp_path, univer
 
     report = rt.reconcile_broker_cash(now=datetime(2026, 8, 18, 9, 0))
     assert report.action == "reconcile_cash"
-    assert report.detail["deposito"] == pytest.approx(500.0)
+    assert report.detail["diferenca"] == pytest.approx(500.0)
 
     with store.live_journal(rt.db_path) as conn:
         acc = store.load_account(conn, "teste")
         rows = conn.execute(
             "SELECT * FROM live_deposits WHERE account_id = ?", (acc.id,)
         ).fetchall()
-    assert acc.cash == pytest.approx(10_500.0)
-    assert len(rows) == 1
-    assert rows[0]["origin"] == "mt5_reconciliation"
-    assert rows[0]["amount"] == pytest.approx(500.0)
+        eventos = store.recent_events(conn, acc.id)
+    assert acc.cash == pytest.approx(10_000.0)  # NUNCA creditado sozinho
+    assert rows == []
+    assert any(e["level"] == "warn" for e in eventos)
 
     report2 = rt.reconcile_broker_cash(now=datetime(2026, 8, 18, 9, 1))
     assert report2.action == "reconcile_cash"
-    assert report2.detail.get("deposito") is None  # diff ~0 agora: no-op
+    assert report2.detail["diferenca"] == pytest.approx(500.0)  # continua avisando
 
     with store.live_journal(rt.db_path) as conn:
         acc2 = store.load_account(conn, "teste")
         rows2 = conn.execute(
             "SELECT * FROM live_deposits WHERE account_id = ?", (acc2.id,)
         ).fetchall()
-    assert acc2.cash == pytest.approx(10_500.0)
-    assert len(rows2) == 1  # nao duplicou
+    assert acc2.cash == pytest.approx(10_000.0)
+    assert rows2 == []
 
 
 def test_reconcile_broker_cash_sem_saldo_externo_e_no_op_silencioso(tmp_path, universe):
@@ -1115,8 +1118,9 @@ def test_reconcile_broker_cash_encolhimento_nao_ajusta_so_avisa(tmp_path, univer
 
 def test_run_once_aciona_reconcile_broker_cash_no_pre_open(tmp_path, universe):
     """`run_once` chamado dentro do PRE_OPEN de um dia de pregao invoca
-    `reconcile_broker_cash` — o unico jeito do aporte automatico acontecer
-    sem alguem rodar o passo na mao."""
+    `reconcile_broker_cash` — o unico jeito da divergencia de caixa ser
+    detectada sem alguem rodar o passo na mao. Deteccao NUNCA credita
+    sozinha: `acc.cash` continua o mesmo, so o evento de aviso e gerado."""
     data_dir, days = universe
     d0 = days[0]
     broker = _FakeCashBroker(10_300.0)
@@ -1130,10 +1134,10 @@ def test_run_once_aciona_reconcile_broker_cash_no_pre_open(tmp_path, universe):
 
     passos = rt.run_once(now=pre_open_now)
     assert any(
-        p.action == "reconcile_cash" and p.detail.get("deposito") == pytest.approx(300.0)
+        p.action == "reconcile_cash" and p.detail.get("diferenca") == pytest.approx(300.0)
         for p in passos
     )
 
     with store.live_journal(rt.db_path) as conn:
         acc = store.load_account(conn, "teste")
-    assert acc.cash == pytest.approx(10_300.0)
+    assert acc.cash == pytest.approx(10_000.0)  # nao creditado sozinho

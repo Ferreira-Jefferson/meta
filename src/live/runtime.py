@@ -870,72 +870,49 @@ class LiveRuntime:
 
     # ---------- deposito externo (aporte) -----------------------------------
 
-    def _apply_deposit(self, conn, account: AccountState, session: date,
-                       amount: float, origin: str, note: str = "") -> None:
-        """Credita um deposito externo ao caixa da conta e registra a
-        auditoria — o nucleo compartilhado pelos dois caminhos de aporte:
-        `reconcile_broker_cash` (deteccao automatica via MT5) chama isto
-        direto; o botao manual do dashboard (`/operacao/aportar`, ver
-        `dashboard/app.py`) replica os MESMOS tres passos (soma ao caixa,
-        salva conta, grava `live_deposits`) sem passar por aqui, porque
-        instanciar um `LiveRuntime` inteiro (estrategia/feed/corretora) so
-        para somar um valor ao caixa seria peso desnecessario para uma
-        rota que nao decide nada. `store.record_deposit` e o formato de
-        dado compartilhado de verdade entre os dois caminhos.
-
-        Loga e notifica no mesmo ponto (via `self._log`) — o botao manual
-        nao precisa disso (e um clique explicito do proprio dono, ele ja
-        sabe que aconteceu), so o caminho automatico, que roda sozinho sem
-        ninguem olhando.
-        """
-        account.cash += amount
-        store.save_account(conn, account)
-        store.record_deposit(conn, account.id, session, amount, origin, note)
-        self._log(conn, account.id, "info", "runtime",
-                        f"deposito detectado: +R$ {amount:.2f} ({origin})",
-                        {"origin": origin, "valor": round(amount, 2)})
-
     def reconcile_broker_cash(self, now: Optional[datetime] = None) -> StepReport:
         """Compara o saldo real da corretora (`Broker.cash_balance()`) contra
-        `AccountState.cash` uma vez antes da abertura, para detectar um
-        aporte feito fora deste sistema (o dono depositou direto na
-        corretora). Ver `_apply_deposit` para o credito em si.
+        `AccountState.cash` uma vez antes da abertura — DETECTOR PURO, nunca
+        credita nem debita nada sozinho.
+
+        Antes desta feature, uma diferenca positiva virava `account.cash +=
+        diff` automaticamente (tratando qualquer saldo extra da corretora
+        como se fosse aporte). No modo MT5 isso inflava o patrimonio a cada
+        saque confirmado na corretora de verdade (o saldo cai lá fora, mas
+        cresce aqui por engano) — o crítico nº2 da revisão original. Agora a
+        regra e uma so, para os dois sinais (positivo e negativo): loga
+        `warn` com o numero e a instrucao certa para o dono agir (aporte ->
+        `/operacao` "Registrar aporte"; saque -> confirme em `/operacao`
+        "Confirmar saque" ou CLI `sacar`) e NUNCA mexe em `account.cash`. Quem
+        credita aporte e `dashboard.app.operacao_aportar`; quem debita saque
+        e `confirm_withdrawal` — os dois exigem uma acao humana explicita,
+        nunca esta reconciliacao.
 
         So age quando a corretora sabe responder isso: `cash_balance()`
-        default e `None` (Paper/Manual, sem conta real para comparar) e este
+        default e `None` (Manual, sem conta real para comparar) e este
         metodo vira no-op silencioso — sem log, senao spamaria `live_events`
-        todo santo dia, para toda conta paper/manual, com um evento que nao
-        diz nada de novo.
-
-        Diferenca NEGATIVA (saldo real abaixo do esperado) NUNCA ajusta caixa
-        sozinho — pode ser uma taxa que o sistema nao conhece ou uma venda
-        manual direto na corretora, e o escopo pedido e so sobre deposito
-        que FAZ a conta crescer. So loga como aviso, para o dono investigar.
+        todo santo dia, para toda conta manual, com um evento que nao diz
+        nada de novo.
         """
         real_balance = self.broker.cash_balance()
         if real_balance is None:
             return StepReport("reconcile_cash_skip", detail={"motivo": "corretora sem saldo externo"})
 
         now = now or datetime.now(timezone.utc)
-        session = now.date()
         with store.live_journal(self.db_path) as conn:
             account = self._load_account(conn)
             if account is None:
                 return StepReport("reconcile_cash_skip", detail={"motivo": "conta inexistente"})
 
             diff = real_balance - account.cash
-            if diff > _DEPOSIT_TOLERANCE:
-                note = f"saldo real {real_balance:.2f} vs caixa esperado {account.cash:.2f}"
-                self._apply_deposit(conn, account, session, diff,
-                                    origin="mt5_reconciliation", note=note)
-                return StepReport("reconcile_cash", detail={"deposito": round(diff, 2)})
-            if diff < -_DEPOSIT_TOLERANCE:
+            if abs(diff) > _DEPOSIT_TOLERANCE:
+                sinal = "aporte seu" if diff > 0 else "saque seu"
                 self._log(conn, account.id, "warn", "runtime",
-                                f"caixa da corretora (R$ {real_balance:.2f}) abaixo do "
-                                f"esperado (R$ {account.cash:.2f}) — diferenca nao "
-                                "explicada, nenhum ajuste automatico",
+                                f"caixa da corretora (R$ {real_balance:.2f}) diverge do "
+                                f"esperado (R$ {account.cash:.2f}), diferenca de "
+                                f"R$ {diff:+.2f} — nenhum ajuste automatico; se foi "
+                                f"{sinal}, registre/confirme em /operacao",
                                 {"diferenca": round(diff, 2)})
-                return StepReport("reconcile_cash", detail={"diferenca": round(diff, 2)})
             return StepReport("reconcile_cash", detail={"diferenca": round(diff, 2)})
 
     # ---------- intra-dia --------------------------------------------------
