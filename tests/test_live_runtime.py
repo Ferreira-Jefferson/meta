@@ -797,6 +797,130 @@ def test_recomendacao_de_saque_por_liquidez_e_gravada_sem_matar_o_supervisor(tmp
     assert pend_saque[0].decided_on == d1
 
 
+# ---------- confirmacao humana do saque (confirm_withdrawal) ---------------
+
+def _runtime_com_recomendacao(tmp_path, data_dir, amount: float = 5_000.0, capital: float = 10_000.0):
+    """Monta um `LiveRuntime` com uma recomendacao de saque PENDING ja
+    gravada (via `close_and_decide` real, floor baixo o suficiente para
+    pagar `amount` no fecho do 1o pregao)."""
+    policy = FloorSkim(pct=amount / capital, floor=100.0, day=1, min_amount=0.0)
+    days = _sessions(3)
+    rt = _runtime(tmp_path, data_dir, {}, policy=policy, mode="manual", capital=capital)
+    rt.ensure_account()
+    rt.close_and_decide(days[0])
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, "teste")
+        pend = store.pending_withdraw_intents(conn, acc.id)
+    assert len(pend) == 1
+    return rt, pend[0], days
+
+
+def test_confirm_withdrawal_debita_caixa_credita_externo_e_fecha_intent(tmp_path, universe):
+    data_dir, _days = universe
+    rt, intent, days = _runtime_com_recomendacao(tmp_path, data_dir, amount=5_000.0, capital=10_000.0)
+
+    report = rt.confirm_withdrawal(4_800.0, session=days[1])
+    assert report.action == "withdraw_confirm"
+    assert report.detail["intent_id"] == intent.id
+    assert report.detail["recomendado"] == pytest.approx(5_000.0)
+    assert report.detail["confirmado"] == pytest.approx(4_800.0)
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, "teste")
+        saques = store.withdrawals(conn, acc.id)
+        pend_depois = store.pending_withdraw_intents(conn, acc.id)
+    assert acc.cash == pytest.approx(10_000.0 - 4_800.0)
+    assert acc.external_cash == pytest.approx(4_800.0)
+    assert acc.withdrawn_total == pytest.approx(4_800.0)
+    assert pend_depois == []
+    assert len(saques) == 1
+    assert saques[0]["requested"] == pytest.approx(5_000.0)
+    assert saques[0]["executed"] == pytest.approx(4_800.0)
+
+
+def test_confirm_withdrawal_sem_recomendacao_pendente_rejeita_sem_mexer_no_caixa(tmp_path, universe):
+    data_dir, days = universe
+    rt = _runtime(tmp_path, data_dir, {}, mode="manual", capital=10_000.0)
+    rt.ensure_account()
+
+    report = rt.confirm_withdrawal(1_000.0, session=days[0])
+    assert report.action == "withdraw_reject"
+    assert "recomendação" in report.detail["motivo"] or "pendente" in report.detail["motivo"]
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, "teste")
+    assert acc.cash == pytest.approx(10_000.0)
+
+
+def test_confirm_withdrawal_duas_vezes_debita_uma_so_vez(tmp_path, universe):
+    """RED antes de GREEN (hipotese nº5 do plan-reviewer): a mesma
+    recomendacao confirmada duas vezes NUNCA debita duas vezes -- a 2a
+    chamada tem de perder a corrida do `claim_intent` e devolver
+    `withdraw_reject`, com o caixa identico ao que a 1a chamada deixou."""
+    data_dir, _days = universe
+    rt, intent, days = _runtime_com_recomendacao(tmp_path, data_dir, amount=5_000.0, capital=10_000.0)
+
+    r1 = rt.confirm_withdrawal(5_000.0, session=days[1], intent_id=intent.id)
+    assert r1.action == "withdraw_confirm"
+    with store.live_journal(rt.db_path) as conn:
+        acc_apos_1 = store.load_account(conn, "teste")
+    cash_apos_1 = acc_apos_1.cash
+
+    r2 = rt.confirm_withdrawal(5_000.0, session=days[1], intent_id=intent.id)
+    assert r2.action == "withdraw_reject"
+
+    with store.live_journal(rt.db_path) as conn:
+        acc_apos_2 = store.load_account(conn, "teste")
+    assert acc_apos_2.cash == pytest.approx(cash_apos_1)  # nao debitou de novo
+
+
+def test_confirm_withdrawal_valor_menor_devolve_falta_a_fila_e_maior_nao_devolve(tmp_path, universe):
+    data_dir, _days = universe
+    rt, intent, days = _runtime_com_recomendacao(tmp_path, data_dir, amount=5_000.0, capital=10_000.0)
+    pool_antes = rt.withdrawal.policy._pool
+
+    rt.confirm_withdrawal(3_000.0, session=days[1], intent_id=intent.id)
+    assert rt.withdrawal.policy._pool == pytest.approx(pool_antes + 2_000.0)  # falta volta a fila
+
+    # nova recomendacao/rodada independente para o caso "confirma mais que o pedido"
+    rt2, intent2, days2 = _runtime_com_recomendacao(tmp_path / "outro", data_dir, amount=5_000.0, capital=10_000.0)
+    pool_antes2 = rt2.withdrawal.policy._pool
+    rt2.confirm_withdrawal(6_000.0, session=days2[1], intent_id=intent2.id)
+    assert rt2.withdrawal.policy._pool == pytest.approx(pool_antes2)  # nao devolve nada
+
+
+def test_confirm_withdrawal_funciona_com_disjuntor_acionado(tmp_path, universe):
+    """`CircuitBreaker` so veta ENTER (premissa 17) -- confirmar saque nao e
+    afetado mesmo com o disjuntor congelado."""
+    data_dir, _days = universe
+    rt, intent, days = _runtime_com_recomendacao(tmp_path, data_dir, amount=5_000.0, capital=10_000.0)
+    guard = CircuitBreaker(daily_loss_pct=0.01, monthly_loss_pct=0.01)
+    guard.observe(days[1], 100_000.0)
+    guard.observe(days[1], 90_000.0)
+    assert guard.is_frozen
+    rt.risk_guard = guard
+
+    report = rt.confirm_withdrawal(5_000.0, session=days[1], intent_id=intent.id)
+    assert report.action == "withdraw_confirm"
+
+
+def test_confirm_withdrawal_acima_do_caixa_debita_mesmo_assim_e_avisa(tmp_path, universe):
+    """Decisao do usuario (§5 do plano): sem clamp, sem rejeicao -- o caixa
+    fica negativo e um evento `warn` e gravado; `reconcile_broker_cash` e
+    quem aponta a divergencia real depois, nao esta confirmacao."""
+    data_dir, _days = universe
+    rt, intent, days = _runtime_com_recomendacao(tmp_path, data_dir, amount=5_000.0, capital=10_000.0)
+
+    report = rt.confirm_withdrawal(50_000.0, session=days[1], intent_id=intent.id)
+    assert report.action == "withdraw_confirm"
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, "teste")
+        eventos = store.recent_events(conn, acc.id)
+    assert acc.cash < 0
+    assert any(e["level"] == "warn" and "negativ" in e["message"] for e in eventos)
+
+
 def test_saque_automatico_com_liquidacao_permanece_sincrono(tmp_path, universe):
     """Regressao: sob corretora automatica (paper/MT5) a liquidacao continua
     acontecendo TODA dentro do mesmo `execute_session` — sem passar por
@@ -907,6 +1031,39 @@ def test_fim_de_mes_dispara_no_ultimo_dia_disponivel(tmp_path):
     assert any(i.ticker == "AAA.SA" for i in entradas), (
         f"esperava ENTER em AAA.SA para {execute_on}, intencoes gravadas: {pend}"
     )
+
+
+# ---------- status(): recomendacao de saque visivel o mes inteiro ----------
+
+def test_status_mostra_recomendacao_de_saque_pendente_varios_dias_depois(tmp_path, universe):
+    """Passo 11: uma recomendacao de saque decidida ha varios dias continua
+    aparecendo em `status()["intencoes_pendentes"]` (ao contrario de
+    ENTER/EXIT, que so aparecem no pregao seguinte) -- e cada item traz `id`
+    nao-nulo, necessario para a UI vincular a confirmacao a uma recomendacao
+    especifica."""
+    data_dir, days = universe
+    d0 = days[0]
+    policy = FloorSkim(pct=0.5, floor=100.0, day=1, min_amount=0.0)
+    rt = _runtime(tmp_path, data_dir, {}, policy=policy, mode="manual", capital=10_000.0)
+    rt.ensure_account()
+    rt.close_and_decide(d0)
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, "teste")
+        pend = store.pending_withdraw_intents(conn, acc.id)
+    assert len(pend) == 1
+    intent_id = pend[0].id
+
+    # "muitos dias depois": status() sem nenhum pregao adicional decidido,
+    # so avancando o relogio real (session_date usa datetime.now por
+    # default) -- a recomendacao continua PENDING no banco independente da
+    # data de "hoje" do sistema, entao ja e suficiente checar que ela
+    # aparece mesmo sem ser "o pregao seguinte a decisao".
+    status = rt.status()
+    saques_no_status = [i for i in status["intencoes_pendentes"] if i["tipo"] == "withdraw"]
+    assert len(saques_no_status) == 1
+    assert saques_no_status[0]["id"] == intent_id
+    assert saques_no_status[0]["id"] is not None
 
 
 # ---------- integracao: disjuntor de risco e notificador -------------------

@@ -806,6 +806,125 @@ class LiveRuntime:
             expiradas += 1
         return expiradas
 
+    def _last_equity_before(self, conn, account: AccountState, session: date) -> float:
+        """Ultimo equity marcado (`store.equity_series`) com data <= `session`
+        -- usado como `equity_before` de uma confirmacao de saque, que (ao
+        contrario do antigo `_withdraw` sincrono, sempre chamado dentro do
+        ciclo fecho->abertura) pode acontecer a qualquer momento.
+
+        Conta sem NENHUMA linha em `equity_series` ainda (primeiro saque de
+        uma conta nova, confirmado antes do primeiro `close_and_decide`): cai
+        para `account.cash` -- sem posicao, caixa E o equity. Loga `warn` se
+        a conta JA tiver posicao aberta nesse caso (o fallback subestimaria o
+        equity real), em vez de travar a confirmacao por um dado que faltou.
+        """
+        serie = store.equity_series(conn, account.id)
+        candidatos = [(d, eq) for d, eq, _p in serie if d <= session.isoformat()]
+        if candidatos:
+            return candidatos[-1][1]
+        if account.positions:
+            self._log(conn, account.id, "warn", "saque",
+                            "equity_before de saque caiu no fallback de caixa com posicoes "
+                            "abertas em carteira -- pode subestimar o equity real",
+                            {})
+        return account.cash
+
+    def confirm_withdrawal(self, amount: float, session: Optional[date] = None,
+                           intent_id: Optional[int] = None) -> StepReport:
+        """Confirmacao HUMANA de uma recomendacao de saque -- o UNICO caminho
+        que move dinheiro de verdade desde que o saque virou recomendacao
+        (ver docstring do modulo). Chamado pelo CLI (`scripts/run_live.py
+        sacar`) ou pelo botao "Confirmar saque" do dashboard.
+
+        Ordem estrita (cada item so roda se o anterior nao rejeitou):
+          1. `amount <= 0` -> rejeita sem abrir banco.
+          2. Conta inexistente -> rejeita.
+          3. Expira recomendacao vencida ANTES de escolher -- nunca confirma
+             contra uma recomendacao que a virada de mes ja invalidou.
+          4. Sem recomendacao PENDING -> rejeita. Com `intent_id`, so aquela
+             especifica (nao achou -> rejeita). Sem `intent_id`: uma so ->
+             usa; mais de uma -> rejeita listando os ids -- NUNCA adivinha a
+             mais antiga (ver riscos do plano).
+          5. `store.claim_intent(PENDING -> DONE)` -- a TRAVA contra
+             duplo-clique/confirmacao concorrente. Quem perde a corrida
+             (`False`) rejeita SEM tocar em caixa.
+          6. So a partir daqui o caixa e mexido: `cash -= amount`,
+             `external_cash += amount`, `withdrawn_total += amount`. SEM
+             CLAMP e SEM rejeitar por caixa insuficiente -- decisao explicita
+             do usuario (ver riscos/§5 do plano): o sistema so registra a
+             intencao do dono; qualquer divergencia real com o saldo da
+             corretora e capturada por `reconcile_broker_cash`, nunca por uma
+             trava aqui. Se `cash` ficar negativo, loga `warn`.
+          7. Grava a auditoria (`record_withdrawal`), avisa a politica
+             (`on_executed` -- se saiu menos que o recomendado, a diferenca
+             volta para a fila) e persiste o estado dos robos.
+        """
+        if amount <= 0:
+            return StepReport("withdraw_reject", session, detail={"motivo": "valor inválido"})
+
+        session = session or clock.session_date()
+        with store.live_journal(self.db_path) as conn:
+            account = self._load_account(conn)
+            if account is None:
+                return StepReport("withdraw_reject", session, detail={"motivo": "conta inexistente"})
+            self._restore_robot_state(account.policy_state)
+
+            self._expire_withdraw_advice(conn, account, session)
+
+            pendentes = store.pending_withdraw_intents(conn, account.id)
+            if not pendentes:
+                return StepReport("withdraw_reject", session,
+                                  detail={"motivo": "sem recomendação pendente"})
+            if intent_id is not None:
+                escolhida = next((i for i in pendentes if i.id == intent_id), None)
+                if escolhida is None:
+                    return StepReport("withdraw_reject", session, detail={
+                        "motivo": f"recomendação #{intent_id} não está pendente",
+                    })
+            elif len(pendentes) == 1:
+                escolhida = pendentes[0]
+            else:
+                return StepReport("withdraw_reject", session, detail={
+                    "motivo": "mais de uma recomendação pendente -- informe --intent-id",
+                    "intent_ids": [i.id for i in pendentes],
+                })
+
+            if not store.claim_intent(conn, escolhida.id, IntentStatus.PENDING, IntentStatus.DONE):
+                return StepReport("withdraw_reject", session,
+                                  detail={"motivo": "recomendação já confirmada ou expirada"})
+
+            equity_before = self._last_equity_before(conn, account, session)
+
+            account.cash -= amount
+            account.external_cash += amount
+            account.withdrawn_total += amount
+            if account.cash < 0:
+                self._log(conn, account.id, "warn", "saque",
+                                f"caixa ficou negativo (R$ {account.cash:.2f}) apos confirmar "
+                                f"saque de R$ {amount:.2f} -- reconcile_broker_cash vai apontar "
+                                "a divergencia com a corretora",
+                                {"caixa": round(account.cash, 2)})
+
+            store.record_withdrawal(
+                conn, account.id, session,
+                requested=escolhida.amount, executed=amount,
+                equity_before=equity_before, fees_paid=0.0, liquidated=[],
+            )
+            self.withdrawal.on_executed(escolhida, amount)
+
+            account.policy_state = self._robot_state()
+            store.save_account(conn, account)
+            self._log(conn, account.id, "info", "saque",
+                            f"saque confirmado: recomendado R$ {escolhida.amount:.2f}, "
+                            f"confirmado R$ {amount:.2f}",
+                            {"intent_id": escolhida.id, "recomendado": round(escolhida.amount, 2),
+                             "confirmado": round(amount, 2)})
+            resultado = StepReport("withdraw_confirm", session, detail={
+                "intent_id": escolhida.id, "recomendado": round(escolhida.amount, 2),
+                "confirmado": round(amount, 2), "caixa": round(account.cash, 2),
+            })
+        return resultado
+
     # ---------- reconciliacao (fills que chegaram depois) ------------------
 
     def reconcile_pending_fills(self, now: Optional[datetime] = None) -> StepReport:
@@ -1018,7 +1137,13 @@ class LiveRuntime:
             if account is None:
                 return {"conta": self.account_name, "existe": False}
             self._restore_robot_state(account.policy_state)
-            pend = store.pending_intents(conn, account.id, clock.next_session(session))
+            # Recomendacao de saque NAO entra em `pending_intents` (que so olha
+            # a `execute_on` do proximo pregao) -- ela fica visivel o mes
+            # inteiro, ver `store.pending_withdraw_intents`. Exclui WITHDRAW
+            # daqui para nao listar a mesma recomendacao duas vezes.
+            pend = [i for i in store.pending_intents(conn, account.id, clock.next_session(session))
+                    if i.kind != IntentKind.WITHDRAW]
+            pend_saque = store.pending_withdraw_intents(conn, account.id)
             eventos = store.recent_events(conn, account.id, limit=10)
         return {
             "conta": account.name,
@@ -1048,9 +1173,9 @@ class LiveRuntime:
                 for p in account.positions.values()
             ],
             "intencoes_pendentes": [
-                {"robo": i.robot, "tipo": i.kind.value, "ticker": i.ticker,
+                {"id": i.id, "robo": i.robot, "tipo": i.kind.value, "ticker": i.ticker,
                  "motivo": i.reason, "valor": i.amount, "executa_em": i.execute_on.isoformat()}
-                for i in pend
+                for i in (pend + pend_saque)
             ],
             "eventos": eventos,
         }
