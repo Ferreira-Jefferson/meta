@@ -54,6 +54,7 @@ formato das tabelas.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import date, datetime
@@ -119,11 +120,122 @@ def _live_ddl(schema_path: Path) -> str:
     return ";\n".join(statements) + ";"
 
 
+class LegacyPaperAccountError(RuntimeError):
+    """`live_accounts` ainda usa o CHECK antigo (vocabulário `paper`/`manual`/
+    `broker`) e contém ao menos uma conta de SIMULAÇÃO (`mode='paper'`).
+
+    Não é seguro converter isso em silêncio para o vocabulário canônico
+    (`manual`/`mt5`, ver `core.live_models.BrokerMode`) — uma conta de
+    simulação virar conta real por engano é o tipo de bug que só aparece
+    quando já é tarde. O operador precisa decidir explicitamente: ARQUIVAR
+    (renomear a conta) ou APAGAR essa(s) linha(s) antes do rebuild continuar.
+    """
+
+
+def _legacy_check_present(conn: sqlite3.Connection) -> bool:
+    """`True` se `live_accounts` já existe no banco E seu DDL (lido de
+    `sqlite_master`, posicionalmente — sem depender de `row_factory`) ainda
+    tem o CHECK antigo. O marcador usado é `'broker'`: só existe no
+    vocabulário antigo, o vocabulário canônico (`manual`/`mt5`) nunca o tem.
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'live_accounts'"
+    ).fetchone()
+    if row is None:
+        return False
+    ddl = row[0] or ""
+    return "'broker'" in ddl
+
+
+def _live_accounts_rebuild_ddl(schema_path: Path) -> str:
+    """DDL de `CREATE TABLE live_accounts_new (...)`, extraído de
+    `schema.sql` (fonte única de verdade do formato final da tabela) e
+    renomeado — nunca duplicado à mão aqui, senão o rebuild divergiria do
+    schema no primeiro `ALTER TABLE` que alguém fizer em `schema.sql`."""
+    text = schema_path.read_text(encoding="utf-8")
+    code_only = "\n".join(line for line in text.splitlines() if not line.strip().startswith("--"))
+    for raw in code_only.split(";"):
+        stmt = raw.strip()
+        if not stmt:
+            continue
+        head = stmt.upper().split("(", 1)[0].rstrip()
+        if head.startswith("CREATE TABLE") and head.endswith("LIVE_ACCOUNTS"):
+            return re.sub(
+                r"(?i)(CREATE TABLE(?:\s+IF NOT EXISTS)?\s+)live_accounts\b",
+                r"\1live_accounts_new", stmt, count=1,
+            ) + ";"
+    raise RuntimeError("definição de live_accounts não encontrada em schema.sql")
+
+
+def _migrate_account_mode_vocabulary(conn: sqlite3.Connection, schema_path: Path = SCHEMA_PATH) -> None:
+    """Rebuild de `live_accounts` do vocabulário antigo (`paper`/`manual`/
+    `broker`) para o canônico (`manual`/`mt5`) — chamado no início de
+    `ensure_tables`, antes de qualquer outra tabela ser tocada.
+
+    Recusa (levanta `LegacyPaperAccountError`, não mexe em nada) se houver
+    alguma conta `mode='paper'` — nunca converte simulação em conta real em
+    silêncio. Caso contrário, reconstrói a tabela na ordem OBRIGATÓRIA
+    criar-nova -> copiar -> dropar-antiga -> renomear (nunca o inverso: a
+    partir do SQLite 3.25 `ALTER TABLE ... RENAME` reescreve as cláusulas
+    `REFERENCES` das tabelas FILHAS — renomear `live_accounts` para
+    `live_accounts_old` primeiro deixaria `live_positions`/`live_orders`/
+    `live_intents` apontando para o nome velho, corrompendo o banco em
+    silêncio). `PRAGMA foreign_keys` é desligado/religado aqui (fora de
+    qualquer transação — o pragma é um no-op dentro de uma), porque
+    `_connect` já o liga ANTES de chamar `ensure_tables`.
+    """
+    if not _legacy_check_present(conn):
+        return
+
+    legacy_paper = conn.execute(
+        "SELECT name FROM live_accounts WHERE mode = 'paper'"
+    ).fetchall()
+    if legacy_paper:
+        nomes = ", ".join(str(row[0]) for row in legacy_paper)
+        raise LegacyPaperAccountError(
+            "live_accounts tem conta(s) de SIMULAÇÃO (mode='paper') que o "
+            f"vocabulário canônico (manual/mt5) não cobre: {nomes}. Decida "
+            "explicitamente antes de continuar — arquivar (ex.: UPDATE "
+            "live_accounts SET name = name || '_arquivada' WHERE mode = "
+            "'paper') ou apagar a(s) linha(s); esta migração nunca converte "
+            "simulação em conta real em silêncio."
+        )
+
+    conn.execute("PRAGMA foreign_keys = OFF")
+    conn.executescript(_live_accounts_rebuild_ddl(schema_path))
+    conn.execute(
+        """INSERT INTO live_accounts_new
+            (id, name, mode, initial_capital, cash, investment_robot, withdrawal_robot,
+             withdrawn_total, external_cash, policy_state, created_at, updated_at)
+           SELECT id, name, CASE WHEN mode = 'broker' THEN 'mt5' ELSE mode END,
+                  initial_capital, cash, investment_robot, withdrawal_robot,
+                  withdrawn_total, external_cash, policy_state, created_at, updated_at
+           FROM live_accounts"""
+    )
+    conn.execute("DROP TABLE live_accounts")
+    conn.execute("ALTER TABLE live_accounts_new RENAME TO live_accounts")
+    # Commit ANTES de religar o pragma: `PRAGMA foreign_keys` é um no-op
+    # dentro de uma transação aberta (a que o INSERT acima começou) — sem
+    # commitar primeiro, `foreign_keys=ON` abaixo não teria efeito nenhum
+    # pelo resto da vida desta conexão.
+    conn.commit()
+
+    fk_problems = conn.execute("PRAGMA foreign_key_check").fetchall()
+    if fk_problems:
+        raise RuntimeError(
+            f"rebuild de live_accounts deixou referência(s) inválida(s): {fk_problems}"
+        )
+    conn.execute("PRAGMA foreign_keys = ON")
+
+
 def ensure_tables(conn: sqlite3.Connection, schema_path: Path = SCHEMA_PATH) -> None:
     """Cria as tabelas `live_*` se ainda não existirem. Idempotente e barato.
 
     Chamado a cada `_connect` — ver docstring do módulo para o porquê.
+    Primeiro passo: migrar o vocabulário de modo se `live_accounts` ainda
+    estiver no formato antigo (ver `_migrate_account_mode_vocabulary`).
     """
+    _migrate_account_mode_vocabulary(conn, schema_path)
     ddl = _live_ddl(schema_path)
     if ddl:
         conn.executescript(ddl)
@@ -195,8 +307,11 @@ def ensure_account(
     """Cria a conta se não existir; se já existir, não mexe nela.
 
     Idempotente por causa de `ON CONFLICT(name) DO NOTHING`: chamar duas vezes
-    com os mesmos dados (ou dados diferentes) não duplica linha nem sobrescreve
-    o estado atual — quem quer mudar cash/robôs usa `save_account`.
+    com os MESMOS dados não duplica linha nem sobrescreve o estado atual —
+    quem quer mudar cash/robôs usa `save_account`. Chamar com um `mode`
+    DIFERENTE do já gravado levanta `ValueError`: o modo de uma conta nunca
+    muda por baixo do broker que a criou (antes disso era ignorado em
+    silêncio pelo `ON CONFLICT DO NOTHING`).
     """
     conn.execute(
         """INSERT INTO live_accounts
@@ -207,6 +322,12 @@ def ensure_account(
     )
     account = load_account(conn, name)
     assert account is not None, "insert com ON CONFLICT DO NOTHING não pode deixar a conta ausente"
+    if account.mode != mode:
+        raise ValueError(
+            f"conta '{name}' já existe com mode={account.mode!r}, mas foi "
+            f"pedida com mode={mode!r} — divergência entre a conta gravada "
+            "e o broker/CLI que está chamando agora."
+        )
     return account
 
 
