@@ -1,0 +1,233 @@
+{% extends "base.html" %}
+{% set page = "strategies" %}
+{% block title %}{{ strategy.name }} · META{% endblock %}
+{% block content %}
+
+<section class="page-head">
+  <div>
+    <div class="kicker"><a href="/" class="crumb">← Robôs</a> · v{{ strategy.version }}</div>
+    <h1>{{ strategy.name }}</h1>
+    <p class="dek">{{ strategy.description }}</p>
+  </div>
+  <aside>
+    <div>Data mais recente · <span class="pos">{{ default_end }}</span></div>
+    <div>Ativos elegíveis · {{ watchlist|length }}</div>
+  </aside>
+</section>
+
+<section class="robot-doc stagger">
+  <article class="doc-block">
+    <h2>Como opera</h2>
+    <p class="doc-body">{{ strategy.long_description|safe }}</p>
+  </article>
+
+  <div class="doc-columns">
+    <article class="doc-block">
+      <h3>Entrada</h3>
+      <ol class="doc-list">
+        {% for r in strategy.entry_rules %}<li>{{ r|safe }}</li>{% endfor %}
+      </ol>
+    </article>
+    <article class="doc-block">
+      <h3>Saída</h3>
+      <ol class="doc-list">
+        {% for r in strategy.exit_rules %}<li>{{ r|safe }}</li>{% endfor %}
+      </ol>
+    </article>
+    <article class="doc-block">
+      <h3>Sizing &amp; custos</h3>
+      <ol class="doc-list">
+        {% for r in strategy.sizing_rules %}<li>{{ r|safe }}</li>{% endfor %}
+      </ol>
+    </article>
+  </div>
+
+  <article class="doc-block">
+    <h3>Parâmetros</h3>
+    <table class="params-table">
+      <thead><tr><th>Nome</th><th>Valor</th><th>Descrição</th></tr></thead>
+      <tbody>
+        {% for p in strategy.params %}
+        <tr>
+          <td>{{ p[0] }}</td>
+          <td class="num">{{ p[1] }}</td>
+          <td class="dim">{{ p[2] }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </article>
+</section>
+
+<section class="run-form stagger">
+  <div class="run-form-head">
+    <h2>Rodar simulação</h2>
+    <p class="dek">A data final é sempre a última barra disponível. O robô processa o histórico dia a dia e você acompanha o capital em tempo real.</p>
+  </div>
+
+  <form method="post" action="/strategies/{{ strategy.key }}/run" class="sim-form">
+    <div class="row">
+      <label>
+        <span class="k">Data início</span>
+        <input type="date" name="start_date" value="{{ default_start }}" min="2010-01-01" max="{{ default_end }}" required />
+      </label>
+      <label>
+        <span class="k">Data fim</span>
+        <input type="date" value="{{ default_end }}" disabled />
+        <small class="dim">automática — última barra disponível</small>
+      </label>
+      <label>
+        <span class="k">Capital (R$)</span>
+        <input type="number" name="capital" value="{{ default_capital }}" min="100" step="100" required />
+      </label>
+    </div>
+
+    <div class="fractional-row">
+      <label class="switch">
+        <input type="checkbox" name="fractional" value="1" checked />
+        <span class="switch-track"><span class="switch-dot"></span></span>
+        <span class="switch-text">Lote fracionário <span class="dim">— permite comprar &lt; 100 ações. Útil para capital pequeno (mercado fracionário: <code>PETR4F</code>, <code>VALE3F</code>).</span></span>
+      </label>
+    </div>
+
+    <div class="tickers">
+      <div class="k">Ativos</div>
+      <div class="ticker-actions">
+        <a href="#" onclick="toggleAll(true); return false;">selecionar todos</a>
+        <span class="dim">·</span>
+        <a href="#" onclick="toggleAll(false); return false;">limpar</a>
+      </div>
+      <div class="ticker-grid">
+        {% for t in watchlist %}
+          <label class="chip">
+            <input type="checkbox" name="tickers" value="{{ t }}" checked />
+            <span>{{ t.replace('.SA','') }}</span>
+          </label>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="submit-row">
+      <button type="submit">▶ Executar simulação</button>
+    </div>
+  </form>
+</section>
+
+<section class="recent-runs stagger">
+  <div class="recent-runs-head">
+    <h3>Simulações deste robô</h3>
+    <p class="dek">Histórico de execuções do {{ strategy.name }}. Filtre por período, capital ou ativo específico.</p>
+  </div>
+
+  <form id="runs-filter-form"
+        class="runs-filters compact"
+        hx-get="/runs/list"
+        hx-trigger="change delay:150ms, keyup delay:400ms from:input[type='number'], keyup delay:400ms from:input[type='date']"
+        hx-target="#runs-tbody"
+        hx-swap="innerHTML"
+        hx-vals='{"offset": 0}'>
+    <input type="hidden" name="strategy" value="{{ strategy.key }}" />
+    <label>
+      <span class="k">Período de</span>
+      <input type="date" name="start_from" value="{{ filters.start_from }}" />
+    </label>
+    <label>
+      <span class="k">Período até</span>
+      <input type="date" name="end_to" value="{{ filters.end_to }}" />
+    </label>
+    <label>
+      <span class="k">Capital ≥ (R$)</span>
+      <input type="number" name="capital_min" min="0" step="100" value="{{ filters.capital_min }}" />
+    </label>
+    <label>
+      <span class="k">Capital ≤ (R$)</span>
+      <input type="number" name="capital_max" min="0" step="100" value="{{ filters.capital_max }}" />
+    </label>
+    <label>
+      <span class="k">Ativo</span>
+      <select name="ticker">
+        <option value="">Todos</option>
+        {% for t in run_tickers %}
+          <option value="{{ t }}" {% if filters.ticker == t %}selected{% endif %}>{{ t.replace('.SA','') }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button
+      type="button"
+      class="clear"
+      onclick="document.querySelectorAll('#runs-filter-form input:not([type=hidden]), #runs-filter-form select').forEach(el => { if (el.type==='date' || el.type==='number') el.value=''; else el.selectedIndex=0; }); htmx.trigger('#runs-filter-form','change');">
+      limpar
+    </button>
+  </form>
+
+  <table class="runs-table">
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Robô</th>
+        <th>Período</th>
+        <th>Ativos</th>
+        <th class="right">Capital inicial</th>
+        <th class="right">Capital final</th>
+        <th class="right">CAGR</th>
+        <th class="right">Sharpe</th>
+        <th class="right">Trades</th>
+        <th class="right">Concluída em</th>
+      </tr>
+    </thead>
+    <tbody id="runs-tbody">
+      {% for r in recent_runs %}
+      <tr onclick="location.href='/runs/{{ r.id }}'">
+        <td class="num">{{ r.id }}</td>
+        <td>{{ r.strategy_name }} <span class="dim">v{{ r.strategy_version }}</span></td>
+        <td class="num">{{ r.period_start }} → {{ r.period_end }}</td>
+        <td class="tickers-cell">
+          {% set tks = (r.tickers or '').split(',') if r.tickers else [] %}
+          {% if tks %}
+            {% set shown = tks[:4] %}
+            {% for t in shown %}<span class="ticker-pill">{{ t.replace('.SA','') }}</span>{% endfor %}
+            {% if tks|length > 4 %}<span class="ticker-more dim">+{{ tks|length - 4 }}</span>{% endif %}
+          {% else %}<span class="dim">—</span>{% endif %}
+        </td>
+        <td class="right num">R$ {{ "{:,.0f}".format(r.initial_capital).replace(",", ".") }}</td>
+        <td class="right num {% if r.final_capital is not none %}{% if r.final_capital > r.initial_capital %}pos{% elif r.final_capital < r.initial_capital %}neg{% endif %}{% endif %}">
+          {% if r.final_capital is not none %}R$ {{ "{:,.0f}".format(r.final_capital).replace(",", ".") }}{% else %}<span class="dim">—</span>{% endif %}
+        </td>
+        <td class="right num {% if (r.cagr or 0) >= 0 %}pos{% else %}neg{% endif %}">
+          {{ "%.2f%%"|format((r.cagr or 0) * 100) }}
+        </td>
+        <td class="right num">{{ "%.2f"|format(r.sharpe or 0) }}</td>
+        <td class="right num">{{ r.trades_count or 0 }}</td>
+        <td class="right num dim">{{ r.created_at }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="10" class="runs-empty">Nenhuma simulação para este robô ainda. Use o formulário acima para rodar a primeira.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <div id="runs-more-slot" class="runs-more">
+    {% if has_more %}
+    <button
+      class="cta ghost"
+      hx-get="/runs/list"
+      hx-include="#runs-filter-form"
+      hx-vals='{"offset": {{ next_offset }} }'
+      hx-target="#runs-tbody"
+      hx-swap="beforeend">
+      Ver mais 10 simulações
+    </button>
+    <span class="dim">{{ next_offset }} exibidas · há mais</span>
+    {% elif recent_runs %}
+    <span class="dim">— fim da lista —</span>
+    {% endif %}
+  </div>
+</section>
+
+<script>
+  function toggleAll(on) {
+    document.querySelectorAll('input[name="tickers"]').forEach(cb => cb.checked = on);
+  }
+</script>
+
+{% endblock %}

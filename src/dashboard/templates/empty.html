@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% set page = "overview" %}
+{% block content %}
+<section class="empty">
+  <div>
+    <h1>Nenhum backtest ainda</h1>
+    <p>Rode primeiro:</p>
+    <p><code>python scripts/init_db.py</code></p>
+    <p><code>python scripts/download_data.py</code></p>
+    <p><code>python scripts/run_backtest.py --strategy baseline_ma_cross --start 2010 --end 2019</code></p>
+    <p>Depois recarregue esta página.</p>
+  </div>
+</section>
+{% endblock %}

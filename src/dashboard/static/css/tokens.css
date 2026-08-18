@@ -1,0 +1,75 @@
+/* Design tokens — Terminal Editorial
+   Não hardcode cor/fonte fora daqui. */
+
+/* ── Light theme (default) ─────────────────────────────── */
+:root {
+  /* Palette */
+  --bg:            #f4f1e8;
+  --bg-elevated:   #ede9de;
+  --bg-hover:      #e5e1d4;
+  --fg:            #1c1a14;
+  --fg-strong:     #0e0d09;
+  --fg-muted:      #7a7367;
+  --fg-faint:      #c0bab0;
+  --grid:          #d4cfc0;
+  --grid-strong:   #c0b9a8;
+
+  --accent-amber:     #9a6e1a;
+  --accent-amber-dim: #f0e4c0;
+  --accent-green:     #3d7d3d;
+  --accent-red:       #a83028;
+
+  color-scheme: light;
+
+  /* Type — shared */
+  --font-mono:    "JetBrainsMono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-serif:   "InstrumentSerif", "Iowan Old Style", "Palatino", Georgia, serif;
+
+  /* Type scale */
+  --fs-metadata: 0.6875rem;   /* 11 */
+  --fs-body:     0.8125rem;   /* 13 */
+  --fs-body-lg:  0.9375rem;   /* 15 */
+  --fs-h3:       1.125rem;    /* 18 */
+  --fs-h2:       1.75rem;     /* 28 */
+  --fs-h1:       3rem;        /* 48 */
+  --fs-display:  4.5rem;      /* 72 */
+
+  --lh-tight:    1.15;
+  --lh-body:     1.55;
+
+  /* Spacing scale (8px base with editorial exceptions) */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 24px;
+  --s-6: 32px;
+  --s-7: 48px;
+  --s-8: 72px;
+  --s-9: 112px;
+
+  /* Layout */
+  --page-max: 1360px;
+  --gutter: var(--s-5);
+  --header-h: 56px;
+}
+
+/* ── Dark theme ─────────────────────────────────────────── */
+[data-theme="dark"] {
+  --bg:            #0d0d0e;
+  --bg-elevated:   #151517;
+  --bg-hover:      #1c1c1e;
+  --fg:            #e8e4d9;
+  --fg-strong:     #f5f2ea;
+  --fg-muted:      #8a8579;
+  --fg-faint:      #4a463f;
+  --grid:          #26251f;
+  --grid-strong:   #3a382f;
+
+  --accent-amber:     #d9a441;
+  --accent-amber-dim: #8f6d2b;
+  --accent-green:     #7aa87a;
+  --accent-red:       #c25a4c;
+
+  color-scheme: dark;
+}

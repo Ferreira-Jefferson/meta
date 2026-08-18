@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% set page = "trades" %}
+{% block title %}Trades · META{% endblock %}
+{% block content %}
+
+<section class="page-head">
+  <div>
+    <div class="kicker"><a href="/runs/{{ run.id }}" class="crumb">← Run #{{ run.id }}</a> · Diário de operações</div>
+    <h1>Trades</h1>
+    <p class="dek">Cada linha é uma decisão tomada pelo robô — filtre para inspecionar contexto.</p>
+  </div>
+  <aside>
+    <div>{{ trades|length }} operações listadas</div>
+    <div>{{ run.strategy_name }} v{{ run.strategy_version }}</div>
+  </aside>
+</section>
+
+<form class="filters"
+      hx-get="/runs/{{ run.id }}/trades"
+      hx-trigger="change from:select"
+      hx-target="#trades-body"
+      hx-swap="outerHTML"
+      hx-include="closest form"
+      hx-push-url="true">
+  <label>Ticker
+    <select name="ticker">
+      <option value="">Todos</option>
+      {% for t in tickers %}
+        <option value="{{ t }}" {% if filters.ticker == t %}selected{% endif %}>{{ t }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Ano
+    <select name="year">
+      <option value="">Todos</option>
+      {% for y in years %}
+        <option value="{{ y }}" {% if filters.year|string == y|string %}selected{% endif %}>{{ y }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Resultado
+    <select name="outcome">
+      <option value="">Todos</option>
+      <option value="winner" {% if filters.outcome == "winner" %}selected{% endif %}>Vencedores</option>
+      <option value="loser"  {% if filters.outcome == "loser" %}selected{% endif %}>Perdedores</option>
+    </select>
+  </label>
+  <label>Saída
+    <select name="exit_reason">
+      <option value="">Todas</option>
+      <option value="cross_down"     {% if filters.exit_reason == "cross_down" %}selected{% endif %}>Reversão MM</option>
+      <option value="stop"           {% if filters.exit_reason == "stop" %}selected{% endif %}>Stop</option>
+      <option value="ibov_defensive" {% if filters.exit_reason == "ibov_defensive" %}selected{% endif %}>Defensiva IBOV</option>
+      <option value="manual"         {% if filters.exit_reason == "manual" %}selected{% endif %}>Fim de período</option>
+    </select>
+  </label>
+</form>
+
+<table class="trades-table">
+  <thead>
+    <tr>
+      <th>#</th>
+      <th>Ticker</th>
+      <th>Entrada</th>
+      <th>Saída</th>
+      <th class="right">Holding</th>
+      <th class="right">PnL %</th>
+      <th class="right">R</th>
+      <th>Motivo</th>
+      <th>Tags</th>
+    </tr>
+  </thead>
+  {% include "partials/trades_tbody.html" %}
+</table>
+
+<div class="export">
+  {% set qs = [] %}
+  {% if filters.ticker %}{% set _ = qs.append('ticker=' ~ filters.ticker) %}{% endif %}
+  {% if filters.year %}{% set _ = qs.append('year=' ~ filters.year) %}{% endif %}
+  {% if filters.outcome %}{% set _ = qs.append('outcome=' ~ filters.outcome) %}{% endif %}
+  {% if filters.exit_reason %}{% set _ = qs.append('exit_reason=' ~ filters.exit_reason) %}{% endif %}
+  <a href="/runs/{{ run.id }}/trades/export.csv{% if qs %}?{{ qs|join('&') }}{% endif %}">↓ Export CSV</a>
+</div>
+
+{% endblock %}

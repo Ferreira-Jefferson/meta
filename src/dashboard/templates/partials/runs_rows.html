@@ -1,0 +1,56 @@
+{# Sempre devolve apenas as <tr> (para tbody replace/append) + OOB do slot "ver mais". #}
+{% for r in recent_runs %}
+<tr onclick="location.href='/runs/{{ r.id }}'">
+  <td class="num">{{ r.id }}</td>
+  <td>{{ r.strategy_name }} <span class="dim">v{{ r.strategy_version }}</span></td>
+  <td class="num">{{ r.period_start }} → {{ r.period_end }}</td>
+  <td class="right num">{{ "%.1f"|format(r.period_years or 0) }}</td>
+  <td class="tickers-cell">
+    {% set tks = (r.tickers or '').split(',') if r.tickers else [] %}
+    {% if tks %}
+      {% set shown = tks[:4] %}
+      {% for t in shown %}<span class="ticker-pill">{{ t.replace('.SA','') }}</span>{% endfor %}
+      {% if tks|length > 4 %}<span class="ticker-more dim">+{{ tks|length - 4 }}</span>{% endif %}
+    {% else %}<span class="dim">—</span>{% endif %}
+  </td>
+  <td class="right num">R$ {{ "{:,.0f}".format(r.initial_capital).replace(",", ".") }}</td>
+  <td class="right num {% if r.final_capital is not none %}{% if r.final_capital > r.initial_capital %}pos{% elif r.final_capital < r.initial_capital %}neg{% endif %}{% endif %}">
+    {% if r.final_capital is not none %}R$ {{ "{:,.0f}".format(r.final_capital).replace(",", ".") }}{% else %}<span class="dim">—</span>{% endif %}
+  </td>
+  <td class="right num {% if (r.cagr or 0) >= 0 %}pos{% else %}neg{% endif %}">
+    {{ "%.2f%%"|format((r.cagr or 0) * 100) }}
+  </td>
+  <td class="right num">{{ "%.2f"|format(r.sharpe or 0) }}</td>
+  <td class="right num">{{ r.trades_count or 0 }}</td>
+  <td class="right num dim">{{ r.created_at }}</td>
+</tr>
+{% else %}
+{% if not append_mode %}
+<tr><td colspan="11" class="runs-empty">Nenhuma simulação encontrada para os filtros aplicados.</td></tr>
+{% endif %}
+{% endfor %}
+
+{# Atualização OOB do rodapé "Ver mais".
+   Envolvido em <template> porque o alvo do swap principal é um <tbody> — <div> não é
+   filho legal de tbody, e o parser do browser desloca/dropa o elemento antes do HTMX
+   ver, quebrando o OOB com "querySelectorAll is not a function". #}
+<template>
+<div id="runs-more-slot" hx-swap-oob="true" class="runs-more">
+  {% if has_more %}
+  <button
+    class="cta ghost"
+    hx-get="/runs/list"
+    hx-include="#runs-filter-form"
+    hx-vals='{"offset": {{ next_offset }} }'
+    hx-target="#runs-tbody"
+    hx-swap="beforeend">
+    Ver mais 10 simulações
+  </button>
+  <span class="dim">{{ next_offset }} exibidas · há mais</span>
+  {% elif recent_runs %}
+  <span class="dim">— fim da lista —</span>
+  {% else %}
+  <span class="dim"></span>
+  {% endif %}
+</div>
+</template>

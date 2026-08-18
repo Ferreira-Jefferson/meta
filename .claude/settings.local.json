@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(\"/c/Users/Jeffe/Documents/study/meta/.venv/Scripts/python.exe\" --version)",
+      "Bash(./.venv/Scripts/python.exe -c ' *)",
+      "Bash(./.venv/Scripts/python.exe -m uvicorn dashboard.app:app --app-dir src --host 127.0.0.1 --port 8765 --log-level warning)",
+      "Bash(curl -s -o /dev/null http://127.0.0.1:8765/)",
+      "Bash(curl -s http://127.0.0.1:8765/runs/57/insights)",
+      "Bash(taskkill //F //IM python.exe //FI \"WINDOWTITLE eq *\")",
+      "Bash(taskkill //F //IM uvicorn.exe)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://127.0.0.1:8765/)",
+      "Bash(powershell -Command 'Get-NetTCPConnection -LocalPort 8765 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }')",
+      "PowerShell(Get-NetTCPConnection *)"
+    ]
+  }
+}

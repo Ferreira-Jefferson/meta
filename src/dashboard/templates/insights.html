@@ -1,0 +1,175 @@
+{% extends "base.html" %}
+{% set page = "strategies" %}
+{% block title %}Insights · META{% endblock %}
+{% block content %}
+
+<section class="page-head">
+  <div>
+    <div class="kicker"><a href="/runs/{{ run.id }}" class="crumb">← Run #{{ run.id }}</a> · Análise</div>
+    <h1>Insights</h1>
+    <p class="dek">
+      O diário existe para responder <em>por que</em> o robô ganha ou perde.
+      Cada bloco abaixo aponta uma hipótese acionável para a próxima iteração da estratégia.
+    </p>
+  </div>
+  <aside>
+    <div>{{ run.strategy_name }} v{{ run.strategy_version }}</div>
+    <div>{{ run.trades_count or 0 }} trades</div>
+  </aside>
+</section>
+
+<article class="insight stagger">
+  <h2>O que separa vencedores de perdedores?</h2>
+  <p class="dek">Winrate e PnL médio por qualidade do sinal detectada automaticamente na entrada.</p>
+  <div class="insight-grid">
+    {% for row in by_signal_quality %}
+      <div class="insight-cell">
+        <div class="k">{{ row.tag }} · {{ row.trades }} trades</div>
+        <div class="v {% if row.avg_pnl_pct >= 0 %}pos{% else %}neg{% endif %}">
+          {{ "%+0.2f%%"|format(row.avg_pnl_pct * 100) }}
+        </div>
+        <div class="sub">Winrate {{ "%.0f%%"|format(row.win_rate * 100) }}</div>
+      </div>
+    {% else %}
+      <div class="insight-cell dim">Sem dados agregados ainda.</div>
+    {% endfor %}
+  </div>
+</article>
+
+<article class="insight">
+  <h2>IFR na entrada · winners × losers</h2>
+  <p class="dek">Distribuição do IFR(14) no dia da entrada. Se winners se concentram em faixas específicas, existe filtro possível.</p>
+  <div class="chart-wrap" style="background: var(--bg-elevated);">
+    <div id="chart-ifr" style="height: 260px;"></div>
+  </div>
+</article>
+
+<article class="insight">
+  <h2>Performance por regime de mercado</h2>
+  <div class="insight-grid">
+    {% for row in by_regime %}
+      <div class="insight-cell">
+        <div class="k">{{ row.tag }} · {{ row.trades }} trades</div>
+        <div class="v {% if row.avg_pnl_pct >= 0 %}pos{% else %}neg{% endif %}">
+          {{ "%+0.2f%%"|format(row.avg_pnl_pct * 100) }}
+        </div>
+        <div class="sub">Winrate {{ "%.0f%%"|format(row.win_rate * 100) }}</div>
+      </div>
+    {% else %}
+      <div class="insight-cell dim">Sem dados agregados ainda.</div>
+    {% endfor %}
+  </div>
+</article>
+
+<article class="insight">
+  <h2>Motivo de saída · quem paga a conta</h2>
+  <div class="insight-grid">
+    {% for row in by_exit %}
+      <div class="insight-cell">
+        <div class="k">{{ row.tag }} · {{ row.trades }} trades</div>
+        <div class="v {% if row.avg_pnl_pct >= 0 %}pos{% else %}neg{% endif %}">
+          {{ "%+0.2f%%"|format(row.avg_pnl_pct * 100) }}
+        </div>
+        <div class="sub">Winrate {{ "%.0f%%"|format(row.win_rate * 100) }}</div>
+      </div>
+    {% else %}
+      <div class="insight-cell dim">Sem dados agregados ainda.</div>
+    {% endfor %}
+  </div>
+</article>
+
+<article class="insight">
+  <h2>Volatilidade · risco vs recompensa</h2>
+  <div class="insight-grid">
+    {% for row in by_vol %}
+      <div class="insight-cell">
+        <div class="k">{{ row.tag }} · {{ row.trades }} trades</div>
+        <div class="v {% if row.avg_pnl_pct >= 0 %}pos{% else %}neg{% endif %}">
+          {{ "%+0.2f%%"|format(row.avg_pnl_pct * 100) }}
+        </div>
+        <div class="sub">Winrate {{ "%.0f%%"|format(row.win_rate * 100) }}</div>
+      </div>
+    {% else %}
+      <div class="insight-cell dim">Sem dados agregados ainda.</div>
+    {% endfor %}
+  </div>
+</article>
+
+<article class="insight">
+  <h2>Onde esse robô ganhou (ou perdeu) dinheiro?</h2>
+  <p class="dek">
+    Um ativo por linha. <em>Contribuição</em> mostra quanto cada ticker pesou no PnL total —
+    concentração alta significa que o resultado do robô depende de poucos nomes.
+    <em>Edge vs buy&amp;hold</em> compara o retorno do robô sobre o capital que ele efetivamente
+    alocou naquele ativo contra a alternativa mais burra: comprar e segurar o mesmo papel do
+    início ao fim do período.
+    Verde = o robô ganhou mais que segurar; vermelho = o robô destruiu valor naquele ativo.
+  </p>
+  <table class="trades-table ticker-breakdown" style="margin-top: var(--s-4);">
+    <thead><tr>
+      <th>Ticker</th>
+      <th class="right">Trades</th>
+      <th class="right">Winrate</th>
+      <th class="right">Holding méd.</th>
+      <th class="right">Melhor / pior</th>
+      <th class="right">PnL total (R$)</th>
+      <th>Contribuição</th>
+      <th class="right">ROI no capital</th>
+      <th class="right">Buy&amp;hold período</th>
+      <th class="right">Edge vs B&amp;H</th>
+    </tr></thead>
+    <tbody>
+    {% for row in ticker_ranking %}
+      {% set contrib = row.contribution_pct or 0 %}
+      {% set contrib_abs = (contrib if contrib >= 0 else -contrib) * 100 %}
+      <tr>
+        <td class="ticker">{{ row.ticker.replace('.SA','') }}</td>
+        <td class="right">{{ row.trades }}</td>
+        <td class="right">{{ "%.0f%%"|format((row.win_rate or 0) * 100) }}</td>
+        <td class="right dim">{{ "%.0f"|format(row.avg_holding_days or 0) }}d</td>
+        <td class="right">
+          <span class="pos">{{ "%+0.1f%%"|format((row.best_pnl_pct or 0) * 100) }}</span>
+          <span class="dim"> / </span>
+          <span class="neg">{{ "%+0.1f%%"|format((row.worst_pnl_pct or 0) * 100) }}</span>
+        </td>
+        <td class="right pnl {% if (row.total_pnl or 0) >= 0 %}pos{% else %}neg{% endif %}">
+          {{ "{:,.0f}".format(row.total_pnl or 0).replace(",", ".") }}
+        </td>
+        <td>
+          <div class="contrib-bar" title="{{ '%+0.1f%%'|format(contrib * 100) }} do PnL total">
+            <span class="contrib-fill {% if contrib >= 0 %}pos{% else %}neg{% endif %}"
+                  style="width: {{ '%.1f'|format(contrib_abs) }}%"></span>
+            <span class="contrib-label">{{ "%+0.1f%%"|format(contrib * 100) }}</span>
+          </div>
+        </td>
+        <td class="right {% if (row.roi_deployed or 0) >= 0 %}pos{% else %}neg{% endif %}">
+          {{ "%+0.1f%%"|format((row.roi_deployed or 0) * 100) }}
+        </td>
+        <td class="right {% if row.buy_hold_return is not none and row.buy_hold_return >= 0 %}pos{% elif row.buy_hold_return is not none %}neg{% else %}dim{% endif %}">
+          {% if row.buy_hold_return is not none %}
+            {{ "%+0.1f%%"|format(row.buy_hold_return * 100) }}
+          {% else %}—{% endif %}
+        </td>
+        <td class="right {% if row.edge_pp is not none and row.edge_pp >= 0 %}pos{% elif row.edge_pp is not none %}neg{% else %}dim{% endif %}">
+          {% if row.edge_pp is not none %}
+            {{ "%+0.1f pp"|format(row.edge_pp * 100) }}
+          {% else %}—{% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="dim" style="margin-top: var(--s-3); font-size: var(--fs-metadata);">
+    <em>ROI no capital</em> = PnL total ÷ soma do capital alocado em cada entrada nesse ticker.
+    Diferente de PnL médio por trade — reflete quanto o dinheiro efetivamente rendeu quando estava nesse papel.
+  </p>
+</article>
+
+<script>
+window.addEventListener('load', function () {
+  const data = {{ ifr_data_json|safe }};
+  MetaCharts.ifrHistogram(document.getElementById('chart-ifr'), data);
+});
+</script>
+
+{% endblock %}

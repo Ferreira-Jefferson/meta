@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% set page = "strategies" %}
+{% block title %}Trade #{{ trade.id }} · META{% endblock %}
+{% block content %}
+
+<section class="page-head">
+  <div>
+    <div class="kicker"><a href="/runs/{{ run.id }}/trades" class="crumb">← Trades da run #{{ run.id }}</a></div>
+    <h1>{{ trade.ticker }}</h1>
+    <p class="dek">
+      Entrada {{ trade.entry_date }} · Saída {{ trade.exit_date or "em aberto" }} ·
+      Motivo <em>{{ trade.exit_reason }}</em>
+    </p>
+  </div>
+  <aside>
+    <div>PnL · <span class="num {% if (trade.pnl_pct or 0) >= 0 %}pos{% else %}neg{% endif %}">
+      {{ "%+0.2f%%"|format((trade.pnl_pct or 0) * 100) }}
+    </span></div>
+    <div>R · {{ "%+0.2f"|format(trade.r_multiple or 0) }}</div>
+    <div>Holding · {{ trade.holding_days or 0 }} dias</div>
+    <div><a href="/runs/{{ run.id }}/trades">← voltar à lista</a></div>
+  </aside>
+</section>
+
+<section class="detail-grid stagger">
+  <div class="chart-wrap">
+    <div class="chart-title">
+      <h3>Preço · {{ trade.ticker }}</h3>
+      <div class="legend">
+        <span class="primary">MM50</span>
+        <span>MM200</span>
+      </div>
+    </div>
+    <div id="chart-trade" style="height: 440px;"></div>
+  </div>
+
+  <div>
+    <div class="snapshot-panel">
+      <h3>Snapshot <span class="side">ENTRADA</span></h3>
+      {% if entry %}
+      <dl>
+        <dt>Close</dt><dd>{{ "%.2f"|format(entry.close or 0) }}</dd>
+        <dt>MM50 / MM200</dt><dd>{{ "%.2f"|format(entry.mm50 or 0) }} · {{ "%.2f"|format(entry.mm200 or 0) }}</dd>
+        <dt>MM50 vs MM200</dt><dd>{{ "%+0.2f%%"|format((entry.mm50_over_mm200_pct or 0) * 100) }}</dd>
+        <dt>Dias desde cross</dt><dd>{{ entry.days_since_cross or 0 }}</dd>
+        <dt>IFR(14)</dt><dd>{{ "%.1f"|format(entry.ifr14 or 0) }}</dd>
+        <dt>ATR(14)</dt><dd>{{ "%.2f"|format(entry.atr14 or 0) }}</dd>
+        <dt>Vol Hist 30d</dt><dd>{{ "%.1f%%"|format((entry.historical_vol_30d or 0) * 100) }}</dd>
+        <dt>Vol vs Avg20</dt><dd>{{ "%.2fx"|format(entry.volume_vs_avg20 or 0) }}</dd>
+        <dt>Distância do topo 52w</dt><dd>{{ "%+0.2f%%"|format((entry.distance_from_52w_high_pct or 0) * 100) }}</dd>
+        <dt>IBOV vs MM200</dt><dd>{{ "%+0.2f%%"|format((entry.ibov_trend_strength or 0) * 100) }}</dd>
+        <dt>Corr(60d, IBOV)</dt><dd>{{ "%.2f"|format(entry.correlation_with_ibov_60d or 0) }}</dd>
+      </dl>
+      {% else %}<p class="dim">Sem snapshot de entrada.</p>{% endif %}
+    </div>
+
+    <div class="snapshot-panel" style="margin-top: var(--s-4);">
+      <h3>Snapshot <span class="side">SAÍDA</span></h3>
+      {% if exit %}
+      <dl>
+        <dt>Close</dt><dd>{{ "%.2f"|format(exit.close or 0) }}</dd>
+        <dt>MM50 / MM200</dt><dd>{{ "%.2f"|format(exit.mm50 or 0) }} · {{ "%.2f"|format(exit.mm200 or 0) }}</dd>
+        <dt>MM50 vs MM200</dt><dd>{{ "%+0.2f%%"|format((exit.mm50_over_mm200_pct or 0) * 100) }}</dd>
+        <dt>IFR(14)</dt><dd>{{ "%.1f"|format(exit.ifr14 or 0) }}</dd>
+        <dt>ATR(14)</dt><dd>{{ "%.2f"|format(exit.atr14 or 0) }}</dd>
+        <dt>IBOV vs MM200</dt><dd>{{ "%+0.2f%%"|format((exit.ibov_trend_strength or 0) * 100) }}</dd>
+      </dl>
+      {% else %}<p class="dim">Sem snapshot de saída.</p>{% endif %}
+    </div>
+
+    {% if tags %}
+    <div class="tags">
+      {% for tag in tags %}
+        <span class="tag"><span class="k">{{ tag.tag_type }}</span>{{ tag.tag_value }}</span>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+</section>
+
+<script>
+window.addEventListener('load', function () {
+  MetaCharts.tradeChart(document.getElementById('chart-trade'), {{ trade.id }});
+});
+</script>
+
+{% endblock %}

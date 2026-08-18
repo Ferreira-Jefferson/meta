@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% set page = "strategies" %}
+{% block title %}Run #{{ run.id }} · META{% endblock %}
+{% block content %}
+
+<section class="page-head">
+  <div>
+    <div class="kicker"><a href="/" class="crumb">← Robôs</a> · Run #{{ run.id }}</div>
+    <h1>{{ run.strategy_name }} <span class="ver">v{{ run.strategy_version }}</span></h1>
+    <p class="dek">
+      Período <em>{{ run.period_start }}</em> → <em>{{ run.period_end }}</em> ·
+      Concluída em {{ run.created_at }}
+    </p>
+    <div class="run-params">
+      <span class="run-params-label">Ativos</span>
+      {% if tickers %}
+        {% for t in tickers %}<span class="ticker-pill">{{ t.replace('.SA', '') }}</span>{% endfor %}
+      {% else %}
+        <span class="dim">Nenhum trade registrado</span>
+      {% endif %}
+    </div>
+  </div>
+  <aside class="header-ctas">
+    <a class="cta ghost" href="/runs/{{ run.id }}/trades">Trades</a>
+    <a class="cta ghost" href="/runs/{{ run.id }}/insights">Insights</a>
+  </aside>
+</section>
+
+<section class="capital-cards stagger">
+  <div class="capital-card">
+    <span class="k">Capital inicial</span>
+    <span class="v num">R$ {{ "{:,.0f}".format(run.initial_capital).replace(",", ".") }}</span>
+    <span class="sub">{{ stats.initial.date if stats.initial else "—" }}</span>
+  </div>
+  <div class="capital-card peak">
+    <span class="k">Pico do capital</span>
+    <span class="v num">R$ {{ "{:,.0f}".format(stats.peak.equity if stats.peak else run.initial_capital).replace(",", ".") }}</span>
+    <span class="sub">{{ stats.peak.date if stats.peak else "—" }}</span>
+  </div>
+  <div class="capital-card trough">
+    <span class="k">Vale do capital</span>
+    <span class="v num">R$ {{ "{:,.0f}".format(stats.trough.equity if stats.trough else run.initial_capital).replace(",", ".") }}</span>
+    <span class="sub">{{ stats.trough.date if stats.trough else "—" }}</span>
+  </div>
+  <div class="capital-card final">
+    <span class="k">Capital final</span>
+    {% set final_eq = stats.final.equity if stats.final else run.initial_capital %}
+    {% set delta = ((final_eq / run.initial_capital) - 1) * 100 %}
+    <span class="v num">R$ {{ "{:,.0f}".format(final_eq).replace(",", ".") }}</span>
+    <span class="sub {% if delta >= 0 %}pos{% else %}neg{% endif %}">
+      {{ "%+0.2f%%"|format(delta) }}
+    </span>
+  </div>
+</section>
+
+<section class="sim-metrics stagger">
+  <div class="metric">
+    <span class="k">CAGR</span>
+    <span class="v num {% if (run.cagr or 0) >= 0 %}pos{% else %}neg{% endif %}">
+      {{ "%.2f%%"|format((run.cagr or 0) * 100) }}
+    </span>
+    <span class="sub">Anualizado</span>
+  </div>
+  <div class="metric">
+    <span class="k">Sharpe</span>
+    <span class="v num">{{ "%.2f"|format(run.sharpe or 0) }}</span>
+    <span class="sub">Ajustado a risco</span>
+  </div>
+  <div class="metric">
+    <span class="k">Max DD</span>
+    <span class="v num neg">{{ "%.2f%%"|format((run.max_drawdown or 0) * 100) }}</span>
+    <span class="sub">Pico → vale</span>
+  </div>
+  <div class="metric">
+    <span class="k">Trades</span>
+    <span class="v num">{{ run.trades_count or 0 }}</span>
+    <span class="sub">Fechados</span>
+  </div>
+  <div class="metric">
+    <span class="k">vs IBOV</span>
+    {% set delta = ((run.cagr or 0) - (run.benchmark_cagr or 0)) * 100 %}
+    <span class="v num {% if delta >= 0 %}pos{% else %}neg{% endif %}">
+      {{ "%+0.2fpp"|format(delta) }}
+    </span>
+    <span class="sub">CAGR excedente</span>
+  </div>
+</section>
+
+<section class="chart-wrap">
+  <div class="chart-title">
+    <h3>Evolução do capital</h3>
+    <div class="legend"><span class="primary">Robô</span><span>IBOV</span></div>
+  </div>
+  <div id="chart-equity" style="height: 380px;"></div>
+</section>
+
+<section class="chart-wrap">
+  <div class="chart-title">
+    <h3>Drawdown</h3>
+    <div class="legend"><span>% do pico</span></div>
+  </div>
+  <div id="chart-dd" style="height: 140px;"></div>
+</section>
+
+<script>
+window.addEventListener('load', function () {
+  const eq = {{ equity_json|safe }};
+  MetaCharts.equityCurve(document.getElementById('chart-equity'), eq);
+  MetaCharts.drawdown(document.getElementById('chart-dd'), eq);
+});
+</script>
+
+{% endblock %}

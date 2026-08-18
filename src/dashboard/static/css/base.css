@@ -1,0 +1,217 @@
+/* Reset + tipografia global. Herda tokens.css */
+
+@font-face {
+  font-family: "JetBrainsMono";
+  src: url("/static/fonts/JetBrainsMono-Regular.woff2") format("woff2");
+  font-weight: 400; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "JetBrainsMono";
+  src: url("/static/fonts/JetBrainsMono-Medium.woff2") format("woff2");
+  font-weight: 500; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "InstrumentSerif";
+  src: url("/static/fonts/InstrumentSerif-Regular.woff2") format("woff2");
+  font-weight: 400; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "InstrumentSerif";
+  src: url("/static/fonts/InstrumentSerif-Italic.woff2") format("woff2");
+  font-weight: 400; font-style: italic; font-display: swap;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0; padding: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  background-image:
+    radial-gradient(ellipse at top, rgba(217,164,65,0.03), transparent 60%),
+    linear-gradient(180deg, var(--bg) 0%, var(--bg) 100%);
+  min-height: 100vh;
+}
+
+a { color: var(--fg); text-decoration: none; }
+a:hover { color: var(--accent-amber); }
+
+::selection { background: var(--accent-amber-dim); color: var(--fg-strong); }
+
+/* --- Header ------------------------------------------------------------- */
+.chrome {
+  position: sticky; top: 0; z-index: 20;
+  height: var(--header-h);
+  border-bottom: 1px solid var(--grid);
+  background: var(--bg);
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  padding: 0 var(--s-5);
+  gap: var(--s-5);
+}
+.chrome .brand {
+  font-family: var(--font-serif);
+  font-size: var(--fs-body-lg);
+  letter-spacing: 0.01em;
+}
+.chrome .brand::before {
+  content: "◈ ";
+  color: var(--accent-amber);
+}
+.chrome nav {
+  display: flex; gap: var(--s-5);
+  justify-self: center;
+}
+.chrome nav a {
+  font-size: var(--fs-metadata);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--fg-muted);
+  padding: var(--s-2) 0;
+  border-bottom: 1px solid transparent;
+}
+.chrome nav a[aria-current="page"] {
+  color: var(--fg-strong);
+  border-bottom-color: var(--accent-amber);
+}
+.chrome .meta {
+  font-family: var(--font-mono);
+  font-size: var(--fs-metadata);
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  display: flex; gap: var(--s-4);
+}
+.theme-toggle {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: var(--fs-metadata);
+  color: var(--fg-muted);
+  padding: var(--s-1) var(--s-2);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  transition: color 90ms linear;
+  display: flex;
+  align-items: center;
+  gap: var(--s-1);
+  margin-left: var(--s-2);
+  border-left: 1px solid var(--grid);
+  padding-left: var(--s-4);
+}
+.theme-toggle:hover { color: var(--accent-amber); }
+
+.chrome .meta .dot::before {
+  content: "";
+  display: inline-block;
+  width: 6px; height: 6px;
+  background: var(--accent-green);
+  margin-right: var(--s-2);
+  transform: translateY(-1px);
+}
+
+/* --- Layout ------------------------------------------------------------- */
+.page {
+  max-width: var(--page-max);
+  margin: 0 auto;
+  padding: var(--s-7) var(--s-5) var(--s-9);
+}
+
+.page-head {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: end;
+  gap: var(--s-5);
+  padding-bottom: var(--s-5);
+  border-bottom: 1px solid var(--grid);
+  margin-bottom: var(--s-6);
+}
+.page-head h1 {
+  font-family: var(--font-serif);
+  font-weight: 400;
+  font-size: var(--fs-h1);
+  line-height: var(--lh-tight);
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+.page-head .dek {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: var(--fs-body-lg);
+  color: var(--fg-muted);
+  margin-top: var(--s-2);
+}
+.page-head .kicker {
+  font-size: var(--fs-metadata);
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--accent-amber);
+  margin-bottom: var(--s-2);
+}
+.page-head aside {
+  text-align: right;
+  font-size: var(--fs-metadata);
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+/* --- Labels & meta ------------------------------------------------------ */
+.label {
+  font-size: var(--fs-metadata);
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+}
+.num { font-variant-numeric: tabular-nums; }
+.pos { color: var(--accent-green); }
+.neg { color: var(--accent-red); }
+.dim { color: var(--fg-muted); }
+
+/* --- Stagger reveal ----------------------------------------------------- */
+@keyframes rise {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.stagger > * {
+  animation: rise 500ms cubic-bezier(.2,.7,.2,1) both;
+}
+.stagger > *:nth-child(1) { animation-delay: 40ms; }
+.stagger > *:nth-child(2) { animation-delay: 100ms; }
+.stagger > *:nth-child(3) { animation-delay: 160ms; }
+.stagger > *:nth-child(4) { animation-delay: 220ms; }
+.stagger > *:nth-child(5) { animation-delay: 280ms; }
+.stagger > *:nth-child(6) { animation-delay: 340ms; }
+
+/* --- Empty state -------------------------------------------------------- */
+.empty {
+  min-height: 60vh;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  color: var(--fg-muted);
+}
+.empty h1 {
+  font-family: var(--font-serif);
+  font-size: var(--fs-h2);
+  color: var(--fg);
+  margin-bottom: var(--s-3);
+  font-weight: 400;
+}
+.empty code {
+  background: var(--bg-elevated);
+  padding: var(--s-2) var(--s-3);
+  border: 1px solid var(--grid);
+  color: var(--fg-strong);
+  font-size: var(--fs-body);
+}

@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}META · Terminal Editorial{% endblock %}</title>
+  <script>
+    (function(){
+      var t = localStorage.getItem('meta-theme');
+      if (t === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
+    })();
+  </script>
+  <link rel="stylesheet" href="/static/css/tokens.css?v={{ static_v('tokens.css') }}" />
+  <link rel="stylesheet" href="/static/css/base.css?v={{ static_v('base.css') }}" />
+  <link rel="stylesheet" href="/static/css/pages.css?v={{ static_v('pages.css') }}" />
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" defer></script>
+  <script src="https://unpkg.com/htmx.org@1.9.12" defer></script>
+  <script src="/static/js/charts.js" defer></script>
+</head>
+<body>
+  <header class="chrome">
+    <a class="brand" href="/">META</a>
+    <nav>
+      <a href="/" {% if page == "strategies" %}aria-current="page"{% endif %}>Robôs</a>
+      <a href="/operacao" {% if page == "operacao" %}aria-current="page"{% endif %}>Operação</a>
+    </nav>
+    <div class="meta">
+      {% if run %}
+        <span>Run #{{ run.id }}</span>
+        <span>{{ run.strategy_name }} v{{ run.strategy_version }}</span>
+        <span>{{ run.period_start }} → {{ run.period_end }}</span>
+        <span class="dot">LIVE</span>
+      {% else %}
+        <span class="dot">IDLE</span>
+      {% endif %}
+      <button id="theme-toggle" class="theme-toggle" aria-label="Alternar tema">
+        <span id="theme-icon">☾</span>
+      </button>
+    </div>
+  </header>
+  <main class="page">
+    {% block content %}{% endblock %}
+  </main>
+  <script>
+    (function(){
+      var btn  = document.getElementById('theme-toggle');
+      var icon = document.getElementById('theme-icon');
+      function isDark(){ return document.documentElement.getAttribute('data-theme') === 'dark'; }
+      function sync(){
+        icon.textContent = isDark() ? '☀' : '☾';
+        btn.title = isDark() ? 'Mudar para modo claro' : 'Mudar para modo escuro';
+      }
+      sync();
+      btn.addEventListener('click', function(){
+        if (isDark()) {
+          document.documentElement.removeAttribute('data-theme');
+          localStorage.setItem('meta-theme', 'light');
+        } else {
+          document.documentElement.setAttribute('data-theme', 'dark');
+          localStorage.setItem('meta-theme', 'dark');
+        }
+        sync();
+        if (window.MetaCharts && MetaCharts.updateTheme) MetaCharts.updateTheme();
+      });
+    })();
+  </script>
+</body>
+</html>

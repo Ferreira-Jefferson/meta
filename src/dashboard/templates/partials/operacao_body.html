@@ -1,0 +1,336 @@
+{% set s = status %}
+<div id="ops-body" hx-get="/operacao/fragment" hx-trigger="every {{ poll_seconds }}s" hx-swap="outerHTML">
+
+{% if erro %}
+<div class="ops-alert stagger">{{ erro }}</div>
+{% endif %}
+
+<section class="ops-credentials stagger">
+  <details{% if creds_msg %} open{% endif %}>
+    <summary>Acesso e credenciais</summary>
+    <p class="dek">
+      Login da corretora e canais de alerta — ficam salvos só neste
+      computador (nunca em texto puro na linha de comando) e são passados ao
+      robô quando ele sobe como processo. Campos de senha/token nunca
+      reaparecem aqui: deixe em branco para manter o que já está salvo.
+    </p>
+    {% if creds_msg %}<div class="ops-alert ops-alert-ok">{{ creds_msg }}</div>{% endif %}
+    <form class="ops-creds-form" hx-post="/operacao/credenciais" hx-target="#ops-body" hx-swap="outerHTML">
+
+      <fieldset>
+        <legend>
+          Telegram
+          <span class="ops-cred-badge{% if creds_status.telegram %} ok{% endif %}">
+            {{ "configurado" if creds_status.telegram else "não configurado" }}
+          </span>
+        </legend>
+        <div class="row">
+          <label><span class="k">Bot token</span>
+            <input type="password" name="telegram_bot_token" autocomplete="off"
+                   placeholder="{{ '•••• (em branco = mantém)' if creds_status.telegram else '123456:ABC-...' }}" />
+          </label>
+          <label><span class="k">Chat ID</span>
+            <input type="text" name="telegram_chat_id" value="{{ creds.telegram_chat_id or '' }}" placeholder="-100123456789" />
+          </label>
+        </div>
+        <label class="switch small"><input type="checkbox" name="remover_telegram" value="1" />
+          <span class="switch-track"><span class="switch-dot"></span></span>
+          <span class="switch-text">Remover esta credencial</span>
+        </label>
+      </fieldset>
+
+      <fieldset>
+        <legend>
+          E-mail (SMTP)
+          <span class="ops-cred-badge{% if creds_status.smtp %} ok{% endif %}">
+            {{ "configurado" if creds_status.smtp else "não configurado" }}
+          </span>
+        </legend>
+        <div class="row">
+          <label><span class="k">Servidor SMTP</span><input type="text" name="smtp_host" value="{{ creds.smtp_host or '' }}" placeholder="smtp.gmail.com" /></label>
+          <label><span class="k">Porta</span><input type="number" name="smtp_port" value="{{ creds.smtp_port or '' }}" placeholder="587" /></label>
+          <label><span class="k">TLS</span>
+            <select name="smtp_tls">
+              <option value="1"{% if creds.smtp_tls != '0' %} selected{% endif %}>Sim</option>
+              <option value="0"{% if creds.smtp_tls == '0' %} selected{% endif %}>Não</option>
+            </select>
+          </label>
+        </div>
+        <div class="row">
+          <label><span class="k">Usuário</span><input type="text" name="smtp_user" value="{{ creds.smtp_user or '' }}" /></label>
+          <label><span class="k">Senha</span>
+            <input type="password" name="smtp_password" autocomplete="off"
+                   placeholder="{{ '•••• (em branco = mantém)' if creds_status.smtp else '' }}" />
+          </label>
+        </div>
+        <div class="row">
+          <label><span class="k">Destinatário</span><input type="text" name="smtp_to" value="{{ creds.smtp_to or '' }}" /></label>
+          <label><span class="k">Remetente (opcional)</span><input type="text" name="smtp_from" value="{{ creds.smtp_from or '' }}" /></label>
+        </div>
+        <label class="switch small"><input type="checkbox" name="remover_smtp" value="1" />
+          <span class="switch-track"><span class="switch-dot"></span></span>
+          <span class="switch-text">Remover esta credencial</span>
+        </label>
+      </fieldset>
+
+      <fieldset>
+        <legend>
+          MetaTrader 5
+          <span class="ops-cred-badge{% if creds_status.mt5 %} ok{% endif %}">
+            {{ "configurado" if creds_status.mt5 else "não configurado" }}
+          </span>
+        </legend>
+        <p class="dek">
+          Sem isso, o robô só consegue enviar ordens se um humano deixar o
+          terminal MT5 aberto e logado nesta máquina. Com login/senha/servidor
+          salvos aqui, o próprio robô faz o login ao conectar.
+        </p>
+        <div class="row">
+          <label><span class="k">Login</span><input type="text" name="mt5_login" value="{{ creds.mt5_login or '' }}" /></label>
+          <label><span class="k">Senha</span>
+            <input type="password" name="mt5_password" autocomplete="off"
+                   placeholder="{{ '•••• (em branco = mantém)' if creds_status.mt5 else '' }}" />
+          </label>
+          <label><span class="k">Servidor</span><input type="text" name="mt5_server" value="{{ creds.mt5_server or '' }}" placeholder="Corretora-Live" /></label>
+        </div>
+        <label><span class="k">Caminho do terminal (opcional)</span>
+          <input type="text" name="mt5_terminal_path" value="{{ creds.mt5_terminal_path or '' }}" placeholder="C:\Program Files\...\terminal64.exe" />
+        </label>
+        <label class="switch small"><input type="checkbox" name="remover_mt5" value="1" />
+          <span class="switch-track"><span class="switch-dot"></span></span>
+          <span class="switch-text">Remover esta credencial</span>
+        </label>
+      </fieldset>
+
+      <div class="submit-row"><button type="submit">Salvar credenciais</button></div>
+    </form>
+  </details>
+</section>
+
+{% if not s.existe %}
+
+<div class="empty ops-empty">
+  <h1>Nenhuma conta de operação ainda</h1>
+  <p class="dek">
+    Escolha o modo e o capital e clique em iniciar — o sistema cria a conta
+    e passa a decidir sozinho, a cada pregão. Nenhum comando de terminal
+    necessário.
+  </p>
+</div>
+
+<section class="ops-start-form-wrap stagger">
+  <form class="ops-start-form" hx-post="/operacao/iniciar" hx-target="#ops-body" hx-swap="outerHTML">
+    <div class="row">
+      <label>
+        <span class="k">Modo</span>
+        <select name="mode" onchange="document.getElementById('ops-mt5-confirm').style.display = this.value === 'mt5' ? 'flex' : 'none';">
+          <option value="paper" selected>Paper — simulado, sem risco</option>
+          <option value="manual">Manual — você confirma cada ordem</option>
+          <option value="mt5">MetaTrader 5 — dinheiro real</option>
+        </select>
+      </label>
+      <label>
+        <span class="k">Capital (R$)</span>
+        <input type="number" name="capital" value="{{ (config_anterior or {}).get('capital', 1000) | int }}" min="100" step="100" required />
+      </label>
+    </div>
+
+    <details class="ops-advanced">
+      <summary>Opções avançadas</summary>
+      <div class="row">
+        <label>
+          <span class="k">Piso do saque (R$)</span>
+          <input type="number" name="floor" placeholder="padrão: 55× o capital" min="0" step="100"
+                 value="{{ (config_anterior or {}).get('floor') or '' }}" />
+        </label>
+        <label>
+          <span class="k">Disjuntor diário (%)</span>
+          <input type="number" name="daily_loss_limit" placeholder="ex.: 5" min="0" max="100" step="0.5" />
+        </label>
+        <label>
+          <span class="k">Disjuntor mensal (%)</span>
+          <input type="number" name="monthly_loss_limit" placeholder="ex.: 15" min="0" max="100" step="0.5" />
+        </label>
+      </div>
+    </details>
+
+    <div id="ops-mt5-confirm" class="ops-mt5-confirm" style="display: none;">
+      <label class="switch">
+        <input type="checkbox" name="confirmar_real" value="1" />
+        <span class="switch-track"><span class="switch-dot"></span></span>
+        <span class="switch-text">Confirmo que este robô vai operar com <strong>dinheiro real</strong> via MetaTrader 5.</span>
+      </label>
+    </div>
+
+    <div class="submit-row">
+      <button type="submit">▶ Iniciar operação</button>
+    </div>
+  </form>
+</section>
+
+{% else %}
+
+<section class="ops-control stagger">
+  {% if proc %}
+    <span class="ops-status running"><span class="dot"></span> Robô ativo desde {{ proc.started_at[:16].replace("T", " ") }}</span>
+    <form hx-post="/operacao/parar" hx-target="#ops-body" hx-swap="outerHTML">
+      <button type="submit" class="btn-stop">■ Parar operação</button>
+    </form>
+  {% else %}
+    <span class="ops-status stopped">
+      <span class="dot"></span> Robô parado
+      {% if s.modo == "mt5" %}<span class="dim">— ⚠ modo dinheiro real (MetaTrader 5)</span>{% endif %}
+    </span>
+    <form hx-post="/operacao/iniciar" hx-target="#ops-body" hx-swap="outerHTML">
+      {# retoma com o mesmo piso/disjuntor da última vez que rodou — modo e
+         capital vêm sempre da conta, nunca do form (ver rota no app.py) #}
+      {% if config_anterior %}
+      <input type="hidden" name="floor" value="{{ config_anterior.floor or '' }}" />
+      <input type="hidden" name="daily_loss_limit" value="{{ (config_anterior.daily_loss_limit * 100) if config_anterior.daily_loss_limit else '' }}" />
+      <input type="hidden" name="monthly_loss_limit" value="{{ (config_anterior.monthly_loss_limit * 100) if config_anterior.monthly_loss_limit else '' }}" />
+      <input type="hidden" name="notify_min_level" value="{{ config_anterior.notify_min_level or 'warn' }}" />
+      {% endif %}
+      <button type="submit">▶ Iniciar operação</button>
+    </form>
+  {% endif %}
+</section>
+
+<section class="ops-badges stagger">
+  <span class="ops-badge {% if s.modo == 'manual' %}warn{% endif %}">
+    <span class="dot"></span> Modo · <strong>{{ s.modo }}</strong>
+  </span>
+  <span class="ops-badge {% if not s.corretora.automatica %}warn{% endif %}">
+    <span class="dot"></span> Corretora · <strong>{{ s.corretora.nome }}</strong>
+  </span>
+  <span class="ops-badge {% if not s.feed.tempo_real %}warn{% endif %}">
+    <span class="dot"></span> Feed · <strong>{{ s.feed.nome }}</strong>
+    {% if s.feed.atraso_s and s.feed.atraso_s > 60 %}
+      <span class="dim">· atraso {{ (s.feed.atraso_s / 60) | round(0, 'floor') | int }} min</span>
+    {% endif %}
+  </span>
+  <span class="ops-badge">
+    <span class="dot"></span> Robô · <strong>{{ s.robo_investimento }}</strong>
+  </span>
+  <span class="ops-badge">
+    <span class="dot"></span> Saque · <strong>{{ s.robo_saque.replace("withdrawal:", "") }}</strong>
+  </span>
+</section>
+
+<section class="capital-cards stagger">
+  <div class="capital-card">
+    <span class="k">Caixa</span>
+    <span class="v num">R$ {{ "{:,.0f}".format(s.caixa).replace(",", ".") }}</span>
+    <span class="sub">Livre, não alocado</span>
+  </div>
+  <div class="capital-card">
+    <span class="k">Carteira</span>
+    <span class="v num">R$ {{ "{:,.0f}".format(s.carteira).replace(",", ".") }}</span>
+    <span class="sub">Caixa + posições a mercado</span>
+  </div>
+  <div class="capital-card safe">
+    <span class="k">Caixa externo</span>
+    <span class="v num">R$ {{ "{:,.0f}".format(s.caixa_externo).replace(",", ".") }}</span>
+    <span class="sub">Sacado, fora do risco</span>
+  </div>
+  <div class="capital-card headline">
+    <span class="k">Patrimônio</span>
+    <span class="v num">R$ {{ "{:,.0f}".format(s.patrimonio).replace(",", ".") }}</span>
+    <span class="sub">Carteira + caixa externo</span>
+  </div>
+</section>
+
+<section class="metrics-grid stagger">
+  <div class="metric">
+    <span class="k">Investido a mercado</span>
+    <span class="v num">R$ {{ "{:,.0f}".format(s.investido).replace(",", ".") }}</span>
+    <span class="sub">{{ s.posicoes | length }} posiç{{ "ão" if s.posicoes | length == 1 else "ões" }} aberta{{ "" if s.posicoes | length == 1 else "s" }}</span>
+  </div>
+  <div class="metric">
+    <span class="k">Sacado (histórico)</span>
+    <span class="v num">R$ {{ "{:,.0f}".format(s.sacado_total).replace(",", ".") }}</span>
+    <span class="sub">Desde o início da conta</span>
+  </div>
+  <div class="metric">
+    <span class="k">Intenções pendentes</span>
+    <span class="v num">{{ s.intencoes_pendentes | length }}</span>
+    <span class="sub">Aguardando a próxima abertura</span>
+  </div>
+  <div class="metric">
+    <span class="k">Fase do pregão</span>
+    <span class="v" style="font-size: var(--fs-h3);">{{ s.fase }}</span>
+    <span class="sub">{{ s.pregao }}</span>
+  </div>
+</section>
+
+<section class="ops-panel stagger">
+  <h3>Posições abertas</h3>
+  <table class="ops-table">
+    <thead>
+      <tr>
+        <th>Ticker</th>
+        <th class="right">Qtd</th>
+        <th class="right">Entrada</th>
+        <th class="right">Stop</th>
+        <th class="right">Barras</th>
+        <th class="right">Valor</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for p in s.posicoes %}
+      <tr>
+        <td class="ticker">{{ p.ticker.replace(".SA", "") }}</td>
+        <td class="right num">{{ p.qtd }}</td>
+        <td class="right num">R$ {{ "%.2f"|format(p.entrada) }}</td>
+        <td class="right num">{% if p.stop %}R$ {{ "%.2f"|format(p.stop) }}{% else %}<span class="dim">—</span>{% endif %}</td>
+        <td class="right num dim">{{ p.barras }}</td>
+        <td class="right num">R$ {{ "{:,.0f}".format(p.valor).replace(",", ".") }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="ops-table-empty">Robô fora do mercado — nenhuma posição aberta.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="ops-panel stagger">
+  <h3>Intenções pendentes</h3>
+  <p class="dek">
+    Decididas no último fecho, valem para o próximo pregão — nunca para o mesmo dia (regra 4 do AGENTS.md).
+  </p>
+  <table class="ops-table">
+    <thead>
+      <tr>
+        <th>Robô</th>
+        <th>Tipo</th>
+        <th>Ticker</th>
+        <th>Motivo</th>
+        <th class="right">Valor</th>
+        <th class="right">Executa em</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for i in s.intencoes_pendentes %}
+      <tr>
+        <td class="dim">{{ i.robo.replace("withdrawal:", "saque:") }}</td>
+        <td>{{ i.tipo }}</td>
+        <td class="ticker">{{ i.ticker.replace(".SA", "") if i.ticker else "—" }}</td>
+        <td class="dim">{{ i.motivo or "—" }}</td>
+        <td class="right num">{% if i.valor %}R$ {{ "{:,.0f}".format(i.valor).replace(",", ".") }}{% else %}<span class="dim">—</span>{% endif %}</td>
+        <td class="right num">{{ i.executa_em }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="ops-table-empty">Nada na fila — o robô não decidiu nenhuma ação no último fecho.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="console-wrap stagger">
+  <div class="k console-label">Eventos recentes</div>
+  <pre class="console">{% for e in s.eventos %}[{{ e.ts }}] {{ e.level | upper }} {{ e.source }}: {{ e.message }}
+{% else %}(nenhum evento registrado ainda)
+{% endfor %}</pre>
+</section>
+
+{% endif %}
+</div>

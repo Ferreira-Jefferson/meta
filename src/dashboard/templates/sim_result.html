@@ -1,0 +1,222 @@
+{% extends "base.html" %}
+{% set page = "strategies" %}
+{% block title %}Resultado · {{ sim.strategy_name }} · META{% endblock %}
+{% block content %}
+
+<section class="page-head">
+  <div>
+    <div class="kicker"><a href="/" class="crumb">← Robôs</a> · Simulação #{{ sim.id }}</div>
+    <h1>{{ sim.strategy_name }}</h1>
+    <p class="dek">
+      Período <em>{{ sim.start }}</em> → <em>{{ sim.end }}</em> ·
+      {{ sim.tickers|length }} ativos ·
+      Status <span id="sim-status">{{ sim.status }}</span>
+    </p>
+  </div>
+  <aside>
+    <div>ID · <span class="num">{{ sim.id }}</span></div>
+    <div id="sim-progress-line">Progresso · <span class="num" id="m-pct">0%</span></div>
+    <div id="sim-date-line">Data corrente · <span class="num" id="m-date">—</span></div>
+  </aside>
+</section>
+
+<section class="capital-cards stagger">
+  <div class="capital-card">
+    <span class="k">Capital inicial</span>
+    <span class="v num" id="c-initial">R$ {{ "{:,.0f}".format(sim.capital).replace(",", ".") }}</span>
+    <span class="sub">Ponto de partida</span>
+  </div>
+  <div class="capital-card peak">
+    <span class="k">Pico do capital</span>
+    <span class="v num" id="c-peak">R$ {{ "{:,.0f}".format(sim.capital).replace(",", ".") }}</span>
+    <span class="sub" id="c-peak-date">—</span>
+  </div>
+  <div class="capital-card trough">
+    <span class="k">Vale do capital</span>
+    <span class="v num" id="c-trough">R$ {{ "{:,.0f}".format(sim.capital).replace(",", ".") }}</span>
+    <span class="sub" id="c-trough-date">—</span>
+  </div>
+  <div class="capital-card final">
+    <span class="k">Capital final</span>
+    <span class="v num" id="c-final">R$ {{ "{:,.0f}".format(sim.capital).replace(",", ".") }}</span>
+    <span class="sub" id="c-final-delta">—</span>
+  </div>
+</section>
+
+<section class="progressbar">
+  <div class="fill" id="pb-fill" style="width: 0%;"></div>
+</section>
+
+<section class="chart-wrap">
+  <div class="chart-title">
+    <h3>Evolução do capital</h3>
+    <div class="legend"><span class="primary">Robô</span></div>
+  </div>
+  <div id="chart-live" style="height: 340px;"></div>
+</section>
+
+<section class="sim-metrics stagger">
+  <div class="metric">
+    <span class="k">Trades fechados</span>
+    <span class="v num" id="m-trades">0</span>
+    <span class="sub"><span id="m-open">0</span> abertos</span>
+  </div>
+  <div class="metric">
+    <span class="k">CAGR</span>
+    <span class="v num" id="d-cagr">—</span>
+    <span class="sub">Anualizado</span>
+  </div>
+  <div class="metric">
+    <span class="k">Sharpe</span>
+    <span class="v num" id="d-sharpe">—</span>
+    <span class="sub">Ajustado a risco</span>
+  </div>
+  <div class="metric">
+    <span class="k">Max DD</span>
+    <span class="v num neg" id="d-dd">—</span>
+    <span class="sub">Pico → vale</span>
+  </div>
+  <div class="metric">
+    <span class="k">vs IBOV</span>
+    <span class="v num" id="d-vs">—</span>
+    <span class="sub">CAGR excedente</span>
+  </div>
+</section>
+
+<section class="console-wrap">
+  <div class="k console-label">Console</div>
+  <pre class="console" id="console"></pre>
+</section>
+
+<section class="sim-done" id="sim-done" style="display: none;">
+  <h2>Análise concluída</h2>
+  <p class="dek">
+    A run foi persistida no diário. Explore os trades e agregações para entender
+    <em>por que</em> o robô se comportou dessa forma.
+  </p>
+  <div class="cta-row">
+    <a class="cta" id="d-trades" href="#">Ver trades</a>
+    <a class="cta ghost" id="d-insights" href="#">Ver insights</a>
+    <a class="cta ghost" href="/">Novo teste</a>
+  </div>
+</section>
+
+<script>
+window.addEventListener('load', function () {
+  const simId = "{{ sim.id }}";
+  const initialCapital = {{ sim.capital }};
+  const es = new EventSource(`/sim/${simId}/stream`);
+
+  const $ = (id) => document.getElementById(id);
+  const equitySeries = { dates: [], values: [] };
+  const consoleLines = [];
+  const CONSOLE_MAX = 200;
+  let drawScheduled = false;
+
+  function log(msg) {
+    const now = new Date().toLocaleTimeString('pt-BR');
+    consoleLines.push(`[${now}] ${msg}`);
+    if (consoleLines.length > CONSOLE_MAX) consoleLines.shift();
+    $('console').textContent = consoleLines.join('\n') + '\n';
+    $('console').scrollTop = $('console').scrollHeight;
+  }
+  function brl(v) { return 'R$ ' + Math.round(v).toLocaleString('pt-BR'); }
+  function pct(v) { return (v * 100).toFixed(2) + '%'; }
+
+  function scheduleDraw() {
+    if (drawScheduled || !window.Plotly) return;
+    drawScheduled = true;
+    requestAnimationFrame(() => {
+      drawScheduled = false;
+      if (equitySeries.dates.length === 0) return;
+      const T = MetaCharts.tokens;
+      Plotly.react($('chart-live'), [{
+        x: equitySeries.dates.slice(),
+        y: equitySeries.values.slice(),
+        mode: 'lines', line: { color: T.amber, width: 1.5 },
+        hoverinfo: 'skip',
+      }], {
+        paper_bgcolor: T.bg, plot_bgcolor: T.bg,
+        font: { family: T.fontMono, color: T.fg, size: 11 },
+        margin: { l: 64, r: 24, t: 12, b: 40 }, height: 340, showlegend: false,
+        shapes: [{
+          type: 'line', xref: 'paper', yref: 'y',
+          x0: 0, x1: 1, y0: initialCapital, y1: initialCapital,
+          line: { color: T.fgMuted, width: 1, dash: 'dot' },
+        }],
+        xaxis: { type: 'date', showgrid: true, gridcolor: T.grid, tickfont: { color: T.fgMuted, size: 10 }, linecolor: T.grid },
+        yaxis: { showgrid: true, gridcolor: T.grid, tickfont: { color: T.fgMuted, size: 10 }, linecolor: T.grid, tickformat: ',.0f' },
+      }, { displayModeBar: false, responsive: true });
+    });
+  }
+
+  es.addEventListener('hello', (e) => {
+    const d = JSON.parse(e.data);
+    log(`Conectado. Status inicial: ${d.status}`);
+  });
+  es.addEventListener('log', (e) => {
+    log(JSON.parse(e.data).message);
+    $('sim-status').textContent = 'running';
+  });
+  es.addEventListener('progress', (e) => {
+    const d = JSON.parse(e.data);
+    const p = d.total ? (d.index / d.total) : 0;
+    $('m-pct').textContent    = (p * 100).toFixed(1) + '%';
+    $('m-date').textContent   = d.date;
+    $('m-trades').textContent = d.closed_trades;
+    $('m-open').textContent   = d.open_positions;
+    $('pb-fill').style.width  = (p * 100).toFixed(1) + '%';
+
+    if (d.peak_equity   !== undefined) { $('c-peak').textContent   = brl(d.peak_equity);   $('c-peak-date').textContent   = d.peak_date; }
+    if (d.trough_equity !== undefined) { $('c-trough').textContent = brl(d.trough_equity); $('c-trough-date').textContent = d.trough_date; }
+    $('c-final').textContent = brl(d.equity);
+    const delta = ((d.equity / initialCapital) - 1) * 100;
+    $('c-final-delta').textContent = (delta >= 0 ? '+' : '') + delta.toFixed(2) + '%';
+    $('c-final-delta').className = 'sub ' + (delta >= 0 ? 'pos' : 'neg');
+
+    equitySeries.dates.push(d.date);
+    equitySeries.values.push(d.equity);
+    scheduleDraw();
+  });
+  es.addEventListener('done', (e) => {
+    const d = JSON.parse(e.data);
+    $('sim-status').textContent = 'done';
+    $('sim-status').className = 'pos';
+    log(`Simulação concluída. Run #${d.run_id}.`);
+
+    if (d.peak_equity   !== undefined) { $('c-peak').textContent   = brl(d.peak_equity);   $('c-peak-date').textContent   = d.peak_date; }
+    if (d.trough_equity !== undefined) { $('c-trough').textContent = brl(d.trough_equity); $('c-trough-date').textContent = d.trough_date; }
+    if (d.final_equity  !== undefined) {
+      $('c-final').textContent = brl(d.final_equity);
+      const delta = ((d.final_equity / initialCapital) - 1) * 100;
+      $('c-final-delta').textContent = (delta >= 0 ? '+' : '') + delta.toFixed(2) + '%';
+      $('c-final-delta').className = 'sub ' + (delta >= 0 ? 'pos' : 'neg');
+    }
+
+    $('d-cagr').textContent   = pct(d.metrics.cagr);
+    $('d-cagr').className     = 'v num ' + (d.metrics.cagr >= 0 ? 'pos' : 'neg');
+    $('d-sharpe').textContent = d.metrics.sharpe.toFixed(2);
+    $('d-dd').textContent     = pct(d.metrics.max_drawdown);
+    const deltaBench = (d.metrics.cagr - d.metrics.benchmark_cagr) * 100;
+    $('d-vs').textContent     = (deltaBench >= 0 ? '+' : '') + deltaBench.toFixed(2) + 'pp';
+    $('d-vs').className       = 'v num ' + (deltaBench >= 0 ? 'pos' : 'neg');
+
+    $('sim-done').style.display = 'block';
+    $('d-trades').href   = `/runs/${d.run_id}/trades`;
+    $('d-insights').href = `/runs/${d.run_id}/insights`;
+    scheduleDraw();
+    es.close();
+  });
+  es.addEventListener('error', (e) => {
+    if (e.data) {
+      const d = JSON.parse(e.data);
+      log('ERRO: ' + d.message);
+      $('sim-status').textContent = 'error';
+      $('sim-status').className = 'neg';
+    }
+    es.close();
+  });
+});
+</script>
+
+{% endblock %}

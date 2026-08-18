@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+{% set page = "operacao" %}
+{% block title %}Histórico · Operação · META{% endblock %}
+{% block content %}
+
+<section class="page-head">
+  <div>
+    <div class="kicker"><a href="/operacao" class="crumb">← Operação ao vivo</a> · Histórico</div>
+    <h1>Histórico</h1>
+    <p class="dek">
+      O retrospecto da conta: a curva de patrimônio desde o início e toda
+      decisão já tomada pelo robô — o que foi comprado, vendido, ajustado ou
+      sacado, uma linha por decisão.
+    </p>
+  </div>
+  {% if existe %}
+  <aside>
+    <div>Conta · {{ conta }}</div>
+    <div>Capital inicial · <span class="num">R$ {{ "{:,.0f}".format(capital_inicial).replace(",", ".") }}</span></div>
+  </aside>
+  {% endif %}
+</section>
+
+{% if not existe %}
+
+<div class="empty">
+  <div>
+    <h1>Nenhuma conta de operação ainda</h1>
+    <p>Crie a conta com o robô oficial e a política de saque em vigor primeiro:</p>
+    <p><code>python scripts/run_live.py init --capital SEU_CAPITAL --mode paper</code></p>
+    <p>Depois volte aqui para acompanhar o histórico.</p>
+  </div>
+</div>
+
+{% else %}
+
+<section class="chart-wrap stagger">
+  <div class="chart-title">
+    <h3>Evolução do patrimônio</h3>
+    <div class="legend"><span class="primary">Carteira</span><span>Patrimônio</span></div>
+  </div>
+  <div id="chart-patrimonio" style="height: 340px;"></div>
+</section>
+
+<section class="ops-panel stagger">
+  <h3>Decisões</h3>
+  <p class="dek">
+    Toda intenção gravada pelo robô, mais recente primeiro — decidida no fecho
+    de um pregão, para executar no seguinte (regra 4 do AGENTS.md).
+  </p>
+  <table class="ops-table">
+    <thead>
+      <tr>
+        <th>Decidido em</th>
+        <th>Robô</th>
+        <th>Tipo</th>
+        <th>Ticker</th>
+        <th>Motivo</th>
+        <th class="right">Valor</th>
+        <th class="right">Executa em</th>
+        <th>Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for i in intents %}
+      <tr>
+        <td class="num">{{ i.decided_on }}</td>
+        <td class="dim">{{ i.robot.replace("withdrawal:", "saque:") }}</td>
+        <td>{{ i.kind.value }}</td>
+        <td class="ticker">{{ i.ticker.replace(".SA", "") if i.ticker else "—" }}</td>
+        <td class="dim">{{ i.reason or "—" }}</td>
+        <td class="right num">{% if i.amount %}R$ {{ "{:,.0f}".format(i.amount).replace(",", ".") }}{% else %}<span class="dim">—</span>{% endif %}</td>
+        <td class="right num">{{ i.execute_on }}</td>
+        <td><span class="status-pill {{ i.status.value }}">{{ i.status.value }}</span></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="8" class="ops-table-empty">Nenhuma decisão registrada ainda.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="ops-panel stagger">
+  <h3>Saques</h3>
+  <p class="dek">Retiradas de caixa executadas pela política de saque em vigor.</p>
+  <table class="ops-table">
+    <thead>
+      <tr>
+        <th>Data</th>
+        <th class="right">Pedido</th>
+        <th class="right">Executado</th>
+        <th class="right">Equity antes</th>
+        <th class="right">Taxas</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for w in withdrawals %}
+      <tr>
+        <td class="num">{{ w.date }}</td>
+        <td class="right num">R$ {{ "{:,.0f}".format(w.requested).replace(",", ".") }}</td>
+        <td class="right num">R$ {{ "{:,.0f}".format(w.executed).replace(",", ".") }}</td>
+        <td class="right num">R$ {{ "{:,.0f}".format(w.equity_before).replace(",", ".") }}</td>
+        <td class="right num dim">R$ {{ "{:,.2f}".format(w.fees_paid).replace(",", ".") }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5" class="ops-table-empty">Nenhum saque executado ainda.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<script>
+window.addEventListener('load', function () {
+  const series = {{ equity_json|safe }};
+  const el = document.getElementById('chart-patrimonio');
+  if (!series.length) return;
+
+  function tokens() {
+    const css = getComputedStyle(document.documentElement);
+    const c = (name) => css.getPropertyValue(name).trim();
+    return {
+      bg: c('--bg-elevated'), fg: c('--fg'), fgMuted: c('--fg-muted'), grid: c('--grid'),
+      amber: c('--accent-amber'), green: c('--accent-green'), red: c('--accent-red'),
+      fontMono: 'JetBrainsMono, ui-monospace, monospace',
+    };
+  }
+
+  const T = tokens();
+  const dates = series.map(p => p[0]);
+  const carteira = series.map(p => p[1]);
+  const patrimonio = series.map(p => p[2]);
+
+  Plotly.newPlot(el, [
+    { x: dates, y: carteira, name: 'Carteira', line: { color: T.amber, width: 1.5 }, hovertemplate: 'Carteira R$ %{y:,.0f}<extra></extra>' },
+    { x: dates, y: patrimonio, name: 'Patrimônio', line: { color: T.green, width: 1.5 }, hovertemplate: 'Patrimônio R$ %{y:,.0f}<extra></extra>' },
+  ], {
+    paper_bgcolor: T.bg, plot_bgcolor: T.bg,
+    font: { family: T.fontMono, color: T.fg, size: 11 },
+    margin: { l: 64, r: 24, t: 12, b: 40 }, height: 340, showlegend: false,
+    xaxis: { type: 'date', showgrid: true, gridcolor: T.grid, tickfont: { color: T.fgMuted, size: 10 }, linecolor: T.grid },
+    yaxis: { showgrid: true, gridcolor: T.grid, tickfont: { color: T.fgMuted, size: 10 }, linecolor: T.grid, tickformat: ',.0f' },
+  }, { displayModeBar: false, responsive: true });
+});
+</script>
+
+{% endif %}
+
+{% endblock %}
