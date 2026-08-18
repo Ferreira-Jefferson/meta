@@ -705,6 +705,98 @@ def test_saque_manual_liquidacao_em_duas_pernas(tmp_path):
     assert saques[0]["liquidated"] == [[TICKER, 60, 100.0], ["BBB.SA", 80, 50.0]]
 
 
+def test_saque_recomendado_nao_move_caixa_nem_gera_ordem(tmp_path, universe):
+    """Passo 8 (RED antes de GREEN): uma recomendacao de saque (kind=WITHDRAW,
+    PENDING, gerada por `close_and_decide`) NUNCA mais e executada por
+    `execute_session` -- nem debita caixa, nem gera `Order`, mesmo quando
+    precisaria liquidar posicao para cobrir o valor pedido (o comportamento
+    antigo liquidava a posicao sozinho e movia o caixa)."""
+    data_dir, days = universe
+    d0, d1 = days[0], days[1]
+    policy = FloorSkim(pct=0.9, floor=100.0, day=1, min_amount=0.0)
+    rt = _runtime(tmp_path, data_dir, {}, policy=policy, mode="mt5", capital=10_000.0)
+    rt.ensure_account()
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, "teste")
+        acc.cash = 1_000.0
+        pos = LivePosition(ticker=TICKER, quantity=90, entry_date=d0, entry_price=100.0,
+                           capital_allocated=9_000.0, current_stop=50.0,
+                           max_price_seen=100.0, min_price_seen=100.0)
+        store.upsert_position(conn, acc.id, pos)
+        store.save_account(conn, acc)
+
+    rt.feed.set(TICKER, 100.0)
+    decide = rt.close_and_decide(d0)
+    assert decide.action == "decide"
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, "teste")
+        pend = store.pending_withdraw_intents(conn, acc.id)
+    assert len(pend) == 1  # a politica recomendou o saque
+
+    execu = rt.execute_session(d1)
+    assert execu.detail.get("saques", 0) == 0        # nunca mais executa saque
+    assert execu.detail.get("recomendacoes_saque", 0) == 0  # essa e a programada (D+1), nao a de liquidez
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, "teste")
+        abertas = store.open_orders(conn, acc.id)
+        pend_depois = store.pending_withdraw_intents(conn, acc.id)
+    assert acc.cash == pytest.approx(1_000.0)          # caixa intocado
+    assert TICKER in acc.positions
+    assert acc.positions[TICKER].quantity == 90        # posicao intocada
+    assert abertas == []                                # nenhuma ordem gerada
+    assert len(pend_depois) == 1                        # recomendacao continua PENDING
+
+
+def test_recomendacao_de_saque_por_liquidez_e_gravada_sem_matar_o_supervisor(tmp_path, universe):
+    """Passo 8 (RED antes de GREEN, achado nº2 do plan-reviewer): uma venda
+    credita caixa na mesma barra e o evento de liquidez da politica devolve
+    valor > 0 -- `execute_session` tem de gravar a recomendacao (kind=WITHDRAW,
+    execute_on == decided_on) e retornar normalmente, sem `ValueError` de
+    look-ahead e sem executar nada (o caixa creditado pela venda fica
+    intacto, a espera de confirmacao humana)."""
+    data_dir, days = universe
+    d0, d1 = days[0], days[1]
+    # day=2 (nunca bate com a 1a sessao do mes que o teste ve): garante que
+    # `on_close` nao paga sozinho, isolando o evento de liquidez como a UNICA
+    # fonte da recomendacao neste teste.
+    policy = FloorSkim(pct=0.9, floor=100.0, day=2, min_amount=0.0)
+    script = {pd.Timestamp(d0): [Exit(ticker=TICKER, reason=ExitReason.ROTATION_OUT)]}
+    rt = _runtime(tmp_path, data_dir, script, policy=policy, mode="mt5", capital=10_000.0)
+    rt.ensure_account()
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, "teste")
+        acc.cash = 1_000.0
+        pos = LivePosition(ticker=TICKER, quantity=90, entry_date=d0, entry_price=100.0,
+                           capital_allocated=9_000.0, current_stop=50.0,
+                           max_price_seen=100.0, min_price_seen=100.0)
+        store.upsert_position(conn, acc.id, pos)
+        store.save_account(conn, acc)
+
+    rt.feed.set(TICKER, 100.0)
+    decide = rt.close_and_decide(d0)
+    assert decide.action == "decide"
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, "teste")
+        pend = store.pending_withdraw_intents(conn, acc.id)
+    assert len(pend) == 0  # day=2 nao bateu -- nenhuma recomendacao programada
+
+    execu = rt.execute_session(d1)  # nao pode levantar ValueError
+    assert execu.detail["saidas"] == 1
+    assert execu.detail.get("recomendacoes_saque", 0) == 1
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, "teste")
+        pend_saque = store.pending_withdraw_intents(conn, acc.id)
+    assert TICKER not in acc.positions       # venda aplicada normalmente
+    assert acc.cash > 1_000.0                # caixa creditado pela venda, saque NAO debitou nada
+    assert len(pend_saque) == 1
+    assert pend_saque[0].execute_on == d1    # mesma barra, nao D+1
+    assert pend_saque[0].decided_on == d1
+
+
 def test_saque_automatico_com_liquidacao_permanece_sincrono(tmp_path, universe):
     """Regressao: sob corretora automatica (paper/MT5) a liquidacao continua
     acontecendo TODA dentro do mesmo `execute_session` — sem passar por

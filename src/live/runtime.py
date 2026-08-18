@@ -16,16 +16,20 @@ backtest que a validou:
 
   FECHO de D (`close_and_decide`)
     1. marca o equity com o close de D
-    2. politica de saque decide  -> intencao para D+1
-    3. estrategia decide          -> intencoes para D+1
-    4. `bars_held += 1`
+    2. expira recomendacao de saque vencida (virada de mes civil)
+    3. politica de saque decide  -> recomendacao para D+1 (nunca executada
+       pela maquina — so confirmacao humana move o caixa)
+    4. estrategia decide          -> intencoes para D+1
+    5. `bars_held += 1`
 
   ABERTURA de D+1 (`execute_session`)
     1. expira intencao atrasada (execute_on < hoje) — nunca executa velho
-    2. saque programado no fecho de ontem
+    2. expira recomendacao de saque vencida (virada de mes civil)
     3. saidas (rotacao, defensiva)
-    4. saque por evento de liquidez, se alguma venda creditou caixa hoje
-    5. entradas, dimensionadas pelo caixa JA descontado do saque
+    4. recomendacao de saque por evento de liquidez, se alguma venda
+       creditou caixa hoje — so registra + notifica, nunca executa
+    5. entradas, dimensionadas pelo caixa (saque NUNCA e debitado aqui —
+       saque so sai do caixa por confirmacao humana, ver `confirm_withdrawal`)
 
   DURANTE o pregao (`intraday_tick`)
     stop: no backtest dispara quando `low[D] <= stop`, porque o engine ve a
@@ -419,10 +423,13 @@ class LiveRuntime:
     def close_and_decide(self, session: date) -> StepReport:
         """Marca a carteira no fecho de `session` e colhe as decisoes dos robos.
 
-        Ordem identica ao engine: equity -> saque -> estrategia -> bars_held.
-        A politica de saque decide ANTES da estrategia porque no engine ela ve o
-        equity do fecho antes de qualquer acao nova ser enfileirada; trocar a
-        ordem mudaria o valor sacado.
+        Ordem identica ao engine: equity -> expira saque vencido -> saque ->
+        estrategia -> bars_held. A expiracao roda ANTES de `withdrawal.on_close`
+        de proposito (ver `_expire_withdraw_advice`): nenhuma recomendacao nova
+        pode ser decidida enquanto uma vencida do mes anterior ainda estiver
+        `PENDING`. A politica de saque decide ANTES da estrategia porque no
+        engine ela ve o equity do fecho antes de qualquer acao nova ser
+        enfileirada; trocar a ordem mudaria o valor sacado.
         """
         universe = self._load_universe()
         ready, faltando = self._data_is_ready(session, universe)
@@ -438,6 +445,7 @@ class LiveRuntime:
             if any(d == session.isoformat() for d, _e, _p in store.equity_series(conn, account.id)):
                 return StepReport("decide_skip", session, detail={"motivo": "ja decidido"})
             self._restore_robot_state(account.policy_state)
+            saques_expirados = self._expire_withdraw_advice(conn, account, session)
 
             marks = self._marks(session)
             equity = account.equity(marks)
@@ -486,6 +494,15 @@ class LiveRuntime:
                     intent.status = IntentStatus.DONE
                 store.record_intent(conn, account.id, intent)
                 gravadas += 1
+                if intent.kind == IntentKind.WITHDRAW:
+                    # Saque nunca mais e executado pela maquina — so registrado
+                    # e notificado. `warn` porque `--notify-min-level` default
+                    # e `warn` (ver docstring de `scripts/run_live.py`).
+                    self._log(conn, account.id, "warn", "saque",
+                                    f"recomendacao de saque: R$ {intent.amount:.2f} "
+                                    f"({intent.reason}) — confirme via CLI 'sacar' ou "
+                                    "no painel /operacao",
+                                    {"intent_id": intent.id, "valor": intent.amount})
 
             for pos in account.positions.values():
                 pos.bars_held += 1
@@ -498,6 +515,7 @@ class LiveRuntime:
 
         return StepReport("decide", session, detail={
             "equity": round(equity, 2), "intencoes": gravadas, "stops_movidos": aplicadas,
+            "saques_expirados": saques_expirados,
         })
 
     # ---------- abertura: o ambiente executa ------------------------------
@@ -505,17 +523,23 @@ class LiveRuntime:
     def execute_session(self, session: date) -> StepReport:
         """Executa as intencoes que valem para `session`, na ordem do engine.
 
-        `_sell`/`_buy`/`_withdraw` devolvem um de tres resultados, nao um bool:
-        `'done'` (aplicado), `'rejected'` (nao vai acontecer) e `'pending'`
-        (ordem no ar, aguardando confirmacao — corretora manual ou limitada
-        que ainda nao bateu o preco). `'pending'` NAO e rejeicao: a intencao
-        vira `EXECUTING` e e resolvida depois por `reconcile_pending_fills`,
-        sem ser re-tentada nem expirada por atraso.
+        `_sell`/`_buy` devolvem um de tres resultados, nao um bool: `'done'`
+        (aplicado), `'rejected'` (nao vai acontecer) e `'pending'` (ordem no
+        ar, aguardando confirmacao — corretora manual ou limitada que ainda
+        nao bateu o preco). `'pending'` NAO e rejeicao: a intencao vira
+        `EXECUTING` e e resolvida depois por `reconcile_pending_fills`, sem
+        ser re-tentada nem expirada por atraso.
+
+        Saque NUNCA e executado aqui. Uma intent `WITHDRAW` (programada no
+        fecho anterior, ou gerada agora por evento de liquidez) so vira
+        RECOMENDACAO: gravada + notificada. Quem move dinheiro de fato e um
+        humano, via `confirm_withdrawal` (CLI `sacar` ou botao "Confirmar
+        saque" do dashboard) — nunca este metodo.
         """
         self._load(clock.previous_session(session))
         quotes = self.feed.quotes(self.tickers)
-        done = {"expiradas": 0, "saques": 0, "saidas": 0, "entradas": 0,
-               "rejeitadas": 0, "aguardando": 0}
+        done = {"expiradas": 0, "saques_expirados": 0, "recomendacoes_saque": 0,
+               "saidas": 0, "entradas": 0, "rejeitadas": 0, "aguardando": 0}
 
         with store.live_journal(self.db_path) as conn:
             account = self._load_account(conn)
@@ -524,6 +548,7 @@ class LiveRuntime:
             self._restore_robot_state(account.policy_state)
 
             # 1. Intencao atrasada nunca executa (regra 7 do AGENTS.md).
+            #    `stale_intents` ja exclui WITHDRAW (nao expira por dia).
             for velha in store.stale_intents(conn, account.id, session):
                 store.set_intent_status(conn, velha.id, IntentStatus.EXPIRED)
                 self._log(conn, account.id, "warn", "runtime",
@@ -531,16 +556,20 @@ class LiveRuntime:
                                 f"hoje e {session}")
                 done["expiradas"] += 1
 
+            # 2. Expira recomendacao de saque vencida (virada de mes civil)
+            #    ANTES de qualquer venda — impede que uma recomendacao nova
+            #    por evento de liquidez (passo 4 abaixo) coexista PENDING com
+            #    uma vencida do mes anterior (ver `_expire_withdraw_advice`).
+            done["saques_expirados"] = self._expire_withdraw_advice(conn, account, session)
+
             pend = store.pending_intents(conn, account.id, session)
-            saques = [i for i in pend if i.kind == IntentKind.WITHDRAW]
             saidas = [i for i in pend if i.kind == IntentKind.EXIT]
             entradas = [i for i in pend if i.kind == IntentKind.ENTER]
-
-            # 2. Saque programado — sai antes das compras para a entrada ser
-            #    dimensionada pelo caixa ja descontado.
-            for intent in saques:
-                r = self._withdraw(conn, account, session, intent, quotes)
-                done["saques" if r == "done" else "rejeitadas" if r == "rejected" else "aguardando"] += 1
+            # Intents WITHDRAW programadas (`execute_on == session`, decididas
+            # no fecho anterior) aparecem em `pend` mas NAO sao processadas
+            # aqui de proposito — continuam PENDING, visiveis em `status()`
+            # via `pending_withdraw_intents`, ate confirmacao humana ou
+            # expiracao mensal.
 
             # 3. Saidas.
             motivo_liquidez: Optional[str] = None
@@ -554,14 +583,20 @@ class LiveRuntime:
                 else:
                     done["rejeitadas"] += 1
 
-            # 4. Saque por evento de liquidez: alguma venda creditou caixa agora,
-            #    o dinheiro esta na mao e o saque nao paga liquidacao extra.
+            # 4. Recomendacao de saque por evento de liquidez: alguma venda
+            #    creditou caixa agora — so REGISTRA a recomendacao e notifica,
+            #    nunca executa (`Intent.is_immediate` cobre este caso:
+            #    execute_on == decided_on == session, ver core.live_models).
             if motivo_liquidez:
                 ctx = self._context(session, account, SessionPhase.OPEN, quotes)
                 for intent in self.withdrawal.on_liquidity(ctx, motivo_liquidez):
                     store.record_intent(conn, account.id, intent)
-                    r = self._withdraw(conn, account, session, intent, quotes)
-                    done["saques" if r == "done" else "rejeitadas" if r == "rejected" else "aguardando"] += 1
+                    self._log(conn, account.id, "warn", "saque",
+                                    f"recomendacao de saque: R$ {intent.amount:.2f} "
+                                    f"({intent.reason}) — confirme via CLI 'sacar' ou "
+                                    "no painel /operacao",
+                                    {"intent_id": intent.id, "valor": intent.amount})
+                    done["recomendacoes_saque"] += 1
 
             # 5. Entradas.
             for intent in entradas:
@@ -714,6 +749,62 @@ class LiveRuntime:
         account.positions[pos.ticker] = pos
         store.set_intent_status(conn, intent.id, IntentStatus.DONE)
         return "done"
+
+    # ---------- saque: recomendacao, expiracao, confirmacao humana ---------
+
+    def _expire_withdraw_advice(self, conn, account: AccountState, session: date) -> int:
+        """Expira recomendacoes de saque cuja virada de mes civil ja passou.
+
+        Recomendacao de saque NAO expira por dia (`stale_intents` exclui
+        `kind='withdraw'` de proposito, ver `journal.live_store`) -- ela fica
+        visivel/confirmavel o mes inteiro. O que a torna invalida e o mes
+        civil da decisao (`decided_on`) ser DIFERENTE do mes civil de
+        `session`: chegou um mes novo, a politica ja teria decidido outra
+        parcela, a recomendacao antiga nao vale mais.
+
+        Chamado no INICIO de `close_and_decide`, no INICIO de `execute_session`
+        (antes de qualquer venda/compra) e no INICIO de `confirm_withdrawal` --
+        as tres vezes que uma decisao de liquidez pode estar prestes a
+        acontecer. Motivo: `run_once` roda `execute_session` (OPEN) ANTES de
+        `close_and_decide` (POST_CLOSE), entao no 1o pregao de um mes novo uma
+        recomendacao por evento de liquidez pode nascer ANTES de a do mes
+        anterior ser expirada -- se isso acontecesse, haveria DUAS intents
+        WITHDRAW `PENDING` ao mesmo tempo.
+
+        `FloorSkim._requested` e um escalar GLOBAL da politica (nao por-intent,
+        ver `backtest/withdrawal.py`): `on_executed` faz `falta = _requested -
+        executed` e zera. Duas recomendacoes pendentes corromperiam essa
+        conta. A garantia que este helper oferece NAO e mexer em `_pool` na
+        mao (isso seria regra de decisao vivendo em `live/`, proibido pela
+        regra 6 do AGENTS.md) -- e so a ORDEM: nenhuma recomendacao nova e
+        decidida enquanto uma vencida ainda estiver `PENDING`. Se, ainda
+        assim, mais de uma `PENDING` for encontrada aqui, e invariante
+        quebrada: loga `error` (nao deveria acontecer nunca) em vez de passar
+        batido.
+
+        Devolve quantas recomendacoes expirou.
+        """
+        pendentes = store.pending_withdraw_intents(conn, account.id)
+        if len(pendentes) > 1:
+            self._log(conn, account.id, "error", "saque",
+                            f"{len(pendentes)} recomendacoes de saque PENDING ao mesmo "
+                            "tempo -- invariante quebrada",
+                            {"intent_ids": [i.id for i in pendentes]})
+
+        expiradas = 0
+        for intent in pendentes:
+            if (intent.decided_on.year, intent.decided_on.month) == (session.year, session.month):
+                continue
+            if not store.claim_intent(conn, intent.id, IntentStatus.PENDING, IntentStatus.EXPIRED):
+                continue  # outro processo ja tratou esta recomendacao
+            self.withdrawal.on_executed(intent, 0.0)
+            self._log(conn, account.id, "warn", "saque",
+                            f"recomendacao de saque de R$ {intent.amount:.2f} (decidida em "
+                            f"{intent.decided_on}) expirou sem confirmacao -- valor volta "
+                            "para a fila da politica",
+                            {"intent_id": intent.id, "valor": intent.amount})
+            expiradas += 1
+        return expiradas
 
     # ---------- reconciliacao (fills que chegaram depois) ------------------
 
