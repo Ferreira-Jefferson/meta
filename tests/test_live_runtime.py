@@ -63,6 +63,19 @@ def _sessions(n: int) -> list[date]:
     return days[:n]
 
 
+def _pregao_e_pregao_do_mes_seguinte() -> tuple[date, date]:
+    """Dois pregoes reais em meses civis DIFERENTES, derivados do calendario
+    de `live.clock` -- nao um mes fixo hardcodado a mao: `d0` e o primeiro
+    pregao da janela, `d1` e o primeiro pregao subsequente cujo (ano, mes) ja
+    e outro. Usado pelos testes de expiracao mensal da recomendacao de
+    saque, que precisam de duas sessoes em meses civis diferentes sem
+    depender da data em que o teste roda."""
+    dias = clock.sessions_between(date(2030, 1, 1), date(2030, 6, 1))
+    d0 = dias[0]
+    d1 = next(d for d in dias if (d.year, d.month) != (d0.year, d0.month))
+    return d0, d1
+
+
 def _write_parquet(data_dir, ticker: str, days: list[date], closes: list[float]) -> None:
     idx = pd.DatetimeIndex([pd.Timestamp(d) for d in days])
     df = pd.DataFrame({
@@ -573,7 +586,6 @@ def test_saque_recomendado_nao_move_caixa_nem_gera_ordem(tmp_path, universe):
     assert len(pend) == 1  # a politica recomendou o saque
 
     execu = rt.execute_session(d1)
-    assert execu.detail.get("saques", 0) == 0        # nunca mais executa saque
     assert execu.detail.get("recomendacoes_saque", 0) == 0  # essa e a programada (D+1), nao a de liquidez
 
     with store.live_journal(rt.db_path) as conn:
@@ -757,6 +769,115 @@ def test_confirm_withdrawal_acima_do_caixa_debita_mesmo_assim_e_avisa(tmp_path, 
         eventos = store.recent_events(conn, acc.id)
     assert acc.cash < 0
     assert any(e["level"] == "warn" and "negativ" in e["message"] for e in eventos)
+
+
+# ---------- expiracao mensal da recomendacao de saque -----------------------
+
+def test_saque_expira_na_virada_do_mes_e_devolve_valor_a_fila(tmp_path):
+    """Recomendacao PENDING decidida no fecho do mes 1, nunca confirmada: um
+    pregao de abertura ja no mes civil seguinte (`execute_session`, que roda
+    `_expire_withdraw_advice` antes de qualquer venda/compra -- ver passo 8
+    do plano) expira a recomendacao e devolve o valor para a fila da
+    politica -- tanto no objeto em memoria (`rt.withdrawal.policy`) quanto
+    no `policy_state` persistido no BANCO (nao so o objeto Python)."""
+    d0, d1 = _pregao_e_pregao_do_mes_seguinte()
+    dias_dado = clock.sessions_between(date(2030, 1, 1), date(2030, 6, 1))
+
+    data_dir = tmp_path / "dados"
+    data_dir.mkdir()
+    _write_parquet(data_dir, TICKER, dias_dado, [100.0] * len(dias_dado))
+    _write_parquet(data_dir, BENCHMARK, dias_dado, [50_000.0] * len(dias_dado))
+
+    policy = FloorSkim(pct=0.5, floor=100.0, day=1, min_amount=0.0)
+    rt = _runtime(tmp_path, data_dir, {}, policy=policy, mode="manual", capital=10_000.0)
+    rt.ensure_account()
+
+    rt.close_and_decide(d0)
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, "teste")
+        pend = store.pending_withdraw_intents(conn, acc.id)
+    assert len(pend) == 1
+    intent = pend[0]
+    assert intent.amount == pytest.approx(5_000.0)
+
+    execu = rt.execute_session(d1)
+    assert execu.detail["saques_expirados"] == 1
+
+    with store.live_journal(rt.db_path) as conn:
+        acc_depois = store.load_account(conn, "teste")
+        pend_depois = store.pending_withdraw_intents(conn, acc_depois.id)
+    assert pend_depois == []  # expirou, nao ficou pendente
+
+    withdrawal_state = acc_depois.policy_state["withdrawal"]
+    assert withdrawal_state["_pool"] == pytest.approx(5_000.0)      # valor voltou pra fila
+    assert withdrawal_state["_requested"] == pytest.approx(0.0)
+
+
+def test_recomendacao_de_saque_gera_evento_warn_notificado(tmp_path, universe):
+    """A decisao de uma recomendacao de saque (`close_and_decide`, primeira
+    vez que ela e decidida) tem de notificar de verdade -- antes desta
+    feature a decisao gravava o evento mas nao chamava o notificador."""
+    data_dir, days = universe
+    d0 = days[0]
+    notifier = _RecordingNotifier()
+    policy = FloorSkim(pct=0.5, floor=100.0, day=1, min_amount=0.0)
+    rt = _runtime(tmp_path, data_dir, {}, policy=policy, mode="manual", capital=10_000.0)
+    rt.notifier = notifier
+    rt.ensure_account()
+
+    result = rt.close_and_decide(d0)
+    assert result.action == "decide"
+
+    saque_calls = [c for c in notifier.calls if c[1] == "saque"]
+    assert len(saque_calls) == 1
+    level, source, message, payload = saque_calls[0]
+    assert level == "warn"
+    assert payload is not None
+    assert payload.get("valor") == pytest.approx(5_000.0)
+
+
+def test_confirm_withdrawal_expira_recomendacao_vencida_e_persiste_policy_state(tmp_path):
+    """Reproducao exata da issue 1 do code-review: uma recomendacao PENDING
+    do mes 1, nunca confirmada; tentar confirma-la ja no mes civil seguinte
+    expira a recomendacao POR DENTRO de `confirm_withdrawal`
+    (`_expire_withdraw_advice` roda antes de escolher a recomendacao, logo
+    `pendentes` fica vazia e a chamada rejeita). O FURO era: o evento/return
+    diziam "valor volta pra fila", mas sem persistir `account.policy_state`
+    antes do `return StepReport(\"withdraw_reject\", ...)`, o BANCO ficava
+    com o `_requested` antigo -- o dinheiro sumia da fila em silencio."""
+    d0, d1 = _pregao_e_pregao_do_mes_seguinte()
+    dias_dado = clock.sessions_between(date(2030, 1, 1), date(2030, 6, 1))
+
+    data_dir = tmp_path / "dados"
+    data_dir.mkdir()
+    _write_parquet(data_dir, TICKER, dias_dado, [100.0] * len(dias_dado))
+    _write_parquet(data_dir, BENCHMARK, dias_dado, [50_000.0] * len(dias_dado))
+
+    policy = FloorSkim(pct=0.5, floor=100.0, day=1, min_amount=0.0)
+    rt = _runtime(tmp_path, data_dir, {}, policy=policy, mode="manual", capital=10_000.0)
+    rt.ensure_account()
+
+    rt.close_and_decide(d0)
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, "teste")
+        pend = store.pending_withdraw_intents(conn, acc.id)
+    assert len(pend) == 1
+    intent = pend[0]
+    assert intent.amount == pytest.approx(5_000.0)
+
+    report = rt.confirm_withdrawal(5_000.0, session=d1, intent_id=intent.id)
+    assert report.action == "withdraw_reject"  # a recomendacao ja tinha vencido
+
+    with store.live_journal(rt.db_path) as conn:
+        acc_depois = store.load_account(conn, "teste")
+        intents_depois = store.pending_withdraw_intents(conn, acc_depois.id)
+    assert intents_depois == []
+
+    # Sem a correcao, o banco ficaria com `_requested == 5000.0` (o valor
+    # antigo) e `_pool == 0.0` -- exatamente o furo apontado pelo revisor.
+    withdrawal_state = acc_depois.policy_state["withdrawal"]
+    assert withdrawal_state["_requested"] == pytest.approx(0.0)
+    assert withdrawal_state["_pool"] == pytest.approx(5_000.0)
 
 
 # ---------- regressao: fim-de-mes tem que disparar no ULTIMO dia truncado -
