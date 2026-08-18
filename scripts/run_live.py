@@ -9,6 +9,8 @@
     python scripts/run_live.py confirm 12 300 41.85 # confirma fill manual
     python scripts/run_live.py reconcile            # aplica fills confirmados ao caixa/posicao
     python scripts/run_live.py unfreeze             # destrava o disjuntor de risco manualmente
+    python scripts/run_live.py sacar 5000.00        # confirma recomendacao de saque pendente
+    python scripts/run_live.py sacar 5000.00 --intent-id 42 --data 2026-08-18
     python scripts/run_live.py loop --seconds 60
 
 `loop` so da passo dentro da janela de pregao B3 +/-1h (ver `live.clock.
@@ -81,6 +83,7 @@ import json
 import os
 import sys
 import time
+from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -236,6 +239,23 @@ def cmd_reconcile(args) -> None:
     print(rt.reconcile_pending_fills())
 
 
+def cmd_sacar(args) -> None:
+    """Confirma uma recomendacao de saque pendente -- o UNICO caminho que
+    move dinheiro de verdade desde que o saque virou recomendacao (ver
+    docstring de `live/runtime.py`). `--intent-id` existe pelo mesmo motivo
+    do `confirm <order_id>` acima: um `sacar` repetido (cron, dedo no Enter)
+    nao pode confirmar "o que estiver pendente" as cegas -- com mais de uma
+    recomendacao pendente ao mesmo tempo (nao deveria acontecer, mas
+    `LiveRuntime._expire_withdraw_advice` grita se acontecer), `confirm_
+    withdrawal` recusa em vez de adivinhar a mais antiga."""
+    rt = build(args)
+    session = date.fromisoformat(args.data) if args.data else None
+    report = rt.confirm_withdrawal(args.valor, session=session, intent_id=args.intent_id)
+    print(report)
+    if report.action != "withdraw_confirm":
+        sys.exit(1)
+
+
 def cmd_unfreeze(args) -> None:
     rt = build(args)
     if rt.risk_guard is None:
@@ -384,6 +404,15 @@ def main() -> None:
     lp = sub.add_parser("loop")
     lp.add_argument("--seconds", type=int, default=60)
     lp.set_defaults(func=cmd_loop)
+
+    s = sub.add_parser("sacar")
+    s.add_argument("valor", type=float)
+    s.add_argument("--intent-id", type=int, default=None,
+                   help="confirma so esta recomendacao especifica -- obrigatorio "
+                        "se houver mais de uma pendente ao mesmo tempo")
+    s.add_argument("--data", default=None,
+                   help="pregao de referencia (ISO, ex. 2026-08-18); default: hoje")
+    s.set_defaults(func=cmd_sacar)
 
     args = p.parse_args()
     args.func(args)
