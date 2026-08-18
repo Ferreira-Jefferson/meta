@@ -68,6 +68,17 @@ class Broker(ABC):
         humano para fechar o ciclo."""
         return True
 
+    def cash_balance(self) -> Optional[float]:
+        """Saldo de caixa segundo uma fonte EXTERNA e independente da conta
+        interna (`AccountState.cash`), se este broker tiver uma. Default
+        `None`: nem `PaperBroker` (simula contra um feed, nao existe conta
+        real por tras) nem `ManualBroker` (nao fala com corretora nenhuma)
+        tem algo para comparar — `None` significa "nao tenta reconciliar
+        deposito contra este broker", nunca "saldo zero". So uma conexao de
+        corretora de verdade (ver `MT5Broker.cash_balance`) sabe responder
+        isto de fato."""
+        return None
+
 
 class PaperBroker(Broker):
     """Preenche a ordem contra um `QuoteFeed`, com o MESMO custo do backtest.

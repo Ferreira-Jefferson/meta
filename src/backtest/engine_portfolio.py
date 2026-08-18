@@ -41,6 +41,7 @@ class _Sat:
 
 
 RedistMode = Literal["main", "pool", "best_sat"]
+EntryFillMode = Literal["open"]
 
 
 def _positions_view(positions: dict[str, _Position]) -> dict[str, OpenPosition]:
@@ -66,6 +67,7 @@ def run_portfolio_backtest(
     redist_mode: RedistMode = "pool",
     on_progress: Optional[Callable] = None,
     withdrawal_policy: Optional[WithdrawalPolicy] = None,
+    entry_fill_mode: EntryFillMode = "open",
 ) -> BacktestResult:
     ibov = universe[BENCHMARK]
     start_ts, end_ts = pd.Timestamp(start), pd.Timestamp(end)
@@ -88,6 +90,12 @@ def run_portfolio_backtest(
     equity_records = []
     pending: list = []
     last_sat_check_month = None
+    # Contadores dos modos != 'open' — quantos sinais de Enter chegaram a
+    # ponto de executar vs quantos de fato preencheram a ordem. So vao para
+    # `metrics` quando o modo nao e o default (ver bloco de metrics no fim),
+    # para o modo padrao continuar byte-a-byte identico ao de antes desta opcao.
+    entries_attempted = 0
+    entries_filled = 0
     # Saque programado: decidido no close[D] pela politica, executado no
     # open[D+1] (mesma disciplina anti-look-ahead das ordens).
     withdrawals: list[WithdrawalEvent] = []
@@ -434,6 +442,8 @@ def run_portfolio_backtest(
             if df is None or today not in df.index:
                 continue
 
+            entries_attempted += 1
+
             # Consolida satelite do mesmo ticker de volta ao caixa
             if act.ticker in satellites:
                 sat = satellites[act.ticker]
@@ -445,10 +455,12 @@ def run_portfolio_backtest(
                 del satellites[act.ticker]
 
             opn = float(df.at[today, "open"])
+            ref_price = opn
+            entries_filled += 1
             # Sizing, stop default e teto de slots vivem em `backtest/sizing.py`
             # para o runtime ao vivo chamar a MESMA mecanica — ver o docstring
             # de la: e o unico jeito de a carteira real nao divergir da testada.
-            plan = plan_entry(cash, opn, act.size_hint, config)
+            plan = plan_entry(cash, ref_price, act.size_hint, config)
             if not plan.is_feasible:
                 continue
             exec_px = plan.exec_price
@@ -460,7 +472,7 @@ def run_portfolio_backtest(
             positions[act.ticker] = _Position(
                 ticker=act.ticker, entry_date=today.date(), entry_price=exec_px,
                 quantity=plan.quantity, capital_allocated=plan.cost, fees_paid=plan.fees,
-                slippage_paid=abs(exec_px - opn) * plan.quantity,
+                slippage_paid=abs(exec_px - ref_price) * plan.quantity,
                 entry_snapshot=snap, max_price_seen=exec_px, min_price_seen=exec_px,
                 current_stop=stop_px, bars_held=0, metadata={},
             )
@@ -556,6 +568,13 @@ def run_portfolio_backtest(
         metrics["withdrawn_total"] = float(sum(w.executed for w in withdrawals))
         metrics["withdrawals_count"] = len(withdrawals)
         metrics["withdrawal_fees"] = float(sum(w.fees_paid for w in withdrawals))
+    if entry_fill_mode != "open":
+        # So aparece fora do modo default — o modo 'open' tem de devolver o
+        # mesmo dict de sempre, byte-a-byte, para nao quebrar quem ja consome
+        # `metrics` hoje.
+        metrics["entries_attempted"] = entries_attempted
+        metrics["entries_filled"] = entries_filled
+        metrics["entries_skipped"] = entries_attempted - entries_filled
     return BacktestResult(trades=closed, equity_curve=equity_series,
                           benchmark_curve=ibov_norm, metrics=metrics,
                           withdrawals=withdrawals)

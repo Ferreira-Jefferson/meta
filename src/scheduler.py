@@ -71,7 +71,10 @@ def _run_champion(strategy_key: str, factory, start: str, end: str, run_kind: st
                   fingerprint: str | None = None) -> int:
     """Roda um backtest oficial de ranking e persiste. Retorna run_id."""
     strategy = factory()
-    universe = load_universe()  # WATCHLIST default + benchmark
+    # universe_tickers permite a um robô experimental (setor bancário, universo
+    # largo, etc.) escolher seu próprio universo em vez do WATCHLIST canonical
+    # — ver o comentário em `strategy/base.py`.
+    universe = load_universe(tickers=strategy.universe_tickers) if strategy.universe_tickers else load_universe()
     config = BacktestConfig(initial_capital=CHAMPION_CAPITAL, lot_size=CHAMPION_LOT_SIZE)
     result = run_backtest_dispatch(universe, strategy, config, start=start, end=end)
 
@@ -159,10 +162,14 @@ def refresh_champion_rankings(force: bool = False) -> dict:
     refreshed: list[dict] = []
     failed: list[dict] = []
     strategies = list_strategies()
-    fingerprint = universe_fingerprint()
     print(f"[champion-refresh] target_end={target_end}, 5y_start={five_y_start}, "
-          f"1y={one_y_start}..{one_y_end}, {len(strategies)} robôs, data={fingerprint[:12]}")
+          f"1y={one_y_start}..{one_y_end}, {len(strategies)} robôs")
     for info in strategies:
+        # Fingerprint por robô: um robô com `universe_tickers` próprio (ex.
+        # especialista em bancos) tem que ser invalidado quando O SEU dado
+        # avança, não quando o WATCHLIST canonical avança — e vice-versa.
+        strategy_tickers = info.factory().universe_tickers
+        fingerprint = universe_fingerprint(tickers=strategy_tickers or WATCHLIST)
         for run_kind, start, end in windows:
             if not force and _champion_is_current(info.key, run_kind, end, fingerprint):
                 continue

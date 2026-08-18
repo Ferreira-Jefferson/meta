@@ -426,3 +426,28 @@ def test_supports_automation_true_e_metadados():
     assert broker.supports_automation() is True
     assert broker.mode == "broker"
     assert broker.name == "mt5"
+
+
+# ---------- cash_balance (reconciliacao de deposito) -----------------------
+
+def test_cash_balance_conectado_devolve_balance_da_conta(fake_mt5):
+    mod, calls = fake_mt5(initialize_ok=True)
+    mod.account_info = lambda: types.SimpleNamespace(balance=12_345.67, equity=13_000.0)
+    broker = MT5Broker()
+
+    assert broker.cash_balance() == pytest.approx(12_345.67)
+
+
+def test_cash_balance_falha_de_conexao_devolve_none_sem_excecao(fake_mt5):
+    fake_mt5(initialize_ok=False, last_error=(10004, "terminal nao encontrado"))
+    broker = MT5Broker()
+
+    assert broker.cash_balance() is None
+
+
+def test_cash_balance_account_info_none_devolve_none(fake_mt5):
+    mod, calls = fake_mt5(initialize_ok=True)
+    mod.account_info = lambda: None
+    broker = MT5Broker()
+
+    assert broker.cash_balance() is None

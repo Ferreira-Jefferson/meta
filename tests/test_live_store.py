@@ -30,6 +30,7 @@ from journal.live_store import (
     pending_intents,
     record_equity,
     record_fill,
+    record_deposit,
     record_intent,
     record_order,
     record_withdrawal,
@@ -309,6 +310,31 @@ def test_record_withdrawal_and_events(db_path):
         assert events[0]["level"] in {"info", "warn"}
         sources = {e["source"] for e in events}
         assert sources == {"withdrawal_robot", "feed"}
+
+
+def test_record_deposit(db_path):
+    with live_journal(db_path) as conn:
+        account = _account(conn)
+        d_id = record_deposit(
+            conn, account.id, day=date(2026, 8, 18), amount=500.0,
+            origin="mt5_reconciliation", note="saldo real 10500.00 vs caixa esperado 10000.00",
+        )
+        assert d_id > 0
+
+        rows = conn.execute(
+            "SELECT * FROM live_deposits WHERE account_id = ?", (account.id,)
+        ).fetchall()
+        assert len(rows) == 1
+        assert rows[0]["amount"] == 500.0
+        assert rows[0]["origin"] == "mt5_reconciliation"
+        assert rows[0]["date"] == "2026-08-18"
+
+        # `note` default vazio quando nao informado (botao manual nao precisa dele).
+        record_deposit(conn, account.id, day=date(2026, 8, 19), amount=100.0, origin="manual")
+        rows2 = conn.execute(
+            "SELECT * FROM live_deposits WHERE account_id = ? ORDER BY id", (account.id,)
+        ).fetchall()
+        assert rows2[1]["note"] == ""
 
 
 # ---------------------------------------------------------------------------

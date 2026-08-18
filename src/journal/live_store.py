@@ -436,6 +436,18 @@ def set_intent_status(conn: sqlite3.Connection, intent_id: int, status: IntentSt
     conn.execute("UPDATE live_intents SET status = ? WHERE id = ?", (status.value, intent_id))
 
 
+def set_intent_payload(conn: sqlite3.Connection, intent_id: int, payload: dict) -> None:
+    """Sobrescreve o `payload` de uma intent já gravada.
+
+    A intent em si é imutável (é o registro do CÉREBRO — ver `core.live_models`),
+    mas `payload` é o campo pensado para metadado de execução que só existe
+    DEPOIS da decisão (ex.: `equity_before` capturado no primeiro ciclo de um
+    saque que precisa de várias rodadas de liquidação sob corretora manual —
+    ver `live.runtime._withdraw_manual_step`). Sobrescreve inteiro, não faz
+    merge: quem chama é o único dono do payload desta intent neste momento."""
+    conn.execute("UPDATE live_intents SET payload = ? WHERE id = ?", (_dumps(payload), intent_id))
+
+
 def intents_by_status(conn: sqlite3.Connection, account_id: int, status: IntentStatus) -> list[Intent]:
     """Intents da conta num status qualquer — usada por `live.runtime.reconcile_pending_fills`
     para achar as `EXECUTING` (ordem no ar, aguardando confirmacao que chegou depois
@@ -624,6 +636,22 @@ def record_withdrawal(
             (account_id, date, requested, executed, equity_before, fees_paid, liquidated)
            VALUES (?, ?, ?, ?, ?, ?, ?)""",
         (account_id, day.isoformat(), requested, executed, equity_before, fees_paid, _dumps(liquidated)),
+    )
+    return int(cur.lastrowid)
+
+
+def record_deposit(
+    conn: sqlite3.Connection,
+    account_id: int,
+    day: date,
+    amount: float,
+    origin: str,
+    note: str = "",
+) -> int:
+    cur = conn.execute(
+        """INSERT INTO live_deposits (account_id, date, amount, origin, note)
+           VALUES (?, ?, ?, ?, ?)""",
+        (account_id, day.isoformat(), amount, origin, note),
     )
     return int(cur.lastrowid)
 

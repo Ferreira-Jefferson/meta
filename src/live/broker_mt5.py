@@ -347,3 +347,34 @@ class MT5Broker(Broker):
 
     def supports_automation(self) -> bool:
         return True
+
+    def cash_balance(self) -> Optional[float]:
+        """Saldo real de caixa reportado pelo terminal, para o runtime
+        detectar deposito externo (ver `live.runtime.reconcile_broker_cash`).
+
+        Usa `balance`, NUNCA `equity`: numa conta de acoes a vista (nao
+        CFD/margem), `balance` e o caixa REALIZADO (depositos, saques,
+        proventos de venda ja fechada) e exclui o P&L flutuante de posicao
+        aberta — exatamente o que `AccountState.cash` representa aqui dentro
+        (caixa NAO investido). `equity` misturaria isso com dinheiro que ja
+        esta alocado em acoes, e faria o runtime "ver" deposito onde so
+        houve valorizacao de posicao.
+
+        Mesmo padrao de erro do resto do arquivo: falha de conexao, pacote
+        ausente ou resposta inesperada viram `None`, nunca uma excecao solta
+        — quem chama (`reconcile_broker_cash`) trata `None` como "esta
+        corretora nao tem saldo externo para comparar agora", nao como erro.
+        """
+        try:
+            import MetaTrader5 as mt5  # lazy: ver docstring do modulo
+        except Exception:
+            return None
+        try:
+            if not self.connect():
+                return None
+            info = mt5.account_info()
+            if info is None:
+                return None
+            return float(info.balance)
+        except Exception:
+            return None

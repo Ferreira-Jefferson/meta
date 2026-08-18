@@ -404,6 +404,47 @@ def operacao_parar(request: Request):
     return TEMPLATES.TemplateResponse(request, "partials/operacao_body.html", _operacao_ctx())
 
 
+@app.post("/operacao/aportar", response_class=HTMLResponse)
+async def operacao_aportar(request: Request):
+    """Registra que dinheiro foi depositado na corretora FORA deste sistema
+    (o dono aportou), creditando o valor direto ao caixa da conta. Fallback
+    manual: no modo MT5 o mesmo crédito acontece sozinho antes da abertura
+    (`live.runtime.reconcile_broker_cash`), mas Paper/Manual não têm saldo
+    externo para conferir, então este botão é o único jeito do sistema saber
+    que o caixa cresceu — e mesmo em MT5 serve para forçar o crédito sem
+    esperar o próximo PRE_OPEN.
+
+    Mexe direto no diário (mesmo padrão de `operacao_iniciar`): não há
+    decisão nenhuma aqui, só contabilidade, e montar um `LiveRuntime`
+    completo (estratégia/feed/corretora) só para somar um valor ao caixa
+    seria peso desnecessário."""
+    form = await request.form()
+    from journal import live_store
+
+    erro = None
+    aporte_msg = None
+    try:
+        amount = _parse_optional_float(form.get("amount"))
+    except ValueError:
+        amount = None
+    if amount is None or amount <= 0:
+        erro = "Informe um valor de aporte maior que zero."
+    else:
+        with live_store.live_journal() as conn:
+            conta = live_store.load_account(conn, live_service.ACCOUNT_NAME)
+            if conta is None:
+                erro = "Nenhuma conta de operação ainda — inicie a operação primeiro."
+            else:
+                conta.cash += amount
+                live_store.save_account(conn, conta)
+                live_store.record_deposit(conn, conta.id, clock.session_date(), amount,
+                                          origin="manual", note="registrado via /operacao")
+                aporte_msg = f"Aporte de R$ {amount:.2f} registrado."
+
+    ctx = _operacao_ctx(erro=erro, aporte_msg=aporte_msg)
+    return TEMPLATES.TemplateResponse(request, "partials/operacao_body.html", ctx)
+
+
 @app.post("/operacao/credenciais", response_class=HTMLResponse)
 async def operacao_credenciais(request: Request):
     """Login da corretora (MT5) e canais de alerta (Telegram/e-mail) — salvos

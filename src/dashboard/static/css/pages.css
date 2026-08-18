@@ -1468,3 +1468,66 @@
   font-family: var(--font-mono);
   font-size: var(--fs-body);
 }
+
+/* ============ OPERAÇÃO · REGISTRAR APORTE ==================================
+   Fallback manual do depósito (ver `live.runtime.reconcile_broker_cash` para
+   o caminho automático via MT5) — crédito imediato ao caixa, um clique só.
+   Reusa a paleta/tipografia de `.ops-creds-form`; layout mais simples (um
+   campo + botão lado a lado) por ser uma ação única, não um formulário de
+   configuração com várias seções. */
+
+.ops-deposit {
+  border: 1px solid var(--grid-strong);
+  background: var(--bg-elevated);
+  padding: var(--s-4) var(--s-5);
+  margin-bottom: var(--s-6);
+}
+.ops-deposit h3 {
+  font-family: var(--font-mono);
+  font-size: var(--fs-body);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--fg-strong);
+  margin: 0 0 var(--s-3);
+}
+.ops-deposit .dek { margin-bottom: var(--s-4); }
+.ops-deposit-form {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--s-4);
+  flex-wrap: wrap;
+}
+.ops-deposit-form label { display: flex; flex-direction: column; gap: var(--s-2); }
+.ops-deposit-form label .k {
+  font-size: var(--fs-metadata);
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+}
+.ops-deposit-form input[type="number"] {
+  background: var(--bg);
+  color: var(--fg-strong);
+  font-family: var(--font-mono);
+  font-size: var(--fs-body);
+  border: 1px solid var(--grid-strong);
+  border-radius: 0;
+  padding: var(--s-3);
+  min-width: 200px;
+}
+.ops-deposit-form input:focus { outline: none; border-color: var(--accent-amber); }
+.ops-deposit-form button {
+  background: var(--accent-amber);
+  color: var(--bg);
+  border: none;
+  border-radius: 0;
+  padding: var(--s-3) var(--s-5);
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-size: var(--fs-body);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  cursor: pointer;
+  transition: background 120ms linear;
+}
+.ops-deposit-form button:hover { background: var(--fg-strong); }

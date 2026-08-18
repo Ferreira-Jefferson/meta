@@ -239,6 +239,30 @@
   </div>
 </section>
 
+<section class="ops-deposit stagger">
+  <h3>Registrar aporte</h3>
+  <p class="dek">
+    Avisa o sistema que você depositou dinheiro na corretora, para o robô
+    poder usar esse caixa na próxima entrada (o sinal de compra continua o
+    mesmo — só o caixa disponível cresce).
+    {% if s.modo == "mt5" %}
+    No modo MetaTrader 5 isso normalmente não é necessário: o aporte é
+    detectado sozinho antes da abertura do pregão. Use este botão só para
+    forçar o crédito sem esperar essa checagem.
+    {% else %}
+    No modo {{ s.modo }} não há saldo externo na corretora para conferir
+    sozinho, então este é o único jeito do sistema saber que o caixa cresceu.
+    {% endif %}
+  </p>
+  {% if aporte_msg %}<div class="ops-alert ops-alert-ok">{{ aporte_msg }}</div>{% endif %}
+  <form class="ops-deposit-form" hx-post="/operacao/aportar" hx-target="#ops-body" hx-swap="outerHTML">
+    <label><span class="k">Valor do aporte (R$)</span>
+      <input type="number" name="amount" min="0.01" step="0.01" placeholder="1000.00" required />
+    </label>
+    <button type="submit">Registrar aporte</button>
+  </form>
+</section>
+
 <section class="metrics-grid stagger">
   <div class="metric">
     <span class="k">Investido a mercado</span>
