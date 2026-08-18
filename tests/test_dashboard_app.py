@@ -292,6 +292,32 @@ def test_operacao_sacar_sem_conta_devolve_erro_sem_criar_saque(isolated_journal,
     assert rows == []
 
 
+def test_operacao_fragment_mostra_form_de_confirmar_saque_com_recomendacao_pendente(
+    isolated_journal, client,
+):
+    """Passo 15: com uma recomendacao pendente, o painel renderiza o form
+    "Confirmar saque" com o `intent_id` (hidden) e o valor pre-preenchido."""
+    db_path = isolated_journal
+    account_id = _create_account(db_path)
+    intent_id = _create_withdraw_intent(db_path, account_id, amount=500.0)
+
+    resp = client.get("/operacao/fragment")
+    assert resp.status_code == 200
+    assert "Confirmar saque" in resp.text
+    assert f'name="intent_id" value="{intent_id}"' in resp.text
+    assert "500.00" in resp.text
+
+
+def test_operacao_fragment_sem_recomendacao_pendente_nao_mostra_form(isolated_journal, client):
+    db_path = isolated_journal
+    _create_account(db_path)
+
+    resp = client.get("/operacao/fragment")
+    assert resp.status_code == 200
+    assert "Nenhuma recomendação de saque pendente." in resp.text
+    assert 'hx-post="/operacao/sacar"' not in resp.text
+
+
 def test_operacao_sacar_duplo_post_debita_uma_so_vez(isolated_journal, client):
     """Falsificacao do achado nº5 (duplo-clique): dois POSTs identicos com o
     MESMO `intent_id` so debitam o caixa UMA vez -- o 2o perde a corrida do
