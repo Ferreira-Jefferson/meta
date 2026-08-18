@@ -170,6 +170,12 @@ class InvestmentRobot(LiveRobot):
             ))
         return intents
 
+    def state(self) -> dict:
+        return self.strategy.state()
+
+    def restore(self, state: dict) -> None:
+        self.strategy.restore(state)
+
 
 class WithdrawalRobot(LiveRobot):
     """Adapta uma `WithdrawalPolicy` (`backtest/withdrawal.py`) ao ambiente ao vivo.
