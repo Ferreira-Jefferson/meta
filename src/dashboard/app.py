@@ -428,14 +428,27 @@ async def operacao_iniciar(request: Request):
             if mt5_shares_per_lot is None or mt5_shares_per_lot <= 0:
                 erro = "Informe quantas ações por lote o seu terminal MT5 usa para este símbolo."
     else:
+        # Primeira conta: capital nunca é digitado -- é o saldo real da
+        # corretora (ver `live_control.detect_broker_capital()`). Só consulta
+        # a corretora depois das outras validações passarem, pra não gastar
+        # uma tentativa de conexão MT5 num form incompleto.
         mode = "mt5"
-        capital = float(form.get("capital") or live_service.DEFAULT_CAPITAL)
+        capital = None
         if not form.get("confirmar_real"):
             erro = "Para operar em MT5 (dinheiro real), marque a confirmação antes de iniciar."
         else:
             mt5_shares_per_lot = _parse_optional_float(form.get("mt5_shares_per_lot"))
             if mt5_shares_per_lot is None or mt5_shares_per_lot <= 0:
                 erro = "Informe quantas ações por lote o seu terminal MT5 usa para este símbolo."
+            else:
+                capital = live_control.detect_broker_capital()
+                if capital is None:
+                    erro = (
+                        "Não foi possível ler o saldo disponível na sua conta MetaTrader 5 — "
+                        "confirme que o terminal MT5 está aberto e logado nesta máquina, ou "
+                        "que o login/senha/servidor MT5 foram salvos em 'Acesso e credenciais', "
+                        "e tente novamente."
+                    )
 
     if erro is None:
         try:
@@ -466,128 +479,6 @@ async def operacao_iniciar(request: Request):
 def operacao_parar(request: Request):
     live_control.stop()
     return TEMPLATES.TemplateResponse(request, "partials/operacao_body.html", _operacao_ctx())
-
-
-# account_id -> (amount, time.monotonic() do ultimo aporte ACEITO). Debounce
-# em memoria contra duplo-clique/F5/retry de rede em `operacao_aportar` — ver
-# docstring da funcao para o porque de nao ser dedup por schema.
-_LAST_DEPOSIT_ACCEPTED: dict[int, tuple[float, float]] = {}
-_DEPOSIT_DEDUP_WINDOW_SECONDS = 5.0
-
-
-@app.post("/operacao/aportar", response_class=HTMLResponse)
-async def operacao_aportar(request: Request):
-    """Registra que dinheiro foi depositado na corretora FORA deste sistema
-    (o dono aportou), creditando o valor direto ao caixa da conta. Em MT5 o
-    mesmo crédito já acontece sozinho antes da abertura
-    (`live.runtime.reconcile_broker_cash`) — este botão serve para forçar o
-    crédito sem esperar o próximo PRE_OPEN, sem precisar de decisão nenhuma
-    do robô.
-
-    Mexe direto no diário (mesmo padrão de `operacao_iniciar`): não há
-    decisão nenhuma aqui, só contabilidade, e montar um `LiveRuntime`
-    completo (estratégia/feed/corretora) só para somar um valor ao caixa
-    seria peso desnecessário.
-
-    Correção pós-teste-ao-vivo (duplo-envio): sem guarda nenhuma, um
-    duplo-clique no botão, um F5 ou um retry de rede reenviava o POST e
-    creditava o mesmo aporte duas vezes (dinheiro fantasma no caixa que o
-    robô acha disponível). `live_deposits.date` é granularidade de DIA (vem
-    de `clock.session_date()`), não dá pra distinguir duplicata de dois
-    aportes legítimos do mesmo valor no mesmo dia via schema — por isso o
-    dedup é em memória, por `(account_id, amount)` dentro de uma janela
-    curta (`_DEPOSIT_DEDUP_WINDOW_SECONDS`), e não uma migração. Reinício do
-    processo limpa a janela, o que é aceitável: o caso real é duplo-clique
-    humano, não duplicata entre reinicializações."""
-    form = await request.form()
-    from journal import live_store
-
-    erro = None
-    aporte_msg = None
-    try:
-        amount = _parse_optional_float(form.get("amount"))
-    except ValueError:
-        amount = None
-    if amount is None or amount <= 0:
-        erro = "Informe um valor de aporte maior que zero."
-    else:
-        try:
-            with live_store.live_journal() as conn:
-                conta = live_store.load_account(conn, live_service.ACCOUNT_NAME)
-                if conta is None:
-                    erro = "Nenhuma conta de operação ainda — inicie a operação primeiro."
-                else:
-                    now = time.monotonic()
-                    last = _LAST_DEPOSIT_ACCEPTED.get(conta.id)
-                    is_duplicate = (
-                        last is not None and last[0] == amount
-                        and now - last[1] < _DEPOSIT_DEDUP_WINDOW_SECONDS
-                    )
-                    if not is_duplicate:
-                        conta.cash += amount
-                        live_store.save_account(conn, conta)
-                        live_store.record_deposit(conn, conta.id, clock.session_date(), amount,
-                                                  origin="manual", note="registrado via /operacao")
-                        _LAST_DEPOSIT_ACCEPTED[conta.id] = (amount, now)
-                    # Duplicata: nao credita de novo, mas devolve a MESMA
-                    # mensagem de sucesso -- do ponto de vista do usuario o
-                    # aporte "aconteceu", so nao duplicou.
-                    aporte_msg = f"Aporte de R$ {amount:.2f} registrado."
-        except live_store.LegacyPaperAccountError as e:
-            # Correção pós-code-review (item 5): mensagem amigável em vez de
-            # 500 cru.
-            erro = str(e)
-
-    ctx = _operacao_ctx(erro=erro, aporte_msg=aporte_msg)
-    return TEMPLATES.TemplateResponse(request, "partials/operacao_body.html", ctx)
-
-
-@app.post("/operacao/sacar", response_class=HTMLResponse)
-async def operacao_sacar(request: Request):
-    """Confirma uma recomendacao de saque pendente -- o UNICO caminho que
-    move dinheiro de verdade desde que o saque virou recomendacao (ver
-    `live/runtime.py`). Espelha `operacao_aportar` na forma (parse do form,
-    guarda de conta inexistente, captura de `LegacyPaperAccountError`), mas
-    -- ao contrario daquele, que so soma ao caixa -- precisa da POLITICA DE
-    SAQUE real (`WithdrawalRobot.on_executed` devolve a diferenca a fila do
-    minimo se confirmar menos que o recomendado), entao monta um
-    `LiveRuntime` completo via `live_service._build_runtime` em vez de mexer
-    direto no diario."""
-    form = await request.form()
-    from journal import live_store
-
-    erro = None
-    saque_msg = None
-    try:
-        amount = _parse_optional_float(form.get("amount"))
-    except ValueError:
-        amount = None
-    intent_id_raw = form.get("intent_id")
-    try:
-        intent_id = int(intent_id_raw) if intent_id_raw not in (None, "") else None
-    except ValueError:
-        intent_id = None
-
-    if amount is None or amount <= 0:
-        erro = "Informe um valor de saque maior que zero."
-    else:
-        try:
-            with live_store.live_journal() as conn:
-                conta = live_store.load_account(conn, live_service.ACCOUNT_NAME)
-            if conta is None:
-                erro = "Nenhuma conta de operação ainda — inicie a operação primeiro."
-            else:
-                rt = live_service._build_runtime(conta.mode, conta.initial_capital)
-                report = rt.confirm_withdrawal(amount, intent_id=intent_id)
-                if report.action != "withdraw_confirm":
-                    erro = report.detail.get("motivo", "não foi possível confirmar o saque.")
-                else:
-                    saque_msg = f"Saque de R$ {amount:.2f} confirmado."
-        except live_store.LegacyPaperAccountError as e:
-            erro = str(e)
-
-    ctx = _operacao_ctx(erro=erro, saque_msg=saque_msg)
-    return TEMPLATES.TemplateResponse(request, "partials/operacao_body.html", ctx)
 
 
 @app.post("/operacao/credenciais", response_class=HTMLResponse)

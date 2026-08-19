@@ -433,11 +433,13 @@ def test_intencao_atrasada_expira_em_vez_de_executar(tmp_path, universe):
 
 # ---------- saque: emissao, execucao, persistencia entre restarts ---------
 
-def test_withdrawal_flui_e_estado_sobrevive_a_restart(tmp_path):
-    """A politica de saque decide (recomendacao), a confirmacao humana move
-    o dinheiro, e o estado da politica (`_pool`, `_paid_month`, etc.)
-    sobrevive a uma instancia NOVA de `LiveRuntime` apontando para o mesmo
-    banco — simula um restart do processo.
+def test_withdrawal_recomendacao_nao_confirmada_estado_sobrevive_a_restart(tmp_path):
+    """A politica de saque so decide (recomendacao) -- nunca confirma
+    sozinha, nem espera confirmacao deste sistema (regra do dono,
+    2026-08-19: quem saca de verdade e o dono, direto na corretora). O
+    estado da politica (`_pool`, `_paid_month`, etc.) precisa sobreviver a
+    uma instancia NOVA de `LiveRuntime` apontando para o mesmo banco —
+    simula um restart do processo — mesmo sem nenhuma confirmacao.
 
     Datas FIXADAS pelo proprio teste (defeito apontado no Lote 5 do plano
     original): em vez de confiar que `days[2]` do calendario sintetico caia
@@ -468,16 +470,13 @@ def test_withdrawal_flui_e_estado_sobrevive_a_restart(tmp_path):
     intent = pend[0]
     assert intent.amount == pytest.approx(5_000.0)  # 50% de 10.000
 
-    # confirmacao humana move o dinheiro -- nunca execute_session/_withdraw.
-    report = rt.confirm_withdrawal(5_000.0, session=d1, intent_id=intent.id)
-    assert report.action == "withdraw_confirm"
+    # Regra do dono (2026-08-19): a recomendacao NUNCA e confirmada por este
+    # sistema -- se o dono sacar, e direto na corretora, sem nenhuma acao
+    # aqui. O caixa continua intacto, e o estado da politica (_pool,
+    # _paid_month) precisa sobreviver ao restart mesmo assim.
     with store.live_journal(rt.db_path) as conn:
         acc = store.load_account(conn, "teste")
-        saques = store.withdrawals(conn, acc.id)
-    assert acc.external_cash == pytest.approx(5_000.0)
-    assert acc.withdrawn_total == pytest.approx(5_000.0)
-    assert acc.cash == pytest.approx(5_000.0)
-    assert len(saques) == 1
+    assert acc.cash == pytest.approx(10_000.0)
 
     # "restart": nova instancia de LiveRuntime, nova FloorSkim (estado zerado
     # em memoria), mesmo banco. Sem reidratar, a politica achara que "hoje" e
@@ -491,8 +490,11 @@ def test_withdrawal_flui_e_estado_sobrevive_a_restart(tmp_path):
         acc = store.load_account(conn, "teste")
         pend2 = store.pending_withdraw_intents(conn, acc.id)
     # d2 e mesmo mes civil de d0/d1 por construcao (nao condicional): a
-    # politica restaurada NAO re-recomenda o mes ja pago.
-    assert pend2 == []
+    # politica restaurada NAO re-recomenda o mes ja pago -- a UNICA
+    # recomendacao pendente continua sendo a mesma de d0 (nunca confirmada,
+    # nunca expirada: ainda no mesmo mes civil), nao uma segunda.
+    assert len(pend2) == 1
+    assert pend2[0].id == intent.id
 
 
 # ---------- reconcile_pending_fills nao pode apagar o estado da politica --
@@ -634,7 +636,7 @@ def test_recomendacao_de_saque_por_liquidez_e_gravada_sem_matar_o_supervisor(tmp
     assert pend_saque[0].decided_on == d1
 
 
-# ---------- confirmacao humana do saque (confirm_withdrawal) ---------------
+# ---------- recomendacao de saque: nunca confirmada por este sistema -------
 
 def _runtime_com_recomendacao(tmp_path, data_dir, amount: float = 5_000.0, capital: float = 10_000.0):
     """Monta um `LiveRuntime` com uma recomendacao de saque PENDING ja
@@ -652,110 +654,20 @@ def _runtime_com_recomendacao(tmp_path, data_dir, amount: float = 5_000.0, capit
     return rt, pend[0], days
 
 
-def test_confirm_withdrawal_debita_caixa_credita_externo_e_fecha_intent(tmp_path, universe):
+def test_recomendacao_de_saque_nunca_debita_caixa_sozinha(tmp_path, universe):
+    """Regra do dono (2026-08-19): a recomendacao de saque e so notificacao
+    -- nao existe mais nenhum caminho (CLI, dashboard, ou automatico) que
+    debite `account.cash` por causa dela. O caixa so muda quando a
+    corretora de verdade refletir um saque, via `reconcile_broker_cash`."""
     data_dir, _days = universe
-    rt, intent, days = _runtime_com_recomendacao(tmp_path, data_dir, amount=5_000.0, capital=10_000.0)
-
-    report = rt.confirm_withdrawal(4_800.0, session=days[1])
-    assert report.action == "withdraw_confirm"
-    assert report.detail["intent_id"] == intent.id
-    assert report.detail["recomendado"] == pytest.approx(5_000.0)
-    assert report.detail["confirmado"] == pytest.approx(4_800.0)
+    rt, intent, _days_run = _runtime_com_recomendacao(tmp_path, data_dir, amount=5_000.0, capital=10_000.0)
 
     with store.live_journal(rt.db_path) as conn:
         acc = store.load_account(conn, "teste")
-        saques = store.withdrawals(conn, acc.id)
-        pend_depois = store.pending_withdraw_intents(conn, acc.id)
-    assert acc.cash == pytest.approx(10_000.0 - 4_800.0)
-    assert acc.external_cash == pytest.approx(4_800.0)
-    assert acc.withdrawn_total == pytest.approx(4_800.0)
-    assert pend_depois == []
-    assert len(saques) == 1
-    assert saques[0]["requested"] == pytest.approx(5_000.0)
-    assert saques[0]["executed"] == pytest.approx(4_800.0)
-
-
-def test_confirm_withdrawal_sem_recomendacao_pendente_rejeita_sem_mexer_no_caixa(tmp_path, universe):
-    data_dir, days = universe
-    rt = _runtime(tmp_path, data_dir, {}, mode="mt5", capital=10_000.0)
-    rt.ensure_account()
-
-    report = rt.confirm_withdrawal(1_000.0, session=days[0])
-    assert report.action == "withdraw_reject"
-    assert "recomendação" in report.detail["motivo"] or "pendente" in report.detail["motivo"]
-
-    with store.live_journal(rt.db_path) as conn:
-        acc = store.load_account(conn, "teste")
+        pend = store.pending_withdraw_intents(conn, acc.id)
     assert acc.cash == pytest.approx(10_000.0)
-
-
-def test_confirm_withdrawal_duas_vezes_debita_uma_so_vez(tmp_path, universe):
-    """RED antes de GREEN (hipotese nº5 do plan-reviewer): a mesma
-    recomendacao confirmada duas vezes NUNCA debita duas vezes -- a 2a
-    chamada tem de perder a corrida do `claim_intent` e devolver
-    `withdraw_reject`, com o caixa identico ao que a 1a chamada deixou."""
-    data_dir, _days = universe
-    rt, intent, days = _runtime_com_recomendacao(tmp_path, data_dir, amount=5_000.0, capital=10_000.0)
-
-    r1 = rt.confirm_withdrawal(5_000.0, session=days[1], intent_id=intent.id)
-    assert r1.action == "withdraw_confirm"
-    with store.live_journal(rt.db_path) as conn:
-        acc_apos_1 = store.load_account(conn, "teste")
-    cash_apos_1 = acc_apos_1.cash
-
-    r2 = rt.confirm_withdrawal(5_000.0, session=days[1], intent_id=intent.id)
-    assert r2.action == "withdraw_reject"
-
-    with store.live_journal(rt.db_path) as conn:
-        acc_apos_2 = store.load_account(conn, "teste")
-    assert acc_apos_2.cash == pytest.approx(cash_apos_1)  # nao debitou de novo
-
-
-def test_confirm_withdrawal_valor_menor_devolve_falta_a_fila_e_maior_nao_devolve(tmp_path, universe):
-    data_dir, _days = universe
-    rt, intent, days = _runtime_com_recomendacao(tmp_path, data_dir, amount=5_000.0, capital=10_000.0)
-    pool_antes = rt.withdrawal.policy._pool
-
-    rt.confirm_withdrawal(3_000.0, session=days[1], intent_id=intent.id)
-    assert rt.withdrawal.policy._pool == pytest.approx(pool_antes + 2_000.0)  # falta volta a fila
-
-    # nova recomendacao/rodada independente para o caso "confirma mais que o pedido"
-    rt2, intent2, days2 = _runtime_com_recomendacao(tmp_path / "outro", data_dir, amount=5_000.0, capital=10_000.0)
-    pool_antes2 = rt2.withdrawal.policy._pool
-    rt2.confirm_withdrawal(6_000.0, session=days2[1], intent_id=intent2.id)
-    assert rt2.withdrawal.policy._pool == pytest.approx(pool_antes2)  # nao devolve nada
-
-
-def test_confirm_withdrawal_funciona_com_disjuntor_acionado(tmp_path, universe):
-    """`CircuitBreaker` so veta ENTER (premissa 17) -- confirmar saque nao e
-    afetado mesmo com o disjuntor congelado."""
-    data_dir, _days = universe
-    rt, intent, days = _runtime_com_recomendacao(tmp_path, data_dir, amount=5_000.0, capital=10_000.0)
-    guard = CircuitBreaker(daily_loss_pct=0.01, monthly_loss_pct=0.01)
-    guard.observe(days[1], 100_000.0)
-    guard.observe(days[1], 90_000.0)
-    assert guard.is_frozen
-    rt.risk_guard = guard
-
-    report = rt.confirm_withdrawal(5_000.0, session=days[1], intent_id=intent.id)
-    assert report.action == "withdraw_confirm"
-
-
-def test_confirm_withdrawal_acima_do_caixa_debita_mesmo_assim_e_avisa(tmp_path, universe):
-    """Decisao do usuario (§5 do plano): sem clamp, sem rejeicao -- o caixa
-    fica negativo e um evento `warn` e gravado; `reconcile_broker_cash` e
-    quem aponta a divergencia real depois, nao esta confirmacao."""
-    data_dir, _days = universe
-    rt, intent, days = _runtime_com_recomendacao(tmp_path, data_dir, amount=5_000.0, capital=10_000.0)
-
-    report = rt.confirm_withdrawal(50_000.0, session=days[1], intent_id=intent.id)
-    assert report.action == "withdraw_confirm"
-
-    with store.live_journal(rt.db_path) as conn:
-        acc = store.load_account(conn, "teste")
-        eventos = store.recent_events(conn, acc.id)
-    assert acc.cash < 0
-    assert any(e["level"] == "warn" and "negativ" in e["message"] for e in eventos)
+    assert len(pend) == 1
+    assert pend[0].id == intent.id
 
 
 # ---------- expiracao mensal da recomendacao de saque -----------------------
@@ -821,50 +733,6 @@ def test_recomendacao_de_saque_gera_evento_warn_notificado(tmp_path, universe):
     assert level == "warn"
     assert payload is not None
     assert payload.get("valor") == pytest.approx(5_000.0)
-
-
-def test_confirm_withdrawal_expira_recomendacao_vencida_e_persiste_policy_state(tmp_path):
-    """Reproducao exata da issue 1 do code-review: uma recomendacao PENDING
-    do mes 1, nunca confirmada; tentar confirma-la ja no mes civil seguinte
-    expira a recomendacao POR DENTRO de `confirm_withdrawal`
-    (`_expire_withdraw_advice` roda antes de escolher a recomendacao, logo
-    `pendentes` fica vazia e a chamada rejeita). O FURO era: o evento/return
-    diziam "valor volta pra fila", mas sem persistir `account.policy_state`
-    antes do `return StepReport(\"withdraw_reject\", ...)`, o BANCO ficava
-    com o `_requested` antigo -- o dinheiro sumia da fila em silencio."""
-    d0, d1 = _pregao_e_pregao_do_mes_seguinte()
-    dias_dado = clock.sessions_between(date(2030, 1, 1), date(2030, 6, 1))
-
-    data_dir = tmp_path / "dados"
-    data_dir.mkdir()
-    _write_parquet(data_dir, TICKER, dias_dado, [100.0] * len(dias_dado))
-    _write_parquet(data_dir, BENCHMARK, dias_dado, [50_000.0] * len(dias_dado))
-
-    policy = FloorSkim(pct=0.5, floor=100.0, day=1, min_amount=0.0)
-    rt = _runtime(tmp_path, data_dir, {}, policy=policy, mode="mt5", capital=10_000.0)
-    rt.ensure_account()
-
-    rt.close_and_decide(d0)
-    with store.live_journal(rt.db_path) as conn:
-        acc = store.load_account(conn, "teste")
-        pend = store.pending_withdraw_intents(conn, acc.id)
-    assert len(pend) == 1
-    intent = pend[0]
-    assert intent.amount == pytest.approx(5_000.0)
-
-    report = rt.confirm_withdrawal(5_000.0, session=d1, intent_id=intent.id)
-    assert report.action == "withdraw_reject"  # a recomendacao ja tinha vencido
-
-    with store.live_journal(rt.db_path) as conn:
-        acc_depois = store.load_account(conn, "teste")
-        intents_depois = store.pending_withdraw_intents(conn, acc_depois.id)
-    assert intents_depois == []
-
-    # Sem a correcao, o banco ficaria com `_requested == 5000.0` (o valor
-    # antigo) e `_pool == 0.0` -- exatamente o furo apontado pelo revisor.
-    withdrawal_state = acc_depois.policy_state["withdrawal"]
-    assert withdrawal_state["_requested"] == pytest.approx(0.0)
-    assert withdrawal_state["_pool"] == pytest.approx(5_000.0)
 
 
 # ---------- regressao: fim-de-mes tem que disparar no ULTIMO dia truncado -
@@ -1245,13 +1113,15 @@ def _cash_runtime(tmp_path, data_dir, broker, capital=10_000.0) -> LiveRuntime:
     )
 
 
-def test_reconcile_broker_cash_nunca_credita_so_avisa_pra_mais_ou_pra_menos(tmp_path, universe):
-    """Achado nº2 da revisao original: `reconcile_broker_cash` e um detector
-    PURO -- diferenca POSITIVA (saldo real 500 acima do esperado) NUNCA mais
-    credita `account.cash` sozinha (antes disso inflava o patrimonio a cada
-    saque confirmado direto na corretora MT5, sem ninguem ter aportado nada).
-    So loga `warn`; `live_deposits` continua vazia; chamar de novo com o
-    MESMO saldo real e idempotente (novo evento, mesmo nao-efeito)."""
+def test_reconcile_broker_cash_sincroniza_para_cima_registra_deposito_e_avisa_info(tmp_path, universe):
+    """Regra do dono (2026-08-19): sem ledger paralelo, `account.cash` vira
+    sempre um snapshot do saldo real -- diferenca POSITIVA (saldo real 500
+    acima do esperado, ex.: aporte direto na corretora) SINCRONIZA
+    `account.cash` pra cima, grava a auditoria em `live_deposits`
+    (`origin="mt5_auto_sync"`) e loga `info` (nao acorda ninguem, e a
+    operacao normal esperada). Chamar de novo com o MESMO saldo real (ja
+    sincronizado) e idempotente: sem novo depósito, sem novo evento de
+    diferenca."""
     data_dir, days = universe
     broker = _FakeCashBroker(10_500.0)
     rt = _cash_runtime(tmp_path, data_dir, broker)
@@ -1267,26 +1137,31 @@ def test_reconcile_broker_cash_nunca_credita_so_avisa_pra_mais_ou_pra_menos(tmp_
             "SELECT * FROM live_deposits WHERE account_id = ?", (acc.id,)
         ).fetchall()
         eventos = store.recent_events(conn, acc.id)
-    assert acc.cash == pytest.approx(10_000.0)  # NUNCA creditado sozinho
-    assert rows == []
-    assert any(e["level"] == "warn" for e in eventos)
+    assert acc.cash == pytest.approx(10_500.0)  # sincronizado pra cima
+    assert len(rows) == 1
+    assert rows[0]["origin"] == "mt5_auto_sync"
+    assert rows[0]["amount"] == pytest.approx(500.0)
+    assert any(e["level"] == "info" for e in eventos)
 
     report2 = rt.reconcile_broker_cash(now=datetime(2026, 8, 18, 9, 1))
     assert report2.action == "reconcile_cash"
-    assert report2.detail["diferenca"] == pytest.approx(500.0)  # continua avisando
+    assert report2.detail["diferenca"] == pytest.approx(0.0, abs=0.01)  # ja convergiu
 
     with store.live_journal(rt.db_path) as conn:
         acc2 = store.load_account(conn, "teste")
         rows2 = conn.execute(
             "SELECT * FROM live_deposits WHERE account_id = ?", (acc2.id,)
         ).fetchall()
-    assert acc2.cash == pytest.approx(10_000.0)
-    assert rows2 == []
+    assert acc2.cash == pytest.approx(10_500.0)
+    assert len(rows2) == 1  # nenhum depósito novo gravado
 
 
-def test_reconcile_broker_cash_sem_saldo_externo_e_no_op_silencioso(tmp_path, universe):
+def test_reconcile_broker_cash_sem_saldo_externo_mantem_ultimo_valor_e_avisa(tmp_path, universe):
     """`PaperBroker` nao sobrescreve `cash_balance` -> herda o `None` do
-    default de `Broker`: skip limpo, sem log (senao spamaria todo dia)."""
+    default de `Broker`: mantem o ultimo `account.cash` conhecido (nunca
+    zera, nunca trava o robo), mas agora AVISA `warn` -- sem essa fonte, o
+    robo pode estar decidindo com um caixa desatualizado, o dono precisa
+    saber."""
     data_dir, days = universe
     feed = ReplayFeed()
     rt = LiveRuntime(
@@ -1307,12 +1182,15 @@ def test_reconcile_broker_cash_sem_saldo_externo_e_no_op_silencioso(tmp_path, un
         eventos = store.recent_events(conn, acc.id)
     assert acc.cash == pytest.approx(10_000.0)
     assert rows == []
-    assert eventos == []
+    assert any(e["level"] == "warn" for e in eventos)
 
 
-def test_reconcile_broker_cash_encolhimento_nao_ajusta_so_avisa(tmp_path, universe):
-    """Saldo real ABAIXO do esperado: fora do escopo pedido (so deposito que
-    faz a conta crescer) — nao mexe no caixa, so loga um aviso."""
+def test_reconcile_broker_cash_encolhimento_sincroniza_para_baixo_e_avisa_warn(tmp_path, universe):
+    """Saldo real ABAIXO do esperado (ex.: saque feito direto na corretora,
+    ou uma taxa/ajuste) -- sincroniza `account.cash` pra baixo do mesmo
+    jeito que um aumento, grava a mesma auditoria, mas loga `warn` (o
+    sistema nao sabe distinguir saque legitimo de erro, entao sempre pede
+    pro dono conferir o extrato)."""
     data_dir, days = universe
     broker = _FakeCashBroker(9_950.0)  # 50 a menos que o esperado
     rt = _cash_runtime(tmp_path, data_dir, broker)
@@ -1328,16 +1206,18 @@ def test_reconcile_broker_cash_encolhimento_nao_ajusta_so_avisa(tmp_path, univer
             "SELECT * FROM live_deposits WHERE account_id = ?", (acc.id,)
         ).fetchall()
         eventos = store.recent_events(conn, acc.id)
-    assert acc.cash == pytest.approx(10_000.0)  # nao ajustou sozinho
-    assert rows == []
+    assert acc.cash == pytest.approx(9_950.0)  # sincronizado pra baixo
+    assert len(rows) == 1
+    assert rows[0]["origin"] == "mt5_auto_sync"
+    assert rows[0]["amount"] == pytest.approx(-50.0)
     assert any(e["level"] == "warn" for e in eventos)
 
 
 def test_run_once_aciona_reconcile_broker_cash_no_pre_open(tmp_path, universe):
     """`run_once` chamado dentro do PRE_OPEN de um dia de pregao invoca
     `reconcile_broker_cash` — o unico jeito da divergencia de caixa ser
-    detectada sem alguem rodar o passo na mao. Deteccao NUNCA credita
-    sozinha: `acc.cash` continua o mesmo, so o evento de aviso e gerado."""
+    detectada sem alguem rodar o passo na mao. `acc.cash` reflete o saldo
+    real sincronizado, pronto para a proxima decisao de alocacao usar."""
     data_dir, days = universe
     d0 = days[0]
     broker = _FakeCashBroker(10_300.0)
@@ -1357,7 +1237,7 @@ def test_run_once_aciona_reconcile_broker_cash_no_pre_open(tmp_path, universe):
 
     with store.live_journal(rt.db_path) as conn:
         acc = store.load_account(conn, "teste")
-    assert acc.cash == pytest.approx(10_000.0)  # nao creditado sozinho
+    assert acc.cash == pytest.approx(10_300.0)  # sincronizado pra cima
 
 
 # ---------- FEAT-003: Strategy.state()/restore() e lista branca ------------
@@ -1881,53 +1761,6 @@ def test_status_lista_todos_os_pregoes_sem_decisao_e_o_notificador(tmp_path, uni
     monkeypatch.setattr(live_clock, "session_date", lambda *a, **k: d2)
     status2 = rt.status()
     assert status2["decisao_pendente"] == [d1.isoformat(), d2.isoformat()]
-
-
-# ---------- FEAT-005: cobertura de menores -------------------------------
-
-def test_reconcile_broker_cash_apos_saque_confirmado_nao_vira_deposito(tmp_path, universe):
-    """Interacao especifica sem cobertura ate esta feature: uma conciliacao
-    de caixa MT5 rodada LOGO APOS uma confirmacao de saque humana nao pode
-    ler o caixa ja reduzido como se fosse deposito -- o saldo externo real
-    (o usuario sacou na corretora tambem) ja vem reduzido, e a diferenca
-    contra `account.cash` (tambem ja reduzido) deve ser ~0."""
-    data_dir, days = universe
-    policy = FloorSkim(pct=0.5, floor=100.0, day=1, min_amount=0.0)
-    broker = _FakeCashBroker(10_000.0)
-    rt = LiveRuntime(
-        account_name="teste", strategy=ScriptedStrategy({}), policy=policy,
-        feed=ReplayFeed(), broker=broker, config=BacktestConfig(initial_capital=10_000.0, lot_size=1),
-        tickers=(TICKER,), db_path=tmp_path / "live.sqlite", data_dir=data_dir,
-    )
-    rt.ensure_account()
-    rt.close_and_decide(days[0])
-
-    with store.live_journal(rt.db_path) as conn:
-        acc = store.load_account(conn, "teste")
-        pend = store.pending_withdraw_intents(conn, acc.id)
-    assert len(pend) == 1
-    intent = pend[0]
-
-    report = rt.confirm_withdrawal(5_000.0, session=days[1], intent_id=intent.id)
-    assert report.action == "withdraw_confirm"
-
-    with store.live_journal(rt.db_path) as conn:
-        acc_apos = store.load_account(conn, "teste")
-
-    # A corretora real refletiria o MESMO saque (o usuario sacou de la
-    # tambem): o saldo externo relatado ja vem reduzido, igual ao caixa
-    # gravado no diario.
-    broker._cash = acc_apos.cash
-
-    report2 = rt.reconcile_broker_cash()
-    assert report2.action == "reconcile_cash"
-    assert report2.detail["diferenca"] == pytest.approx(0.0, abs=0.01)
-
-    with store.live_journal(rt.db_path) as conn:
-        rows = conn.execute(
-            "SELECT * FROM live_deposits WHERE account_id = ?", (acc_apos.id,)
-        ).fetchall()
-    assert rows == [], "saque confirmado nao pode ser lido como deposito"
 
 
 def test_execute_session_chamada_duas_vezes_e_idempotente(tmp_path, universe):

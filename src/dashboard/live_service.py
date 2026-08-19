@@ -19,7 +19,6 @@ from live.runtime import LiveRuntime
 from strategy.portfolio_dip2_hw40 import DipTop1Portfolio
 
 ACCOUNT_NAME = "principal"
-DEFAULT_CAPITAL = 1_000.0
 
 
 def _build_runtime(mode: str, capital: float) -> LiveRuntime:
@@ -27,9 +26,8 @@ def _build_runtime(mode: str, capital: float) -> LiveRuntime:
     nenhuma, então o broker aqui não precisa (nem deve) estar conectado a
     nada de verdade. Mas o TIPO do broker precisa bater com o modo REAL da
     conta (`account.mode`) e `capital` precisa ser o `initial_capital` REAL
-    dela — nunca `DEFAULT_CAPITAL` (que é só o default do FORMULÁRIO de
-    conta nova em `app.py`, uso legítimo e diferente disto): usar o default
-    aqui vazava capital/piso de simulação para uma conta real (crítico 1.7).
+    dela, lido do banco — nunca um valor inventado aqui: usar um default
+    vazaria capital/piso de simulação para uma conta real (crítico 1.7).
     Dispatch explícito, sem default de `mode` — o `else: PaperBroker` de
     antes era metade do bug (fallback silencioso para simulação)."""
     from backtest.withdrawal import official_policy

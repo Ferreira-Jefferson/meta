@@ -166,8 +166,8 @@ class Intent:
         data da recomendacao para o dia da venda, e com
         `policy.on_liquidity_event` no engine de backtest. Isto NAO e
         look-ahead de verdade: a recomendacao nao executa nada sozinha, so
-        notifica um humano — quem move dinheiro de fato e
-        `LiveRuntime.confirm_withdrawal`, depois, por decisao explicita.
+        notifica um humano — quem move dinheiro de fato e o dono, sacando
+        direto na corretora, se e quando quiser.
         """
         return (
             self.kind == IntentKind.ADJUST_STOP

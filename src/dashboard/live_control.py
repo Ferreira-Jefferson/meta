@@ -206,6 +206,35 @@ def credential_status() -> dict:
     }
 
 
+def detect_broker_capital() -> Optional[float]:
+    """Consulta o saldo real de caixa da corretora (MT5) para servir de
+    capital inicial da conta — o usuário nunca digita esse valor.
+
+    Usa as credenciais já salvas em `db/live_secrets.json`
+    (`load_credentials()`) diretamente, NUNCA via `os.environ`: diferente
+    de `start()` (que injeta `_credentials_env()` no `env` do processo
+    FILHO), uma chamada como `create_account()` -> `cli.build(args)` ->
+    `_mt5_credentials()` leria o `os.environ` do processo do DASHBOARD, que
+    nunca recebe essas variáveis — daria `login=None` mesmo com as
+    credenciais MT5 salvas corretamente.
+
+    Devolve `None` se a corretora não responder (terminal MT5 fechado ou
+    deslogado, credenciais ausentes, ou qualquer falha de conexão) — o
+    chamador decide como bloquear a criação da conta nesse caso; nunca
+    inventa um valor default."""
+    from live.broker_mt5 import MT5Broker
+
+    creds = load_credentials()
+    login = creds.get("mt5_login")
+    broker = MT5Broker(
+        login=int(login) if login else None,
+        password=creds.get("mt5_password"),
+        server=creds.get("mt5_server"),
+        path=creds.get("mt5_terminal_path"),
+    )
+    return broker.cash_balance()
+
+
 def save_credentials(updates: dict, clear: set[str] = frozenset()) -> None:
     """Mescla campos não vazios do form com o que já estava salvo — mudar só
     o Telegram não obriga a redigitar SMTP/MT5 (campo em branco = "mantém o

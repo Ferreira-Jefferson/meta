@@ -196,3 +196,57 @@ def test_start_concorrente_apenas_um_vence_o_outro_ve_ja_rodando(isolated, monke
     saved = live_control._read_state()
     assert saved is not None
     assert saved["pid"] == results[0]["pid"]
+
+
+# ---------- detect_broker_capital() -- capital nunca digitado (regra do dono, 2026-08-19) --
+
+class _FakeCashBroker:
+    """Substitui `live.broker_mt5.MT5Broker` para os testes de
+    `detect_broker_capital()` -- captura os kwargs de construção (pra provar
+    que vêm das credenciais salvas, não de `os.environ`) e devolve um saldo
+    fixo (ou `None`, simulando corretora inacessível)."""
+
+    def __init__(self, cash, captured, **kwargs):
+        captured.append(kwargs)
+        self._cash = cash
+
+    def cash_balance(self):
+        return self._cash
+
+
+def test_detect_broker_capital_usa_credenciais_salvas_nunca_os_environ(monkeypatch):
+    """As credenciais MT5 salvas em db/live_secrets.json (`load_credentials`)
+    têm de ir direto pro construtor do broker -- NUNCA via `os.environ` do
+    processo do dashboard, que não recebe essas variáveis (só o processo
+    FILHO recebe, via `_credentials_env()` dentro de `start()`)."""
+    monkeypatch.setattr(live_control, "load_credentials", lambda: {
+        "mt5_login": "12345", "mt5_password": "segredo",
+        "mt5_server": "Corretora-Live", "mt5_terminal_path": r"C:\mt5\terminal64.exe",
+    })
+    captured: list = []
+    import live.broker_mt5 as broker_mt5
+    monkeypatch.setattr(
+        broker_mt5, "MT5Broker",
+        lambda **kwargs: _FakeCashBroker(7_530.42, captured, **kwargs),
+    )
+
+    assert live_control.detect_broker_capital() == pytest.approx(7_530.42)
+    assert captured[0]["login"] == 12345
+    assert captured[0]["password"] == "segredo"
+    assert captured[0]["server"] == "Corretora-Live"
+
+
+def test_detect_broker_capital_sem_saldo_devolve_none(monkeypatch):
+    """Terminal fechado/deslogado, credenciais ausentes, ou qualquer falha:
+    `cash_balance()` devolve `None` e `detect_broker_capital()` repassa isso
+    -- nunca inventa um valor default."""
+    monkeypatch.setattr(live_control, "load_credentials", lambda: {})
+    captured: list = []
+    import live.broker_mt5 as broker_mt5
+    monkeypatch.setattr(
+        broker_mt5, "MT5Broker",
+        lambda **kwargs: _FakeCashBroker(None, captured, **kwargs),
+    )
+
+    assert live_control.detect_broker_capital() is None
+    assert captured[0]["login"] is None

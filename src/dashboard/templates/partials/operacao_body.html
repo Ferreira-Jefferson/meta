@@ -118,24 +118,21 @@
 <div class="empty ops-empty">
   <h1>Nenhuma conta de operação ainda</h1>
   <p class="dek">
-    Defina o capital e clique em iniciar — o sistema cria a conta e passa a
-    decidir e executar sozinho via MetaTrader 5, a cada pregão. Nenhum
-    comando de terminal necessário.
+    Clique em iniciar — o sistema lê o saldo disponível na sua conta
+    MetaTrader 5, usa isso como capital inicial, e passa a decidir e
+    executar sozinho via MetaTrader 5, a cada pregão. Nenhum valor digitado,
+    nenhum comando de terminal necessário.
   </p>
 </div>
 
 <section class="ops-start-form-wrap stagger">
   <form class="ops-start-form" hx-post="/operacao/iniciar" hx-target="#ops-body" hx-swap="outerHTML"
         hx-disabled-elt="find button[type=submit]">
-    <div class="row row-2col">
+    <div class="row row-solo">
       <label>
         <span class="k">Modo</span>
         <input type="hidden" name="mode" value="mt5" />
         <span class="ops-mode-fixed">MetaTrader 5 — dinheiro real</span>
-      </label>
-      <label>
-        <span class="k">Capital (R$)</span>
-        <input type="number" name="capital" value="{{ (config_anterior or {}).get('capital', 1000) | int }}" min="100" step="100" required />
       </label>
     </div>
 

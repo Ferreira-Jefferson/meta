@@ -1,7 +1,7 @@
-"""Teste leve do dashboard FastAPI (`dashboard/app.py`) — cobre so a rota
-nova desta feature, `/operacao/aportar` (registrar aporte manual). Nenhum
-teste de dashboard existia antes desta feature; este arquivo estabelece o
-padrao minimo: `TestClient` SEM usar `with` — entrar no `with` dispara a
+"""Teste leve do dashboard FastAPI (`dashboard/app.py`) — cobre as rotas de
+`/operacao` (criar/parar conta, credenciais, fragmento HTMX). Este arquivo
+estabelece o padrao minimo: `TestClient` SEM usar `with` — entrar no `with`
+dispara a
 `lifespan` do app (3 loops de fundo que baixam dado de mercado/macro e
 rerrodam o ranking automatico), o que faria o teste depender de rede e ser
 lento/instavel por nada que a rota testada precise.
@@ -33,11 +33,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backtest.withdrawal import OFFICIAL_FLOOR_MULTIPLE
-from core.live_models import Intent, IntentKind, RobotRole
 from dashboard import app as dashboard_app
 from dashboard import live_control, live_service
 from journal import live_store
-from live import clock
 from live import runtime as live_runtime
 
 
@@ -57,19 +55,6 @@ def client():
     # SEM `with TestClient(...) as client:` de proposito — ver docstring do
     # modulo: entrar no context manager dispara a lifespan real do app.
     return TestClient(dashboard_app.app)
-
-
-@pytest.fixture(autouse=True)
-def _reset_deposit_dedup():
-    """`_LAST_DEPOSIT_ACCEPTED` (debounce de `/operacao/aportar`) e estado
-    module-level, sobrevivendo entre testes. Sem reset, dois testes
-    diferentes que criam conta id=1 (sempre o primeiro autoincrement de um
-    banco novo em `isolated_journal`) e aportam o mesmo valor dentro da
-    janela real de alguns segundos entre testes ficariam sujeitos um ao
-    estado do outro."""
-    dashboard_app._LAST_DEPOSIT_ACCEPTED.clear()
-    yield
-    dashboard_app._LAST_DEPOSIT_ACCEPTED.clear()
 
 
 def _create_account(db_path) -> int:
@@ -111,39 +96,6 @@ CREATE TABLE live_accounts (
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 """
-
-
-def test_operacao_aportar_credita_caixa_e_grava_deposito(isolated_journal, client):
-    db_path = isolated_journal
-    account_id = _create_account(db_path)
-
-    resp = client.post("/operacao/aportar", data={"amount": "500.00"})
-    assert resp.status_code == 200
-
-    with live_store.live_journal(db_path) as conn:
-        acc = live_store.load_account(conn, live_service.ACCOUNT_NAME)
-        rows = conn.execute(
-            "SELECT * FROM live_deposits WHERE account_id = ?", (account_id,)
-        ).fetchall()
-    assert acc.cash == pytest.approx(1_500.0)
-    assert len(rows) == 1
-    assert rows[0]["origin"] == "manual"
-    assert rows[0]["amount"] == pytest.approx(500.0)
-
-
-def test_operacao_aportar_valor_invalido_nao_mexe_no_caixa(isolated_journal, client):
-    db_path = isolated_journal
-    _create_account(db_path)
-
-    resp = client.post("/operacao/aportar", data={"amount": "-10"})
-    assert resp.status_code == 200
-    assert "Informe um valor de aporte" in resp.text
-
-    with live_store.live_journal(db_path) as conn:
-        acc = live_store.load_account(conn, live_service.ACCOUNT_NAME)
-        rows = conn.execute("SELECT * FROM live_deposits").fetchall()
-    assert acc.cash == pytest.approx(1_000.0)
-    assert rows == []
 
 
 # ---------- get_status() carrega capital/disjuntor REAIS da conta (1.7) -----
@@ -210,7 +162,7 @@ def test_operacao_iniciar_mt5_sem_shares_per_lot_pede_campo_sem_iniciar(isolated
     monkeypatch.setattr(live_control, "start", lambda cfg: called.append(cfg))
 
     resp = client.post("/operacao/iniciar", data={
-        "mode": "mt5", "capital": "1000", "confirmar_real": "1",
+        "mode": "mt5", "confirmar_real": "1",
     })
 
     assert resp.status_code == 200
@@ -218,237 +170,43 @@ def test_operacao_iniciar_mt5_sem_shares_per_lot_pede_campo_sem_iniciar(isolated
     assert called == []
 
 
-def test_operacao_aportar_sem_conta_devolve_erro_sem_criar_deposito(isolated_journal, client):
-    """Nenhuma conta criada ainda: a rota nao pode inventar uma so para
-    aceitar o aporte — devolve erro e nao grava nada."""
-    resp = client.post("/operacao/aportar", data={"amount": "100"})
-    assert resp.status_code == 200
-    assert "Nenhuma conta de operação" in resp.text
-
-    with live_store.live_journal(isolated_journal) as conn:
-        rows = conn.execute("SELECT * FROM live_deposits").fetchall()
-    assert rows == []
-
-
-# ---------- /operacao/aportar: debounce contra duplo-envio -----------------
-# Bug confirmado ao vivo via Playwright: nenhum form da pagina tinha
-# protecao contra duplo-clique/F5/retry de rede, e o handler creditava o
-# caixa incondicionalmente a cada POST -- um reenvio duplicava o aporte
-# (dinheiro fantasma). Ver docstring de `operacao_aportar` em `app.py`.
-
-def test_operacao_aportar_duplo_envio_rapido_credita_uma_unica_vez(
+def test_operacao_iniciar_primeira_vez_usa_saldo_da_corretora_como_capital(
     isolated_journal, client, monkeypatch,
 ):
-    db_path = isolated_journal
-    account_id = _create_account(db_path)
+    """Regra do dono (2026-08-19): capital nunca e digitado -- na primeira
+    criacao de conta, `operacao_iniciar` consulta
+    `live_control.detect_broker_capital()` (saldo real da corretora) e usa
+    isso como capital, mesmo sem nenhum campo `capital` no form."""
+    captured: list = []
+    monkeypatch.setattr(live_control, "start", lambda cfg: captured.append(cfg))
+    monkeypatch.setattr(live_control, "detect_broker_capital", lambda: 7_530.0)
 
-    fake_now = [1_000.0]
-    monkeypatch.setattr(dashboard_app.time, "monotonic", lambda: fake_now[0])
+    resp = client.post("/operacao/iniciar", data={
+        "mode": "mt5", "confirmar_real": "1", "mt5_shares_per_lot": "1.0",
+    })
 
-    resp1 = client.post("/operacao/aportar", data={"amount": "500.00"})
-    assert resp1.status_code == 200
-
-    fake_now[0] += 1.0  # bem dentro da janela de dedup (5s), simula 2o clique
-    resp2 = client.post("/operacao/aportar", data={"amount": "500.00"})
-    assert resp2.status_code == 200
-    # do ponto de vista do usuario o aporte "aconteceu" -- mesma mensagem de
-    # sucesso, sem expor a duplicata como erro.
-    assert "Aporte de R$ 500.00 registrado." in resp2.text
-
-    with live_store.live_journal(db_path) as conn:
-        acc = live_store.load_account(conn, live_service.ACCOUNT_NAME)
-        rows = conn.execute(
-            "SELECT * FROM live_deposits WHERE account_id = ?", (account_id,)
-        ).fetchall()
-    assert acc.cash == pytest.approx(1_500.0)  # nao 2_000.0
-    assert len(rows) == 1
+    assert resp.status_code == 200
+    assert len(captured) == 1
+    assert captured[0].capital == pytest.approx(7_530.0)
 
 
-def test_operacao_aportar_valores_diferentes_em_sequencia_nao_sao_bloqueados(
+def test_operacao_iniciar_primeira_vez_sem_saldo_da_corretora_bloqueia_com_erro_claro(
     isolated_journal, client, monkeypatch,
 ):
-    """Guarda contra falso-positivo: dois aportes DIFERENTES e legitimos em
-    sequencia rapida (mesmo dentro da janela de debounce) nao podem ser
-    tratados como duplicata -- o dedup e por `(conta, valor)`, nao so por
-    `conta`."""
-    db_path = isolated_journal
-    account_id = _create_account(db_path)
+    """Se a corretora nao responder (terminal fechado/deslogado, credenciais
+    ausentes), a criacao da conta e bloqueada com uma mensagem clara --
+    nunca cai num capital default inventado."""
+    called: list = []
+    monkeypatch.setattr(live_control, "start", lambda cfg: called.append(cfg))
+    monkeypatch.setattr(live_control, "detect_broker_capital", lambda: None)
 
-    fake_now = [2_000.0]
-    monkeypatch.setattr(dashboard_app.time, "monotonic", lambda: fake_now[0])
+    resp = client.post("/operacao/iniciar", data={
+        "mode": "mt5", "confirmar_real": "1", "mt5_shares_per_lot": "1.0",
+    })
 
-    client.post("/operacao/aportar", data={"amount": "500.00"})
-    fake_now[0] += 1.0
-    client.post("/operacao/aportar", data={"amount": "300.00"})
-
-    with live_store.live_journal(db_path) as conn:
-        acc = live_store.load_account(conn, live_service.ACCOUNT_NAME)
-        rows = conn.execute(
-            "SELECT * FROM live_deposits WHERE account_id = ?", (account_id,)
-        ).fetchall()
-    assert acc.cash == pytest.approx(1_800.0)
-    assert len(rows) == 2
-
-
-def test_operacao_aportar_mesmo_valor_apos_janela_credita_de_novo(
-    isolated_journal, client, monkeypatch,
-):
-    """Passado o intervalo de debounce, um segundo aporte legitimo do MESMO
-    valor (coincidencia normal, ex.: dois depositos de R$500 em dias/horas
-    diferentes) tem de ser aceito -- o dedup e so uma janela curta, nunca um
-    bloqueio permanente por valor repetido."""
-    db_path = isolated_journal
-    account_id = _create_account(db_path)
-
-    fake_now = [3_000.0]
-    monkeypatch.setattr(dashboard_app.time, "monotonic", lambda: fake_now[0])
-
-    client.post("/operacao/aportar", data={"amount": "500.00"})
-    fake_now[0] += dashboard_app._DEPOSIT_DEDUP_WINDOW_SECONDS + 0.1
-    client.post("/operacao/aportar", data={"amount": "500.00"})
-
-    with live_store.live_journal(db_path) as conn:
-        acc = live_store.load_account(conn, live_service.ACCOUNT_NAME)
-        rows = conn.execute(
-            "SELECT * FROM live_deposits WHERE account_id = ?", (account_id,)
-        ).fetchall()
-    assert acc.cash == pytest.approx(2_000.0)
-    assert len(rows) == 2
-
-
-# ---------- /operacao/sacar: confirma recomendacao de saque (passo 14) ------
-
-def _create_withdraw_intent(db_path, account_id, amount=500.0) -> int:
-    """Grava uma recomendacao de saque PENDING direto no diario -- mais
-    simples que rodar `close_and_decide` real para exercitar so a rota.
-
-    `decided_on` e derivado do mes CIVIL da sessao corrente (`clock.
-    session_date()`, o mesmo relogio que `/operacao/sacar` usa quando o
-    form nao manda data) -- nunca um mes fixo hardcodado a mao. A rota
-    confirma sem `session=` explicito, entao ela sempre compara contra
-    "hoje": uma `decided_on` de um mes civil distante e fixo viraria uma
-    recomendacao ja EXPIRADA assim que o mes civil real virasse, quebrando
-    o teste sem nenhuma mudanca de codigo."""
-    mes_corrente = clock.session_date().replace(day=1)
-    with live_store.live_journal(db_path) as conn:
-        intent = Intent(
-            robot="withdrawal:teste", role=RobotRole.WITHDRAWAL, kind=IntentKind.WITHDRAW,
-            decided_on=mes_corrente, execute_on=clock.next_session(mes_corrente),
-            amount=amount, reason="teste",
-        )
-        return live_store.record_intent(conn, account_id, intent)
-
-
-def test_operacao_sacar_confirma_recomendacao_pendente_debita_caixa_e_credita_externo(
-    isolated_journal, client,
-):
-    db_path = isolated_journal
-    account_id = _create_account(db_path)
-    intent_id = _create_withdraw_intent(db_path, account_id, amount=500.0)
-
-    resp = client.post("/operacao/sacar", data={"amount": "500.00", "intent_id": str(intent_id)})
     assert resp.status_code == 200
-    assert "confirmado" in resp.text.lower()
-
-    with live_store.live_journal(db_path) as conn:
-        acc = live_store.load_account(conn, live_service.ACCOUNT_NAME)
-        rows = conn.execute(
-            "SELECT * FROM live_withdrawals WHERE account_id = ?", (account_id,)
-        ).fetchall()
-    assert acc.cash == pytest.approx(500.0)
-    assert acc.external_cash == pytest.approx(500.0)
-    assert len(rows) == 1
-    assert rows[0]["executed"] == pytest.approx(500.0)
-
-
-def test_operacao_sacar_sem_recomendacao_pendente_devolve_erro_sem_mexer_no_caixa(
-    isolated_journal, client,
-):
-    db_path = isolated_journal
-    _create_account(db_path)
-
-    resp = client.post("/operacao/sacar", data={"amount": "500.00"})
-    assert resp.status_code == 200
-
-    with live_store.live_journal(db_path) as conn:
-        acc = live_store.load_account(conn, live_service.ACCOUNT_NAME)
-    assert acc.cash == pytest.approx(1_000.0)
-
-
-def test_operacao_sacar_valor_invalido_nao_mexe_no_caixa(isolated_journal, client):
-    db_path = isolated_journal
-    account_id = _create_account(db_path)
-    _create_withdraw_intent(db_path, account_id, amount=500.0)
-
-    resp = client.post("/operacao/sacar", data={"amount": "-10"})
-    assert resp.status_code == 200
-    assert "Informe um valor de saque" in resp.text
-
-    with live_store.live_journal(db_path) as conn:
-        acc = live_store.load_account(conn, live_service.ACCOUNT_NAME)
-    assert acc.cash == pytest.approx(1_000.0)
-
-
-def test_operacao_sacar_sem_conta_devolve_erro_sem_criar_saque(isolated_journal, client):
-    resp = client.post("/operacao/sacar", data={"amount": "100"})
-    assert resp.status_code == 200
-    assert "Nenhuma conta de operação" in resp.text
-
-    with live_store.live_journal(isolated_journal) as conn:
-        rows = conn.execute("SELECT * FROM live_withdrawals").fetchall()
-    assert rows == []
-
-
-def test_operacao_fragment_mostra_form_de_confirmar_saque_com_recomendacao_pendente(
-    isolated_journal, client,
-):
-    """Passo 15: com uma recomendacao pendente, o painel renderiza o form
-    "Confirmar saque" com o `intent_id` (hidden) e o valor pre-preenchido."""
-    db_path = isolated_journal
-    account_id = _create_account(db_path)
-    intent_id = _create_withdraw_intent(db_path, account_id, amount=500.0)
-
-    resp = client.get("/operacao/fragment")
-    assert resp.status_code == 200
-    assert "Confirmar saque" in resp.text
-    assert f'name="intent_id" value="{intent_id}"' in resp.text
-    assert "500.00" in resp.text
-
-
-def test_operacao_fragment_sem_recomendacao_pendente_nao_mostra_form(isolated_journal, client):
-    db_path = isolated_journal
-    _create_account(db_path)
-
-    resp = client.get("/operacao/fragment")
-    assert resp.status_code == 200
-    assert "Nenhuma recomendação de saque pendente." in resp.text
-    assert 'hx-post="/operacao/sacar"' not in resp.text
-
-
-def test_operacao_sacar_duplo_post_debita_uma_so_vez(isolated_journal, client):
-    """Falsificacao do achado nº5 (duplo-clique): dois POSTs identicos com o
-    MESMO `intent_id` so debitam o caixa UMA vez -- o 2o perde a corrida do
-    `claim_intent` e devolve erro."""
-    db_path = isolated_journal
-    account_id = _create_account(db_path)
-    intent_id = _create_withdraw_intent(db_path, account_id, amount=500.0)
-
-    resp1 = client.post("/operacao/sacar", data={"amount": "500.00", "intent_id": str(intent_id)})
-    assert resp1.status_code == 200
-    with live_store.live_journal(db_path) as conn:
-        acc_apos_1 = live_store.load_account(conn, live_service.ACCOUNT_NAME)
-    assert acc_apos_1.cash == pytest.approx(500.0)
-
-    resp2 = client.post("/operacao/sacar", data={"amount": "500.00", "intent_id": str(intent_id)})
-    assert resp2.status_code == 200
-
-    with live_store.live_journal(db_path) as conn:
-        acc_apos_2 = live_store.load_account(conn, live_service.ACCOUNT_NAME)
-        rows = conn.execute(
-            "SELECT * FROM live_withdrawals WHERE account_id = ?", (account_id,)
-        ).fetchall()
-    assert acc_apos_2.cash == pytest.approx(500.0)  # nao debitou de novo
-    assert len(rows) == 1
+    assert "MetaTrader 5" in resp.text
+    assert called == []
 
 
 # ---------- botão "Iniciar" morto numa conta mt5 existente (bloqueante nº1) --
@@ -517,7 +275,7 @@ def test_operacao_iniciar_mt5_shares_per_lot_zero_pede_campo_sem_iniciar(
     monkeypatch.setattr(live_control, "start", lambda cfg: called.append(cfg))
 
     resp = client.post("/operacao/iniciar", data={
-        "mode": "mt5", "capital": "1000", "confirmar_real": "1",
+        "mode": "mt5", "confirmar_real": "1",
         "mt5_shares_per_lot": "0",
     })
 

@@ -29,7 +29,8 @@ backtest que a validou:
     4. recomendacao de saque por evento de liquidez, se alguma venda
        creditou caixa hoje — so registra + notifica, nunca executa
     5. entradas, dimensionadas pelo caixa (saque NUNCA e debitado aqui —
-       saque so sai do caixa por confirmacao humana, ver `confirm_withdrawal`)
+       recomendacao de saque e so notificacao, o dono saca direto na
+       corretora se quiser; ver `reconcile_broker_cash`)
 
   DURANTE o pregao (`intraday_tick`)
     stop: no backtest dispara quando `low[D] <= stop`, porque o engine ve a
@@ -698,8 +699,8 @@ class LiveRuntime:
                     # e `warn` (ver docstring de `scripts/run_live.py`).
                     self._log(conn, account.id, "warn", "saque",
                                     f"recomendacao de saque: R$ {intent.amount:.2f} "
-                                    f"({intent.reason}) — confirme via CLI 'sacar' ou "
-                                    "no painel /operacao",
+                                    f"({intent.reason}) — saque direto na corretora, "
+                                    "se e quando quiser: este sistema so notifica",
                                     {"intent_id": intent.id, "valor": intent.amount})
 
             for pos in account.positions.values():
@@ -732,11 +733,12 @@ class LiveRuntime:
         `EXECUTING` e e resolvida depois por `reconcile_pending_fills`, sem
         ser re-tentada nem expirada por atraso.
 
-        Saque NUNCA e executado aqui. Uma intent `WITHDRAW` (programada no
-        fecho anterior, ou gerada agora por evento de liquidez) so vira
-        RECOMENDACAO: gravada + notificada. Quem move dinheiro de fato e um
-        humano, via `confirm_withdrawal` (CLI `sacar` ou botao "Confirmar
-        saque" do dashboard) — nunca este metodo.
+        Saque NUNCA e executado aqui, nem em lugar nenhum do sistema. Uma
+        intent `WITHDRAW` (programada no fecho anterior, ou gerada agora por
+        evento de liquidez) so vira RECOMENDACAO: gravada + notificada. Se o
+        dono quiser sacar de verdade, ele acessa a corretora diretamente —
+        a recomendacao so expira na virada do mes (`_expire_withdraw_advice`),
+        nunca e "confirmada" por este sistema.
         """
         self._load(clock.previous_session(session))
         quotes = self.feed.quotes(self.tickers)
@@ -795,8 +797,8 @@ class LiveRuntime:
                     store.record_intent(conn, account.id, intent)
                     self._log(conn, account.id, "warn", "saque",
                                     f"recomendacao de saque: R$ {intent.amount:.2f} "
-                                    f"({intent.reason}) — confirme via CLI 'sacar' ou "
-                                    "no painel /operacao",
+                                    f"({intent.reason}) — saque direto na corretora, "
+                                    "se e quando quiser: este sistema so notifica",
                                     {"intent_id": intent.id, "valor": intent.amount})
                     done["recomendacoes_saque"] += 1
 
@@ -1025,10 +1027,10 @@ class LiveRuntime:
         `session`: chegou um mes novo, a politica ja teria decidido outra
         parcela, a recomendacao antiga nao vale mais.
 
-        Chamado no INICIO de `close_and_decide`, no INICIO de `execute_session`
-        (antes de qualquer venda/compra) e no INICIO de `confirm_withdrawal` --
-        as tres vezes que uma decisao de liquidez pode estar prestes a
-        acontecer. Motivo: `run_once` roda `execute_session` (OPEN) ANTES de
+        Chamado no INICIO de `close_and_decide` e no INICIO de
+        `execute_session` (antes de qualquer venda/compra) -- as duas vezes
+        que uma decisao de liquidez pode estar prestes a acontecer. Motivo:
+        `run_once` roda `execute_session` (OPEN) ANTES de
         `close_and_decide` (POST_CLOSE), entao no 1o pregao de um mes novo uma
         recomendacao por evento de liquidez pode nascer ANTES de a do mes
         anterior ser expirada -- se isso acontecesse, haveria DUAS intents
@@ -1049,9 +1051,7 @@ class LiveRuntime:
         `unfreeze()`: restaura -> muta -> persiste): `on_executed(intent,
         0.0)` muta a politica SO em memoria (`self.withdrawal`); sem gravar
         `account.policy_state`/`store.save_account` aqui dentro, um chamador
-        que rejeita/retorna logo em seguida (ex.: `confirm_withdrawal`, que
-        chama este helper e pode nao ter mais recomendacao PENDING para
-        confirmar depois da expiracao) perderia o valor devolvido a fila em
+        que retorna logo em seguida perderia o valor devolvido a fila em
         silencio -- o evento diria "volta pra fila" mas o banco continuaria
         com o `_requested` antigo. Nao depende de cada chamador lembrar de
         persistir: e o proprio helper que garante isso sempre que muda o
@@ -1085,125 +1085,6 @@ class LiveRuntime:
             store.save_account(conn, account)
         return expiradas
 
-    def _last_equity_before(self, conn, account: AccountState, session: date) -> float:
-        """Ultimo equity marcado (`store.equity_series`) com data <= `session`
-        -- usado como `equity_before` de uma confirmacao de saque, que (ao
-        contrario do antigo `_withdraw` sincrono, sempre chamado dentro do
-        ciclo fecho->abertura) pode acontecer a qualquer momento.
-
-        Conta sem NENHUMA linha em `equity_series` ainda (primeiro saque de
-        uma conta nova, confirmado antes do primeiro `close_and_decide`): cai
-        para `account.cash` -- sem posicao, caixa E o equity. Loga `warn` se
-        a conta JA tiver posicao aberta nesse caso (o fallback subestimaria o
-        equity real), em vez de travar a confirmacao por um dado que faltou.
-        """
-        serie = store.equity_series(conn, account.id)
-        candidatos = [(d, eq) for d, eq, _p in serie if d <= session.isoformat()]
-        if candidatos:
-            return candidatos[-1][1]
-        if account.positions:
-            self._log(conn, account.id, "warn", "saque",
-                            "equity_before de saque caiu no fallback de caixa com posicoes "
-                            "abertas em carteira -- pode subestimar o equity real",
-                            {})
-        return account.cash
-
-    def confirm_withdrawal(self, amount: float, session: Optional[date] = None,
-                           intent_id: Optional[int] = None) -> StepReport:
-        """Confirmacao HUMANA de uma recomendacao de saque -- o UNICO caminho
-        que move dinheiro de verdade desde que o saque virou recomendacao
-        (ver docstring do modulo). Chamado pelo CLI (`scripts/run_live.py
-        sacar`) ou pelo botao "Confirmar saque" do dashboard.
-
-        Ordem estrita (cada item so roda se o anterior nao rejeitou):
-          1. `amount <= 0` -> rejeita sem abrir banco.
-          2. Conta inexistente -> rejeita.
-          3. Expira recomendacao vencida ANTES de escolher -- nunca confirma
-             contra uma recomendacao que a virada de mes ja invalidou.
-          4. Sem recomendacao PENDING -> rejeita. Com `intent_id`, so aquela
-             especifica (nao achou -> rejeita). Sem `intent_id`: uma so ->
-             usa; mais de uma -> rejeita listando os ids -- NUNCA adivinha a
-             mais antiga (ver riscos do plano).
-          5. `store.claim_intent(PENDING -> DONE)` -- a TRAVA contra
-             duplo-clique/confirmacao concorrente. Quem perde a corrida
-             (`False`) rejeita SEM tocar em caixa.
-          6. So a partir daqui o caixa e mexido: `cash -= amount`,
-             `external_cash += amount`, `withdrawn_total += amount`. SEM
-             CLAMP e SEM rejeitar por caixa insuficiente -- decisao explicita
-             do usuario (ver riscos/§5 do plano): o sistema so registra a
-             intencao do dono; qualquer divergencia real com o saldo da
-             corretora e capturada por `reconcile_broker_cash`, nunca por uma
-             trava aqui. Se `cash` ficar negativo, loga `warn`.
-          7. Grava a auditoria (`record_withdrawal`), avisa a politica
-             (`on_executed` -- se saiu menos que o recomendado, a diferenca
-             volta para a fila) e persiste o estado dos robos.
-        """
-        if amount <= 0:
-            return StepReport("withdraw_reject", session, detail={"motivo": "valor inválido"})
-
-        session = session or clock.session_date()
-        with store.live_journal(self.db_path) as conn:
-            account = self._load_account(conn)
-            if account is None:
-                return StepReport("withdraw_reject", session, detail={"motivo": "conta inexistente"})
-            self._restore_robot_state(account.policy_state)
-
-            self._expire_withdraw_advice(conn, account, session)
-
-            pendentes = store.pending_withdraw_intents(conn, account.id)
-            if not pendentes:
-                return StepReport("withdraw_reject", session,
-                                  detail={"motivo": "sem recomendação pendente"})
-            if intent_id is not None:
-                escolhida = next((i for i in pendentes if i.id == intent_id), None)
-                if escolhida is None:
-                    return StepReport("withdraw_reject", session, detail={
-                        "motivo": f"recomendação #{intent_id} não está pendente",
-                    })
-            elif len(pendentes) == 1:
-                escolhida = pendentes[0]
-            else:
-                return StepReport("withdraw_reject", session, detail={
-                    "motivo": "mais de uma recomendação pendente -- informe --intent-id",
-                    "intent_ids": [i.id for i in pendentes],
-                })
-
-            if not store.claim_intent(conn, escolhida.id, IntentStatus.PENDING, IntentStatus.DONE):
-                return StepReport("withdraw_reject", session,
-                                  detail={"motivo": "recomendação já confirmada ou expirada"})
-
-            equity_before = self._last_equity_before(conn, account, session)
-
-            account.cash -= amount
-            account.external_cash += amount
-            account.withdrawn_total += amount
-            if account.cash < 0:
-                self._log(conn, account.id, "warn", "saque",
-                                f"caixa ficou negativo (R$ {account.cash:.2f}) apos confirmar "
-                                f"saque de R$ {amount:.2f} -- reconcile_broker_cash vai apontar "
-                                "a divergencia com a corretora",
-                                {"caixa": round(account.cash, 2)})
-
-            store.record_withdrawal(
-                conn, account.id, session,
-                requested=escolhida.amount, executed=amount,
-                equity_before=equity_before, fees_paid=0.0, liquidated=[],
-            )
-            self.withdrawal.on_executed(escolhida, amount)
-
-            account.policy_state = self._robot_state()
-            store.save_account(conn, account)
-            self._log(conn, account.id, "info", "saque",
-                            f"saque confirmado: recomendado R$ {escolhida.amount:.2f}, "
-                            f"confirmado R$ {amount:.2f}",
-                            {"intent_id": escolhida.id, "recomendado": round(escolhida.amount, 2),
-                             "confirmado": round(amount, 2)})
-            resultado = StepReport("withdraw_confirm", session, detail={
-                "intent_id": escolhida.id, "recomendado": round(escolhida.amount, 2),
-                "confirmado": round(amount, 2), "caixa": round(account.cash, 2),
-            })
-        return resultado
-
     # ---------- reconciliacao (fills que chegaram depois) ------------------
 
     def reconcile_pending_fills(self, now: Optional[datetime] = None) -> StepReport:
@@ -1220,9 +1101,9 @@ class LiveRuntime:
 
         ENTER/EXIT geram exatamente um `Order` por `Intent`, entao olhar so o
         ultimo (`orders[-1]`) basta. WITHDRAW nao aparece mais aqui: desde que
-        o saque virou recomendacao (nunca executada pela maquina), nenhuma
-        intent WITHDRAW chega a `EXECUTING` — ver `execute_session` e
-        `confirm_withdrawal`.
+        o saque virou recomendacao (nunca executada pela maquina, nem por
+        este sistema), nenhuma intent WITHDRAW chega a `EXECUTING` — ver
+        `execute_session`.
 
         Restaura o estado dos robos (`_restore_robot_state`) ANTES do laco,
         replicando o padrao ja documentado em `unfreeze()`: esta chamada pode
@@ -1270,48 +1151,87 @@ class LiveRuntime:
     # ---------- deposito externo (aporte) -----------------------------------
 
     def reconcile_broker_cash(self, now: Optional[datetime] = None) -> StepReport:
-        """Compara o saldo real da corretora (`Broker.cash_balance()`) contra
-        `AccountState.cash` uma vez antes da abertura — DETECTOR PURO, nunca
-        credita nem debita nada sozinho.
+        """Sincroniza `AccountState.cash` com o saldo real da corretora
+        (`Broker.cash_balance()`) uma vez por dia, antes da abertura, NAS
+        DUAS DIREÇÕES.
 
-        Antes desta feature, uma diferenca positiva virava `account.cash +=
-        diff` automaticamente (tratando qualquer saldo extra da corretora
-        como se fosse aporte). No modo MT5 isso inflava o patrimonio a cada
-        saque confirmado na corretora de verdade (o saldo cai lá fora, mas
-        cresce aqui por engano) — o crítico nº2 da revisão original. Agora a
-        regra e uma so, para os dois sinais (positivo e negativo): loga
-        `warn` com o numero e a instrucao certa para o dono agir (aporte ->
-        `/operacao` "Registrar aporte"; saque -> confirme em `/operacao`
-        "Confirmar saque" ou CLI `sacar`) e NUNCA mexe em `account.cash`. Quem
-        credita aporte e `dashboard.app.operacao_aportar`; quem debita saque
-        e `confirm_withdrawal` — os dois exigem uma acao humana explicita,
-        nunca esta reconciliacao.
+        Regra do dono (2026-08-19): sem capital digitado, sem botão manual
+        de aporte/saque (removidos — ver `git log` desta mudança) — o robô
+        detecta capital novo sozinho e aloca na próxima decisão; um saque
+        feito pelo dono direto na corretora não exige nenhuma ação nossa.
+        Como consequência, `account.cash` deixa de ser um ledger
+        independente e vira sempre um SNAPSHOT do que a corretora diz que
+        existe de caixa livre — não há mais nenhum outro código que
+        credite/debite esse campo fora daqui e da execução de ordens
+        (`_buy`/venda), então sincronizar sempre é seguro por definição: só
+        existe UM livro-caixa agora.
+
+        Antes desta mudança, esta função era um DETECTOR PURO (nunca
+        creditava/debitava, só avisava) — porque uma versão ainda mais
+        antiga (commit `c0ef1e7`) creditava diferenças positivas automática
+        e incondicionalmente, o que inflava o patrimônio quando um saque de
+        verdade acontecia na corretora fora do conhecimento do sistema (ver
+        `confirm_withdrawal`, removido). Essa classe de bug dependia de
+        DOIS livros-caixa que podiam divergir (o ledger interno, mutado só
+        por transações que o sistema conhecia, e o saldo real). Sem um
+        segundo livro paralelo, não existe mais "para onde divergir errado"
+        — encolher também é uma sincronização legítima agora, não mais um
+        sinal a ignorar.
 
         So age quando a corretora sabe responder isso: `cash_balance()`
-        default e `None` (sem conta real para comparar) e este metodo vira
-        no-op silencioso — sem log, senao spamaria `live_events` todo santo
-        dia, para toda conta sem essa fonte, com um evento que nao diz nada
-        de novo.
+        default e `None` (sem conta real para comparar) — mantém o último
+        `account.cash` conhecido e avisa, nunca zera nem trava o robô.
         """
         real_balance = self.broker.cash_balance()
-        if real_balance is None:
-            return StepReport("reconcile_cash_skip", detail={"motivo": "corretora sem saldo externo"})
-
         now = now or datetime.now(timezone.utc)
         with store.live_journal(self.db_path) as conn:
             account = self._load_account(conn)
             if account is None:
                 return StepReport("reconcile_cash_skip", detail={"motivo": "conta inexistente"})
 
-            diff = real_balance - account.cash
-            if abs(diff) > _DEPOSIT_TOLERANCE:
-                sinal = "aporte seu" if diff > 0 else "saque seu"
+            if real_balance is None:
                 self._log(conn, account.id, "warn", "runtime",
-                                f"caixa da corretora (R$ {real_balance:.2f}) diverge do "
-                                f"esperado (R$ {account.cash:.2f}), diferenca de "
-                                f"R$ {diff:+.2f} — nenhum ajuste automatico; se foi "
-                                f"{sinal}, registre/confirme em /operacao",
+                                "não foi possível ler o saldo da corretora na sincronização "
+                                f"diária -- mantendo o último caixa conhecido (R$ {account.cash:.2f}); "
+                                "confirme que o terminal MT5 está aberto e logado.",
+                                {})
+                return StepReport("reconcile_cash_skip", detail={"motivo": "corretora sem saldo externo"})
+
+            diff = real_balance - account.cash
+            if abs(diff) <= _DEPOSIT_TOLERANCE:
+                return StepReport("reconcile_cash", detail={"diferenca": round(diff, 2)})
+
+            anterior = account.cash
+            account.cash = real_balance
+            store.save_account(conn, account)
+            store.record_deposit(conn, account.id, now.date(), round(diff, 2),
+                                  origin="mt5_auto_sync",
+                                  note=f"caixa anterior {anterior:.2f} -> real {real_balance:.2f}")
+
+            if diff > 0:
+                # Capital novo (aporte externo do dono, direto na
+                # corretora): info, não precisa acordar ninguém -- é a
+                # operação normal esperada por este design; a próxima
+                # decisão de fecho (`close_and_decide`) já aloca sozinha,
+                # já que o robô atual usa size_hint=1.0 (100% do caixa) na
+                # entrada.
+                self._log(conn, account.id, "info", "runtime",
+                                f"capital novo detectado na corretora: +R$ {diff:.2f} "
+                                f"(caixa {anterior:.2f} -> {real_balance:.2f}) -- será "
+                                "considerado na próxima decisão de alocação.",
                                 {"diferenca": round(diff, 2)})
+            else:
+                # Saldo encolheu: pode ser um saque que o dono fez direto
+                # na corretora (esperado, não é erro) ou uma taxa/ajuste
+                # inesperado -- não dá para distinguir os dois casos
+                # daqui, então avisa sempre para o dono revisar o extrato
+                # se a causa não for óbvia.
+                self._log(conn, account.id, "warn", "runtime",
+                                f"caixa da corretora encolheu: R$ {diff:.2f} "
+                                f"(caixa {anterior:.2f} -> {real_balance:.2f}) -- confirme "
+                                "se foi um saque seu direto na corretora ou revise o extrato.",
+                                {"diferenca": round(diff, 2)})
+
             return StepReport("reconcile_cash", detail={"diferenca": round(diff, 2)})
 
     # ---------- intra-dia --------------------------------------------------
