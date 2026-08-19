@@ -31,29 +31,14 @@ from core.models import ExitReason
 from journal import live_store as store
 from live import clock
 from live.broker import Broker, ManualBroker
-from live.notify import NullNotifier, Notifier
+from live.notify import NullNotifier
 from live.riskguard import CircuitBreaker
 from live.runtime import LiveRuntime
-from strategy.base import AdjustStop, Enter, Exit, Strategy
+from strategy.base import AdjustStop, Enter, Exit
 from strategy.buy_the_dip import BuyTheDip
-from tests.doubles import PaperBroker, ReplayFeed
+from tests.doubles import PaperBroker, ReplayFeed, ScriptedStrategy, _RecordingNotifier
 
 TICKER = "AAA.SA"
-
-
-class ScriptedStrategy(Strategy):
-    """Estrategia sintetica: as acoes de cada dia vem de um dicionario fixo,
-    indexado pela data de DECISAO (o `ctx.session` do fecho), nao pelo preco.
-    Deixa o teste 100% deterministico e alheio a qualquer logica de sinal."""
-
-    name = "scripted_test_robot"
-    version = "test"
-
-    def __init__(self, script: dict) -> None:
-        self.script = script
-
-    def on_bar(self, on_date, open_positions, cash_available):
-        return list(self.script.get(pd.Timestamp(on_date), []))
 
 
 def _sessions(n: int) -> list[date]:
@@ -1121,16 +1106,6 @@ def test_status_mostra_recomendacao_de_saque_pendente_varios_dias_depois(tmp_pat
 
 
 # ---------- integracao: disjuntor de risco e notificador -------------------
-
-class _RecordingNotifier(Notifier):
-    """Fake em memoria — grava toda chamada para o teste inspecionar."""
-
-    def __init__(self) -> None:
-        self.calls: list[tuple] = []
-
-    def notify(self, level, source, message, payload=None) -> None:
-        self.calls.append((level, source, message, payload))
-
 
 def test_disjuntor_veta_entrada_nova_mas_nao_saida(tmp_path, universe):
     """CircuitBreaker acionado: `close_and_decide` filtra ENTER do robo de

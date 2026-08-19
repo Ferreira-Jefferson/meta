@@ -23,21 +23,12 @@ from live.notify import (
     NullNotifier,
     TelegramNotifier,
 )
+from tests.doubles import _RecordingNotifier
 
 
 # ---------------------------------------------------------------------------
 # duplos de teste
 # ---------------------------------------------------------------------------
-
-class _RecordingNotifier(Notifier):
-    """Notifier fake em memoria: so registra as chamadas recebidas."""
-
-    def __init__(self) -> None:
-        self.calls: list[tuple[str, str, str, dict | None]] = []
-
-    def notify(self, level, source, message, payload=None) -> None:
-        self.calls.append((level, source, message, payload))
-
 
 class _BoomNotifier(Notifier):
     """Notifier fake que viola o contrato e lanca — usado so para testar a
