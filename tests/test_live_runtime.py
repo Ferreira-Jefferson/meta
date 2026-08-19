@@ -1209,6 +1209,128 @@ def test_notifier_dispara_junto_com_o_log_do_fecho(tmp_path, universe):
     assert len(eventos) >= 1
 
 
+# ---------- FEAT-004: execucao notificada, alerta de caixa, PARCIAL --------
+
+class _FakeExpensiveFillBroker(Broker):
+    """Preenche a quantidade PEDIDA, mas a um preco muito acima do que foi
+    usado por `plan_entry` para dimensionar -- simula um fill real muito
+    pior que o planejado (gap, latencia). `place`/`poll` sao os unicos
+    metodos usados; nenhuma regra de negocio mora aqui (regra 6)."""
+
+    name = "fake_expensive"
+    mode = "mt5"
+
+    def __init__(self, avg_price: float) -> None:
+        self._avg_price = avg_price
+
+    def place(self, order):
+        order.status = OrderStatus.FILLED
+        order.filled_qty = order.quantity
+        order.avg_price = self._avg_price
+        order.fees = 0.0
+        return order
+
+    def poll(self, order):
+        return order
+
+
+def test_fill_com_custo_acima_do_caixa_dispara_alerta_sem_desfazer(tmp_path, universe):
+    """4.4a: um fill mais caro que o planejado (gap, gordura de `plan_entry`
+    que so reserva ~0,22%) nao pode passar em silencio -- alerta `error`,
+    SEM desfazer o fill (ja aconteceu de verdade na corretora)."""
+    data_dir, days = universe
+    d0, d1 = days[0], days[1]
+    script = {pd.Timestamp(d0): [Enter(ticker=TICKER, initial_stop=None, size_hint=None)]}
+    notifier = _RecordingNotifier()
+    rt = _runtime(tmp_path, data_dir, script, capital=10_000.0)
+    rt.notifier = notifier
+    rt.feed.set(TICKER, 100.0)
+    rt.broker = _FakeExpensiveFillBroker(avg_price=100.0 * 100)  # 100x o preco planejado
+    rt.ensure_account()
+
+    rt.close_and_decide(d0)
+    execu = rt.execute_session(d1)
+    assert execu.detail["entradas"] == 1  # fill aconteceu, nao foi rejeitado
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, "teste")
+    assert TICKER in acc.positions          # fill real NAO e desfeito
+    assert acc.cash < 0                     # estourou o caixa disponivel
+
+    eventos_error = [c for c in notifier.calls if c[0] == "error"]
+    assert eventos_error, "fill acima do caixa disponivel deveria disparar alerta error"
+    assert any("caixa" in c[2].lower() or "custo" in c[2].lower() for c in eventos_error)
+
+
+def test_entrada_e_saida_executadas_notificam(tmp_path, universe):
+    """4.4d: entrada e saida executadas com sucesso geram notificacao --
+    os dois momentos mais importantes do dia com dinheiro real nao podem
+    ficar mudos (so no diario, sem alertar ninguem)."""
+    data_dir, days = universe
+    d0, d1 = days[0], days[1]
+    script = {pd.Timestamp(d0): [Enter(ticker=TICKER, initial_stop=None, size_hint=None)]}
+    notifier = _RecordingNotifier()
+    rt = _runtime(tmp_path, data_dir, script)
+    rt.notifier = notifier
+    rt.feed.set(TICKER, 100.0)
+    rt.ensure_account()
+
+    rt.close_and_decide(d0)
+    rt.execute_session(d1)
+
+    entradas_info = [c for c in notifier.calls
+                     if c[0] == "info" and "entrada" in c[2].lower()]
+    assert entradas_info, "entrada executada deveria notificar"
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, "teste")
+    stop_price = acc.positions[TICKER].current_stop
+    assert stop_price is not None
+    rt.feed.set(TICKER, stop_price - 1.0)
+    rt.intraday_tick(d1)
+
+    saidas_info = [c for c in notifier.calls
+                   if c[0] == "info" and "saida" in c[2].lower()]
+    assert saidas_info, "saida executada deveria notificar"
+
+
+def test_fill_parcial_notifica_como_parcial_com_quantidade_restante(tmp_path, universe):
+    """Correcao SUBSTANTIVA do plan-reviewer (§6 item 3): fill PARCIAL (ja
+    alcancavel HOJE via `ManualBroker.confirm`, e apos o passo 2 tambem via
+    `MT5Broker`) nao pode notificar como se fosse fill TOTAL -- esconderia
+    exatamente a informacao que o item 4.4b desta feature passou a detectar
+    corretamente (`PARTIAL` vs `FILLED`)."""
+    data_dir, days = universe
+    d0, d1 = days[0], days[1]
+    script = {pd.Timestamp(d0): [Enter(ticker=TICKER, initial_stop=None, size_hint=None)]}
+    notifier = _RecordingNotifier()
+    rt = _runtime(tmp_path, data_dir, script, mode="manual")
+    rt.notifier = notifier
+    rt.feed.set(TICKER, 100.0)
+    rt.ensure_account()
+
+    rt.close_and_decide(d0)
+    execu = rt.execute_session(d1)
+    assert execu.detail["aguardando"] == 1  # ManualBroker: ordem SENT, sem fill ainda
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, "teste")
+        order = store.open_orders(conn, acc.id)[0]
+    assert order.quantity > 1  # premissa do teste: precisa dar pra confirmar so metade
+    metade = order.quantity // 2
+    rt.broker.confirm(order, filled_qty=metade, avg_price=101.5, fees=1.0)
+    with store.live_journal(rt.db_path) as conn:
+        store.update_order(conn, order)
+
+    reconcile = rt.reconcile_pending_fills(now=datetime.combine(d1, datetime.min.time()))
+    assert reconcile.detail["aplicadas"] == 1
+
+    parciais = [c for c in notifier.calls if c[0] == "info" and "PARCIAL" in c[2]]
+    assert parciais, "fill parcial deveria notificar como PARCIAL, nao como fill total"
+    restante = order.quantity - metade
+    assert str(restante) in parciais[0][2], "quantidade restante (leaves_qty) deveria aparecer na notificacao"
+
+
 # ---------- deposito externo (aporte) ---------------------------------------
 
 class _FakeCashBroker(Broker):
