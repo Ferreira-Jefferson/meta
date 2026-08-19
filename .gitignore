@@ -8,6 +8,7 @@ db/*.sqlite
 db/*.sqlite-journal
 db/*.sqlite-wal
 db/*.sqlite-shm
+db/live_secrets.json
 .DS_Store
 Thumbs.db
 screenshots/

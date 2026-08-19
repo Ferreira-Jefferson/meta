@@ -55,6 +55,11 @@ CREDENTIAL_FIELDS = (
     "telegram_bot_token", "telegram_chat_id",
     "smtp_host", "smtp_port", "smtp_user", "smtp_password", "smtp_to", "smtp_from", "smtp_tls",
     "mt5_login", "mt5_password", "mt5_server", "mt5_terminal_path",
+    # "Ações por lote" nao e parametro de estrategia nem de sessao -- e do
+    # TERMINAL MT5 do usuario (quantas acoes por lote pro simbolo operado).
+    # Fica salvo aqui, junto do resto da config MT5, em vez de digitado a
+    # cada clique em "Iniciar operacao" (decisao do dono, 2026-08-19).
+    "mt5_shares_per_lot",
 )
 _SECRET_FIELDS = frozenset({"telegram_bot_token", "smtp_password", "mt5_password"})
 _CHANNEL_FIELDS = {
@@ -97,11 +102,20 @@ def _load_cli():
 
 @dataclass
 class ProcessConfig:
+    """Sem `floor`/`daily_loss_limit`/`monthly_loss_limit`: piso de saque e
+    disjuntor de risco não são escolha de quem opera — o robô já sabe qual é
+    o valor certo (`official_policy`/`CircuitBreaker` defaults), ver
+    docstring de `scripts/run_live.py` seção "Disjuntor de risco".
+
+    `strategy`: chave do robô (`strategy.registry`). Numa conta NOVA, quem
+    chama resolve isso a partir do top-3 do ranking automático (janela FULL,
+    ver `app.py::operacao_iniciar`); numa conta JÁ EXISTENTE, sempre
+    `conta.investment_robot` -- nunca recalculado do ranking corrente, senão
+    uma conta em operação trocaria de robô sozinha só porque o ranking
+    mudou (decisão do dono, 2026-08-19: "nada automático" na troca)."""
     mode: str
     capital: float
-    floor: Optional[float] = None
-    daily_loss_limit: Optional[float] = None
-    monthly_loss_limit: Optional[float] = None
+    strategy: str
     notify_min_level: str = "warn"
     # Obrigatório sempre (sem valor universal — ver docstring de
     # `live/broker_mt5.py`); `create_account()`/`start()` recusam cedo se
@@ -275,9 +289,9 @@ def create_account(config: ProcessConfig):
 
     cli = _load_cli()
     args = argparse.Namespace(
-        mode=config.mode, capital=config.capital, floor=config.floor,
+        mode=config.mode, capital=config.capital, strategy=config.strategy, floor=None,
         feed="yfinance", notify_min_level=config.notify_min_level,
-        daily_loss_limit=config.daily_loss_limit, monthly_loss_limit=config.monthly_loss_limit,
+        daily_loss_limit=None, monthly_loss_limit=None,
         mt5_magic=20260817, mt5_shares_per_lot=config.mt5_shares_per_lot, mt5_symbol_map=None,
     )
     rt = cli.build(args)
@@ -307,20 +321,21 @@ def start(config: ProcessConfig) -> dict:
                 "modo mt5 exige o campo 'ações por lote' (mt5_shares_per_lot) — "
                 "não há valor universal, confira o symbol_info do seu terminal MT5."
             )
+        if not config.strategy:
+            raise RuntimeError(
+                "nenhum robô de investimento selecionado — não há robô "
+                "padrão (ver docstring de scripts/run_live.py, seção 'Robô "
+                "de investimento')."
+            )
 
         create_account(config)
 
         argv = [
             sys.executable, str(_SCRIPT),
             "--mode", config.mode, "--capital", str(config.capital),
+            "--strategy", config.strategy,
             "--notify-min-level", config.notify_min_level,
         ]
-        if config.floor is not None:
-            argv += ["--floor", str(config.floor)]
-        if config.daily_loss_limit is not None:
-            argv += ["--daily-loss-limit", str(config.daily_loss_limit)]
-        if config.monthly_loss_limit is not None:
-            argv += ["--monthly-loss-limit", str(config.monthly_loss_limit)]
         if config.mode == "mt5":
             argv += ["--mt5-shares-per-lot", str(config.mt5_shares_per_lot)]
         argv += ["loop", "--seconds", "60"]

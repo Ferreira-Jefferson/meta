@@ -1,6 +1,7 @@
 """Linha de comando da operacao ao vivo.
 
-    python scripts/run_live.py init --capital 50000 --mode mt5 --mt5-shares-per-lot 1
+    python scripts/run_live.py init --capital 50000 --mode mt5 \
+        --strategy portfolio_dip2_hw40 --mt5-shares-per-lot 1
     python scripts/run_live.py status
     python scripts/run_live.py step                 # um passo do supervisor
     python scripts/run_live.py decide               # forca o fecho do pregao
@@ -58,8 +59,15 @@ proprio terminal fazer o login sozinho — necessario para operar sem depender
 de alguem manter o terminal logado (ex.: o `loop` rodando como servico em
 segundo plano, disparado pelo botao "Iniciar" do dashboard).
 
-Disjuntor de risco (circuit breaker) — opcional, opt-in
---------------------------------------------------------
+Disjuntor de risco (circuit breaker) — SEMPRE ligado, nao e escolha do usuario
+-------------------------------------------------------------------------------
+O disjuntor nao e parametro de estrategia (nao foi otimizado por backtest) nem
+capital: e trava operacional de risco, parte do proprio robo. Por isso roda
+SEMPRE, com os defaults de `live/riskguard.py::CircuitBreaker` (5% dia / 15%
+mes) quando nada e passado — nunca desligado por omissao, e o dashboard nunca
+expoe `--daily-loss-limit`/`--monthly-loss-limit` como campo editavel (decisao
+do dono, 2026-08-19: nao cabe a quem opera mudar um numero que o robo ja sabe
+qual e o certo pra ele).
   --daily-loss-limit 0.05    -> congela ENTRADA nova se o patrimonio cair
                                  mais que 5% no dia. Reseta sozinho no dia
                                  seguinte (um dia ruim isolado nao deve capar
@@ -69,8 +77,8 @@ Disjuntor de risco (circuit breaker) — opcional, opt-in
                                  um humano revisar. Perda mensal grande e
                                  tratada como sintoma de algo estruturalmente
                                  errado, nao como mau dia de mercado.
-Passar qualquer um dos dois liga o disjuntor (o outro cai no default da
-classe). Sem nenhum, o robo nunca veta entrada por conta propria.
+Estas duas flags de linha de comando continuam existindo só para uso
+manual/teste fora do dashboard (override explícito de quem roda o CLI direto).
 Em NENHUM caso o disjuntor forca uma venda, mexe em stop ou trava saque —
 so veta ABRIR posicao nova (ver `live/riskguard.py`).
 
@@ -78,6 +86,19 @@ O PISO DO SAQUE ACOMPANHA O APORTE. A politica oficial usa piso = 55x o capital
 inicial (ver `backtest/withdrawal.py`). Com `--capital 50000` o piso vira
 R$ 2.750.000 — o saque so comeca quando a carteira chegar la. Se a intencao e
 outra (sacar desde ja, ou piso em valor absoluto), passe `--floor`.
+
+Robo de investimento (--strategy) — sem default, escolha explicita sempre
+---------------------------------------------------------------------------
+Nao ha robo hardcoded: `--strategy` recebe a CHAVE de um robo do registry
+(`strategy.registry.list_strategies()` / pagina `/estrategias`) e o
+runtime resolve via `strategy.registry.get_strategy(chave).factory()`. O
+dashboard resolve isso sozinho (top-3 da janela FULL na criacao da conta,
+`live_accounts.investment_robot` da conta ja existente ao retomar — nunca
+troca de robo sozinho numa conta ja em operacao). Quem usa este CLI direto
+numa conta JA EXISTENTE precisa passar a MESMA chave usada na criacao —
+`status` mostra o `investment_robot` gravado; uma chave diferente aqui e a
+conta ja existente diverge silenciosamente (ver `LiveRuntime.
+_restore_robot_state`, que descarta o estado do robo antigo sem avisar).
 """
 from __future__ import annotations
 
@@ -105,7 +126,7 @@ from live.notify import (
 )
 from live.riskguard import CircuitBreaker
 from live.runtime import LiveRuntime
-from strategy.portfolio_dip2_hw40 import DipTop1Portfolio
+from strategy.registry import get_strategy
 
 ACCOUNT = "principal"
 
@@ -146,9 +167,10 @@ def _mt5_credentials() -> dict:
     )
 
 
-def _build_risk_guard(daily_limit: float | None, monthly_limit: float | None) -> CircuitBreaker | None:
-    if daily_limit is None and monthly_limit is None:
-        return None
+def _build_risk_guard(daily_limit: float | None, monthly_limit: float | None) -> CircuitBreaker:
+    """SEMPRE devolve um disjuntor ativo — nao e opt-in (ver docstring do
+    modulo, secao "Disjuntor de risco"). `None` em qualquer um dos dois cai
+    no default da propria classe (5% dia / 15% mes), nunca em "sem trava"."""
     kwargs = {}
     if daily_limit is not None:
         kwargs["daily_loss_pct"] = daily_limit
@@ -158,6 +180,21 @@ def _build_risk_guard(daily_limit: float | None, monthly_limit: float | None) ->
 
 
 def build(args) -> LiveRuntime:
+    # Sem robo default (regra do dono, 2026-08-19): quem cria a conta escolhe
+    # a chave explicitamente -- nao ha estrategia hardcoded que sirva de
+    # fallback silencioso, ver docstring do modulo, secao "Robo de
+    # investimento".
+    if not args.strategy:
+        raise ValueError(
+            "--strategy é obrigatório — não há robô padrão. Veja as chaves "
+            "disponíveis em strategy.registry.list_strategies() (ex.: "
+            "'portfolio_dip2_hw40') ou na página /estrategias do dashboard."
+        )
+    try:
+        strategy_obj = get_strategy(args.strategy).factory()
+    except KeyError as e:
+        raise ValueError(str(e)) from e
+
     if args.mode == "mt5":
         if args.mt5_shares_per_lot is None or args.mt5_shares_per_lot <= 0:
             raise ValueError(
@@ -194,7 +231,7 @@ def build(args) -> LiveRuntime:
               else official_policy(initial_capital=args.capital))
     return LiveRuntime(
         account_name=ACCOUNT,
-        strategy=DipTop1Portfolio(),
+        strategy=strategy_obj,
         policy=policy,
         feed=feed,
         broker=broker,
@@ -318,6 +355,10 @@ def main() -> None:
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--mode", default="mt5", choices=("mt5",))
     p.add_argument("--capital", type=float, default=1_000.0)
+    p.add_argument("--strategy", default=None,
+                   help="chave do robo (strategy.registry.list_strategies()) -- "
+                        "obrigatorio, sem default (ver docstring, secao "
+                        "'Robo de investimento')")
     p.add_argument("--floor", type=float, default=None,
                    help="piso do saque em R$ absoluto (default: 55x o capital)")
     p.add_argument("--feed", default="yfinance", choices=("parquet", "yfinance", "mt5"))

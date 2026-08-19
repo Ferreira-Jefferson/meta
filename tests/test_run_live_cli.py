@@ -50,8 +50,8 @@ def isolated_db(tmp_path, monkeypatch):
 
 def _args(**overrides) -> argparse.Namespace:
     base = dict(
-        feed="yfinance", mode="mt5", capital=1_000.0, floor=None,
-        notify_min_level="warn", daily_loss_limit=None, monthly_loss_limit=None,
+        feed="yfinance", mode="mt5", capital=1_000.0, strategy="portfolio_dip2_hw40",
+        floor=None, notify_min_level="warn", daily_loss_limit=None, monthly_loss_limit=None,
         mt5_magic=20260817, mt5_shares_per_lot=None, mt5_symbol_map=None,
     )
     base.update(overrides)
@@ -91,6 +91,43 @@ def test_build_mt5_com_shares_per_lot_zero_ou_negativo_levanta_valueerror(cli, i
 def test_build_mt5_com_shares_per_lot_monta_mt5_broker(cli, isolated_db):
     rt = cli.build(_args(mode="mt5", mt5_shares_per_lot=1.0))
     assert rt.broker.mode == "mt5"
+
+
+# ---------- disjuntor SEMPRE ativo, nao e escolha de quem opera (2026-08-19) -
+
+def test_build_sem_limites_no_form_ainda_ativa_disjuntor_com_default_da_classe(cli, isolated_db):
+    """Piso de saque e disjuntor nao sao parametro de estrategia que o
+    usuario deva digitar -- o robo ja sabe o valor certo. Sem
+    `--daily-loss-limit`/`--monthly-loss-limit` (caminho do dashboard, que
+    nunca envia essas flags), `build()` tem de montar o `CircuitBreaker`
+    mesmo assim, com os defaults da propria classe (5%/15%), nunca `None`."""
+    rt = cli.build(_args(mode="mt5", mt5_shares_per_lot=1.0,
+                          daily_loss_limit=None, monthly_loss_limit=None))
+    assert rt.risk_guard is not None
+    assert rt.risk_guard.daily_loss_pct == pytest.approx(0.05)
+    assert rt.risk_guard.monthly_loss_pct == pytest.approx(0.15)
+
+
+# ---------- --strategy sem default, resolvido via registry (2026-08-19) ----
+
+def test_build_sem_strategy_levanta_valueerror(cli, isolated_db):
+    """Regra do dono: nao ha robo padrao escolhido sozinho -- quem cria a
+    conta tem que escolher a chave explicitamente."""
+    with pytest.raises(ValueError, match="strategy"):
+        cli.build(_args(mode="mt5", mt5_shares_per_lot=1.0, strategy=None))
+
+
+def test_build_strategy_desconhecida_levanta_valueerror(cli, isolated_db):
+    with pytest.raises(ValueError):
+        cli.build(_args(mode="mt5", mt5_shares_per_lot=1.0, strategy="robo-que-nao-existe"))
+
+
+def test_build_resolve_strategy_do_registry(cli, isolated_db):
+    """`--strategy` vira a MESMA instancia que `strategy.registry.get_strategy`
+    devolveria -- `build()` nao pode ter nenhum robo hardcoded por fora do
+    registry (extingue o `DipTop1Portfolio` fixo de antes)."""
+    rt = cli.build(_args(mode="mt5", mt5_shares_per_lot=1.0, strategy="portfolio_dip2_hw40"))
+    assert rt.investment.key == "portfolio_dip2_hw40"
 
 
 # ---------- feed obrigatorio em operacao real (FEAT-004, item 4.1) ---------

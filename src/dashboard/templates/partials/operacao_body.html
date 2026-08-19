@@ -33,7 +33,7 @@
         <div class="row">
           <label><span class="k">Bot token</span>
             <input type="password" name="telegram_bot_token" autocomplete="off"
-                   placeholder="{{ '•••• (em branco = mantém)' if creds_status.telegram else '123456:ABC-...' }}" />
+                   placeholder="{{ '******************************' if creds_status.telegram else '123456:ABC-...' }}" />
           </label>
           <label><span class="k">Chat ID</span>
             <input type="text" name="telegram_chat_id" value="{{ creds.telegram_chat_id or '' }}" placeholder="-100123456789" />
@@ -66,7 +66,7 @@
           <label><span class="k">Usuário</span><input type="text" name="smtp_user" value="{{ creds.smtp_user or '' }}" /></label>
           <label><span class="k">Senha</span>
             <input type="password" name="smtp_password" autocomplete="off"
-                   placeholder="{{ '•••• (em branco = mantém)' if creds_status.smtp else '' }}" />
+                   placeholder="{{ '******************************' if creds_status.smtp else '' }}" />
           </label>
         </div>
         <div class="row">
@@ -87,20 +87,28 @@
           </span>
         </legend>
         <p class="dek">
-          Sem isso, o robô só consegue enviar ordens se um humano deixar o
-          terminal MT5 aberto e logado nesta máquina. Com login/senha/servidor
-          salvos aqui, o próprio robô faz o login ao conectar.
+          Sem login/senha/servidor, o robô só consegue enviar ordens se um
+          humano deixar o terminal MT5 aberto e logado nesta máquina; com eles
+          salvos aqui, o próprio robô faz o login ao conectar. "Ações por
+          lote" é quantas ações equivalem a 1 lote pro símbolo operado NESTE
+          terminal — é configuração do terminal, não da estratégia, por isso
+          fica aqui e não no botão de iniciar.
         </p>
         <div class="row">
           <label><span class="k">Login</span><input type="text" name="mt5_login" value="{{ creds.mt5_login or '' }}" /></label>
           <label><span class="k">Senha</span>
             <input type="password" name="mt5_password" autocomplete="off"
-                   placeholder="{{ '•••• (em branco = mantém)' if creds_status.mt5 else '' }}" />
+                   placeholder="{{ '******************************' if creds_status.mt5 else '' }}" />
           </label>
           <label><span class="k">Servidor</span><input type="text" name="mt5_server" value="{{ creds.mt5_server or '' }}" placeholder="Corretora-Live" /></label>
         </div>
         <label><span class="k">Caminho do terminal (opcional)</span>
           <input type="text" name="mt5_terminal_path" value="{{ creds.mt5_terminal_path or '' }}" placeholder="C:\Program Files\...\terminal64.exe" />
+        </label>
+        <label><span class="k">Ações por lote (mt5_shares_per_lot)</span>
+          <input type="number" name="mt5_shares_per_lot" min="0.01" step="0.01"
+                 placeholder="confira o symbol_info do SEU terminal MT5"
+                 value="{{ creds.mt5_shares_per_lot or '' }}" />
         </label>
         <label class="switch small"><input type="checkbox" name="remover_mt5" value="1" />
           <span class="switch-track"><span class="switch-dot"></span></span>
@@ -115,64 +123,55 @@
 
 {% if not s.existe %}
 
-<div class="empty ops-empty">
-  <h1>Nenhuma conta de operação ainda</h1>
-  <p class="dek">
-    Clique em iniciar — o sistema lê o saldo disponível na sua conta
-    MetaTrader 5, usa isso como capital inicial, e passa a decidir e
-    executar sozinho via MetaTrader 5, a cada pregão. Nenhum valor digitado,
-    nenhum comando de terminal necessário.
-  </p>
+{% if not top3 %}
+
+<div class="ops-alert stagger">
+  O ranking automático ainda não tem nenhum robô qualificado para operar —
+  aguarde o próximo recálculo (a cada 6h) e recarregue a página.
 </div>
+
+{% else %}
 
 <section class="ops-start-form-wrap stagger">
   <form class="ops-start-form" hx-post="/operacao/iniciar" hx-target="#ops-body" hx-swap="outerHTML"
         hx-disabled-elt="find button[type=submit]">
-    <div class="row row-solo">
+    <div class="row row-launch">
       <label>
         <span class="k">Modo</span>
         <input type="hidden" name="mode" value="mt5" />
-        <span class="ops-mode-fixed">MetaTrader 5 — dinheiro real</span>
+        <span class="ops-mode-fixed">MT5 — dinheiro real</span>
       </label>
-    </div>
-
-    <details class="ops-advanced">
-      <summary>Opções avançadas</summary>
-      <div class="row">
-        <label>
-          <span class="k">Piso do saque (R$)</span>
-          <input type="number" name="floor" placeholder="padrão: 55× o capital" min="0" step="100"
-                 value="{{ (config_anterior or {}).get('floor') or '' }}" />
-        </label>
-        <label>
-          <span class="k">Disjuntor diário (%)</span>
-          <input type="number" name="daily_loss_limit" placeholder="ex.: 5" min="0" max="100" step="0.5" />
-        </label>
-        <label>
-          <span class="k">Disjuntor mensal (%)</span>
-          <input type="number" name="monthly_loss_limit" placeholder="ex.: 15" min="0" max="100" step="0.5" />
-        </label>
-      </div>
-    </details>
-
-    <div id="ops-mt5-confirm" class="ops-mt5-confirm">
       <label>
-        <span class="k">Ações por lote (mt5_shares_per_lot)</span>
-        <input type="number" name="mt5_shares_per_lot" min="0.01" step="0.01"
-               placeholder="confira o symbol_info do SEU terminal MT5" />
+        <span class="k">Robô</span>
+        {# Top-3 do ranking automático, janela FULL (`journal.reader.
+           top_strategies_by_final_capital`, ver `_operacao_ctx`) -- nunca
+           uma lista fixa/hardcoded. So vale pra CONTA NOVA: uma conta ja
+           existente sempre reusa `investment_robot` gravado na criacao,
+           nunca troca de robo sozinha so porque o ranking mudou depois
+           (decisao do dono, 2026-08-19). #}
+        <select name="robo" required>
+          {% for cand in top3 %}
+          <option value="{{ cand.strategy_name }}">
+            {{ cand.strategy_name }} — R$ {{ "{:,.0f}".format(cand.final_capital).replace(",", ".") }}
+          </option>
+          {% endfor %}
+        </select>
       </label>
-      <label class="switch">
-        <input type="checkbox" name="confirmar_real" value="1" />
-        <span class="switch-track"><span class="switch-dot"></span></span>
-        <span class="switch-text">Confirmo que este robô vai operar com <strong>dinheiro real</strong> via MetaTrader 5.</span>
-      </label>
-    </div>
-
-    <div class="submit-row">
       <button type="submit">▶ Iniciar operação</button>
     </div>
   </form>
 </section>
+
+{% endif %}
+
+<div class="empty ops-empty">
+  <h1>Nenhuma conta de operação ainda</h1>
+  <p class="dek">
+    Ao clicar em iniciar o sistema lê o saldo disponível na sua conta
+    MetaTrader 5, usa isso como capital inicial, e passa a decidir e
+    executar sozinho via MetaTrader 5, a cada pregão.
+  </p>
+</div>
 
 {% else %}
 

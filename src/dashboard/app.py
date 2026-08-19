@@ -307,12 +307,6 @@ def _parse_optional_float(raw: str | None) -> float | None:
     return float(raw)
 
 
-def _parse_optional_pct(raw: str | None) -> float | None:
-    """Campos de perda máxima vêm do form em porcentagem (ex.: '5' = 5%)."""
-    val = _parse_optional_float(raw)
-    return val / 100 if val is not None else None
-
-
 OPERACAO_POLL_ACTIVE_SECONDS = 20     # dentro da janela de pregão ±1h
 OPERACAO_POLL_IDLE_CAP_SECONDS = 1800  # teto fora da janela (30 min) — nunca fica cego
 
@@ -352,6 +346,12 @@ def _operacao_ctx(**extra) -> dict:
     except (live_store.LegacyPaperAccountError, live_store.LegacyManualAccountError) as e:
         status_payload = {"conta": live_service.ACCOUNT_NAME, "existe": False}
         extra.setdefault("erro", str(e))
+    # `top3` só importa pro form de conta NOVA (o select "Robô") -- consulta
+    # o diário de backtests (`journal.reader`, banco SEPARADO do live) só
+    # quando ainda não há conta, pra não bater nele a cada poll HTMX de
+    # 20s em 20s (`/operacao/fragment`) sobre uma conta já em operação.
+    top3 = ([] if status_payload.get("existe")
+            else reader.top_strategies_by_final_capital(top_n=3, run_kind="champion_full"))
     return {
         "status": status_payload,
         "proc": live_control.status(),
@@ -359,6 +359,7 @@ def _operacao_ctx(**extra) -> dict:
         "creds": live_control.display_credentials(),
         "creds_status": live_control.credential_status(),
         "poll_seconds": _operacao_poll_seconds(),
+        "top3": top3,
         **extra,
     }
 
@@ -410,53 +411,61 @@ async def operacao_iniciar(request: Request):
         return TEMPLATES.TemplateResponse(request, "partials/operacao_body.html", ctx)
 
     erro = None
-    mt5_shares_per_lot = None
-    if conta is not None:
-        # conta já existe: modo/capital são da conta, NUNCA do form — evita
-        # subir o loop com um broker que não bate com o que a conta espera.
-        mode, capital = conta.mode, conta.initial_capital
-        if mode == "mt5":
-            mt5_shares_per_lot = _parse_optional_float(form.get("mt5_shares_per_lot"))
-            if mt5_shares_per_lot is None:
-                # Correção pós-code-review (bloqueante nº1): o form de
-                # RETOMADA agora manda o campo (ver operacao_body.html), mas
-                # se por algum motivo vier vazio/ausente, tenta o último
-                # valor usado por esta conta antes de declarar erro — sem
-                # isso o botão "Iniciar" ficava morto para sempre numa conta
-                # mt5 já existente.
-                mt5_shares_per_lot = (live_control.last_config() or {}).get("mt5_shares_per_lot")
-            if mt5_shares_per_lot is None or mt5_shares_per_lot <= 0:
-                erro = "Informe quantas ações por lote o seu terminal MT5 usa para este símbolo."
-    else:
-        # Primeira conta: capital nunca é digitado -- é o saldo real da
-        # corretora (ver `live_control.detect_broker_capital()`). Só consulta
-        # a corretora depois das outras validações passarem, pra não gastar
-        # uma tentativa de conexão MT5 num form incompleto.
+    # "Ações por lote" é parâmetro do TERMINAL MT5 do usuário, não da
+    # estratégia nem da sessão -- fica salvo junto das credenciais MT5
+    # (Acesso e credenciais), nunca digitado no form de iniciar/retomar
+    # operação (decisão do dono, 2026-08-19; substitui o workaround antigo
+    # que reexibia o campo no form de retomada + fallback via
+    # `live_control.last_config()`).
+    mt5_shares_per_lot = _parse_optional_float(live_control.load_credentials().get("mt5_shares_per_lot"))
+    if mt5_shares_per_lot is None or mt5_shares_per_lot <= 0:
+        erro = (
+            "Configure 'Ações por lote' em Acesso e credenciais → MetaTrader 5 "
+            "antes de iniciar — confira o symbol_info do seu terminal MT5."
+        )
+
+    if erro is None and conta is not None:
+        # conta já existe: modo/capital/robô são da conta, NUNCA do form --
+        # evita subir o loop com um broker que não bate com o que a conta
+        # espera, e evita a conta trocar de robô sozinha só porque o
+        # ranking automático mudou depois da criação (decisão do dono,
+        # 2026-08-19: "nada automático" na troca de robô).
+        mode, capital, strategy_key = conta.mode, conta.initial_capital, conta.investment_robot
+    elif erro is None:
+        # Primeira conta: o robô vem do TOP-3 do ranking automático (janela
+        # FULL) mostrado no form -- nunca uma chave arbitrária, mesmo que o
+        # form venha adulterado/desatualizado (mesmo espírito de floor/
+        # disjuntor, ver teste `..._ignora_piso_e_disjuntor_arbitrarios...`).
         mode = "mt5"
-        capital = None
-        if not form.get("confirmar_real"):
-            erro = "Para operar em MT5 (dinheiro real), marque a confirmação antes de iniciar."
+        top3 = reader.top_strategies_by_final_capital(top_n=3, run_kind="champion_full")
+        valid_keys = {c["strategy_name"] for c in top3}
+        strategy_key = form.get("robo")
+        if not valid_keys:
+            erro = (
+                "O ranking automático ainda não tem nenhum robô qualificado "
+                "para operar -- aguarde o próximo recálculo (a cada 6h) antes "
+                "de iniciar."
+            )
+        elif strategy_key not in valid_keys:
+            erro = "Escolha um robô da lista antes de iniciar."
         else:
-            mt5_shares_per_lot = _parse_optional_float(form.get("mt5_shares_per_lot"))
-            if mt5_shares_per_lot is None or mt5_shares_per_lot <= 0:
-                erro = "Informe quantas ações por lote o seu terminal MT5 usa para este símbolo."
-            else:
-                capital = live_control.detect_broker_capital()
-                if capital is None:
-                    erro = (
-                        "Não foi possível ler o saldo disponível na sua conta MetaTrader 5 — "
-                        "confirme que o terminal MT5 está aberto e logado nesta máquina, ou "
-                        "que o login/senha/servidor MT5 foram salvos em 'Acesso e credenciais', "
-                        "e tente novamente."
-                    )
+            # Capital nunca é digitado -- é o saldo real da corretora (ver
+            # `live_control.detect_broker_capital()`). Só consulta a
+            # corretora depois das outras validações passarem, pra não
+            # gastar uma tentativa de conexão MT5 num form incompleto.
+            capital = live_control.detect_broker_capital()
+            if capital is None:
+                erro = (
+                    "Não foi possível ler o saldo disponível na sua conta MetaTrader 5 — "
+                    "confirme que o terminal MT5 está aberto e logado nesta máquina, ou "
+                    "que o login/senha/servidor MT5 foram salvos em 'Acesso e credenciais', "
+                    "e tente novamente."
+                )
 
     if erro is None:
         try:
             cfg = live_control.ProcessConfig(
-                mode=mode, capital=capital,
-                floor=_parse_optional_float(form.get("floor")),
-                daily_loss_limit=_parse_optional_pct(form.get("daily_loss_limit")),
-                monthly_loss_limit=_parse_optional_pct(form.get("monthly_loss_limit")),
+                mode=mode, capital=capital, strategy=strategy_key,
                 notify_min_level=form.get("notify_min_level") or "warn",
                 mt5_shares_per_lot=mt5_shares_per_lot,
             )

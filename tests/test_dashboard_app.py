@@ -154,16 +154,19 @@ def test_get_status_disjuntor_nao_nulo_quando_ha_config_salva(isolated_journal, 
     assert status["disjuntor"] is not None
 
 
-def test_operacao_iniciar_mt5_sem_shares_per_lot_pede_campo_sem_iniciar(isolated_journal, client, monkeypatch):
-    """Banco isolado VAZIO (a rota so le o form quando nao ha conta ainda):
-    mode=mt5 + confirmar_real sem mt5_shares_per_lot tem de pedir o campo em
-    vez de subir o processo com o default `1.0` sem valor universal."""
+def test_operacao_iniciar_sem_shares_per_lot_nas_credenciais_pede_campo_sem_iniciar(
+    isolated_journal, client, monkeypatch,
+):
+    """Regra do dono (2026-08-19): 'ações por lote' não é mais campo do form
+    de iniciar/retomar -- vem de `live_control.load_credentials()` (salvo em
+    Acesso e credenciais → MetaTrader 5). Banco isolado VAZIO (a rota só lê
+    o form quando não há conta ainda) e credenciais sem o campo: tem de
+    pedir a configuração em vez de subir o processo sem valor."""
     called: list = []
     monkeypatch.setattr(live_control, "start", lambda cfg: called.append(cfg))
+    monkeypatch.setattr(live_control, "load_credentials", lambda: {})
 
-    resp = client.post("/operacao/iniciar", data={
-        "mode": "mt5", "confirmar_real": "1",
-    })
+    resp = client.post("/operacao/iniciar", data={})
 
     assert resp.status_code == 200
     assert "lote" in resp.text.lower()
@@ -180,14 +183,43 @@ def test_operacao_iniciar_primeira_vez_usa_saldo_da_corretora_como_capital(
     captured: list = []
     monkeypatch.setattr(live_control, "start", lambda cfg: captured.append(cfg))
     monkeypatch.setattr(live_control, "detect_broker_capital", lambda: 7_530.0)
+    monkeypatch.setattr(live_control, "load_credentials", lambda: {"mt5_shares_per_lot": "1.0"})
+    monkeypatch.setattr(dashboard_app.reader, "top_strategies_by_final_capital",
+                         lambda **kw: [{"strategy_name": "portfolio_dip2_hw40", "final_capital": 5_000.0}])
 
-    resp = client.post("/operacao/iniciar", data={
-        "mode": "mt5", "confirmar_real": "1", "mt5_shares_per_lot": "1.0",
-    })
+    resp = client.post("/operacao/iniciar", data={"robo": "portfolio_dip2_hw40"})
 
     assert resp.status_code == 200
     assert len(captured) == 1
     assert captured[0].capital == pytest.approx(7_530.0)
+    assert captured[0].strategy == "portfolio_dip2_hw40"
+
+
+def test_operacao_iniciar_ignora_piso_e_disjuntor_arbitrarios_do_form(
+    isolated_journal, client, monkeypatch,
+):
+    """Regra do dono (2026-08-19): piso de saque e disjuntor de risco não são
+    parâmetro que quem opera deva digitar -- o robô já sabe o valor certo
+    (testado em backtest). `ProcessConfig` não tem mais esses campos, então
+    mesmo um form malicioso/desatualizado enviando `floor`/`daily_loss_limit`/
+    `monthly_loss_limit` não pode influenciar o robô."""
+    captured: list = []
+    monkeypatch.setattr(live_control, "start", lambda cfg: captured.append(cfg))
+    monkeypatch.setattr(live_control, "detect_broker_capital", lambda: 7_530.0)
+    monkeypatch.setattr(live_control, "load_credentials", lambda: {"mt5_shares_per_lot": "1.0"})
+    monkeypatch.setattr(dashboard_app.reader, "top_strategies_by_final_capital",
+                         lambda **kw: [{"strategy_name": "portfolio_dip2_hw40", "final_capital": 5_000.0}])
+
+    resp = client.post("/operacao/iniciar", data={
+        "robo": "portfolio_dip2_hw40",
+        "floor": "1", "daily_loss_limit": "99", "monthly_loss_limit": "99",
+    })
+
+    assert resp.status_code == 200
+    assert len(captured) == 1
+    assert not hasattr(captured[0], "floor")
+    assert not hasattr(captured[0], "daily_loss_limit")
+    assert not hasattr(captured[0], "monthly_loss_limit")
 
 
 def test_operacao_iniciar_primeira_vez_sem_saldo_da_corretora_bloqueia_com_erro_claro(
@@ -199,89 +231,128 @@ def test_operacao_iniciar_primeira_vez_sem_saldo_da_corretora_bloqueia_com_erro_
     called: list = []
     monkeypatch.setattr(live_control, "start", lambda cfg: called.append(cfg))
     monkeypatch.setattr(live_control, "detect_broker_capital", lambda: None)
+    monkeypatch.setattr(live_control, "load_credentials", lambda: {"mt5_shares_per_lot": "1.0"})
+    monkeypatch.setattr(dashboard_app.reader, "top_strategies_by_final_capital",
+                         lambda **kw: [{"strategy_name": "portfolio_dip2_hw40", "final_capital": 5_000.0}])
 
-    resp = client.post("/operacao/iniciar", data={
-        "mode": "mt5", "confirmar_real": "1", "mt5_shares_per_lot": "1.0",
-    })
+    resp = client.post("/operacao/iniciar", data={"robo": "portfolio_dip2_hw40"})
 
     assert resp.status_code == 200
     assert "MetaTrader 5" in resp.text
     assert called == []
 
 
-# ---------- botão "Iniciar" morto numa conta mt5 existente (bloqueante nº1) --
+# ---------- ações por lote vem das credenciais, não do form (2026-08-19) ----
 
-def test_operacao_iniciar_retoma_conta_mt5_existente_com_shares_per_lot_do_form(
+def test_operacao_iniciar_retoma_conta_mt5_existente_usa_shares_per_lot_das_credenciais(
     isolated_journal, client, monkeypatch,
 ):
-    """Correção pós-code-review (bloqueante nº1 do code-reviewer): o form de
-    RETOMADA agora manda `mt5_shares_per_lot` visível (ver
-    operacao_body.html) -- POST /operacao/iniciar sobre uma conta mt5 JÁ
-    EXISTENTE (robô parado) chega em `live_control.start` com o valor certo
-    vindo do FORM, sem depender de nenhum fallback."""
+    """'Ações por lote' é parâmetro do terminal MT5 do usuário, salvo junto
+    das credenciais (Acesso e credenciais → MetaTrader 5) -- POST
+    /operacao/iniciar sobre uma conta mt5 JÁ EXISTENTE (robô parado) chega
+    em `live_control.start` com o valor lido de lá, sem nenhum campo no
+    form de retomada (extingue o workaround antigo, ver
+    operacao_live_panel.html)."""
     db_path = isolated_journal
     _create_mt5_account(db_path)
+    monkeypatch.setattr(live_control, "load_credentials", lambda: {"mt5_shares_per_lot": "3.5"})
 
     captured: list = []
     monkeypatch.setattr(live_control, "start", lambda cfg: captured.append(cfg))
 
-    resp = client.post("/operacao/iniciar", data={"mt5_shares_per_lot": "3.5"})
+    resp = client.post("/operacao/iniciar", data={})
 
     assert resp.status_code == 200
     assert len(captured) == 1
     assert captured[0].mode == "mt5"
     assert captured[0].mt5_shares_per_lot == pytest.approx(3.5)
+    assert captured[0].strategy == "dip2_hw40"  # investment_robot da conta ja existente
 
 
-def test_operacao_iniciar_retoma_conta_mt5_existente_com_shares_per_lot_via_last_config(
-    isolated_journal, client, monkeypatch, tmp_path,
-):
-    """Fallback do bloqueante nº1: se o form não trouxer `mt5_shares_per_lot`
-    (ou vier vazio), `operacao_iniciar` tenta `live_control.last_config()`
-    antes de declarar erro -- só recusa se NEM o form NEM o `last_config()`
-    tiverem o valor."""
-    db_path = isolated_journal
-    _create_mt5_account(db_path)
-
-    state_path = tmp_path / "live_process.json"
-    state_path.write_text(json.dumps({
-        "pid": None, "started_at": None,
-        "config": {
-            "mode": "mt5", "capital": 50_000.0, "floor": None,
-            "daily_loss_limit": None, "monthly_loss_limit": None,
-            "notify_min_level": "warn", "mt5_shares_per_lot": 7.0,
-        },
-    }), encoding="utf-8")
-    monkeypatch.setattr(live_control, "_STATE_PATH", state_path)
-
-    captured: list = []
-    monkeypatch.setattr(live_control, "start", lambda cfg: captured.append(cfg))
-
-    resp = client.post("/operacao/iniciar", data={})  # sem mt5_shares_per_lot
-
-    assert resp.status_code == 200
-    assert len(captured) == 1
-    assert captured[0].mt5_shares_per_lot == pytest.approx(7.0)
-
-
-def test_operacao_iniciar_mt5_shares_per_lot_zero_pede_campo_sem_iniciar(
+def test_operacao_iniciar_mt5_shares_per_lot_zero_nas_credenciais_pede_campo_sem_iniciar(
     isolated_journal, client, monkeypatch,
 ):
     """Item 2 da correção pós-code-review (hipótese-agente): `0`/negativo tem
     de ser recusado igual a ausente -- um valor assim causaria
     `ZeroDivisionError` em `MT5Broker._to_volume` na hora de mandar ordem
-    real (`volume = quantity / shares_per_lot`)."""
+    real (`volume = quantity / shares_per_lot`). Continua valendo agora que
+    o valor vem das credenciais, não do form."""
     called: list = []
     monkeypatch.setattr(live_control, "start", lambda cfg: called.append(cfg))
+    monkeypatch.setattr(live_control, "load_credentials", lambda: {"mt5_shares_per_lot": "0"})
 
-    resp = client.post("/operacao/iniciar", data={
-        "mode": "mt5", "confirmar_real": "1",
-        "mt5_shares_per_lot": "0",
-    })
+    resp = client.post("/operacao/iniciar", data={})
 
     assert resp.status_code == 200
     assert "lote" in resp.text.lower()
     assert called == []
+
+
+# ---------- robô vem do top-3 do ranking, não é campo livre (2026-08-19) ----
+
+def test_operacao_iniciar_robo_fora_do_top3_bloqueia_sem_iniciar(
+    isolated_journal, client, monkeypatch,
+):
+    """O robô de uma conta NOVA só pode ser um dos top-3 do ranking automático
+    (janela FULL) -- um form adulterado/desatualizado mandando uma chave que
+    não está mais no ranking não pode colar (mesmo espírito de floor/
+    disjuntor: quem opera não escolhe um valor arbitrário fora do que foi
+    validado)."""
+    called: list = []
+    monkeypatch.setattr(live_control, "start", lambda cfg: called.append(cfg))
+    monkeypatch.setattr(live_control, "load_credentials", lambda: {"mt5_shares_per_lot": "1.0"})
+    monkeypatch.setattr(dashboard_app.reader, "top_strategies_by_final_capital",
+                         lambda **kw: [{"strategy_name": "portfolio_dip2_hw40", "final_capital": 5_000.0}])
+
+    resp = client.post("/operacao/iniciar", data={"robo": "robo-fora-do-ranking"})
+
+    assert resp.status_code == 200
+    assert "robô" in resp.text.lower() or "lista" in resp.text.lower()
+    assert called == []
+
+
+def test_operacao_iniciar_sem_ranking_ainda_bloqueia_com_erro_claro(
+    isolated_journal, client, monkeypatch,
+):
+    """Ranking automático ainda não rodou (top-3 vazio) -- bloqueia com
+    mensagem clara em vez de deixar escolher qualquer coisa ou estourar."""
+    called: list = []
+    monkeypatch.setattr(live_control, "start", lambda cfg: called.append(cfg))
+    monkeypatch.setattr(live_control, "load_credentials", lambda: {"mt5_shares_per_lot": "1.0"})
+    monkeypatch.setattr(dashboard_app.reader, "top_strategies_by_final_capital", lambda **kw: [])
+
+    resp = client.post("/operacao/iniciar", data={"robo": "portfolio_dip2_hw40"})
+
+    assert resp.status_code == 200
+    assert "ranking" in resp.text.lower()
+    assert called == []
+
+
+def test_operacao_iniciar_conta_existente_ignora_robo_do_form_usa_investment_robot(
+    isolated_journal, client, monkeypatch,
+):
+    """Achado de segurança: uma conta JÁ EXISTENTE nunca pode trocar de robô
+    através do form de retomada, mesmo que o ranking tenha mudado desde a
+    criação -- `LiveRuntime._restore_robot_state` descarta silenciosamente o
+    estado acumulado (`bars_held`, pyramids etc.) quando o robô muda, e um
+    robô diferente rodando sobre dinheiro real sem ninguém decidir isso
+    explicitamente seria um incidente. `operacao_iniciar` tem de usar sempre
+    `conta.investment_robot`, nunca o `robo` que porventura vier no form."""
+    db_path = isolated_journal
+    _create_mt5_account(db_path)  # investment_robot="dip2_hw40" (ver _create_mt5_account)
+    monkeypatch.setattr(live_control, "load_credentials", lambda: {"mt5_shares_per_lot": "1.0"})
+    # Ranking mudou depois da criação -- top-3 atual nem contém o robô da conta.
+    monkeypatch.setattr(dashboard_app.reader, "top_strategies_by_final_capital",
+                         lambda **kw: [{"strategy_name": "um-robo-novo-que-nao-e-o-da-conta", "final_capital": 9_000.0}])
+
+    captured: list = []
+    monkeypatch.setattr(live_control, "start", lambda cfg: captured.append(cfg))
+
+    resp = client.post("/operacao/iniciar", data={"robo": "um-robo-novo-que-nao-e-o-da-conta"})
+
+    assert resp.status_code == 200
+    assert len(captured) == 1
+    assert captured[0].strategy == "dip2_hw40"
 
 
 # ---------- LegacyPaperAccountError não pode virar 500 cru (item 5) ---------

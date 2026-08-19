@@ -29,3 +29,8 @@ supervisor ativo — passo a cada 60s. Ctrl+C para parar.
 [ohlcv] CXSE3.SA: download veio sem 1 pregão(ões) dentro da janela pedida — preservados do parquet local (últimos: 2026-08-10)
 [sync_data]  arquivos=12
 [decide_skip] 2026-08-18 motivo=dado incompleto faltando=WEGE3.SA,BRAP4.SA,RADL3.SA,CSMG3.SA,EMAE4.SA,KEPL3.SA,CXSE3.SA,^BVSP
+supervisor ativo — passo a cada 60s, so na janela de pregao B3 +/-1h (fora dela, dorme ate a janela abrir de novo; sem passo nenhum a noite ou no fim de semana). Ctrl+C para parar.
+[execute] 2026-08-19 expiradas=0 saques_expirados=0 recomendacoes_saque=0 saidas=0 entradas=0 rejeitadas=0 aguardando=0
+[intraday] 2026-08-19 stops=0 cotacoes=7 atrasadas=7
+[execute] 2026-08-19 expiradas=0 saques_expirados=0 recomendacoes_saque=0 saidas=0 entradas=0 rejeitadas=0 aguardando=0
+[intraday] 2026-08-19 stops=0 cotacoes=7 atrasadas=7

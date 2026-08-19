@@ -60,7 +60,7 @@ def test_start_processo_morre_na_hora_levanta_runtimeerror_sem_gravar_estado(iso
                    log_message="[erro fake] terminal MT5 nao encontrado"),
     )
 
-    cfg = live_control.ProcessConfig(mode="mt5", capital=1_000.0, mt5_shares_per_lot=1.0)
+    cfg = live_control.ProcessConfig(mode="mt5", capital=1_000.0, strategy="portfolio_dip2_hw40", mt5_shares_per_lot=1.0)
     with pytest.raises(RuntimeError) as exc_info:
         live_control.start(cfg)
 
@@ -75,7 +75,7 @@ def test_start_processo_sobrevive_grava_pid(isolated, monkeypatch):
         _fake_popen(poll_value=None, captured_argv=captured),
     )
 
-    cfg = live_control.ProcessConfig(mode="mt5", capital=1_000.0, mt5_shares_per_lot=1.0)
+    cfg = live_control.ProcessConfig(mode="mt5", capital=1_000.0, strategy="portfolio_dip2_hw40", mt5_shares_per_lot=1.0)
     state = live_control.start(cfg)
 
     assert state["pid"] == 99999
@@ -91,7 +91,7 @@ def test_start_mt5_sem_shares_per_lot_recusa_antes_do_popen(isolated, monkeypatc
         lambda *a, **k: called.append((a, k)) or _FakeProc(pid=1, poll_value=None),
     )
 
-    cfg = live_control.ProcessConfig(mode="mt5", capital=1_000.0, mt5_shares_per_lot=None)
+    cfg = live_control.ProcessConfig(mode="mt5", capital=1_000.0, strategy="portfolio_dip2_hw40", mt5_shares_per_lot=None)
     with pytest.raises(RuntimeError):
         live_control.start(cfg)
 
@@ -110,7 +110,7 @@ def test_start_mt5_com_shares_per_lot_zero_ou_negativo_recusa_antes_do_popen(iso
     )
 
     for valor in (0, -1.0):
-        cfg = live_control.ProcessConfig(mode="mt5", capital=1_000.0, mt5_shares_per_lot=valor)
+        cfg = live_control.ProcessConfig(mode="mt5", capital=1_000.0, strategy="portfolio_dip2_hw40", mt5_shares_per_lot=valor)
         with pytest.raises(RuntimeError):
             live_control.start(cfg)
 
@@ -124,7 +124,7 @@ def test_start_mt5_inclui_shares_per_lot_no_argv(isolated, monkeypatch):
         _fake_popen(poll_value=None, captured_argv=captured),
     )
 
-    cfg = live_control.ProcessConfig(mode="mt5", capital=1_000.0, mt5_shares_per_lot=2.0)
+    cfg = live_control.ProcessConfig(mode="mt5", capital=1_000.0, strategy="portfolio_dip2_hw40", mt5_shares_per_lot=2.0)
     live_control.start(cfg)
 
     assert len(captured) == 1
@@ -132,6 +132,43 @@ def test_start_mt5_inclui_shares_per_lot_no_argv(isolated, monkeypatch):
     assert "--mt5-shares-per-lot" in argv
     idx = argv.index("--mt5-shares-per-lot")
     assert argv[idx + 1] == "2.0"
+
+
+# ---------- --strategy sempre no argv, sem robo padrao (2026-08-19) --------
+
+def test_start_inclui_strategy_no_argv(isolated, monkeypatch):
+    captured: list = []
+    monkeypatch.setattr(
+        live_control.subprocess, "Popen",
+        _fake_popen(poll_value=None, captured_argv=captured),
+    )
+
+    cfg = live_control.ProcessConfig(mode="mt5", capital=1_000.0,
+                                      strategy="portfolio_dip2_hw40", mt5_shares_per_lot=1.0)
+    live_control.start(cfg)
+
+    assert len(captured) == 1
+    argv = captured[0]
+    assert "--strategy" in argv
+    idx = argv.index("--strategy")
+    assert argv[idx + 1] == "portfolio_dip2_hw40"
+
+
+def test_start_sem_strategy_recusa_antes_do_popen(isolated, monkeypatch):
+    """Sem robo padrao (regra do dono, 2026-08-19): `strategy` vazio/None tem
+    que recusar igual a `mt5_shares_per_lot` ausente -- nunca sobe o processo
+    sem saber que robo rodar."""
+    called = []
+    monkeypatch.setattr(
+        live_control.subprocess, "Popen",
+        lambda *a, **k: called.append((a, k)) or _FakeProc(pid=1, poll_value=None),
+    )
+
+    cfg = live_control.ProcessConfig(mode="mt5", capital=1_000.0, strategy="", mt5_shares_per_lot=1.0)
+    with pytest.raises(RuntimeError):
+        live_control.start(cfg)
+
+    assert called == []  # Popen nunca chamado
 
 
 def test_start_concorrente_apenas_um_vence_o_outro_ve_ja_rodando(isolated, monkeypatch):
@@ -164,7 +201,7 @@ def test_start_concorrente_apenas_um_vence_o_outro_ve_ja_rodando(isolated, monke
     # o `tasklist` real quebraria; simula "processo vivo" direto.
     monkeypatch.setattr(live_control, "_pid_alive", lambda pid: True)
 
-    cfg = live_control.ProcessConfig(mode="mt5", capital=1_000.0, mt5_shares_per_lot=1.0)
+    cfg = live_control.ProcessConfig(mode="mt5", capital=1_000.0, strategy="portfolio_dip2_hw40", mt5_shares_per_lot=1.0)
     results: list = []
     errors: list = []
 
