@@ -392,7 +392,7 @@
   gap: var(--s-4);
   margin-bottom: var(--s-5);
 }
-.sim-form label { display: flex; flex-direction: column; gap: var(--s-2); }
+.sim-form label:not(.switch) { display: flex; flex-direction: column; gap: var(--s-2); }
 .sim-form label .k {
   font-size: var(--fs-metadata);
   color: var(--fg-muted);
@@ -1311,7 +1311,7 @@
   gap: var(--s-4);
   margin-bottom: var(--s-5);
 }
-.ops-start-form label { display: flex; flex-direction: column; gap: var(--s-2); }
+.ops-start-form label:not(.switch) { display: flex; flex-direction: column; gap: var(--s-2); }
 .ops-start-form label .k {
   font-size: var(--fs-metadata);
   color: var(--fg-muted);
@@ -1422,7 +1422,7 @@
   gap: var(--s-4);
   margin: var(--s-4) 0;
 }
-.ops-creds-form label { display: flex; flex-direction: column; gap: var(--s-2); }
+.ops-creds-form label:not(.switch) { display: flex; flex-direction: column; gap: var(--s-2); }
 .ops-creds-form label .k {
   font-size: var(--fs-metadata);
   color: var(--fg-muted);
