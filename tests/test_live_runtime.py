@@ -10,7 +10,7 @@ Esse comportamento ja e validado pelo backtest; aqui o alvo e o encanamento.
 from __future__ import annotations
 
 import json
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 import pandas as pd
@@ -307,6 +307,140 @@ def test_enter_execute_and_intraday_stop(tmp_path, universe):
         acc = store.load_account(conn, "teste")
     assert TICKER not in acc.positions
     assert acc.cash > 0
+
+
+# ---------- FEAT-004: stop nunca sobre dado velho, nunca duplica -----------
+
+def test_stop_intraday_suprimido_sobre_cotacao_velha(tmp_path, universe):
+    """Item 4.2: um stop cuja cotacao esta ATRASADA (acima de
+    `max_quote_age`) nunca pode disparar — suprime (nao vende) e notifica
+    como `error`, em vez de executar sobre dado que pode estar completamente
+    errado."""
+    data_dir, days = universe
+    d0, d1 = days[0], days[1]
+    script = {pd.Timestamp(d0): [Enter(ticker=TICKER, initial_stop=None, size_hint=None)]}
+    notifier = _RecordingNotifier()
+    rt = _runtime(tmp_path, data_dir, script)
+    rt.notifier = notifier
+    rt.feed.set(TICKER, 100.0)
+    rt.ensure_account()
+
+    rt.close_and_decide(d0)
+    rt.execute_session(d1)
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, "teste")
+    stop_price = acc.positions[TICKER].current_stop
+    assert stop_price is not None
+
+    # cotacao abaixo do stop, MAS velha (10.000s atras) -> nao pode disparar.
+    old_ts = datetime.now(timezone.utc) - timedelta(seconds=10_000)
+    rt.feed.set(TICKER, stop_price - 1.0, ts=old_ts)
+
+    tick = rt.intraday_tick(d1)
+    assert tick.detail["stops"] == 0
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, "teste")
+    assert TICKER in acc.positions  # posicao NAO foi vendida
+
+    eventos_error = [c for c in notifier.calls if c[0] == "error"]
+    assert eventos_error, "stop sobre cotacao velha deveria notificar como error"
+
+
+def test_stop_intraday_nao_duplica_ordem_sob_corretora_manual(tmp_path, universe):
+    """Item 4.3: sob `ManualBroker`, a ordem de venda fica `SENT` sem
+    confirmar — 5 chamadas SEGUIDAS de `intraday_tick` sobre o MESMO tick
+    nao podem gerar 5 ordens de venda, so 1."""
+    data_dir, days = universe
+    d0, d1 = days[0], days[1]
+    script = {pd.Timestamp(d0): [Enter(ticker=TICKER, initial_stop=None, size_hint=None)]}
+    rt = _runtime(tmp_path, data_dir, script, mode="manual")
+    rt.feed.set(TICKER, 100.0)
+    rt.ensure_account()
+
+    rt.close_and_decide(d0)
+    rt.execute_session(d1)
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, "teste")
+        buy_order = store.open_orders(conn, acc.id)[0]
+    rt.broker.confirm(buy_order, buy_order.quantity, 101.5, 1.0)
+    with store.live_journal(rt.db_path) as conn:
+        store.update_order(conn, buy_order)
+    rt.reconcile_pending_fills(now=datetime.combine(d1, datetime.min.time()))
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, "teste")
+    stop_price = acc.positions[TICKER].current_stop
+    assert stop_price is not None
+
+    rt.feed.set(TICKER, stop_price - 1.0)
+    for _ in range(5):
+        rt.intraday_tick(d1)
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, "teste")
+        abertas = [o for o in store.open_orders(conn, acc.id) if o.side == OrderSide.SELL]
+    assert len(abertas) == 1, "5 ticks geraram mais de 1 ordem de venda"
+    assert TICKER in acc.positions  # posicao ainda aberta (fill nao confirmado)
+
+
+def test_saida_de_fecho_nao_duplica_ordem_com_stop_ja_em_voo(tmp_path, universe):
+    """Correcao SUBSTANTIVA do plan-reviewer (§6 item 1): um stop intra-dia
+    de ONTEM ainda `SENT` (nao confirmado, posicao continua aberta) nao pode
+    ser duplicado quando o robo decide sair de novo no FECHO seguinte por
+    OUTRO motivo (aqui, rotacao scriptada) — a trava de `intraday_tick`
+    (`exit_em_andamento`) so cobre repeticao do MESMO `on_intraday`; esta
+    trava vive em `_sell` (chamado por `execute_session` E `intraday_tick`),
+    que veta ANTES de `_place` quando ja existe ordem de venda aberta para o
+    mesmo ticker."""
+    data_dir, days = universe
+    d0, d1, d2 = days[0], days[1], days[2]
+    script = {
+        pd.Timestamp(d0): [Enter(ticker=TICKER, initial_stop=None, size_hint=None)],
+        pd.Timestamp(d1): [Exit(ticker=TICKER, reason=ExitReason.ROTATION_OUT)],
+    }
+    rt = _runtime(tmp_path, data_dir, script, mode="manual")
+    rt.feed.set(TICKER, 100.0)
+    rt.ensure_account()
+
+    rt.close_and_decide(d0)
+    rt.execute_session(d1)  # compra -- ManualBroker deixa SENT; confirma na mao
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, "teste")
+        buy_order = store.open_orders(conn, acc.id)[0]
+    rt.broker.confirm(buy_order, buy_order.quantity, 101.5, 1.0)
+    with store.live_journal(rt.db_path) as conn:
+        store.update_order(conn, buy_order)
+    rt.reconcile_pending_fills(now=datetime.combine(d1, datetime.min.time()))
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, "teste")
+    stop_price = acc.positions[TICKER].current_stop
+    assert stop_price is not None
+
+    # stop dispara intra-dia em d1, sob ManualBroker: ordem SENT, sem
+    # confirmar -- posicao continua aberta (premissa 4 do plano).
+    rt.feed.set(TICKER, stop_price - 1.0)
+    tick = rt.intraday_tick(d1)
+    assert tick.detail["stops"] == 0  # ManualBroker nao preenche na hora
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, "teste")
+        abertas_apos_stop = [o for o in store.open_orders(conn, acc.id) if o.side == OrderSide.SELL]
+    assert len(abertas_apos_stop) == 1
+    assert TICKER in acc.positions  # posicao AINDA aberta (fill nao confirmado)
+
+    # fecho de d1: o robo decide EXIT de novo por OUTRO motivo (rotacao) --
+    # ele nao enxerga ordem em voo, so `account.positions` (regra 6).
+    rt.close_and_decide(d1)
+    execu = rt.execute_session(d2)
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, "teste")
+        abertas_depois = [o for o in store.open_orders(conn, acc.id) if o.side == OrderSide.SELL]
+    assert len(abertas_depois) == 1, "venda duplicada -- a 2a saida deveria ter sido recusada"
+    assert execu.detail["rejeitadas"] >= 1
 
 
 def test_adjust_stop_e_imediato_nao_espera_dplus1(tmp_path, universe):
