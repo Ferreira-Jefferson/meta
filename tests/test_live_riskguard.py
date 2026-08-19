@@ -197,6 +197,38 @@ def test_restore_normaliza_lista_em_tupla_das_referencias():
     assert fresh.is_frozen is True
 
 
+def test_unfreeze_com_patrimonio_reancora_as_duas_bases():
+    """Passo 6 (RED antes de GREEN, achado F2): sem re-ancorar, o tick
+    seguinte ao destravamento recalcula a MESMA perda contra a MESMA base
+    antiga e recongela em segundos -- o botao de panico documentado vira
+    inoperante durante o pregao. `unfreeze(session, patrimonio)` tem de
+    re-ancorar as duas bases (diaria e mensal) no patrimonio corrente."""
+    cb = CircuitBreaker(daily_loss_pct=0.05, monthly_loss_pct=0.15)
+    cb.observe(_d(2026, 8, 17), 100_000.0)
+    cb.observe(_d(2026, 8, 17), 80_000.0)     # -20%: trava diaria E mensal
+    assert cb.is_frozen is True
+
+    cb.unfreeze(_d(2026, 8, 17), 80_000.0)    # humano revisou, patrimonio atual = 80k
+    assert cb.is_frozen is False
+
+    # o proximo observe() com o MESMO patrimonio (80k) NAO pode recongelar:
+    # a base do dia/mes agora E 80k, entao a perda contra ela e 0%.
+    cb.observe(_d(2026, 8, 17), 80_000.0)
+    assert cb.is_frozen is False
+    assert cb._daily_ref_equity == pytest.approx(80_000.0)
+    assert cb._monthly_ref_equity == pytest.approx(80_000.0)
+    assert cb._daily_ref_date == (2026, 8, 17)
+    assert cb._monthly_ref_month == (2026, 8)
+
+    # chamada SEM argumentos preserva o comportamento antigo (nao re-ancora)
+    cb2 = CircuitBreaker(daily_loss_pct=0.05, monthly_loss_pct=0.15)
+    cb2.observe(_d(2026, 8, 17), 100_000.0)
+    cb2.observe(_d(2026, 8, 17), 80_000.0)
+    cb2.unfreeze()
+    assert cb2._daily_ref_equity == pytest.approx(100_000.0)   # base NAO mudou
+    assert cb2._monthly_ref_equity == pytest.approx(100_000.0)
+
+
 def test_restart_no_meio_do_mes_produz_o_mesmo_resultado_que_processo_continuo():
     """Uma instancia que reinicia no meio do caminho tem que terminar
     identica (is_frozen, reason) a uma que nunca reiniciou."""

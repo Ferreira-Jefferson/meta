@@ -16,6 +16,12 @@ class BuyTheDip(Strategy):
     name = "buy_the_dip"
     version = "1.0"
     candidate = False  # classe-base da familia dip (usada por composicao), fora do ranking
+    # Lista branca de `Strategy.state()`/`restore()` (ver `strategy/base.py`):
+    # so `_pending_rebalance` precisa sobreviver a um restart. Declarada na
+    # RAIZ da familia (nao na folha, `portfolio_dip2_hw40.py`) para ser
+    # herdada automaticamente por `DipTop1Hysteresis` -> `PortfolioHysteresis`
+    # -> `DipTop1Portfolio` (a campea), sem redeclarar em cada subclasse.
+    _stateful_keys = ("_pending_rebalance",)
 
     def __init__(
         self,

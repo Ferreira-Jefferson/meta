@@ -809,6 +809,30 @@ def equity_series(conn: sqlite3.Connection, account_id: int) -> list[tuple[str, 
     return [(row["date"], row["equity"], row["patrimonio"]) for row in rows]
 
 
+def last_equity(
+    conn: sqlite3.Connection, account_id: int, on_or_before: str
+) -> tuple[str, float, float] | None:
+    """Última linha de `live_equity` com `date <= on_or_before` (date, equity, patrimonio).
+
+    Existe porque o disjuntor intra-dia (FEAT-003) consulta a base do fecho
+    anterior em CADA `intraday_tick` — `run_once` roda a cada minuto, e
+    `equity_series` varre a tabela inteira (custo O(n) por chamada,
+    ~480x/pregão). `ORDER BY date DESC LIMIT 1` resolve em O(log n) com o
+    índice existente. Um único helper serve os três consumidores desta
+    feature: base do fecho anterior (`_previous_close_patrimonio`),
+    checagem de "já decidido" e a lista de pregões sem decisão em `status()`.
+    Devolve `None` quando não há nenhuma linha `<= on_or_before`.
+    """
+    row = conn.execute(
+        """SELECT date, equity, patrimonio FROM live_equity
+           WHERE account_id = ? AND date <= ? ORDER BY date DESC LIMIT 1""",
+        (account_id, on_or_before),
+    ).fetchone()
+    if row is None:
+        return None
+    return (row["date"], row["equity"], row["patrimonio"])
+
+
 def record_withdrawal(
     conn: sqlite3.Connection,
     account_id: int,

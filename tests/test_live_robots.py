@@ -26,6 +26,7 @@ from core.live_models import (
 from core.models import ExitReason
 from live.robots import InvestmentRobot, LiveRobot, WithdrawalRobot, build_robots
 from strategy.base import Action, AdjustStop, Enter, Exit, Strategy
+from strategy.buy_the_dip import BuyTheDip
 
 
 # ---------- fixtures / helpers ---------------------------------------------
@@ -204,6 +205,27 @@ def test_on_intraday_ignora_posicao_sem_stop_e_sem_cotacao():
     ctx = _ctx(session=date(2026, 8, 17), positions=positions, quotes={})
 
     assert robot.on_intraday(ctx) == []
+
+
+def test_state_restore_do_investment_robot_delega_para_a_estrategia():
+    """Passo 3 (RED antes de GREEN): `InvestmentRobot.state()`/`restore()`
+    hoje usam o default de `LiveRobot` (`{}`/no-op) -- o adiamento de
+    rotacao da campeã (`BuyTheDip._pending_rebalance`) nunca sobreviveria a
+    um restart. Mesmo padrao que `WithdrawalRobot` ja usa para a politica."""
+    strat = BuyTheDip()
+    robot = InvestmentRobot(strat)
+    strat._pending_rebalance = True
+
+    snapshot = robot.state()
+    assert snapshot == strat.state()
+    assert snapshot == {"_pending_rebalance": True}
+
+    fresh_strat = BuyTheDip()
+    fresh_robot = InvestmentRobot(fresh_strat)
+    assert fresh_strat._pending_rebalance is False   # premissa do teste
+
+    fresh_robot.restore(snapshot)
+    assert fresh_strat._pending_rebalance is True
 
 
 # ---------- WithdrawalRobot --------------------------------------------------
