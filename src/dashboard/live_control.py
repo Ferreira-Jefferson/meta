@@ -16,6 +16,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -34,6 +35,17 @@ _SECRETS_PATH = _ROOT / "db" / "live_secrets.json"
 # (terminal MT5 ausente, credencial errada) normalmente já morreu bem antes
 # disso; 2s é suficiente sem atrasar o clique "Iniciar" de forma perceptível.
 _STARTUP_GRACE_SECONDS = 2.0
+
+# Serializa `start()` inteira (correção pós-code-review, crítico nº2): dois
+# cliques em "Iniciar" quase simultâneos chegam por threads diferentes do
+# `asyncio.to_thread` (dashboard roda single-process, sem `workers=N` — ver
+# `scripts/run_dashboard.py`), e o guard `status() is not None` só enxerga um
+# robô já iniciado DEPOIS que `_write_state` roda no fim da função. Sem lock,
+# as duas threads passam pelo guard antes de qualquer uma escrever estado e
+# ambas dão `Popen` — dois processos `run_live.py loop` órfãos, só o segundo
+# rastreável. O lock precisa envolver do guard até `_write_state` (não só o
+# `Popen`) para a segunda chamada necessariamente ver o estado já gravado.
+_start_lock = threading.Lock()
 
 # Campos aceitos em `save_credentials`/exibidos no form. `_SECRET_FIELDS` sao
 # os que NUNCA voltam para o HTML (nem mascarados) — so um booleano
@@ -253,62 +265,67 @@ def start(config: ProcessConfig) -> dict:
     morre na hora (terminal MT5 fechado, credencial errada, `--mode`
     recusado) fazia o dashboard gravar PID normalmente e continuar
     mostrando "robô ativo" para sempre — o botão "Iniciar" mentindo sobre um
-    processo morto."""
-    if status() is not None:
-        raise RuntimeError("já existe um robô rodando — pare antes de iniciar outro.")
-    if config.mode == "mt5" and (config.mt5_shares_per_lot is None or config.mt5_shares_per_lot <= 0):
-        raise RuntimeError(
-            "modo mt5 exige o campo 'ações por lote' (mt5_shares_per_lot) — "
-            "não há valor universal, confira o symbol_info do seu terminal MT5."
+    processo morto.
+
+    Trava em `_start_lock` do começo ao fim (ver docstring do lock, crítico
+    nº2): dois cliques quase simultâneos não podem passar os dois pelo guard
+    `status() is not None` antes de qualquer um gravar estado."""
+    with _start_lock:
+        if status() is not None:
+            raise RuntimeError("já existe um robô rodando — pare antes de iniciar outro.")
+        if config.mode == "mt5" and (config.mt5_shares_per_lot is None or config.mt5_shares_per_lot <= 0):
+            raise RuntimeError(
+                "modo mt5 exige o campo 'ações por lote' (mt5_shares_per_lot) — "
+                "não há valor universal, confira o symbol_info do seu terminal MT5."
+            )
+
+        create_account(config)
+
+        argv = [
+            sys.executable, str(_SCRIPT),
+            "--mode", config.mode, "--capital", str(config.capital),
+            "--notify-min-level", config.notify_min_level,
+        ]
+        if config.floor is not None:
+            argv += ["--floor", str(config.floor)]
+        if config.daily_loss_limit is not None:
+            argv += ["--daily-loss-limit", str(config.daily_loss_limit)]
+        if config.monthly_loss_limit is not None:
+            argv += ["--monthly-loss-limit", str(config.monthly_loss_limit)]
+        if config.mode == "mt5":
+            argv += ["--mt5-shares-per-lot", str(config.mt5_shares_per_lot)]
+        argv += ["loop", "--seconds", "60"]
+
+        _LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        log = open(_LOG_PATH, "a", encoding="utf-8")
+        creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+        # Credenciais (Telegram/SMTP/MT5) só entram no ambiente do PROCESSO FILHO
+        # — nunca em argv (fica visível em `ps`/histórico), nunca no ambiente do
+        # próprio dashboard (persistem só em `db/live_secrets.json`).
+        env = {**os.environ, **_credentials_env()}
+        proc = subprocess.Popen(
+            argv, cwd=str(_ROOT), stdout=log, stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL, creationflags=creationflags, env=env,
         )
 
-    create_account(config)
+        time.sleep(_STARTUP_GRACE_SECONDS)
+        exit_code = proc.poll()
+        if exit_code is not None:
+            # Já saiu (qualquer código, inclusive 0 — sair na hora também é
+            # falha de subida) — não grava estado nenhum, o clique tem de
+            # mostrar o erro real em vez de "rodando".
+            raise RuntimeError(
+                f"o processo do robô saiu logo após iniciar (código {exit_code}) — "
+                f"últimas linhas do log:\n{_tail_log()}"
+            )
 
-    argv = [
-        sys.executable, str(_SCRIPT),
-        "--mode", config.mode, "--capital", str(config.capital),
-        "--notify-min-level", config.notify_min_level,
-    ]
-    if config.floor is not None:
-        argv += ["--floor", str(config.floor)]
-    if config.daily_loss_limit is not None:
-        argv += ["--daily-loss-limit", str(config.daily_loss_limit)]
-    if config.monthly_loss_limit is not None:
-        argv += ["--monthly-loss-limit", str(config.monthly_loss_limit)]
-    if config.mode == "mt5":
-        argv += ["--mt5-shares-per-lot", str(config.mt5_shares_per_lot)]
-    argv += ["loop", "--seconds", "60"]
-
-    _LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    log = open(_LOG_PATH, "a", encoding="utf-8")
-    creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
-    # Credenciais (Telegram/SMTP/MT5) só entram no ambiente do PROCESSO FILHO
-    # — nunca em argv (fica visível em `ps`/histórico), nunca no ambiente do
-    # próprio dashboard (persistem só em `db/live_secrets.json`).
-    env = {**os.environ, **_credentials_env()}
-    proc = subprocess.Popen(
-        argv, cwd=str(_ROOT), stdout=log, stderr=subprocess.STDOUT,
-        stdin=subprocess.DEVNULL, creationflags=creationflags, env=env,
-    )
-
-    time.sleep(_STARTUP_GRACE_SECONDS)
-    exit_code = proc.poll()
-    if exit_code is not None:
-        # Já saiu (qualquer código, inclusive 0 — sair na hora também é
-        # falha de subida) — não grava estado nenhum, o clique tem de
-        # mostrar o erro real em vez de "rodando".
-        raise RuntimeError(
-            f"o processo do robô saiu logo após iniciar (código {exit_code}) — "
-            f"últimas linhas do log:\n{_tail_log()}"
-        )
-
-    state = {
-        "pid": proc.pid,
-        "started_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "config": asdict(config),
-    }
-    _write_state(state)
-    return state
+        state = {
+            "pid": proc.pid,
+            "started_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "config": asdict(config),
+        }
+        _write_state(state)
+        return state
 
 
 def stop() -> bool:

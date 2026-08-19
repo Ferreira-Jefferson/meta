@@ -5,6 +5,7 @@ import csv
 import io
 import json
 import queue
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -451,6 +452,13 @@ def operacao_parar(request: Request):
     return TEMPLATES.TemplateResponse(request, "partials/operacao_body.html", _operacao_ctx())
 
 
+# account_id -> (amount, time.monotonic() do ultimo aporte ACEITO). Debounce
+# em memoria contra duplo-clique/F5/retry de rede em `operacao_aportar` — ver
+# docstring da funcao para o porque de nao ser dedup por schema.
+_LAST_DEPOSIT_ACCEPTED: dict[int, tuple[float, float]] = {}
+_DEPOSIT_DEDUP_WINDOW_SECONDS = 5.0
+
+
 @app.post("/operacao/aportar", response_class=HTMLResponse)
 async def operacao_aportar(request: Request):
     """Registra que dinheiro foi depositado na corretora FORA deste sistema
@@ -464,7 +472,18 @@ async def operacao_aportar(request: Request):
     Mexe direto no diário (mesmo padrão de `operacao_iniciar`): não há
     decisão nenhuma aqui, só contabilidade, e montar um `LiveRuntime`
     completo (estratégia/feed/corretora) só para somar um valor ao caixa
-    seria peso desnecessário."""
+    seria peso desnecessário.
+
+    Correção pós-teste-ao-vivo (duplo-envio): sem guarda nenhuma, um
+    duplo-clique no botão, um F5 ou um retry de rede reenviava o POST e
+    creditava o mesmo aporte duas vezes (dinheiro fantasma no caixa que o
+    robô acha disponível). `live_deposits.date` é granularidade de DIA (vem
+    de `clock.session_date()`), não dá pra distinguir duplicata de dois
+    aportes legítimos do mesmo valor no mesmo dia via schema — por isso o
+    dedup é em memória, por `(account_id, amount)` dentro de uma janela
+    curta (`_DEPOSIT_DEDUP_WINDOW_SECONDS`), e não uma migração. Reinício do
+    processo limpa a janela, o que é aceitável: o caso real é duplo-clique
+    humano, não duplicata entre reinicializações."""
     form = await request.form()
     from journal import live_store
 
@@ -483,10 +502,21 @@ async def operacao_aportar(request: Request):
                 if conta is None:
                     erro = "Nenhuma conta de operação ainda — inicie a operação primeiro."
                 else:
-                    conta.cash += amount
-                    live_store.save_account(conn, conta)
-                    live_store.record_deposit(conn, conta.id, clock.session_date(), amount,
-                                              origin="manual", note="registrado via /operacao")
+                    now = time.monotonic()
+                    last = _LAST_DEPOSIT_ACCEPTED.get(conta.id)
+                    is_duplicate = (
+                        last is not None and last[0] == amount
+                        and now - last[1] < _DEPOSIT_DEDUP_WINDOW_SECONDS
+                    )
+                    if not is_duplicate:
+                        conta.cash += amount
+                        live_store.save_account(conn, conta)
+                        live_store.record_deposit(conn, conta.id, clock.session_date(), amount,
+                                                  origin="manual", note="registrado via /operacao")
+                        _LAST_DEPOSIT_ACCEPTED[conta.id] = (amount, now)
+                    # Duplicata: nao credita de novo, mas devolve a MESMA
+                    # mensagem de sucesso -- do ponto de vista do usuario o
+                    # aporte "aconteceu", so nao duplicou.
                     aporte_msg = f"Aporte de R$ {amount:.2f} registrado."
         except live_store.LegacyPaperAccountError as e:
             # Correção pós-code-review (item 5): mensagem amigável em vez de

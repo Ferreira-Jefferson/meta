@@ -9,6 +9,9 @@ DB_PATH` monkeypatchado para o diario de `create_account()` nunca tocar
 """
 from __future__ import annotations
 
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -129,3 +132,67 @@ def test_start_mt5_inclui_shares_per_lot_no_argv(isolated, monkeypatch):
     assert "--mt5-shares-per-lot" in argv
     idx = argv.index("--mt5-shares-per-lot")
     assert argv[idx + 1] == "2.0"
+
+
+def test_start_concorrente_apenas_um_vence_o_outro_ve_ja_rodando(isolated, monkeypatch):
+    """Correção pós-code-review (crítico nº2): duas chamadas a `start()`
+    quase simultâneas (dois cliques em "Iniciar" processados em threads
+    diferentes do `asyncio.to_thread`, já que `run_dashboard.py` é
+    single-process) não podem as duas passarem pelo guard `status() is not
+    None` antes de qualquer uma gravar estado -- isso subia dois processos
+    `run_live.py loop` órfãos com só o segundo PID rastreável.
+
+    Um `Barrier` de 2 partes força as duas threads a chamarem `start()`
+    praticamente no mesmo instante -- é a race de verdade (não sequencial).
+    O fake `Popen` ainda dorme um pouco antes de retornar, alargando a janela
+    em que o processo "sobe" -- se o lock não cobrisse do guard até
+    `_write_state`, a segunda thread teria uma chance real de ler
+    `status() is None` enquanto a primeira ainda está dentro do `Popen`."""
+    captured: list = []
+    pid_counter = iter([11111, 22222])
+    start_barrier = threading.Barrier(2)
+
+    def _slow_popen(argv, **kwargs):
+        time.sleep(0.05)
+        captured.append(argv)
+        return _FakeProc(pid=next(pid_counter), poll_value=None)
+
+    monkeypatch.setattr(live_control.subprocess, "Popen", _slow_popen)
+    # `status()` do vencedor chama `_pid_alive` (que usa `subprocess.run` ->
+    # `tasklist`) para a thread perdedora ver "já rodando" -- como o
+    # `Popen` acima foi trocado pelo fake (sem suporte a context manager),
+    # o `tasklist` real quebraria; simula "processo vivo" direto.
+    monkeypatch.setattr(live_control, "_pid_alive", lambda pid: True)
+
+    cfg = live_control.ProcessConfig(mode="manual", capital=1_000.0)
+    results: list = []
+    errors: list = []
+
+    def _run():
+        start_barrier.wait(timeout=5)  # as duas threads entram em start() juntas
+        try:
+            results.append(live_control.start(cfg))
+        except RuntimeError as e:
+            errors.append(e)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(_run) for _ in range(2)]
+        for f in futures:
+            f.result(timeout=10)
+
+    # O lock serializa a seção crítica inteira -- a segunda thread só entra
+    # no `Popen` depois que a primeira já escreveu estado, então o barrier
+    # de 2 partes nunca deveria ser atingido pelas duas ao mesmo tempo DENTRO
+    # da seção crítica. Se o lock não existisse (ou não cobrisse do guard até
+    # `_write_state`), as duas passariam pelo guard e ambas chegariam ao
+    # barrier -- exatamente o bug original.
+    assert len(results) == 1
+    assert len(errors) == 1
+    assert "já existe um robô rodando" in str(errors[0])
+
+    # Só um processo foi de fato criado.
+    assert len(captured) == 1
+
+    saved = live_control._read_state()
+    assert saved is not None
+    assert saved["pid"] == results[0]["pid"]

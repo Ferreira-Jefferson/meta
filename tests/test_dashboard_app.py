@@ -59,6 +59,19 @@ def client():
     return TestClient(dashboard_app.app)
 
 
+@pytest.fixture(autouse=True)
+def _reset_deposit_dedup():
+    """`_LAST_DEPOSIT_ACCEPTED` (debounce de `/operacao/aportar`) e estado
+    module-level, sobrevivendo entre testes. Sem reset, dois testes
+    diferentes que criam conta id=1 (sempre o primeiro autoincrement de um
+    banco novo em `isolated_journal`) e aportam o mesmo valor dentro da
+    janela real de alguns segundos entre testes ficariam sujeitos um ao
+    estado do outro."""
+    dashboard_app._LAST_DEPOSIT_ACCEPTED.clear()
+    yield
+    dashboard_app._LAST_DEPOSIT_ACCEPTED.clear()
+
+
 def _create_account(db_path) -> int:
     with live_store.live_journal(db_path) as conn:
         acc = live_store.ensure_account(
@@ -215,6 +228,92 @@ def test_operacao_aportar_sem_conta_devolve_erro_sem_criar_deposito(isolated_jou
     with live_store.live_journal(isolated_journal) as conn:
         rows = conn.execute("SELECT * FROM live_deposits").fetchall()
     assert rows == []
+
+
+# ---------- /operacao/aportar: debounce contra duplo-envio -----------------
+# Bug confirmado ao vivo via Playwright: nenhum form da pagina tinha
+# protecao contra duplo-clique/F5/retry de rede, e o handler creditava o
+# caixa incondicionalmente a cada POST -- um reenvio duplicava o aporte
+# (dinheiro fantasma). Ver docstring de `operacao_aportar` em `app.py`.
+
+def test_operacao_aportar_duplo_envio_rapido_credita_uma_unica_vez(
+    isolated_journal, client, monkeypatch,
+):
+    db_path = isolated_journal
+    account_id = _create_account(db_path)
+
+    fake_now = [1_000.0]
+    monkeypatch.setattr(dashboard_app.time, "monotonic", lambda: fake_now[0])
+
+    resp1 = client.post("/operacao/aportar", data={"amount": "500.00"})
+    assert resp1.status_code == 200
+
+    fake_now[0] += 1.0  # bem dentro da janela de dedup (5s), simula 2o clique
+    resp2 = client.post("/operacao/aportar", data={"amount": "500.00"})
+    assert resp2.status_code == 200
+    # do ponto de vista do usuario o aporte "aconteceu" -- mesma mensagem de
+    # sucesso, sem expor a duplicata como erro.
+    assert "Aporte de R$ 500.00 registrado." in resp2.text
+
+    with live_store.live_journal(db_path) as conn:
+        acc = live_store.load_account(conn, live_service.ACCOUNT_NAME)
+        rows = conn.execute(
+            "SELECT * FROM live_deposits WHERE account_id = ?", (account_id,)
+        ).fetchall()
+    assert acc.cash == pytest.approx(1_500.0)  # nao 2_000.0
+    assert len(rows) == 1
+
+
+def test_operacao_aportar_valores_diferentes_em_sequencia_nao_sao_bloqueados(
+    isolated_journal, client, monkeypatch,
+):
+    """Guarda contra falso-positivo: dois aportes DIFERENTES e legitimos em
+    sequencia rapida (mesmo dentro da janela de debounce) nao podem ser
+    tratados como duplicata -- o dedup e por `(conta, valor)`, nao so por
+    `conta`."""
+    db_path = isolated_journal
+    account_id = _create_account(db_path)
+
+    fake_now = [2_000.0]
+    monkeypatch.setattr(dashboard_app.time, "monotonic", lambda: fake_now[0])
+
+    client.post("/operacao/aportar", data={"amount": "500.00"})
+    fake_now[0] += 1.0
+    client.post("/operacao/aportar", data={"amount": "300.00"})
+
+    with live_store.live_journal(db_path) as conn:
+        acc = live_store.load_account(conn, live_service.ACCOUNT_NAME)
+        rows = conn.execute(
+            "SELECT * FROM live_deposits WHERE account_id = ?", (account_id,)
+        ).fetchall()
+    assert acc.cash == pytest.approx(1_800.0)
+    assert len(rows) == 2
+
+
+def test_operacao_aportar_mesmo_valor_apos_janela_credita_de_novo(
+    isolated_journal, client, monkeypatch,
+):
+    """Passado o intervalo de debounce, um segundo aporte legitimo do MESMO
+    valor (coincidencia normal, ex.: dois depositos de R$500 em dias/horas
+    diferentes) tem de ser aceito -- o dedup e so uma janela curta, nunca um
+    bloqueio permanente por valor repetido."""
+    db_path = isolated_journal
+    account_id = _create_account(db_path)
+
+    fake_now = [3_000.0]
+    monkeypatch.setattr(dashboard_app.time, "monotonic", lambda: fake_now[0])
+
+    client.post("/operacao/aportar", data={"amount": "500.00"})
+    fake_now[0] += dashboard_app._DEPOSIT_DEDUP_WINDOW_SECONDS + 0.1
+    client.post("/operacao/aportar", data={"amount": "500.00"})
+
+    with live_store.live_journal(db_path) as conn:
+        acc = live_store.load_account(conn, live_service.ACCOUNT_NAME)
+        rows = conn.execute(
+            "SELECT * FROM live_deposits WHERE account_id = ?", (account_id,)
+        ).fetchall()
+    assert acc.cash == pytest.approx(2_000.0)
+    assert len(rows) == 2
 
 
 # ---------- /operacao/sacar: confirma recomendacao de saque (passo 14) ------

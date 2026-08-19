@@ -119,7 +119,8 @@
 </div>
 
 <section class="ops-start-form-wrap stagger">
-  <form class="ops-start-form" hx-post="/operacao/iniciar" hx-target="#ops-body" hx-swap="outerHTML">
+  <form class="ops-start-form" hx-post="/operacao/iniciar" hx-target="#ops-body" hx-swap="outerHTML"
+        hx-disabled-elt="find button[type=submit]">
     <div class="row">
       <label>
         <span class="k">Modo</span>
@@ -185,7 +186,8 @@
       <span class="dot"></span> Robô parado
       {% if s.modo == "mt5" %}<span class="dim">— ⚠ modo dinheiro real (MetaTrader 5)</span>{% endif %}
     </span>
-    <form hx-post="/operacao/iniciar" hx-target="#ops-body" hx-swap="outerHTML">
+    <form hx-post="/operacao/iniciar" hx-target="#ops-body" hx-swap="outerHTML"
+          hx-disabled-elt="find button[type=submit]">
       {# retoma com o mesmo piso/disjuntor da última vez que rodou — modo e
          capital vêm sempre da conta, nunca do form (ver rota no app.py).
          mt5_shares_per_lot e EXCECAO: a conta nao guarda esse valor (so o
@@ -271,7 +273,8 @@
     {% endif %}
   </p>
   {% if aporte_msg %}<div class="ops-alert ops-alert-ok">{{ aporte_msg }}</div>{% endif %}
-  <form class="ops-deposit-form" hx-post="/operacao/aportar" hx-target="#ops-body" hx-swap="outerHTML">
+  <form class="ops-deposit-form" hx-post="/operacao/aportar" hx-target="#ops-body" hx-swap="outerHTML"
+        hx-disabled-elt="find button[type=submit]">
     <label><span class="k">Valor do aporte (R$)</span>
       <input type="number" name="amount" min="0.01" step="0.01" placeholder="1000.00" required />
     </label>
