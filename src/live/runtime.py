@@ -838,6 +838,28 @@ class LiveRuntime:
             self._log(conn, account.id, "warn", "runtime",
                             f"saida de {intent.ticker} sem posicao — intencao cancelada")
             return "rejected"
+        # FEAT-004, item 4.3 (correcao SUBSTANTIVA do plan-reviewer, §6 item
+        # 1): segunda trava, mais geral que a de `intraday_tick` acima —
+        # cobre o caminho CRUZADO em que um stop intra-dia de ONTEM ainda
+        # esta `SENT`/nao confirmado (posicao continua em `account.
+        # positions`, ver `_resolve_sell`) e o robo decide sair de novo HOJE
+        # por OUTRO motivo (rotacao, fim de mes) — o robo nao enxerga ordem
+        # em voo, so posicao (regra 6), entao pode legitimamente decidir sair
+        # de novo. `_sell` e chamado tanto por `execute_session` quanto por
+        # `intraday_tick`: colocar a trava aqui fecha os dois caminhos com
+        # uma unica checagem, em vez de duplicar nos dois call-sites.
+        ja_em_voo = next(
+            (o for o in store.open_orders(conn, account.id)
+             if o.ticker == pos.ticker and o.side == OrderSide.SELL),
+            None,
+        )
+        if ja_em_voo is not None:
+            store.set_intent_status(conn, intent.id, IntentStatus.CANCELLED)
+            self._log(conn, account.id, "warn", "runtime",
+                            f"saida de {pos.ticker} descartada: ja existe ordem "
+                            f"aberta #{ja_em_voo.id} para o mesmo papel — venda "
+                            "nao duplicada")
+            return "rejected"
         order = self._place(conn, account, intent, pos.ticker, OrderSide.SELL,
                             pos.quantity, note=f"saida: {intent.reason}")
         return self._resolve_sell(conn, account, intent, pos, order)
@@ -874,6 +896,23 @@ class LiveRuntime:
             pos.capital_allocated *= (1.0 - fora)
             store.upsert_position(conn, account.id, pos)
         store.set_intent_status(conn, intent.id, IntentStatus.DONE)
+        # 4.4d: saida executada com sucesso e notificada -- distingue PARCIAL
+        # de TOTAL (§6 item 3 do plan-reviewer): sem isso, um fill parcial
+        # (ja alcancavel via ManualBroker.confirm, e apos o passo 2 tambem
+        # via MT5Broker) ficaria identico a um fill total na notificacao,
+        # escondendo que falta agir sobre o restante (`order.leaves_qty`).
+        if order.status == OrderStatus.PARTIAL:
+            self._log(conn, account.id, "info", "runtime",
+                            f"SAIDA PARCIAL de {pos.ticker}: {order.filled_qty} de "
+                            f"{order.quantity} @ {order.avg_price or 0.0:.4f} "
+                            f"(falta {order.leaves_qty})",
+                            {"ticker": pos.ticker, "filled_qty": order.filled_qty,
+                             "quantity": order.quantity, "leaves_qty": order.leaves_qty})
+        else:
+            self._log(conn, account.id, "info", "runtime",
+                            f"saida executada: {pos.ticker} {order.filled_qty} "
+                            f"@ {order.avg_price or 0.0:.4f}",
+                            {"ticker": pos.ticker, "filled_qty": order.filled_qty})
         return "done"
 
     def _buy(self, conn, account: AccountState, session: date,
@@ -938,6 +977,15 @@ class LiveRuntime:
 
         preco = order.avg_price or fallback_price
         custo = preco * order.filled_qty + order.fees
+        if custo > account.cash:
+            # 4.4a: um fill mais caro que o planejado (gap, gordura de
+            # `plan_entry` que reserva so ~0,22%) nao pode passar em
+            # silencio -- alerta, mas NAO impede nem desfaz o fill: a
+            # execucao ja aconteceu de verdade na corretora.
+            self._log(conn, account.id, "error", "runtime",
+                            f"entrada em {intent.ticker} custou R$ {custo:.2f}, acima "
+                            f"do caixa disponivel (R$ {account.cash:.2f})",
+                            {"custo": round(custo, 2), "caixa": round(account.cash, 2)})
         account.cash -= custo
         pos = LivePosition(
             ticker=intent.ticker, quantity=order.filled_qty, entry_date=entry_date,
@@ -949,6 +997,18 @@ class LiveRuntime:
         store.upsert_position(conn, account.id, pos)
         account.positions[pos.ticker] = pos
         store.set_intent_status(conn, intent.id, IntentStatus.DONE)
+        # 4.4d: entrada executada com sucesso e notificada -- distingue
+        # PARCIAL de TOTAL (§6 item 3), mesmo motivo de `_resolve_sell`.
+        if order.status == OrderStatus.PARTIAL:
+            self._log(conn, account.id, "info", "runtime",
+                            f"ENTRADA PARCIAL em {intent.ticker}: {order.filled_qty} de "
+                            f"{order.quantity} @ {preco:.4f} (falta {order.leaves_qty})",
+                            {"ticker": intent.ticker, "filled_qty": order.filled_qty,
+                             "quantity": order.quantity, "leaves_qty": order.leaves_qty})
+        else:
+            self._log(conn, account.id, "info", "runtime",
+                            f"entrada executada: {intent.ticker} {order.filled_qty} @ {preco:.4f}",
+                            {"ticker": intent.ticker, "filled_qty": order.filled_qty})
         return "done"
 
     # ---------- saque: recomendacao, expiracao, confirmacao humana ---------
@@ -1315,7 +1375,37 @@ class LiveRuntime:
 
             ctx = self._context(session, account, SessionPhase.OPEN, quotes)
             disparados = 0
+            # FEAT-004, item 4.3: saida ja em voo (PENDING/EXECUTING) para o
+            # mesmo ticker nao pode ser re-emitida so por este MESMO
+            # `on_intraday` repetir na chamada seguinte de `intraday_tick` —
+            # calculado ANTES do laco, contra o que ja esta no diario.
+            exit_em_andamento = {
+                i.ticker
+                for i in (
+                    store.intents_by_status(conn, account.id, IntentStatus.PENDING)
+                    + store.intents_by_status(conn, account.id, IntentStatus.EXECUTING)
+                )
+                if i.kind == IntentKind.EXIT
+            }
             for intent in self.investment.on_intraday(ctx):
+                if intent.ticker in velhas:
+                    # 4.2: stop nunca dispara sobre cotacao declaradamente
+                    # velha — suprime (nao grava, nao envia) e escala pra
+                    # `error` (mais grave que o `warn` acima, que so avisa
+                    # sobre a cotacao velha; aqui uma DECISAO real foi
+                    # descartada por causa dela).
+                    self._log(conn, account.id, "error", "feed",
+                                    f"stop de {intent.ticker} suprimido: cotacao "
+                                    f"atrasada {int(velhas[intent.ticker])}s "
+                                    f"(feed {self.feed.name}) -- nao executa sobre dado velho")
+                    continue
+                if intent.ticker in exit_em_andamento:
+                    # ja existe uma saida em voo para este ticker (gravada
+                    # numa chamada anterior de `intraday_tick`) — nao
+                    # reemite. Ver tambem a trava em `_sell`, que cobre o
+                    # caminho cruzado (saida decidida no FECHO enquanto este
+                    # stop ainda esta em voo).
+                    continue
                 store.record_intent(conn, account.id, intent)
                 if self._sell(conn, account, session, intent, quotes) == "done":
                     disparados += 1

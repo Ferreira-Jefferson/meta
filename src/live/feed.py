@@ -6,13 +6,16 @@ atraso — o atraso declarado (`delay_seconds`) e o que permite ao runtime
 recusar decisao intra-dia sobre dado velho (ver `staleness_report` abaixo e
 `Quote.staleness_seconds` em `core/live_models.py`).
 
-Duas implementacoes de producao (`src/`):
+Tres implementacoes de producao (`src/`):
 
   - `ParquetCloseFeed`  — dado historico (D-1 ou mais velho), honesto por
     construcao: `delay_seconds` e a IDADE REAL do dado, calculada contra
     `now`, nao um numero fixo.
   - `YFinanceFeed`      — intradiario, best-effort, ~15min de atraso conhecido
     e documentado (ver docstring da classe).
+  - `MT5Feed`           — intradiario, le o tick do MESMO terminal MT5 que
+    `MT5Broker` usa para executar (ver docstring da classe para o aviso sobre
+    o fuso do relogio do SERVIDOR do terminal).
 
 `ReplayFeed` (dirigido a mao, para teste e simulacao deterministica) mora em
 `tests/doubles.py` (FEAT-001) — nunca em `src/`.
@@ -202,6 +205,156 @@ class YFinanceFeed(QuoteFeed):
             except Exception as exc:
                 self._report_error(ticker, exc)
                 continue
+        return result
+
+    def _report_error(self, ticker: str, exc: Exception) -> None:
+        if self._on_error is not None:
+            self._on_error(ticker, exc)
+
+
+class MT5Feed(QuoteFeed):
+    """Cotacao intradiaria via o MESMO terminal MT5 que `MT5Broker` usa para
+    executar (pacote pip `MetaTrader5`).
+
+    ATENCAO, sem eufemismo, MESMA FAMILIA de ressalva ja documentada no topo de
+    `live/broker_mt5.py` (shares_per_lot/symbol_map/filling_type/comissao),
+    agora um 5o item: `tick.time` (o instante do tick, segundo o pacote
+    `MetaTrader5`) e o horario do RELOGIO DO SERVIDOR do terminal, NAO
+    necessariamente UTC — corretoras costumam configurar o servidor MT5 num
+    fuso proprio (ex.: GMT+2/GMT+3), deslocado de UTC por horas. Este feed
+    calcula `delay_seconds = now_fn() - tick.time` assumindo os dois lados no
+    mesmo referencial; se o servidor estiver ADIANTADO em relacao a UTC, essa
+    conta pode SUBESTIMAR o atraso real (cotacao parecendo mais fresca do que
+    e) — exatamente a direcao perigosa para o invariante de stop nunca disparar
+    sobre dado velho (ver `live.runtime.intraday_tick`). Quem for apontar isto
+    para um terminal real e mexer com volume relevante PRECISA calibrar esse
+    offset servidor<->UTC antes de operar; nao ha valor universal, mesma
+    categoria dos 4 itens ja documentados em `broker_mt5.py`.
+
+    `now_fn` e injetavel (mesma convencao de `ParquetCloseFeed`) por isso: sem
+    relogio injetavel, a idade do tick nao e testavel de forma deterministica
+    — so aproximada, com tolerancia larga e instavel.
+
+    Import de `MetaTrader5` e SEMPRE LAZY (dentro de `quotes`), mesmo motivo e
+    mesmo padrao de `MT5Broker`/`YFinanceFeed`: nem todo ambiente que importa
+    este modulo tem (ou deveria precisar ter) o pacote instalado.
+    """
+
+    name = "mt5"
+    source = "mt5"
+
+    def __init__(
+        self,
+        symbol_map: Optional[dict[str, str]] = None,
+        login: Optional[int] = None,
+        password: Optional[str] = None,
+        server: Optional[str] = None,
+        path: Optional[str] = None,
+        on_error: Optional[Callable[[str, Exception], None]] = None,
+        now_fn: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+    ) -> None:
+        self._symbol_map = dict(symbol_map) if symbol_map else {}
+        self._login = login
+        self._password = password
+        self._server = server
+        self._path = path
+        self._on_error = on_error
+        self._now_fn = now_fn
+        self._connected = False
+        self._last_delay_seconds = 0.0
+
+    @property
+    def delay_seconds(self) -> float:
+        """Maior atraso observado na leitura MAIS RECENTE (ver `quotes`).
+        Antes de qualquer leitura, 0.0 — nao ha dado ainda para ter idade."""
+        return self._last_delay_seconds
+
+    def symbol_for(self, ticker: str) -> str:
+        """Ticker interno (`"WEGE3.SA"`) -> nome do simbolo no terminal MT5.
+
+        Replica deliberadamente `MT5Broker.symbol_for` (ver docstring da
+        classe, risco ativo aceito em ACTION-PLAN FEAT-004 §5): duplicacao
+        pequena, mitigada porque `scripts/run_live.py::build()` passa o MESMO
+        `symbol_map`/credenciais para os dois."""
+        if ticker in self._symbol_map:
+            return self._symbol_map[ticker]
+        if ticker.endswith(".SA"):
+            return ticker[: -len(".SA")]
+        return ticker
+
+    def _connect(self, mt5) -> bool:
+        """Idempotente, mesmo padrao de `MT5Broker.connect()`: chamar
+        `mt5.initialize()` de novo sem necessidade e, na pratica de alguns
+        terminais, um jeito de perder estado de ordens em voo a toa."""
+        if self._connected:
+            return True
+        kwargs = {}
+        if self._path:
+            kwargs["path"] = self._path
+        if self._login is not None:
+            kwargs["login"] = self._login
+            kwargs["password"] = self._password
+            kwargs["server"] = self._server
+        try:
+            ok = bool(mt5.initialize(**kwargs))
+        except Exception:
+            ok = False
+        self._connected = ok
+        return ok
+
+    def quotes(self, tickers: Sequence[str]) -> dict[str, Quote]:
+        """Busca cotacao intradiaria no terminal MT5. Falha de conexao (ou de
+        qualquer ticker individual) NAO propaga excecao: devolve o que
+        conseguiu (dict vazio ou parcial) e reporta via `on_error`, mesmo
+        padrao de `YFinanceFeed`/`MT5Broker.place`."""
+        try:
+            import MetaTrader5 as mt5  # lazy: ver docstring da classe
+        except Exception as exc:  # pragma: no cover - ambiente sem o pacote
+            self._report_error("import", exc)
+            return {}
+
+        if not self._connect(mt5):
+            try:
+                code, desc = mt5.last_error()
+            except Exception:
+                code, desc = (None, "desconhecido")
+            self._report_error(
+                "connect",
+                RuntimeError(f"falha ao conectar ao terminal MT5 (last_error={code}: {desc})"),
+            )
+            return {}
+
+        now = self._now_fn()
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+
+        result: dict[str, Quote] = {}
+        max_delay = 0.0
+        for ticker in tickers:
+            try:
+                symbol = self.symbol_for(ticker)
+                mt5.symbol_select(symbol, True)
+                tick = mt5.symbol_info_tick(symbol)
+                if tick is None:
+                    continue
+                last = getattr(tick, "last", None)
+                price = float(last) if last else (float(tick.bid) + float(tick.ask)) / 2.0
+                # `tick.time`: instante do tick segundo o RELOGIO DO SERVIDOR
+                # do terminal — ver aviso de fuso na docstring da classe.
+                tick_time = datetime.fromtimestamp(tick.time, tz=timezone.utc)
+                delay = max(0.0, (now - tick_time).total_seconds())
+                max_delay = max(max_delay, delay)
+                result[ticker] = Quote(
+                    ticker=ticker,
+                    price=price,
+                    ts=tick_time,
+                    source=self.source,
+                    delay_seconds=delay,
+                )
+            except Exception as exc:
+                self._report_error(ticker, exc)
+                continue
+        self._last_delay_seconds = max_delay
         return result
 
     def _report_error(self, ticker: str, exc: Exception) -> None:

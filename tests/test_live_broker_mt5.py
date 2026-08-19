@@ -405,6 +405,42 @@ def test_comissao_fallback_zero_quando_history_deals_lanca_excecao(fake_mt5):
     assert filled.fees == 0.0
 
 
+# ---------- fill parcial (FEAT-004, item 4.4b) ------------------------------
+
+def test_place_fill_parcial_vira_partial_nao_filled(fake_mt5):
+    """MT5 devolve `volume=1.0` (metade do lote pedido, quantity=2) -- a
+    ordem tem de virar PARTIAL, nao FILLED, e `is_terminal` tem de ser
+    `False` (o restante ainda pode ser reconciliado)."""
+    info = _symbol_info(volume_min=0.01, volume_max=100.0, volume_step=0.01)
+    result = _order_send_result(retcode=106, price=50.1, volume=1.0)
+    mod, calls = fake_mt5(symbol_info=info, tick=_tick(bid=49.9, ask=50.1),
+                          order_send_result=result, history_deals=[])
+
+    broker = MT5Broker(shares_per_lot=1.0)
+    order = broker.place(Order(ticker="WEGE3.SA", side=OrderSide.BUY, quantity=2))
+
+    assert order.status == OrderStatus.PARTIAL
+    assert order.filled_qty == 1
+    assert order.is_terminal is False
+    assert order.leaves_qty == 1
+
+
+def test_place_fill_total_continua_filled(fake_mt5):
+    """Regressao do caminho feliz: fill completo continua FILLED."""
+    info = _symbol_info(volume_min=0.01, volume_max=100.0, volume_step=0.01)
+    result = _order_send_result(retcode=106, price=50.1, volume=2.0)
+    mod, calls = fake_mt5(symbol_info=info, tick=_tick(bid=49.9, ask=50.1),
+                          order_send_result=result, history_deals=[])
+
+    broker = MT5Broker(shares_per_lot=1.0)
+    order = broker.place(Order(ticker="WEGE3.SA", side=OrderSide.BUY, quantity=2))
+
+    assert order.status == OrderStatus.FILLED
+    assert order.filled_qty == 2
+    assert order.is_terminal is True
+    assert order.leaves_qty == 0
+
+
 # ---------- poll / metadados do broker -------------------------------------
 
 def test_poll_e_no_op_sincrono(fake_mt5):

@@ -3,18 +3,22 @@
 Foco: `ParquetCloseFeed` declara o proprio atraso como a idade real do dado
 (nao um numero fixo), `ReplayFeed` serve de dublê determinístico para teste, e
 `staleness_report` so aponta quem passou do limite. `YFinanceFeed` e testado
-sem tocar rede: so o contrato de atraso declarado e o lazy-import.
+sem tocar rede: so o contrato de atraso declarado e o lazy-import. `MT5Feed`
+(FEAT-004) e testado com um `MetaTrader5` FALSO injetado em `sys.modules`,
+mesma tecnica de `tests/test_live_broker_mt5.py::fake_mt5`.
 """
 from __future__ import annotations
 
 import inspect
+import sys
+import types
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
 import pytest
 
-from live.feed import ParquetCloseFeed, QuoteFeed, YFinanceFeed, staleness_report
+from live.feed import MT5Feed, ParquetCloseFeed, QuoteFeed, YFinanceFeed, staleness_report
 from core.live_models import Quote
 from tests.doubles import ReplayFeed
 
@@ -164,3 +168,103 @@ def test_yfinance_feed_falha_de_rede_devolve_dict_vazio_e_chama_on_error(monkeyp
 def test_quotefeed_e_abstrata():
     with pytest.raises(TypeError):
         QuoteFeed()
+
+
+# ---------- MT5Feed (FEAT-004) ----------------------------------------------
+
+def _make_fake_mt5_feed_module(*, initialize_ok: bool = True, ticks: dict | None = None,
+                               last_error=(0, "sem erro")):
+    """Fake minimo de `MetaTrader5`, so a superficie usada por `MT5Feed`
+    (`initialize`, `symbol_select`, `symbol_info_tick`, `last_error`)."""
+    ticks = ticks or {}
+    mod = types.ModuleType("MetaTrader5")
+    mod.initialize = lambda **kwargs: initialize_ok
+    mod.last_error = lambda: last_error
+    mod.symbol_select = lambda symbol, enable=True: True
+    mod.symbol_info_tick = lambda symbol: ticks.get(symbol)
+    return mod
+
+
+def _tick(*, bid=49.9, ask=50.1, last=None, time=0):
+    return types.SimpleNamespace(bid=bid, ask=ask, last=last, time=time)
+
+
+def test_mt5feed_le_tick_e_declara_atraso_real(monkeypatch):
+    now = datetime(2026, 8, 18, 15, 0, 0, tzinfo=timezone.utc)
+    epoch_agora = int(now.timestamp())
+    tick = _tick(bid=49.9, ask=50.1, last=50.0, time=epoch_agora - 12)
+    mod = _make_fake_mt5_feed_module(ticks={"WEGE3": tick})
+    monkeypatch.setitem(sys.modules, "MetaTrader5", mod)
+
+    feed = MT5Feed(now_fn=lambda: now)
+    quotes = feed.quotes(["WEGE3.SA"])
+
+    assert quotes["WEGE3.SA"].price == pytest.approx(50.0)
+    assert quotes["WEGE3.SA"].source == "mt5"
+    assert quotes["WEGE3.SA"].delay_seconds == pytest.approx(12.0)
+    assert feed.delay_seconds == pytest.approx(12.0)
+
+
+def test_mt5feed_sem_last_usa_midpoint_bid_ask(monkeypatch):
+    now = datetime(2026, 8, 18, 15, 0, 0, tzinfo=timezone.utc)
+    tick = _tick(bid=49.9, ask=50.1, last=None, time=int(now.timestamp()))
+    mod = _make_fake_mt5_feed_module(ticks={"WEGE3": tick})
+    monkeypatch.setitem(sys.modules, "MetaTrader5", mod)
+
+    feed = MT5Feed(now_fn=lambda: now)
+    quotes = feed.quotes(["WEGE3.SA"])
+
+    assert quotes["WEGE3.SA"].price == pytest.approx(50.0)  # midpoint (49.9+50.1)/2
+
+
+def test_mt5feed_symbol_for_remove_sufixo_e_respeita_symbol_map():
+    feed = MT5Feed()
+    assert feed.symbol_for("WEGE3.SA") == "WEGE3"
+    assert feed.symbol_for("PETR4") == "PETR4"
+
+    feed_map = MT5Feed(symbol_map={"WEGE3.SA": "WEGE3F"})
+    assert feed_map.symbol_for("WEGE3.SA") == "WEGE3F"
+    assert feed_map.symbol_for("PETR4.SA") == "PETR4"
+
+
+def test_mt5feed_falha_de_conexao_devolve_dict_vazio_e_chama_on_error(monkeypatch):
+    mod = _make_fake_mt5_feed_module(initialize_ok=False, last_error=(10004, "terminal nao encontrado"))
+    monkeypatch.setitem(sys.modules, "MetaTrader5", mod)
+
+    erros = []
+    feed = MT5Feed(on_error=lambda ticker, exc: erros.append((ticker, str(exc))))
+    quotes = feed.quotes(["WEGE3.SA"])
+
+    assert quotes == {}
+    assert len(erros) == 1
+    assert "10004" in erros[0][1]
+
+
+def test_mt5feed_nao_importa_metatrader5_no_topo_do_modulo():
+    import live.feed as feed_module
+
+    source = inspect.getsource(feed_module)
+    top_of_file = source.split("class MT5Feed")[0]
+    assert "import MetaTrader5" not in top_of_file
+    for line in source.splitlines():
+        if line.startswith("import MetaTrader5") or line.startswith("from MetaTrader5"):
+            pytest.fail(f"import de MetaTrader5 fora de metodo (coluna 0): {line!r}")
+
+
+def test_mt5feed_now_fn_injetavel_permite_idade_deterministica(monkeypatch):
+    """Dois `tick.time` diferentes com o MESMO `now_fn` fixo provam que a
+    idade e CALCULADA (nao uma constante) e independe do relogio real da
+    maquina rodando o teste."""
+    now_fixo = datetime(2026, 8, 18, 15, 0, 0, tzinfo=timezone.utc)
+    epoch_agora = int(now_fixo.timestamp())
+    tick_fresco = _tick(last=50.0, time=epoch_agora - 5)
+    tick_velho = _tick(last=50.0, time=epoch_agora - 400)
+    mod = _make_fake_mt5_feed_module(ticks={"AAA": tick_fresco, "BBB": tick_velho})
+    monkeypatch.setitem(sys.modules, "MetaTrader5", mod)
+
+    feed = MT5Feed(now_fn=lambda: now_fixo)
+    quotes = feed.quotes(["AAA.SA", "BBB.SA"])
+
+    assert quotes["AAA.SA"].delay_seconds == pytest.approx(5.0)
+    assert quotes["BBB.SA"].delay_seconds == pytest.approx(400.0)
+    assert quotes["BBB.SA"].delay_seconds != quotes["AAA.SA"].delay_seconds

@@ -235,7 +235,7 @@ def create_account(config: ProcessConfig):
     cli = _load_cli()
     args = argparse.Namespace(
         mode=config.mode, capital=config.capital, floor=config.floor,
-        feed="parquet", notify_min_level=config.notify_min_level,
+        feed="yfinance", notify_min_level=config.notify_min_level,
         daily_loss_limit=config.daily_loss_limit, monthly_loss_limit=config.monthly_loss_limit,
         mt5_magic=20260817, mt5_shares_per_lot=config.mt5_shares_per_lot, mt5_symbol_map=None,
     )
