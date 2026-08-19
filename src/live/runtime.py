@@ -628,8 +628,14 @@ class LiveRuntime:
                         msg += " — FIM DE MES: a rotacao pode ter sido PERDIDA, nao so adiada"
                     self._log(conn, account.id, nivel, "runtime", msg, marcador)
                     self._skip_avisado = marcador
-                account.policy_state = self._robot_state()
-                store.save_account(conn, account)
+                    # so persiste quando o marcador de fato MUDOU (correcao
+                    # pos-review, tentativa 1): sem esta guarda, o skip
+                    # deduplicado ainda gravava no SQLite a cada minuto
+                    # enquanto o dado estivesse faltando, sem necessidade --
+                    # o dedupe em memoria/banco ja cobre a mensagem, so falta
+                    # nao reescrever o mesmo estado repetidamente.
+                    account.policy_state = self._robot_state()
+                    store.save_account(conn, account)
                 return StepReport("decide_skip", session, detail={
                     "motivo": "dado incompleto", "faltando": ",".join(faltando),
                     "fim_de_mes": fim_de_mes,
@@ -1278,10 +1284,12 @@ class LiveRuntime:
         velhas = staleness_report(quotes, now, self.max_quote_age)
 
         paineis_ok = True
+        paineis_erro: Exception | None = None
         try:
             self._load(clock.previous_session(session))
-        except Exception:
+        except Exception as exc:
             paineis_ok = False
+            paineis_erro = exc
 
         with store.live_journal(self.db_path) as conn:
             account = self._load_account(conn)
@@ -1321,7 +1329,7 @@ class LiveRuntime:
                                    may_anchor=False)
             else:
                 self._log(conn, account.id, "warn", "riskguard",
-                                "disjuntor nao observou o tick: paineis indisponiveis")
+                                f"disjuntor nao observou o tick: paineis indisponiveis: {paineis_erro}")
 
             account.policy_state = self._robot_state()
             store.save_account(conn, account)
