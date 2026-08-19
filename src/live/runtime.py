@@ -451,6 +451,19 @@ class LiveRuntime:
         ou feed falharem, destrava sem re-ancorar (comportamento antigo) e
         avisa que a trava pode voltar no proximo tick, em vez de abortar o
         destravamento inteiro por uma falha de leitura de dado.
+
+        ATENCAO a duas datas DIFERENTES aqui (correcao pos-review, tentativa
+        1): `sessao_dado = clock.session_date()` serve SO para carregar/marcar
+        dados (`_load`, `_intraday_marks`) — na fase OPEN do pregao ela
+        devolve o pregao ANTERIOR, por design do clock. Ja o argumento de
+        `risk_guard.unfreeze(hoje, ...)` usa `hoje = datetime.now(timezone.utc).date()`,
+        a MESMA expressao que `run_once` usa para chamar `intraday_tick(hoje, ...)`.
+        Se as duas datas fossem a mesma (`sessao_dado` para as duas coisas), o
+        disjuntor seria re-ancorado no dia ANTERIOR; no tick seguinte,
+        `_observe_risk` veria "dia novo" (hoje != dia ancorado) e re-ancoraria
+        sozinho no patrimonio do fecho anterior — que le como perda grande
+        contra o patrimonio real de hoje, recongelando em menos de um minuto.
+        Ou seja: exatamente o bug que este metodo existe para consertar.
         """
         if self.risk_guard is None:
             return
@@ -459,12 +472,13 @@ class LiveRuntime:
             if account is None:
                 return
             self._restore_robot_state(account.policy_state)
-            hoje = clock.session_date()
+            sessao_dado = clock.session_date()
+            hoje = datetime.now(timezone.utc).date()
             try:
-                self._load(hoje)
+                self._load(sessao_dado)
                 quotes = self.feed.quotes(self.tickers)
                 stale = staleness_report(quotes, datetime.now(timezone.utc), self.max_quote_age)
-                marks = self._intraday_marks(hoje, quotes, stale=stale)
+                marks = self._intraday_marks(sessao_dado, quotes, stale=stale)
                 patrimonio = account.patrimonio(marks)
                 self.risk_guard.unfreeze(hoje, patrimonio)
             except Exception as exc:

@@ -1528,11 +1528,37 @@ def test_unfreeze_durante_o_pregao_nao_recongela_no_tick_seguinte(tmp_path, univ
     a mesma base antiga e recongela em segundos -- o botao de panico
     documentado vira inoperante durante o pregao."""
     from live import clock as live_clock
+    from live import runtime as live_runtime
     data_dir, days = universe
     d0, d1 = days[0], days[1]
-    # `unfreeze()` usa `clock.session_date()` (relogio real) para saber o
-    # patrimonio "de agora" -- casa com `d1` para o cenario sintetico.
-    monkeypatch.setattr(live_clock, "session_date", lambda *a, **k: d1)
+    # Reproduz a fase OPEN de verdade: `clock.session_date()` devolve o
+    # pregao ANTERIOR (`d0`, ja que `d0 == clock.previous_session(d1)` por
+    # `_sessions` gerar dias consecutivos) -- e' assim que o sistema ja
+    # funciona hoje durante o pregao, nao e' bug novo. `unfreeze()` usa
+    # `session_date()` so' para CARREGAR dados (`_load`/`_intraday_marks`);
+    # ja `intraday_tick(d1, ...)` abaixo usa a data de HOJE (`d1`), a mesma
+    # divergencia D-1 x D que `run_once` produz de verdade. Monkeypatchar
+    # `session_date` para devolver `d1` (o MESMO pregao passado a
+    # `intraday_tick`) apagaria essa divergencia e o teste passaria mesmo
+    # com o codigo quebrado -- exatamente o furo que este teste existe para
+    # pegar.
+    monkeypatch.setattr(live_clock, "session_date", lambda *a, **k: d0)
+
+    # `unfreeze()` ancora o argumento de `risk_guard.unfreeze(...)` em
+    # `datetime.now(timezone.utc).date()` -- a MESMA expressao que
+    # `run_once` usa para decidir a `session` passada a `intraday_tick`.
+    # Trava o "agora" real do processo em `d1` (o dia em que o tick roda),
+    # separado de `session_date()` acima (travado em `d0`, o ultimo pregao
+    # FECHADO): sem isso o teste mediria a re-ancoragem contra a data real
+    # do sistema rodando a suite (nunca `d1`), e a asserçao final falharia
+    # por um motivo estranho ao bug (dessincronia de calendario do teste,
+    # nao o F2 que este teste existe para pegar).
+    class _RelogioRealEmD1:
+        @staticmethod
+        def now(tz=None):
+            return datetime(d1.year, d1.month, d1.day, 12, 0, tzinfo=tz)
+
+    monkeypatch.setattr(live_runtime, "datetime", _RelogioRealEmD1)
 
     rt = _runtime(tmp_path, data_dir, {}, capital=10_000.0)
     guard = CircuitBreaker(daily_loss_pct=0.05, monthly_loss_pct=0.99)
