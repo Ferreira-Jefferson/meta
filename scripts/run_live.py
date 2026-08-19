@@ -18,6 +18,15 @@ in_active_window`) — fora dela (noite, fim de semana, feriado) fica
 dormindo ate a janela abrir de novo, em vez de acordar a cada `--seconds`
 so para constatar que nao ha nada a fazer.
 
+Cotacao (--feed)
+----------------
+Operacao real (`--mode manual`/`mt5`) recusa `--feed parquet` (dado de
+fechamento de D-1, ou mais velho): stop e entrada intra-dia nao podem decidir
+sobre dado desse jeito velho. Default `yfinance` (~15min de atraso conhecido,
+ver `live/feed.py::YFinanceFeed`); `mt5` le o tick do MESMO terminal MT5 do
+broker (ver aviso sobre o fuso do relogio do servidor em
+`live/feed.py::MT5Feed`).
+
 Modos de corretora
 ------------------
   manual  `ManualBroker` — nao envia nada. Emite ticket legivel, voce executa na
@@ -95,7 +104,7 @@ from backtest.withdrawal import FloorSkim, official_policy
 from core.config import WATCHLIST, BacktestConfig
 from journal import live_store as store
 from live.broker import ManualBroker
-from live.feed import ParquetCloseFeed, YFinanceFeed
+from live.feed import MT5Feed, YFinanceFeed
 from live.notify import (
     CompositeNotifier,
     EmailNotifier,
@@ -158,7 +167,6 @@ def _build_risk_guard(daily_limit: float | None, monthly_limit: float | None) ->
 
 
 def build(args) -> LiveRuntime:
-    feed = YFinanceFeed() if args.feed == "yfinance" else ParquetCloseFeed()
     if args.mode == "manual":
         broker = ManualBroker()
     elif args.mode == "mt5":
@@ -177,6 +185,22 @@ def build(args) -> LiveRuntime:
             f"--mode inválido ou ausente: {args.mode!r} — use 'manual' ou 'mt5' "
             "(ver core.live_models.BrokerMode)."
         )
+    # Operacao REAL (dinheiro de verdade, os dois modos acima) nunca pode ver
+    # so o fecho de ontem o dia inteiro -- `--feed parquet` e recusado aqui,
+    # nunca um fallback silencioso (FEAT-004, item 4.1).
+    if args.feed == "parquet":
+        raise ValueError(
+            f"--feed parquet não é aceito em operação real (--mode {args.mode!r}): "
+            "dado de fechamento de D-1 (ou mais velho) nunca deveria decidir stop "
+            "nem entrada intra-dia com dinheiro de verdade. Use --feed yfinance "
+            "(~15min de atraso, default) ou --feed mt5 (mesmo terminal do broker, "
+            "sem atraso conhecido — ver docstring de live/feed.py::MT5Feed)."
+        )
+    if args.feed == "mt5":
+        symbol_map = json.loads(args.mt5_symbol_map) if args.mt5_symbol_map else None
+        feed = MT5Feed(symbol_map=symbol_map, **_mt5_credentials())
+    else:
+        feed = YFinanceFeed()
     policy = (FloorSkim(floor=args.floor) if args.floor is not None
               else official_policy(initial_capital=args.capital))
     return LiveRuntime(
@@ -231,6 +255,15 @@ def cmd_decide(args) -> None:
 def cmd_execute(args) -> None:
     rt = build(args)
     from live import clock
+    from core.live_models import SessionPhase
+
+    fase = clock.phase()
+    if fase != SessionPhase.OPEN:
+        print(f"'execute' recusado fora da fase OPEN (fase atual: {fase.value}) — "
+              "rodar fora do pregao executaria as intencoes de D+1 contra as "
+              "cotacoes de D (a sessao errada); espere o pregao abrir ou use "
+              "'decide'/'step' conforme a fase.")
+        sys.exit(1)
     print(rt.execute_session(clock.next_session(clock.session_date())))
 
 
@@ -372,7 +405,7 @@ def main() -> None:
     p.add_argument("--capital", type=float, default=1_000.0)
     p.add_argument("--floor", type=float, default=None,
                    help="piso do saque em R$ absoluto (default: 55x o capital)")
-    p.add_argument("--feed", default="parquet", choices=("parquet", "yfinance"))
+    p.add_argument("--feed", default="yfinance", choices=("parquet", "yfinance", "mt5"))
     p.add_argument("--notify-min-level", default="warn", choices=("debug", "info", "warn", "error"),
                    help="nivel minimo que sai pelo canal externo (Telegram/e-mail); "
                         "o diario sempre grava tudo, sem filtro")

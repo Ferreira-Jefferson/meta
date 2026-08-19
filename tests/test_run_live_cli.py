@@ -54,7 +54,7 @@ def isolated_db(tmp_path, monkeypatch):
 
 def _args(**overrides) -> argparse.Namespace:
     base = dict(
-        feed="parquet", mode="manual", capital=1_000.0, floor=None,
+        feed="yfinance", mode="manual", capital=1_000.0, floor=None,
         notify_min_level="warn", daily_loss_limit=None, monthly_loss_limit=None,
         mt5_magic=20260817, mt5_shares_per_lot=None, mt5_symbol_map=None,
     )
@@ -108,6 +108,69 @@ def test_build_manual_monta_manual_broker(cli, isolated_db):
 def test_build_mt5_com_shares_per_lot_monta_mt5_broker(cli, isolated_db):
     rt = cli.build(_args(mode="mt5", mt5_shares_per_lot=1.0))
     assert rt.broker.mode == "mt5"
+
+
+# ---------- feed obrigatorio em operacao real (FEAT-004, item 4.1) ---------
+
+def test_build_recusa_feed_parquet_em_operacao_real(cli, isolated_db):
+    """`--feed parquet` (dado de D-1, ou mais velho) nunca pode operar
+    dinheiro real -- `build()` recusa para os dois modos reais (manual/mt5),
+    unicos que chegam ate a checagem do feed."""
+    with pytest.raises(ValueError):
+        cli.build(_args(mode="manual", feed="parquet"))
+    with pytest.raises(ValueError):
+        cli.build(_args(mode="mt5", feed="parquet", mt5_shares_per_lot=1.0))
+
+
+def test_build_monta_mt5feed_quando_pedido(cli, isolated_db):
+    from live.feed import MT5Feed
+
+    rt = cli.build(_args(mode="mt5", feed="mt5", mt5_shares_per_lot=1.0))
+    assert isinstance(rt.feed, MT5Feed)
+
+
+# ---------- cmd_execute recusa fora da fase OPEN (FEAT-004, item 4.4c) -----
+
+class _FakeRuntimeExecute:
+    """Minimo o suficiente para exercitar so o dispatch de `cmd_execute` --
+    nao monta universo/dado real (`execute_session` de verdade exigiria
+    parquet em disco para o WATCHLIST inteiro, irrelevante para o que este
+    teste prova: a guarda de fase roda ANTES de chamar `execute_session`)."""
+
+    def __init__(self):
+        self.executed = False
+
+    def execute_session(self, session):
+        self.executed = True
+        return f"execute_session chamado para {session}"
+
+
+def test_cmd_execute_recusa_fora_da_fase_open(cli, isolated_db, monkeypatch):
+    """Rodar `execute` fora da fase OPEN executaria as intencoes de D+1
+    contra as cotacoes de D (a sessao errada) -- `cmd_execute` recusa antes
+    de chamar `execute_session`."""
+    from core.live_models import SessionPhase
+    from live import clock as live_clock
+
+    fake_rt = _FakeRuntimeExecute()
+    monkeypatch.setattr(cli, "build", lambda args: fake_rt)
+    monkeypatch.setattr(live_clock, "phase", lambda *a, **k: SessionPhase.POST_CLOSE)
+
+    with pytest.raises(SystemExit):
+        cli.cmd_execute(_args(mode="manual"))
+    assert fake_rt.executed is False
+
+
+def test_cmd_execute_no_fase_open_nao_recusa(cli, isolated_db, monkeypatch):
+    from core.live_models import SessionPhase
+    from live import clock as live_clock
+
+    fake_rt = _FakeRuntimeExecute()
+    monkeypatch.setattr(cli, "build", lambda args: fake_rt)
+    monkeypatch.setattr(live_clock, "phase", lambda *a, **k: SessionPhase.OPEN)
+
+    cli.cmd_execute(_args(mode="manual"))  # nao levanta SystemExit
+    assert fake_rt.executed is True
 
 
 # ---------- recusa de tickets/confirm sobre conta nao-manual (1.5) ----------
