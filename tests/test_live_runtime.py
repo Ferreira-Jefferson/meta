@@ -31,29 +31,14 @@ from core.models import ExitReason
 from journal import live_store as store
 from live import clock
 from live.broker import Broker, ManualBroker
-from live.notify import NullNotifier, Notifier
+from live.notify import NullNotifier
 from live.riskguard import CircuitBreaker
 from live.runtime import LiveRuntime
-from strategy.base import AdjustStop, Enter, Exit, Strategy
+from strategy.base import AdjustStop, Enter, Exit
 from strategy.buy_the_dip import BuyTheDip
-from tests.doubles import PaperBroker, ReplayFeed
+from tests.doubles import PaperBroker, ReplayFeed, ScriptedStrategy, _RecordingNotifier
 
 TICKER = "AAA.SA"
-
-
-class ScriptedStrategy(Strategy):
-    """Estrategia sintetica: as acoes de cada dia vem de um dicionario fixo,
-    indexado pela data de DECISAO (o `ctx.session` do fecho), nao pelo preco.
-    Deixa o teste 100% deterministico e alheio a qualquer logica de sinal."""
-
-    name = "scripted_test_robot"
-    version = "test"
-
-    def __init__(self, script: dict) -> None:
-        self.script = script
-
-    def on_bar(self, on_date, open_positions, cash_available):
-        return list(self.script.get(pd.Timestamp(on_date), []))
 
 
 def _sessions(n: int) -> list[date]:
@@ -1122,16 +1107,6 @@ def test_status_mostra_recomendacao_de_saque_pendente_varios_dias_depois(tmp_pat
 
 # ---------- integracao: disjuntor de risco e notificador -------------------
 
-class _RecordingNotifier(Notifier):
-    """Fake em memoria — grava toda chamada para o teste inspecionar."""
-
-    def __init__(self) -> None:
-        self.calls: list[tuple] = []
-
-    def notify(self, level, source, message, payload=None) -> None:
-        self.calls.append((level, source, message, payload))
-
-
 def test_disjuntor_veta_entrada_nova_mas_nao_saida(tmp_path, universe):
     """CircuitBreaker acionado: `close_and_decide` filtra ENTER do robo de
     investimento — reduzir risco nunca e bloqueado (ver docstring de
@@ -1997,3 +1972,143 @@ def test_status_lista_todos_os_pregoes_sem_decisao_e_o_notificador(tmp_path, uni
     monkeypatch.setattr(live_clock, "session_date", lambda *a, **k: d2)
     status2 = rt.status()
     assert status2["decisao_pendente"] == [d1.isoformat(), d2.isoformat()]
+
+
+# ---------- FEAT-005: cobertura de menores -------------------------------
+
+def test_reconcile_broker_cash_apos_saque_confirmado_nao_vira_deposito(tmp_path, universe):
+    """Interacao especifica sem cobertura ate esta feature: uma conciliacao
+    de caixa MT5 rodada LOGO APOS uma confirmacao de saque humana nao pode
+    ler o caixa ja reduzido como se fosse deposito -- o saldo externo real
+    (o usuario sacou na corretora tambem) ja vem reduzido, e a diferenca
+    contra `account.cash` (tambem ja reduzido) deve ser ~0."""
+    data_dir, days = universe
+    policy = FloorSkim(pct=0.5, floor=100.0, day=1, min_amount=0.0)
+    broker = _FakeCashBroker(10_000.0)
+    rt = LiveRuntime(
+        account_name="teste", strategy=ScriptedStrategy({}), policy=policy,
+        feed=ReplayFeed(), broker=broker, config=BacktestConfig(initial_capital=10_000.0, lot_size=1),
+        tickers=(TICKER,), db_path=tmp_path / "live.sqlite", data_dir=data_dir,
+    )
+    rt.ensure_account()
+    rt.close_and_decide(days[0])
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, "teste")
+        pend = store.pending_withdraw_intents(conn, acc.id)
+    assert len(pend) == 1
+    intent = pend[0]
+
+    report = rt.confirm_withdrawal(5_000.0, session=days[1], intent_id=intent.id)
+    assert report.action == "withdraw_confirm"
+
+    with store.live_journal(rt.db_path) as conn:
+        acc_apos = store.load_account(conn, "teste")
+
+    # A corretora real refletiria o MESMO saque (o usuario sacou de la
+    # tambem): o saldo externo relatado ja vem reduzido, igual ao caixa
+    # gravado no diario.
+    broker._cash = acc_apos.cash
+
+    report2 = rt.reconcile_broker_cash()
+    assert report2.action == "reconcile_cash"
+    assert report2.detail["diferenca"] == pytest.approx(0.0, abs=0.01)
+
+    with store.live_journal(rt.db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM live_deposits WHERE account_id = ?", (acc_apos.id,)
+        ).fetchall()
+    assert rows == [], "saque confirmado nao pode ser lido como deposito"
+
+
+def test_execute_session_chamada_duas_vezes_e_idempotente(tmp_path, universe):
+    """Mesma sessao, `execute_session` chamado duas vezes seguidas: a
+    segunda chamada nao gera ordem nem fill duplicado -- a intencao ja saiu
+    de PENDING na primeira chamada."""
+    data_dir, days = universe
+    d0, d1 = days[0], days[1]
+    script = {pd.Timestamp(d0): [Enter(ticker=TICKER, initial_stop=None, size_hint=None)]}
+    rt = _runtime(tmp_path, data_dir, script)  # mode="mt5" default -> PaperBroker preenche na hora
+    rt.feed.set(TICKER, 100.0)
+    rt.ensure_account()
+
+    rt.close_and_decide(d0)
+    with store.live_journal(rt.db_path) as conn:
+        acc0 = store.load_account(conn, "teste")
+        pend = store.pending_intents(conn, acc0.id, d1)
+    assert len(pend) == 1
+    intent_id = pend[0].id
+
+    r1 = rt.execute_session(d1)
+    assert r1.detail["entradas"] == 1
+
+    r2 = rt.execute_session(d1)
+    assert r2.detail["entradas"] == 0
+    assert r2.detail["rejeitadas"] == 0
+    assert r2.detail["aguardando"] == 0
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, "teste")
+        ordens = store.orders_for_intent(conn, intent_id)
+    assert len(ordens) == 1, "segunda chamada nao deveria ter criado uma 2a ordem"
+    assert TICKER in acc.positions
+    assert acc.positions[TICKER].quantity == ordens[0].filled_qty
+
+
+def test_entrada_inviavel_por_caixa_insuficiente_notifica(tmp_path, universe):
+    """Intent de ENTER com caixa menor que 1 lote: confirma o evento
+    `warn`/"nao cobre um lote" gravado em `_buy` (`runtime.py`), hoje sem
+    nenhuma asserção cobrindo essa mensagem especifica."""
+    data_dir, days = universe
+    d0, d1 = days[0], days[1]
+    script = {pd.Timestamp(d0): [Enter(ticker=TICKER, initial_stop=None, size_hint=None)]}
+    rt = _runtime(tmp_path, data_dir, script, capital=1.0)  # caixa nao cobre nem 1 acao a R$100
+    rt.feed.set(TICKER, 100.0)
+    rt.ensure_account()
+
+    rt.close_and_decide(d0)
+    result = rt.execute_session(d1)
+
+    assert result.detail["entradas"] == 0
+    assert result.detail["rejeitadas"] == 1
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, "teste")
+        eventos = store.recent_events(conn, acc.id)
+    assert TICKER not in acc.positions
+    assert any(
+        e["level"] == "warn" and "nao cobre um lote" in e["message"]
+        for e in eventos
+    )
+
+
+def test_saque_multiplo_pendente_simultaneo_loga_invariante_quebrada(tmp_path, universe):
+    """Corrompe `live_intents` manualmente para ter 2 intents WITHDRAW
+    PENDING ao mesmo tempo -- invariante que `_expire_withdraw_advice` nunca
+    deveria encontrar (ver docstring do metodo em `runtime.py`), mas se
+    encontrar, loga `error`/"invariante quebrada" em vez de passar batido."""
+    from core.live_models import Intent, IntentKind, RobotRole
+
+    data_dir, _all_days = universe
+    rt, _intent, days = _runtime_com_recomendacao(tmp_path, data_dir, amount=5_000.0, capital=10_000.0)
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, "teste")
+        intruso = Intent(
+            robot="withdrawal", role=RobotRole.WITHDRAWAL, kind=IntentKind.WITHDRAW,
+            decided_on=days[0], execute_on=days[1], amount=1_000.0,
+            reason="corrompido_teste",
+        )
+        store.record_intent(conn, acc.id, intruso)
+        pend_antes = store.pending_withdraw_intents(conn, acc.id)
+    assert len(pend_antes) == 2  # premissa do teste: invariante ja quebrada
+
+    rt.execute_session(days[1])
+
+    with store.live_journal(rt.db_path) as conn:
+        acc2 = store.load_account(conn, "teste")
+        eventos = store.recent_events(conn, acc2.id)
+    assert any(
+        e["level"] == "error" and "invariante quebrada" in e["message"]
+        for e in eventos
+    )

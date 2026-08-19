@@ -21,11 +21,15 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Callable, Optional, Sequence
 
+import pandas as pd
+
 from backtest.costs import apply_slippage, fees_for_leg
 from core.config import CostModel
 from core.live_models import BrokerMode, Order, OrderSide, OrderStatus, OrderType, Quote
 from live.broker import Broker
 from live.feed import QuoteFeed
+from live.notify import Notifier
+from strategy.base import Action, Strategy
 
 
 class PaperBroker(Broker):
@@ -138,3 +142,59 @@ class ReplayFeed(QuoteFeed):
 
     def quotes(self, tickers: Sequence[str]) -> dict[str, Quote]:
         return {t: self._quotes[t] for t in tickers if t in self._quotes}
+
+
+class _RecordingNotifier(Notifier):
+    """Notifier fake em memoria — so registra as chamadas recebidas.
+
+    Consolidacao (FEAT-005) de duas copias identicas que viviam em
+    `tests/test_live_notify.py` e `tests/test_live_runtime.py`."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple] = []
+
+    def notify(self, level, source, message, payload=None) -> None:
+        self.calls.append((level, source, message, payload))
+
+
+class ScriptedStrategy(Strategy):
+    """Estrategia sintetica: as acoes de cada dia vem de um dicionario fixo,
+    indexado pela data de DECISAO (o `ctx.session` do fecho), nao pelo preco.
+    Deixa o teste 100% deterministico e alheio a qualquer logica de sinal.
+
+    Consolidacao (FEAT-005) de `tests/test_live_runtime.py`."""
+
+    name = "scripted_test_robot"
+    version = "test"
+
+    def __init__(self, script: dict) -> None:
+        self.script = script
+
+    def on_bar(self, on_date, open_positions, cash_available):
+        return list(self.script.get(pd.Timestamp(on_date), []))
+
+
+class ScriptedStrategySequence(Strategy):
+    """Estrategia sintetica: devolve uma lista fixa de acoes por chamada de
+    `on_bar`, gravando os argumentos recebidos para o teste inspecionar.
+
+    Renomeada (FEAT-005) a partir de `_ScriptedStrategy` de
+    `tests/test_live_robots.py` — semantica de FILA de acoes por chamada,
+    diferente de `ScriptedStrategy` acima (dict indexado por data)."""
+
+    name = "scripted"
+    version = "1"
+
+    def __init__(self, actions_by_call: list[list[Action]]):
+        self._actions_by_call = list(actions_by_call)
+        self.calls: list[tuple] = []
+        self.initialized_with: tuple | None = None
+
+    def initialize(self, panels, ibov) -> None:
+        self.initialized_with = (panels, ibov)
+
+    def on_bar(self, date, open_positions, cash_available):
+        self.calls.append((date, dict(open_positions), cash_available))
+        if self._actions_by_call:
+            return self._actions_by_call.pop(0)
+        return []

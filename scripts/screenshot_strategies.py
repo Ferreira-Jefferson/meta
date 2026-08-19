@@ -25,9 +25,9 @@ async def run() -> None:
 
         # 2. Preencher e submeter
         await page.fill('input[name="start_date"]', "2018-01-01")
-        # Ao submeter vamos para /strategies/sim/{id}
+        # Ao submeter vamos para /sim/{id} (RedirectResponse de /strategies/{key}/run)
         await page.click('button[type="submit"]')
-        await page.wait_for_url("**/strategies/sim/**", timeout=15000)
+        await page.wait_for_url("**/sim/**", timeout=15000)
 
         # 3. Screenshot durante execução (aguarda alguns eventos de progresso)
         await page.wait_for_timeout(1500)

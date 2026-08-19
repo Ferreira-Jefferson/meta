@@ -16,7 +16,7 @@ async def run(sim_id: str, tag: str) -> None:
         browser = await p.chromium.launch()
         ctx = await browser.new_context(viewport={"width": 1440, "height": 900})
         page = await ctx.new_page()
-        await page.goto(f"http://127.0.0.1:8765/strategies/sim/{sim_id}", wait_until="networkidle")
+        await page.goto(f"http://127.0.0.1:8765/sim/{sim_id}", wait_until="networkidle")
         try:
             await page.wait_for_selector('#sim-status:has-text("done")', timeout=8000)
         except Exception:
