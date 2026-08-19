@@ -14,7 +14,7 @@ async def run(sim_id: str) -> None:
         page = await ctx.new_page()
         page.on("console", lambda msg: print(f"[{msg.type}] {msg.text}"))
         page.on("pageerror", lambda err: print(f"[error] {err}"))
-        await page.goto(f"http://127.0.0.1:8765/strategies/sim/{sim_id}", wait_until="networkidle")
+        await page.goto(f"http://127.0.0.1:8765/sim/{sim_id}", wait_until="networkidle")
         await page.wait_for_timeout(3000)
 
         result = await page.evaluate("""() => {
