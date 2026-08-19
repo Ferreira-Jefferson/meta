@@ -353,7 +353,18 @@ def run_portfolio_backtest(
                 continue
             df = enriched.get(act.ticker)
             if df is None or today not in df.index:
-                pending.append(act)
+                # Ticker sem dado hoje: DESCARTA, nunca reenfileira. Reenfileirar
+                # faria uma saida decidida no close[D] executar em D+2, D+3... se
+                # o ticker tiver um gap — exatamente o "executar tarde" que a
+                # regra 7 do AGENTS.md proibe (decisao atrasada nunca executa
+                # tarde), e quebra o contrato "close[D] -> open[D+1], nunca outro
+                # dia" da regra 4. Simetrico ao laco `enters_p` logo abaixo, que
+                # ja descarta (nao reenfileira) quando o ticker nao tem dado.
+                # Seguro por desenho: a familia BuyTheDip reavalia o alvo de
+                # rotacao TODO mes (`on_bar` roda no month-end e recalcula `tgt`
+                # do zero a partir de `_scores`/`_dist_from_high`) — uma saida
+                # descartada por falta de dado simplesmente sera re-decidida (ou
+                # nao) no proximo rebalance mensal, nao fica presa em limbo.
                 continue
 
             pos = positions.pop(act.ticker)
@@ -456,13 +467,16 @@ def run_portfolio_backtest(
 
             opn = float(df.at[today, "open"])
             ref_price = opn
-            entries_filled += 1
             # Sizing, stop default e teto de slots vivem em `backtest/sizing.py`
             # para o runtime ao vivo chamar a MESMA mecanica — ver o docstring
             # de la: e o unico jeito de a carteira real nao divergir da testada.
             plan = plan_entry(cash, ref_price, act.size_hint, config)
             if not plan.is_feasible:
                 continue
+            # So conta como "preenchida" a entrada que de fato virou posicao —
+            # incrementar antes do teste de viabilidade fazia `entries_skipped`
+            # (`entries_attempted - entries_filled`) nunca poder ser > 0.
+            entries_filled += 1
             exec_px = plan.exec_price
             cash -= plan.cost
 
