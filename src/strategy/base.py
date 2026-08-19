@@ -139,8 +139,14 @@ class Strategy(ABC):
         motivo (indicadores não-serializáveis que não deveriam sobreviver a
         restart de qualquer forma, porque `initialize()` os recalcula).
         Mesma convenção de `backtest.withdrawal.WithdrawalPolicy.state()`.
+
+        `getattr(..., None)` com default (correção pós-review, tentativa 1):
+        sem ele, uma subclasse que declare `_stateful_keys` com um atributo
+        criado fora de `__init__` (ex.: só na primeira chamada de `on_bar`)
+        levantaria `AttributeError` aqui no meio de um `save_account` — o
+        mesmo cuidado que `restore()` logo abaixo já tinha.
         """
-        return {k: getattr(self, k) for k in self._stateful_keys}
+        return {k: getattr(self, k, None) for k in self._stateful_keys}
 
     def restore(self, state: dict) -> None:
         """Reidrata o estado devolvido por `state()`.
