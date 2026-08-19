@@ -369,9 +369,24 @@ def operacao(request: Request):
 
 @app.get("/operacao/fragment", response_class=HTMLResponse)
 def operacao_fragment(request: Request):
-    """Corpo que o polling HTMX troca — mesmo parcial usado no load inicial
-    (ver `operacao.html`), assim a página nunca duplica a marcação."""
-    return TEMPLATES.TemplateResponse(request, "partials/operacao_body.html", _operacao_ctx())
+    """Fragmento que o polling HTMX troca (ver `hx-trigger` em
+    `operacao_live_panel.html`) -- só o painel operacional (status,
+    capital, posições, eventos), NUNCA credenciais nem o form de conta
+    nova. Achado ao vivo: quando esse polling trocava o `#ops-body`
+    inteiro, qualquer <details> aberto (credenciais, opções avançadas)
+    fechava sozinho a cada refresh de fundo, porque o servidor sempre
+    renderiza fechado e `outerHTML` recria o nó do zero -- credencial e
+    setup inicial são configuração do usuário, não dado que o robô gera,
+    então saíram do escopo do poll (ver `operacao_body.html`).
+    Se a conta ainda não existe (poll que sobrou de uma aba antiga,
+    por exemplo), cai pro corpo inteiro -- o painel ao vivo pressupõe
+    conta."""
+    ctx = _operacao_ctx()
+    template = (
+        "partials/operacao_live_panel.html" if ctx["status"].get("existe")
+        else "partials/operacao_body.html"
+    )
+    return TEMPLATES.TemplateResponse(request, template, ctx)
 
 
 @app.post("/operacao/iniciar", response_class=HTMLResponse)
