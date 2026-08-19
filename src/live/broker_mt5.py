@@ -303,8 +303,14 @@ class MT5Broker(Broker):
             return order
 
         filled_volume = getattr(result, "volume", volume)
-        order.status = OrderStatus.FILLED
         order.filled_qty = int(round(filled_volume * self._shares_per_lot))
+        # Fill parcial de verdade da corretora (result.volume < volume pedido)
+        # vira PARTIAL, nunca FILLED — mesmo padrao ja usado por
+        # `ManualBroker.confirm` (`live/broker.py:146`). `Order.is_terminal`
+        # ja exclui PARTIAL corretamente (FEAT-004, item 4.4b).
+        order.status = (
+            OrderStatus.FILLED if order.filled_qty >= order.quantity else OrderStatus.PARTIAL
+        )
         order.avg_price = float(result.price)
         order.broker_ref = str(getattr(result, "order", None) or "")
         order.fees = self._resolve_fees(mt5, result)
