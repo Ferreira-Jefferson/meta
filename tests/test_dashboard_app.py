@@ -75,7 +75,7 @@ def _reset_deposit_dedup():
 def _create_account(db_path) -> int:
     with live_store.live_journal(db_path) as conn:
         acc = live_store.ensure_account(
-            conn, name=live_service.ACCOUNT_NAME, mode="manual",
+            conn, name=live_service.ACCOUNT_NAME, mode="mt5",
             initial_capital=1_000.0, investment_robot="dip2_hw40",
             withdrawal_robot="official_policy",
         )
@@ -156,7 +156,7 @@ def test_get_status_usa_capital_real_da_conta_atraves_de_build_runtime(isolated_
     db_path = isolated_journal
     with live_store.live_journal(db_path) as conn:
         live_store.ensure_account(
-            conn, name=live_service.ACCOUNT_NAME, mode="manual",
+            conn, name=live_service.ACCOUNT_NAME, mode="mt5",
             initial_capital=50_000.0, investment_robot="dip2_hw40",
             withdrawal_robot="official_policy",
         )
@@ -182,7 +182,7 @@ def test_get_status_disjuntor_nao_nulo_quando_ha_config_salva(isolated_journal, 
     db_path = isolated_journal
     with live_store.live_journal(db_path) as conn:
         live_store.ensure_account(
-            conn, name=live_service.ACCOUNT_NAME, mode="manual",
+            conn, name=live_service.ACCOUNT_NAME, mode="mt5",
             initial_capital=1_000.0, investment_robot="dip2_hw40",
             withdrawal_robot="official_policy",
         )
@@ -191,7 +191,7 @@ def test_get_status_disjuntor_nao_nulo_quando_ha_config_salva(isolated_journal, 
     state_path.write_text(json.dumps({
         "pid": None, "started_at": None,
         "config": {
-            "mode": "manual", "capital": 1_000.0, "floor": None,
+            "mode": "mt5", "capital": 1_000.0, "floor": None,
             "daily_loss_limit": 0.05, "monthly_loss_limit": None,
             "notify_min_level": "warn", "mt5_shares_per_lot": None,
         },

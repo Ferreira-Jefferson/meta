@@ -166,7 +166,7 @@ CREATE TABLE IF NOT EXISTS live_accounts (
     id                 INTEGER PRIMARY KEY AUTOINCREMENT,
     name               TEXT    NOT NULL UNIQUE,
     -- Vocabulário canônico: ver `core.live_models.BrokerMode` (FEAT-001).
-    mode               TEXT    NOT NULL CHECK (mode IN ('manual','mt5')),
+    mode               TEXT    NOT NULL CHECK (mode IN ('mt5')),
     initial_capital    REAL    NOT NULL,
     cash               REAL    NOT NULL,
     investment_robot   TEXT    NOT NULL DEFAULT '',
@@ -306,9 +306,9 @@ CREATE INDEX IF NOT EXISTS idx_live_withdrawals_account ON live_withdrawals(acco
 -- distingue as duas origens legítimas: `'mt5_reconciliation'` (checagem
 -- automática do saldo real do terminal antes do pregão abrir, ver
 -- `live.runtime.reconcile_broker_cash`) e `'manual'` (botão "Registrar
--- aporte" do dashboard — fallback para quando não há saldo externo para
--- comparar sozinho, caso de Paper/Manual). `note` guarda o saldo real vs.
--- caixa esperado no caso automático, para o crédito ser auditável depois.
+-- aporte" do dashboard — força o crédito sem esperar a próxima checagem
+-- automática). `note` guarda o saldo real vs. caixa esperado no caso
+-- automático, para o crédito ser auditável depois.
 CREATE TABLE IF NOT EXISTS live_deposits (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     account_id     INTEGER NOT NULL REFERENCES live_accounts(id) ON DELETE CASCADE,

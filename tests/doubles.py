@@ -10,11 +10,10 @@ explicitamente por nome (testes e `scripts/run_live_sim.py`, que documenta por
 que é uma exceção deliberada).
 
 `PaperBroker.mode` — decisão obrigatória do plan-reviewer (ACTION-PLAN FEAT-001,
-seção 2): o vocabulário canônico só tem `manual`/`mt5` (`BrokerMode`). Como o
-dublê simula uma corretora AUTOMÁTICA (preenche sozinho, `supports_automation()
--> True`, ao contrário de `ManualBroker`), ele declara `mode = BrokerMode.MT5.value`
-— nunca um terceiro valor "paper" que o schema (`live_accounts.mode` CHECK)
-não aceitaria mais.
+seção 2): o vocabulário canônico só tem `mt5` (`BrokerMode`). Como o dublê
+simula uma corretora AUTOMÁTICA (preenche sozinho, `supports_automation() ->
+True`), ele declara `mode = BrokerMode.MT5.value` — nunca um terceiro valor
+"paper" que o schema (`live_accounts.mode` CHECK) não aceitaria mais.
 """
 from __future__ import annotations
 

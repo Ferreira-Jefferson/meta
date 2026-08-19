@@ -103,9 +103,9 @@ class ProcessConfig:
     daily_loss_limit: Optional[float] = None
     monthly_loss_limit: Optional[float] = None
     notify_min_level: str = "warn"
-    # Obrigatório quando `mode == "mt5"` (sem valor universal — ver docstring
-    # de `live/broker_mt5.py`); `create_account()`/`start()` recusam cedo se
-    # vier `None` nesse modo, em vez de herdar o default `1.0` do argparse.
+    # Obrigatório sempre (sem valor universal — ver docstring de
+    # `live/broker_mt5.py`); `create_account()`/`start()` recusam cedo se
+    # vier `None`, em vez de herdar o default `1.0` do argparse.
     mt5_shares_per_lot: Optional[float] = None
 
 
@@ -273,7 +273,7 @@ def start(config: ProcessConfig) -> dict:
     with _start_lock:
         if status() is not None:
             raise RuntimeError("já existe um robô rodando — pare antes de iniciar outro.")
-        if config.mode == "mt5" and (config.mt5_shares_per_lot is None or config.mt5_shares_per_lot <= 0):
+        if config.mt5_shares_per_lot is None or config.mt5_shares_per_lot <= 0:
             raise RuntimeError(
                 "modo mt5 exige o campo 'ações por lote' (mt5_shares_per_lot) — "
                 "não há valor universal, confira o symbol_info do seu terminal MT5."

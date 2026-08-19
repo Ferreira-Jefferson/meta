@@ -216,8 +216,8 @@ class LiveRuntime:
         self._risk_sem_base_avisado: Optional[date] = None
         # Aviso "conta de dinheiro real sem canal de notificacao" (achado
         # E7): uma vez por PROCESSO (nao persistido, nao por sessao) --
-        # senao repetiria em todo `close_and_decide` de uma conta manual/mt5
-        # sem `notifier` configurado.
+        # senao repetiria em todo `close_and_decide` de uma conta mt5 sem
+        # `notifier` configurado.
         self._null_notifier_warned: bool = False
 
     # ---------- log + alerta (sempre juntos) -------------------------------
@@ -602,10 +602,10 @@ class LiveRuntime:
             self._restore_robot_state(account.policy_state)
 
             # E7: aviso UNICO por processo se a conta e de dinheiro real
-            # (manual/mt5) e nao ha canal de notificacao configurado -- sem
-            # isso, o alerta mais importante do lote sairia so para um log
-            # que ninguem le.
-            if (account.mode in ("manual", "mt5") and isinstance(self.notifier, NullNotifier)
+            # (mt5) e nao ha canal de notificacao configurado -- sem isso, o
+            # alerta mais importante do lote sairia so para um log que
+            # ninguem le.
+            if (account.mode == "mt5" and isinstance(self.notifier, NullNotifier)
                     and not self._null_notifier_warned):
                 self._null_notifier_warned = True
                 self._log(conn, account.id, "warn", "runtime",
@@ -726,8 +726,9 @@ class LiveRuntime:
 
         `_sell`/`_buy` devolvem um de tres resultados, nao um bool: `'done'`
         (aplicado), `'rejected'` (nao vai acontecer) e `'pending'` (ordem no
-        ar, aguardando confirmacao — corretora manual ou limitada que ainda
-        nao bateu o preco). `'pending'` NAO e rejeicao: a intencao vira
+        ar, sem fill ainda — MT5 pode devolver fill de forma assincrona, ou
+        uma ordem limitada que ainda nao bateu o preco). `'pending'` NAO e
+        rejeicao: a intencao vira
         `EXECUTING` e e resolvida depois por `reconcile_pending_fills`, sem
         ser re-tentada nem expirada por atraso.
 
@@ -876,10 +877,11 @@ class LiveRuntime:
             store.set_intent_status(conn, intent.id, IntentStatus.REJECTED)
             return "rejected"
         if order.filled_qty <= 0:
-            # Ordem viva, sem fill ainda (corretora manual aguardando humano,
-            # ou limitada que nao bateu preco). NAO e rejeicao: a intencao
-            # fica EXECUTING para `reconcile_pending_fills` retomar depois,
-            # sem ser re-tentada como PENDING nem expirada por atraso.
+            # Ordem viva, sem fill ainda (MT5 pode confirmar de forma
+            # assincrona, ou ordem limitada que nao bateu preco). NAO e
+            # rejeicao: a intencao fica EXECUTING para
+            # `reconcile_pending_fills` retomar depois, sem ser re-tentada
+            # como PENDING nem expirada por atraso.
             store.set_intent_status(conn, intent.id, IntentStatus.EXECUTING)
             self._log(conn, account.id, "info", "runtime",
                             f"saida de {pos.ticker} aguardando confirmacao (ordem #{order.id})")
@@ -898,9 +900,9 @@ class LiveRuntime:
         store.set_intent_status(conn, intent.id, IntentStatus.DONE)
         # 4.4d: saida executada com sucesso e notificada -- distingue PARCIAL
         # de TOTAL (§6 item 3 do plan-reviewer): sem isso, um fill parcial
-        # (ja alcancavel via ManualBroker.confirm, e apos o passo 2 tambem
-        # via MT5Broker) ficaria identico a um fill total na notificacao,
-        # escondendo que falta agir sobre o restante (`order.leaves_qty`).
+        # (alcancavel via MT5Broker) ficaria identico a um fill total na
+        # notificacao, escondendo que falta agir sobre o restante
+        # (`order.leaves_qty`).
         if order.status == OrderStatus.PARTIAL:
             self._log(conn, account.id, "info", "runtime",
                             f"SAIDA PARCIAL de {pos.ticker}: {order.filled_qty} de "
@@ -1207,13 +1209,14 @@ class LiveRuntime:
     def reconcile_pending_fills(self, now: Optional[datetime] = None) -> StepReport:
         """Aplica ao estado da conta qualquer ordem `EXECUTING` que se resolveu.
 
-        Existe por causa da corretora MANUAL: `place()` la nao preenche nada —
-        so um humano sabe o preco real, via `ManualBroker.confirm()`, chamado
-        de outro processo (`scripts/run_live.py confirm`) em outro momento. Sem
-        este passo, o fill confirmado ficaria escrito na `Order` mas NUNCA
-        chegaria a `AccountState` (caixa, posicao) — dinheiro perdido no
-        diario. Seguro chamar a qualquer momento: so existe intencao
-        `EXECUTING` quando ha mesmo algo pendente.
+        Existe porque MT5 pode devolver fill de forma assincrona: `place()`
+        pode retornar sem fill (ordem so aceita, nao executada), e o fill
+        real so aparece depois via `poll()`, chamado de outro momento deste
+        mesmo processo ou de um restart. Sem este passo, o fill confirmado
+        ficaria escrito na `Order` mas NUNCA chegaria a `AccountState`
+        (caixa, posicao) — dinheiro perdido no diario. Seguro chamar a
+        qualquer momento: so existe intencao `EXECUTING` quando ha mesmo
+        algo pendente.
 
         ENTER/EXIT geram exatamente um `Order` por `Intent`, entao olhar so o
         ultimo (`orders[-1]`) basta. WITHDRAW nao aparece mais aqui: desde que
@@ -1285,10 +1288,10 @@ class LiveRuntime:
         nunca esta reconciliacao.
 
         So age quando a corretora sabe responder isso: `cash_balance()`
-        default e `None` (Manual, sem conta real para comparar) e este
-        metodo vira no-op silencioso — sem log, senao spamaria `live_events`
-        todo santo dia, para toda conta manual, com um evento que nao diz
-        nada de novo.
+        default e `None` (sem conta real para comparar) e este metodo vira
+        no-op silencioso — sem log, senao spamaria `live_events` todo santo
+        dia, para toda conta sem essa fonte, com um evento que nao diz nada
+        de novo.
         """
         real_balance = self.broker.cash_balance()
         if real_balance is None:
@@ -1437,9 +1440,10 @@ class LiveRuntime:
         hoje = now.date()
         passos: list[StepReport] = []
 
-        # Reconciliar primeiro, em toda fase: uma confirmacao manual pode ter
-        # chegado a qualquer momento (fora do horario de pregao inclusive), e
-        # aplicar o fill ao caixa/posicao nao depende de estar no pregao.
+        # Reconciliar primeiro, em toda fase: uma confirmacao assincrona do
+        # MT5 pode ter chegado a qualquer momento (fora do horario de pregao
+        # inclusive), e aplicar o fill ao caixa/posicao nao depende de estar
+        # no pregao.
         reconciliado = self.reconcile_pending_fills(now)
         if reconciliado.detail.get("aplicadas"):
             passos.append(reconciliado)

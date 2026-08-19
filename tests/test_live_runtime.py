@@ -3,9 +3,9 @@
 Nao usa `data/raw` real nem a estrategia oficial: constroi um universo
 sintetico em `tmp_path` e um robo de investimento SCRIPTADO (decide por data,
 nao por preco) para isolar o que se quer provar aqui — a MECANICA do ambiente
-(ordem das operacoes, idempotencia, anti-look-ahead, persistencia de estado,
-o fluxo de corretora manual) — do comportamento de qualquer estrategia real.
-Esse comportamento ja e validado pelo backtest; aqui o alvo e o encanamento.
+(ordem das operacoes, idempotencia, anti-look-ahead, persistencia de estado) —
+do comportamento de qualquer estrategia real. Esse comportamento ja e
+validado pelo backtest; aqui o alvo e o encanamento.
 """
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ from core.live_models import (
 from core.models import ExitReason
 from journal import live_store as store
 from live import clock
-from live.broker import Broker, ManualBroker
+from live.broker import Broker
 from live.notify import NullNotifier
 from live.riskguard import CircuitBreaker
 from live.runtime import LiveRuntime
@@ -85,8 +85,9 @@ def universe(tmp_path):
 
 def _runtime(tmp_path, days_dir, script, policy=None, db_name="live.sqlite",
             mode="mt5", capital=10_000.0) -> LiveRuntime:
+    assert mode == "mt5"  # unico modo que existe — parametro mantido so pra nao reescrever os call-sites
     feed = ReplayFeed()
-    broker = ManualBroker() if mode == "manual" else PaperBroker(feed)
+    broker = PaperBroker(feed)
     return LiveRuntime(
         account_name="teste",
         strategy=ScriptedStrategy(script),
@@ -124,14 +125,19 @@ def test_db_path_default_e_live_db_path(tmp_path, monkeypatch):
     fake_db_path = tmp_path / "live_test.sqlite"
     monkeypatch.setattr(live_runtime, "DB_PATH", fake_db_path)
 
-    # `ManualBroker` (nao `PaperBroker`): este teste e sobre a RESOLUCAO do
+    # `MT5Broker` (nao `PaperBroker`): este teste e sobre a RESOLUCAO do
     # `db_path` default, nao sobre o tipo de broker — e `PaperBroker` (dublê,
     # `is_test_double = True`) e exatamente o caso que a guarda nova do passo
     # 10 (item 0.3 herdado) passa a recusar quando `db_path` resolve para
     # `DB_PATH` (ver `test_guarda_recusa_test_double_sobre_db_path_producao`
     # abaixo, que herda este cenario original como teste POSITIVO da guarda).
+    # `MT5Broker()` sem mock: o construtor nao toca no pacote `MetaTrader5`
+    # (import lazy, so dentro de metodo — ver `live/broker_mt5.py`), e nenhum
+    # metodo que precisaria dele e chamado aqui.
+    from live.broker_mt5 import MT5Broker
+
     feed = ReplayFeed()
-    broker = ManualBroker()
+    broker = MT5Broker()
     rt = LiveRuntime(
         account_name="teste_db_path_default",
         strategy=ScriptedStrategy({}),
@@ -181,11 +187,13 @@ def test_guarda_recusa_test_double_sobre_db_path_producao(tmp_path, monkeypatch)
             tickers=(TICKER,), db_path=str(tmp_path / relative_equivalent),
         )
 
-    # (c) broker de PRODUCAO (ManualBroker, is_test_double=False default) sobre
+    # (c) broker de PRODUCAO (MT5Broker, is_test_double=False default) sobre
     # o MESMO db_path -> aceito normalmente.
+    from live.broker_mt5 import MT5Broker
+
     rt = LiveRuntime(
         account_name="teste_guarda", strategy=ScriptedStrategy({}),
-        policy=FloorSkim(pct=0.5, floor=1e12), feed=feed, broker=ManualBroker(),
+        policy=FloorSkim(pct=0.5, floor=1e12), feed=feed, broker=MT5Broker(),
         config=BacktestConfig(initial_capital=1_000.0, lot_size=1),
         tickers=(TICKER,), db_path=fake_db_path,
     )
@@ -195,35 +203,40 @@ def test_guarda_recusa_test_double_sobre_db_path_producao(tmp_path, monkeypatch)
 # ---------- guarda: conta e broker divergentes nunca operam juntos ----------
 
 def test_load_account_recusa_quando_broker_diverge_do_modo_da_conta(tmp_path, universe):
-    """Passo 11(a): conta criada com `ManualBroker` (`mode="manual"`); um
-    SEGUNDO `LiveRuntime`, sobre o MESMO banco/conta, mas com um broker de
-    modo diferente (`PaperBroker`, `mode="mt5"`) tem de recusar operar —
+    """Passo 11(a): conta criada com um broker `mode="mt5"` (vocabulario real);
+    um SEGUNDO `LiveRuntime`, sobre o MESMO banco/conta, mas com um broker cujo
+    `.mode` foi forcado para um valor diferente do gravado (dublê de teste,
+    `.mode` sobrescrito na instancia — nunca precisa ser um segundo modo REAL,
+    so precisa divergir do que esta no banco) tem de recusar operar —
     `close_and_decide`/`status()` levantam `ValueError` em vez de aplicar
     decisao de um robo sobre uma conta que nao e a dele."""
     data_dir, days = universe
     d0 = days[0]
     db_path = tmp_path / "live.sqlite"
 
-    manual_rt = LiveRuntime(
+    real_feed = ReplayFeed()
+    real_rt = LiveRuntime(
         account_name="teste_divergencia", strategy=ScriptedStrategy({}),
-        policy=FloorSkim(pct=0.5, floor=1e12), feed=ReplayFeed(), broker=ManualBroker(),
+        policy=FloorSkim(pct=0.5, floor=1e12), feed=real_feed, broker=PaperBroker(real_feed),
         config=BacktestConfig(initial_capital=10_000.0, lot_size=1),
         tickers=(TICKER,), db_path=db_path, data_dir=data_dir,
     )
-    manual_rt.ensure_account()
+    real_rt.ensure_account()
 
-    mt5_feed = ReplayFeed()
-    mt5_rt = LiveRuntime(
+    divergent_feed = ReplayFeed()
+    divergent_broker = PaperBroker(divergent_feed)
+    divergent_broker.mode = "mt5-mas-errado"
+    divergent_rt = LiveRuntime(
         account_name="teste_divergencia", strategy=ScriptedStrategy({}),
-        policy=FloorSkim(pct=0.5, floor=1e12), feed=mt5_feed, broker=PaperBroker(mt5_feed),
+        policy=FloorSkim(pct=0.5, floor=1e12), feed=divergent_feed, broker=divergent_broker,
         config=BacktestConfig(initial_capital=10_000.0, lot_size=1),
         tickers=(TICKER,), db_path=db_path, data_dir=data_dir,
     )
 
     with pytest.raises(ValueError):
-        mt5_rt.close_and_decide(d0)
+        divergent_rt.close_and_decide(d0)
     with pytest.raises(ValueError):
-        mt5_rt.status()
+        divergent_rt.status()
 
 
 def test_load_account_ausente_continua_sendo_skip_nao_excecao(tmp_path, universe):
@@ -333,99 +346,21 @@ def test_stop_intraday_suprimido_sobre_cotacao_velha(tmp_path, universe):
     assert eventos_error, "stop sobre cotacao velha deveria notificar como error"
 
 
-def test_stop_intraday_nao_duplica_ordem_sob_corretora_manual(tmp_path, universe):
-    """Item 4.3: sob `ManualBroker`, a ordem de venda fica `SENT` sem
-    confirmar — 5 chamadas SEGUIDAS de `intraday_tick` sobre o MESMO tick
-    nao podem gerar 5 ordens de venda, so 1."""
-    data_dir, days = universe
-    d0, d1 = days[0], days[1]
-    script = {pd.Timestamp(d0): [Enter(ticker=TICKER, initial_stop=None, size_hint=None)]}
-    rt = _runtime(tmp_path, data_dir, script, mode="manual")
-    rt.feed.set(TICKER, 100.0)
-    rt.ensure_account()
-
-    rt.close_and_decide(d0)
-    rt.execute_session(d1)
-    with store.live_journal(rt.db_path) as conn:
-        acc = store.load_account(conn, "teste")
-        buy_order = store.open_orders(conn, acc.id)[0]
-    rt.broker.confirm(buy_order, buy_order.quantity, 101.5, 1.0)
-    with store.live_journal(rt.db_path) as conn:
-        store.update_order(conn, buy_order)
-    rt.reconcile_pending_fills(now=datetime.combine(d1, datetime.min.time()))
-
-    with store.live_journal(rt.db_path) as conn:
-        acc = store.load_account(conn, "teste")
-    stop_price = acc.positions[TICKER].current_stop
-    assert stop_price is not None
-
-    rt.feed.set(TICKER, stop_price - 1.0)
-    for _ in range(5):
-        rt.intraday_tick(d1)
-
-    with store.live_journal(rt.db_path) as conn:
-        acc = store.load_account(conn, "teste")
-        abertas = [o for o in store.open_orders(conn, acc.id) if o.side == OrderSide.SELL]
-    assert len(abertas) == 1, "5 ticks geraram mais de 1 ordem de venda"
-    assert TICKER in acc.positions  # posicao ainda aberta (fill nao confirmado)
-
-
-def test_saida_de_fecho_nao_duplica_ordem_com_stop_ja_em_voo(tmp_path, universe):
-    """Correcao SUBSTANTIVA do plan-reviewer (§6 item 1): um stop intra-dia
-    de ONTEM ainda `SENT` (nao confirmado, posicao continua aberta) nao pode
-    ser duplicado quando o robo decide sair de novo no FECHO seguinte por
-    OUTRO motivo (aqui, rotacao scriptada) — a trava de `intraday_tick`
-    (`exit_em_andamento`) so cobre repeticao do MESMO `on_intraday`; esta
-    trava vive em `_sell` (chamado por `execute_session` E `intraday_tick`),
-    que veta ANTES de `_place` quando ja existe ordem de venda aberta para o
-    mesmo ticker."""
-    data_dir, days = universe
-    d0, d1, d2 = days[0], days[1], days[2]
-    script = {
-        pd.Timestamp(d0): [Enter(ticker=TICKER, initial_stop=None, size_hint=None)],
-        pd.Timestamp(d1): [Exit(ticker=TICKER, reason=ExitReason.ROTATION_OUT)],
-    }
-    rt = _runtime(tmp_path, data_dir, script, mode="manual")
-    rt.feed.set(TICKER, 100.0)
-    rt.ensure_account()
-
-    rt.close_and_decide(d0)
-    rt.execute_session(d1)  # compra -- ManualBroker deixa SENT; confirma na mao
-    with store.live_journal(rt.db_path) as conn:
-        acc = store.load_account(conn, "teste")
-        buy_order = store.open_orders(conn, acc.id)[0]
-    rt.broker.confirm(buy_order, buy_order.quantity, 101.5, 1.0)
-    with store.live_journal(rt.db_path) as conn:
-        store.update_order(conn, buy_order)
-    rt.reconcile_pending_fills(now=datetime.combine(d1, datetime.min.time()))
-
-    with store.live_journal(rt.db_path) as conn:
-        acc = store.load_account(conn, "teste")
-    stop_price = acc.positions[TICKER].current_stop
-    assert stop_price is not None
-
-    # stop dispara intra-dia em d1, sob ManualBroker: ordem SENT, sem
-    # confirmar -- posicao continua aberta (premissa 4 do plano).
-    rt.feed.set(TICKER, stop_price - 1.0)
-    tick = rt.intraday_tick(d1)
-    assert tick.detail["stops"] == 0  # ManualBroker nao preenche na hora
-
-    with store.live_journal(rt.db_path) as conn:
-        acc = store.load_account(conn, "teste")
-        abertas_apos_stop = [o for o in store.open_orders(conn, acc.id) if o.side == OrderSide.SELL]
-    assert len(abertas_apos_stop) == 1
-    assert TICKER in acc.positions  # posicao AINDA aberta (fill nao confirmado)
-
-    # fecho de d1: o robo decide EXIT de novo por OUTRO motivo (rotacao) --
-    # ele nao enxerga ordem em voo, so `account.positions` (regra 6).
-    rt.close_and_decide(d1)
-    execu = rt.execute_session(d2)
-
-    with store.live_journal(rt.db_path) as conn:
-        acc = store.load_account(conn, "teste")
-        abertas_depois = [o for o in store.open_orders(conn, acc.id) if o.side == OrderSide.SELL]
-    assert len(abertas_depois) == 1, "venda duplicada -- a 2a saida deveria ter sido recusada"
-    assert execu.detail["rejeitadas"] >= 1
+# ---------- fill assincrono/pendente (cobertura reduzida) -------------------
+# `ManualBroker` (removido: modo manual descontinuado) deixava a ordem SENT
+# sem fill ate um humano chamar `confirm()`, o que dava um jeito facil de
+# testar "ordem pendente por varios ticks" — os dois testes de anti-duplicacao
+# de ordem de venda que moravam aqui (`test_stop_intraday_nao_duplica_ordem_
+# sob_corretora_manual`, `test_saida_de_fecho_nao_duplica_ordem_com_stop_ja_
+# em_voo`) dependiam exatamente disso: forcar uma ordem SENT parada por 5
+# ticks/1 fecho inteiro para provar que ela nao duplicava. O `MT5Broker` atual
+# (`live/broker_mt5.py::_send`) resolve toda ordem de forma SINCRONA dentro de
+# `place()` (fill ou rejeicao no mesmo `mt5.order_send()`, ver `poll()`: "nao
+# ha nada assincrono para reprocessar aqui") — nao ha como reproduzir uma
+# ordem parada em voo com o broker de producao real sem fabricar um
+# comportamento que ele hoje nao tem. Dois testes removidos aqui e mais dois
+# logo abaixo (mesma causa) — ver a nota antes de `test_saque_recomendado_
+# nao_move_caixa_nem_gera_ordem`.
 
 
 def test_adjust_stop_e_imediato_nao_espera_dplus1(tmp_path, universe):
@@ -599,81 +534,13 @@ def test_reconcile_pending_fills_nao_apaga_estado_da_politica_de_saque(tmp_path,
     assert acc2.policy_state["withdrawal"] == estado_gravado
 
 
-# ---------- corretora manual: ordem fica no ar, confirmacao aplica depois -
-
-def test_manual_broker_fill_so_aplica_apos_confirmacao(tmp_path, universe):
-    data_dir, days = universe
-    d0, d1 = days[0], days[1]
-    script = {pd.Timestamp(d0): [Enter(ticker=TICKER, initial_stop=None, size_hint=None)]}
-    rt = _runtime(tmp_path, data_dir, script, mode="manual")
-    rt.feed.set(TICKER, 100.0)  # cotacao usada so p/ dimensionar o ticket manual
-    rt.ensure_account()
-
-    rt.close_and_decide(d0)
-    execu = rt.execute_session(d1)
-    # ManualBroker nao preenche na hora: a entrada fica pendente, NAO rejeitada.
-    assert execu.detail["entradas"] == 0
-    assert execu.detail["rejeitadas"] == 0
-    assert execu.detail["aguardando"] == 1
-
-    with store.live_journal(rt.db_path) as conn:
-        acc = store.load_account(conn, "teste")
-        executando = store.intents_by_status(conn, acc.id, IntentStatus.EXECUTING)
-        abertas = store.open_orders(conn, acc.id)
-    assert TICKER not in acc.positions       # efeito NAO aplicado ainda
-    assert acc.cash == pytest.approx(10_000.0)
-    assert len(executando) == 1
-    assert len(abertas) == 1
-    order = abertas[0]
-    assert order.status == OrderStatus.SENT
-    assert "AAA.SA" in order.note           # ticket legivel
-
-    # humano confirma na corretora, fora do processo do supervisor
-    rt.broker.confirm(order, filled_qty=order.quantity, avg_price=101.5, fees=3.0)
-    with store.live_journal(rt.db_path) as conn:
-        store.update_order(conn, order)
-
-    reconcile = rt.reconcile_pending_fills(now=datetime.combine(d1, datetime.min.time()))
-    assert reconcile.detail["aplicadas"] == 1
-
-    with store.live_journal(rt.db_path) as conn:
-        acc = store.load_account(conn, "teste")
-    assert TICKER in acc.positions
-    assert acc.positions[TICKER].entry_price == pytest.approx(101.5)
-    assert acc.cash == pytest.approx(10_000.0 - (101.5 * order.quantity + 3.0))
-
-
-def test_run_once_reconcilia_sozinho(tmp_path, universe):
-    """`run_once` chama a reconciliacao em toda fase — uma confirmacao manual
-    que chegou fora do horario de pregao ainda assim e aplicada."""
-    data_dir, days = universe
-    d0, d1 = days[0], days[1]
-    script = {pd.Timestamp(d0): [Enter(ticker=TICKER, initial_stop=None, size_hint=None)]}
-    rt = _runtime(tmp_path, data_dir, script, mode="manual")
-    rt.feed.set(TICKER, 100.0)
-    rt.ensure_account()
-    rt.close_and_decide(d0)
-    rt.execute_session(d1)
-
-    with store.live_journal(rt.db_path) as conn:
-        acc = store.load_account(conn, "teste")
-        order = store.open_orders(conn, acc.id)[0]
-    rt.broker.confirm(order, order.quantity, 99.0, 1.0)
-    with store.live_journal(rt.db_path) as conn:
-        store.update_order(conn, order)
-
-    # fora do pregao (POST_CLOSE bem depois do after-market) -> `run_once`
-    # tambem chamaria `sync_data()` (rede real, `market_data.download`) nessa
-    # fase; sem rede no teste, so interessa que a RECONCILIACAO acontece
-    # independente da fase — stub o sync para nao tocar rede nem `data/raw`.
-    rt.sync_data = lambda: None
-    fechado = datetime.combine(d1, datetime.min.time().replace(hour=20))
-    passos = rt.run_once(now=fechado)
-    assert any(p and p.action == "reconcile" and p.detail.get("aplicadas") == 1 for p in passos)
-
-    with store.live_journal(rt.db_path) as conn:
-        acc = store.load_account(conn, "teste")
-    assert TICKER in acc.positions
+# ---------- (continuacao da nota acima) mais dois testes removidos pelo mesmo
+# motivo: `test_manual_broker_fill_so_aplica_apos_confirmacao` e
+# `test_run_once_reconcilia_sozinho` fabricavam "ordem pendente, reconciliacao
+# aplica depois" via `ManualBroker.confirm()`. A mecanica de
+# `reconcile_pending_fills` em si (nao perder `policy_state` mesmo sem nada
+# pendente) continua coberta por
+# `test_reconcile_pending_fills_nao_apaga_estado_da_politica_de_saque` acima.
 
 
 def test_saque_recomendado_nao_move_caixa_nem_gera_ordem(tmp_path, universe):
@@ -775,7 +642,7 @@ def _runtime_com_recomendacao(tmp_path, data_dir, amount: float = 5_000.0, capit
     pagar `amount` no fecho do 1o pregao)."""
     policy = FloorSkim(pct=amount / capital, floor=100.0, day=1, min_amount=0.0)
     days = _sessions(3)
-    rt = _runtime(tmp_path, data_dir, {}, policy=policy, mode="manual", capital=capital)
+    rt = _runtime(tmp_path, data_dir, {}, policy=policy, mode="mt5", capital=capital)
     rt.ensure_account()
     rt.close_and_decide(days[0])
     with store.live_journal(rt.db_path) as conn:
@@ -810,7 +677,7 @@ def test_confirm_withdrawal_debita_caixa_credita_externo_e_fecha_intent(tmp_path
 
 def test_confirm_withdrawal_sem_recomendacao_pendente_rejeita_sem_mexer_no_caixa(tmp_path, universe):
     data_dir, days = universe
-    rt = _runtime(tmp_path, data_dir, {}, mode="manual", capital=10_000.0)
+    rt = _runtime(tmp_path, data_dir, {}, mode="mt5", capital=10_000.0)
     rt.ensure_account()
 
     report = rt.confirm_withdrawal(1_000.0, session=days[0])
@@ -909,7 +776,7 @@ def test_saque_expira_na_virada_do_mes_e_devolve_valor_a_fila(tmp_path):
     _write_parquet(data_dir, BENCHMARK, dias_dado, [50_000.0] * len(dias_dado))
 
     policy = FloorSkim(pct=0.5, floor=100.0, day=1, min_amount=0.0)
-    rt = _runtime(tmp_path, data_dir, {}, policy=policy, mode="manual", capital=10_000.0)
+    rt = _runtime(tmp_path, data_dir, {}, policy=policy, mode="mt5", capital=10_000.0)
     rt.ensure_account()
 
     rt.close_and_decide(d0)
@@ -941,7 +808,7 @@ def test_recomendacao_de_saque_gera_evento_warn_notificado(tmp_path, universe):
     d0 = days[0]
     notifier = _RecordingNotifier()
     policy = FloorSkim(pct=0.5, floor=100.0, day=1, min_amount=0.0)
-    rt = _runtime(tmp_path, data_dir, {}, policy=policy, mode="manual", capital=10_000.0)
+    rt = _runtime(tmp_path, data_dir, {}, policy=policy, mode="mt5", capital=10_000.0)
     rt.notifier = notifier
     rt.ensure_account()
 
@@ -974,7 +841,7 @@ def test_confirm_withdrawal_expira_recomendacao_vencida_e_persiste_policy_state(
     _write_parquet(data_dir, BENCHMARK, dias_dado, [50_000.0] * len(dias_dado))
 
     policy = FloorSkim(pct=0.5, floor=100.0, day=1, min_amount=0.0)
-    rt = _runtime(tmp_path, data_dir, {}, policy=policy, mode="manual", capital=10_000.0)
+    rt = _runtime(tmp_path, data_dir, {}, policy=policy, mode="mt5", capital=10_000.0)
     rt.ensure_account()
 
     rt.close_and_decide(d0)
@@ -1083,7 +950,7 @@ def test_status_mostra_recomendacao_de_saque_pendente_varios_dias_depois(tmp_pat
     data_dir, days = universe
     d0 = days[0]
     policy = FloorSkim(pct=0.5, floor=100.0, day=1, min_amount=0.0)
-    rt = _runtime(tmp_path, data_dir, {}, policy=policy, mode="manual", capital=10_000.0)
+    rt = _runtime(tmp_path, data_dir, {}, policy=policy, mode="mt5", capital=10_000.0)
     rt.ensure_account()
     rt.close_and_decide(d0)
 
@@ -1269,40 +1136,82 @@ def test_entrada_e_saida_executadas_notificam(tmp_path, universe):
     assert saidas_info, "saida executada deveria notificar"
 
 
-def test_fill_parcial_notifica_como_parcial_com_quantidade_restante(tmp_path, universe):
-    """Correcao SUBSTANTIVA do plan-reviewer (§6 item 3): fill PARCIAL (ja
-    alcancavel HOJE via `ManualBroker.confirm`, e apos o passo 2 tambem via
-    `MT5Broker`) nao pode notificar como se fosse fill TOTAL -- esconderia
-    exatamente a informacao que o item 4.4b desta feature passou a detectar
-    corretamente (`PARTIAL` vs `FILLED`)."""
+def test_fill_parcial_notifica_como_parcial_com_quantidade_restante(tmp_path, universe, monkeypatch):
+    """Correcao SUBSTANTIVA do plan-reviewer (§6 item 3): fill PARCIAL nao
+    pode notificar como se fosse fill TOTAL -- esconderia exatamente a
+    informacao que o item 4.4b desta feature passou a detectar corretamente
+    (`PARTIAL` vs `FILLED`).
+
+    Reescrito para `MT5Broker` mockado (mesmo padrao de
+    `tests/test_live_broker_mt5.py`) depois que o modo manual foi
+    descontinuado: `ManualBroker.confirm()`, que fabricava o fill parcial
+    antes, nao existe mais. Diferente do cenario manual (fill parcial so
+    aparecia depois de `reconcile_pending_fills`), o `MT5Broker` resolve o
+    fill parcial de forma SINCRONA dentro do proprio `execute_session` (ver
+    `live/broker_mt5.py::_send`, linha do `order.status = ... PARTIAL`) -- o
+    fake `order_send` abaixo devolve metade do volume pedido para forcar
+    exatamente esse caminho."""
+    import sys
+    import types
+
+    from live.broker_mt5 import MT5Broker
+
     data_dir, days = universe
     d0, d1 = days[0], days[1]
     script = {pd.Timestamp(d0): [Enter(ticker=TICKER, initial_stop=None, size_hint=None)]}
     notifier = _RecordingNotifier()
-    rt = _runtime(tmp_path, data_dir, script, mode="manual")
-    rt.notifier = notifier
-    rt.feed.set(TICKER, 100.0)
-    rt.ensure_account()
 
+    feed = ReplayFeed()
+    feed.set(TICKER, 100.0)
+    broker = MT5Broker(shares_per_lot=1.0)
+    rt = LiveRuntime(
+        account_name="teste", strategy=ScriptedStrategy(script),
+        policy=FloorSkim(pct=0.5, floor=1e12), feed=feed, broker=broker,
+        config=BacktestConfig(initial_capital=10_000.0, lot_size=1),
+        tickers=(TICKER,), db_path=tmp_path / "live.sqlite", data_dir=data_dir,
+    )
+    rt.notifier = notifier
+    rt.ensure_account()
     rt.close_and_decide(d0)
+
+    fake_mt5 = types.ModuleType("MetaTrader5")
+    fake_mt5.TRADE_ACTION_DEAL = 1
+    fake_mt5.ORDER_TYPE_BUY = 2
+    fake_mt5.ORDER_TYPE_SELL = 3
+    fake_mt5.ORDER_TIME_GTC = 4
+    fake_mt5.ORDER_FILLING_IOC = 5
+    fake_mt5.TRADE_RETCODE_DONE = 6
+    fake_mt5.initialize = lambda **kw: True
+    fake_mt5.last_error = lambda: (0, "sem erro")
+    fake_mt5.symbol_select = lambda symbol, enable=True: True
+    fake_mt5.symbol_info = lambda symbol: types.SimpleNamespace(
+        volume_min=1.0, volume_max=1_000_000.0, volume_step=1.0,
+    )
+    fake_mt5.symbol_info_tick = lambda symbol: types.SimpleNamespace(bid=99.9, ask=100.1)
+    fake_mt5.history_deals_get = lambda ticket=None: []
+
+    def order_send(request):
+        pedido = request["volume"]
+        preenchido = max(1.0, pedido // 2)  # fill parcial: metade do pedido
+        return types.SimpleNamespace(
+            retcode=fake_mt5.TRADE_RETCODE_DONE, price=100.1,
+            volume=preenchido, deal=1, order=1, comment="ok",
+        )
+    fake_mt5.order_send = order_send
+    monkeypatch.setitem(sys.modules, "MetaTrader5", fake_mt5)
+
     execu = rt.execute_session(d1)
-    assert execu.detail["aguardando"] == 1  # ManualBroker: ordem SENT, sem fill ainda
+    assert execu.detail["entradas"] == 1  # MT5 resolve sincrono: fill (parcial) ja e "done"
 
     with store.live_journal(rt.db_path) as conn:
         acc = store.load_account(conn, "teste")
         order = store.open_orders(conn, acc.id)[0]
-    assert order.quantity > 1  # premissa do teste: precisa dar pra confirmar so metade
-    metade = order.quantity // 2
-    rt.broker.confirm(order, filled_qty=metade, avg_price=101.5, fees=1.0)
-    with store.live_journal(rt.db_path) as conn:
-        store.update_order(conn, order)
-
-    reconcile = rt.reconcile_pending_fills(now=datetime.combine(d1, datetime.min.time()))
-    assert reconcile.detail["aplicadas"] == 1
+    assert order.status == OrderStatus.PARTIAL
+    assert order.quantity > order.filled_qty > 0  # premissa do teste: fill genuinamente parcial
 
     parciais = [c for c in notifier.calls if c[0] == "info" and "PARCIAL" in c[2]]
     assert parciais, "fill parcial deveria notificar como PARCIAL, nao como fill total"
-    restante = order.quantity - metade
+    restante = order.quantity - order.filled_qty
     assert str(restante) in parciais[0][2], "quantidade restante (leaves_qty) deveria aparecer na notificacao"
 
 

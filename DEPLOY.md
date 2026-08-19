@@ -11,10 +11,9 @@ mesma máquina**, via IPC do Windows — não existe suporte oficial em
 Linux/Docker. Por isso o "servidor" aqui é uma **VPS Windows** (Contabo, Vultr,
 Azure/AWS com Windows Server, etc.), não um container Linux.
 
-Se você for operar em `paper` (sem corretora real) ou `manual` (você confirma
-os fills à mão), o Windows não é estritamente necessário — mas como o caminho
-de produção real é MT5, este guia assume Windows do início ao fim para não
-precisar migrar depois.
+O único modo de execução que existe é MT5 — o robô decide e executa sozinho,
+sem confirmação humana em nenhum momento — então este guia assume Windows do
+início ao fim.
 
 ## 1. Preparar a VPS
 
@@ -83,14 +82,15 @@ Windows, um gatilho "ao iniciar o sistema", ação = o mesmo comando acima, "Exe
 estando o usuário conectado ou não", com "Reiniciar a cada X minutos" em caso
 de falha, nas configurações da tarefa.
 
-## 4. Antes de operar dinheiro real: burn-in em paper
+## 4. Antes de operar dinheiro real: valide o encanamento sem capital em risco
 
 **Não pule esta etapa.** O deploy inteiro (serviço, agendamento, variáveis de
 ambiente, conexão MT5) é uma superfície nova que nunca rodou sem supervisão.
-Rode o serviço em `--mode paper` por pelo menos algumas semanas, acompanhando
-`/operacao` e `/operacao/historico`, antes de trocar para `--mode mt5`. Isso
-valida o ENCANAMENTO (o serviço sobrevive a reboot? os alertas chegam? o
-disjuntor dispara quando deveria?) sem nenhum capital em risco.
+Como não existe mais um modo de simulação em produção, valide o serviço
+(sobrevive a reboot? os alertas chegam? o disjuntor dispara quando deveria?)
+com uma conta DEMO da sua corretora no MT5 antes de logar na conta real —
+`MT5Broker` fala com qualquer terminal já aberto e logado, real ou demo,
+sem diferença de código.
 
 Complementar: `python scripts/run_live_sim.py --years 5` reproduz anos de
 histórico real através do MESMO `LiveRuntime`, em minutos, e compara com o

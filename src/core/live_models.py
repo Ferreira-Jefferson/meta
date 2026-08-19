@@ -93,12 +93,12 @@ class BrokerMode(str, Enum):
     recusava (só aceitava `paper`/`manual`/`mt5`), o processo morria na hora,
     e o dashboard continuava mostrando "rodando". `PaperBroker` sai de
     produção junto (vira dublê de teste, ver `tests/doubles.py`) — sem
-    simulação no vocabulário, só sobram os dois modos que uma conta real
-    pode ter: um humano confirma cada ordem (`MANUAL`) ou a corretora executa
+    simulação no vocabulário. O modo `MANUAL` (humano confirma cada ordem)
+    foi removido depois: o usuário decidiu que o robô sempre decide E
+    executa sozinho, então só sobra o modo em que a corretora executa
     sozinha (`MT5`).
     """
 
-    MANUAL = "manual"
     MT5 = "mt5"
 
 
@@ -308,7 +308,7 @@ class AccountState:
     """
 
     name: str
-    mode: str                            # 'manual' | 'mt5' (ver BrokerMode)
+    mode: str                            # 'mt5' (ver BrokerMode)
     initial_capital: float
     cash: float
     investment_robot: str = ""

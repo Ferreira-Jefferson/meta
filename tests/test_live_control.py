@@ -60,7 +60,7 @@ def test_start_processo_morre_na_hora_levanta_runtimeerror_sem_gravar_estado(iso
                    log_message="[erro fake] terminal MT5 nao encontrado"),
     )
 
-    cfg = live_control.ProcessConfig(mode="manual", capital=1_000.0)
+    cfg = live_control.ProcessConfig(mode="mt5", capital=1_000.0, mt5_shares_per_lot=1.0)
     with pytest.raises(RuntimeError) as exc_info:
         live_control.start(cfg)
 
@@ -75,7 +75,7 @@ def test_start_processo_sobrevive_grava_pid(isolated, monkeypatch):
         _fake_popen(poll_value=None, captured_argv=captured),
     )
 
-    cfg = live_control.ProcessConfig(mode="manual", capital=1_000.0)
+    cfg = live_control.ProcessConfig(mode="mt5", capital=1_000.0, mt5_shares_per_lot=1.0)
     state = live_control.start(cfg)
 
     assert state["pid"] == 99999
@@ -164,7 +164,7 @@ def test_start_concorrente_apenas_um_vence_o_outro_ve_ja_rodando(isolated, monke
     # o `tasklist` real quebraria; simula "processo vivo" direto.
     monkeypatch.setattr(live_control, "_pid_alive", lambda pid: True)
 
-    cfg = live_control.ProcessConfig(mode="manual", capital=1_000.0)
+    cfg = live_control.ProcessConfig(mode="mt5", capital=1_000.0, mt5_shares_per_lot=1.0)
     results: list = []
     errors: list = []
 

@@ -118,22 +118,20 @@
 <div class="empty ops-empty">
   <h1>Nenhuma conta de operação ainda</h1>
   <p class="dek">
-    Escolha o modo e o capital e clique em iniciar — o sistema cria a conta
-    e passa a decidir sozinho, a cada pregão. Nenhum comando de terminal
-    necessário.
+    Defina o capital e clique em iniciar — o sistema cria a conta e passa a
+    decidir e executar sozinho via MetaTrader 5, a cada pregão. Nenhum
+    comando de terminal necessário.
   </p>
 </div>
 
 <section class="ops-start-form-wrap stagger">
   <form class="ops-start-form" hx-post="/operacao/iniciar" hx-target="#ops-body" hx-swap="outerHTML"
         hx-disabled-elt="find button[type=submit]">
-    <div class="row">
+    <div class="row row-2col">
       <label>
         <span class="k">Modo</span>
-        <select name="mode" onchange="document.getElementById('ops-mt5-confirm').style.display = this.value === 'mt5' ? 'block' : 'none';">
-          <option value="manual" selected>Manual — você confirma cada ordem</option>
-          <option value="mt5">MetaTrader 5 — dinheiro real</option>
-        </select>
+        <input type="hidden" name="mode" value="mt5" />
+        <span class="ops-mode-fixed">MetaTrader 5 — dinheiro real</span>
       </label>
       <label>
         <span class="k">Capital (R$)</span>
@@ -160,7 +158,7 @@
       </div>
     </details>
 
-    <div id="ops-mt5-confirm" class="ops-mt5-confirm" style="display: none;">
+    <div id="ops-mt5-confirm" class="ops-mt5-confirm">
       <label>
         <span class="k">Ações por lote (mt5_shares_per_lot)</span>
         <input type="number" name="mt5_shares_per_lot" min="0.01" step="0.01"

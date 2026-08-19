@@ -1,12 +1,10 @@
 """Linha de comando da operacao ao vivo.
 
-    python scripts/run_live.py init --capital 50000 --mode manual
+    python scripts/run_live.py init --capital 50000 --mode mt5 --mt5-shares-per-lot 1
     python scripts/run_live.py status
     python scripts/run_live.py step                 # um passo do supervisor
     python scripts/run_live.py decide               # forca o fecho do pregao
     python scripts/run_live.py execute              # forca a execucao do dia
-    python scripts/run_live.py tickets              # ordens a executar na mao
-    python scripts/run_live.py confirm 12 300 41.85 # confirma fill manual
     python scripts/run_live.py reconcile            # aplica fills confirmados ao caixa/posicao
     python scripts/run_live.py unfreeze             # destrava o disjuntor de risco manualmente
     python scripts/run_live.py sacar 5000.00        # confirma recomendacao de saque pendente
@@ -20,28 +18,26 @@ so para constatar que nao ha nada a fazer.
 
 Cotacao (--feed)
 ----------------
-Operacao real (`--mode manual`/`mt5`) recusa `--feed parquet` (dado de
-fechamento de D-1, ou mais velho): stop e entrada intra-dia nao podem decidir
-sobre dado desse jeito velho. Default `yfinance` (~15min de atraso conhecido,
-ver `live/feed.py::YFinanceFeed`); `mt5` le o tick do MESMO terminal MT5 do
+Operacao real (`--mode mt5`) recusa `--feed parquet` (dado de fechamento de
+D-1, ou mais velho): stop e entrada intra-dia nao podem decidir sobre dado
+desse jeito velho. Default `yfinance` (~15min de atraso conhecido, ver
+`live/feed.py::YFinanceFeed`); `mt5` le o tick do MESMO terminal MT5 do
 broker (ver aviso sobre o fuso do relogio do servidor em
 `live/feed.py::MT5Feed`).
 
-Modos de corretora
-------------------
-  manual  `ManualBroker` — nao envia nada. Emite ticket legivel, voce executa na
-          corretora e confirma com `confirm`. E o modo para comecar a operar de
-          verdade sem depender de integracao.
+Modo de corretora
+-----------------
   mt5     `MT5Broker` — fala com um terminal MetaTrader 5 JA ABERTO E LOGADO na
           MESMA maquina (pacote pip `MetaTrader5`, so funciona em Windows).
-          ATENCAO: este adaptador nao foi validado contra um terminal MT5 real
-          (sem ambiente disponivel para isso) — ver o aviso extenso no topo de
-          `live/broker_mt5.py`. Teste primeiro com o MENOR lote possivel, em
-          horario de pregao, observando o terminal ao vivo, antes de confiar
-          nisto operando sem supervisao. `--mt5-shares-per-lot`/`--mt5-magic`/
-          `--mt5-symbol-map` precisam ser conferidos contra o `symbol_info` do
-          SEU terminal (a relacao acao/lote e o nome do simbolo variam por
-          corretora — nao ha valor universal).
+          O robo decide E executa sozinho, sem confirmacao humana em nenhum
+          momento. ATENCAO: este adaptador nao foi validado contra um terminal
+          MT5 real (sem ambiente disponivel para isso) — ver o aviso extenso
+          no topo de `live/broker_mt5.py`. Teste primeiro com o MENOR lote
+          possivel, em horario de pregao, observando o terminal ao vivo, antes
+          de confiar nisto operando sem supervisao. `--mt5-shares-per-lot`/
+          `--mt5-magic`/`--mt5-symbol-map` precisam ser conferidos contra o
+          `symbol_info` do SEU terminal (a relacao acao/lote e o nome do
+          simbolo variam por corretora — nao ha valor universal).
 
 Alertas externos (opcionais, por variavel de ambiente — nunca em texto puro
 na linha de comando, que fica visivel no historico do shell e na lista de
@@ -102,8 +98,6 @@ if hasattr(sys.stdout, "reconfigure"):
 
 from backtest.withdrawal import FloorSkim, official_policy
 from core.config import WATCHLIST, BacktestConfig
-from journal import live_store as store
-from live.broker import ManualBroker
 from live.feed import MT5Feed, YFinanceFeed
 from live.notify import (
     CompositeNotifier,
@@ -167,9 +161,7 @@ def _build_risk_guard(daily_limit: float | None, monthly_limit: float | None) ->
 
 
 def build(args) -> LiveRuntime:
-    if args.mode == "manual":
-        broker = ManualBroker()
-    elif args.mode == "mt5":
+    if args.mode == "mt5":
         if args.mt5_shares_per_lot is None or args.mt5_shares_per_lot <= 0:
             raise ValueError(
                 "--mt5-shares-per-lot é obrigatório no modo mt5 — confira o "
@@ -182,12 +174,12 @@ def build(args) -> LiveRuntime:
                            symbol_map=symbol_map, **_mt5_credentials())
     else:
         raise ValueError(
-            f"--mode inválido ou ausente: {args.mode!r} — use 'manual' ou 'mt5' "
+            f"--mode inválido ou ausente: {args.mode!r} — use 'mt5' "
             "(ver core.live_models.BrokerMode)."
         )
-    # Operacao REAL (dinheiro de verdade, os dois modos acima) nunca pode ver
-    # so o fecho de ontem o dia inteiro -- `--feed parquet` e recusado aqui,
-    # nunca um fallback silencioso (FEAT-004, item 4.1).
+    # Operacao REAL (dinheiro de verdade) nunca pode ver so o fecho de ontem
+    # o dia inteiro -- `--feed parquet` e recusado aqui, nunca um fallback
+    # silencioso (FEAT-004, item 4.1).
     if args.feed == "parquet":
         raise ValueError(
             f"--feed parquet não é aceito em operação real (--mode {args.mode!r}): "
@@ -275,12 +267,12 @@ def cmd_reconcile(args) -> None:
 def cmd_sacar(args) -> None:
     """Confirma uma recomendacao de saque pendente -- o UNICO caminho que
     move dinheiro de verdade desde que o saque virou recomendacao (ver
-    docstring de `live/runtime.py`). `--intent-id` existe pelo mesmo motivo
-    do `confirm <order_id>` acima: um `sacar` repetido (cron, dedo no Enter)
-    nao pode confirmar "o que estiver pendente" as cegas -- com mais de uma
-    recomendacao pendente ao mesmo tempo (nao deveria acontecer, mas
-    `LiveRuntime._expire_withdraw_advice` grita se acontecer), `confirm_
-    withdrawal` recusa em vez de adivinhar a mais antiga."""
+    docstring de `live/runtime.py`). `--intent-id` existe porque um `sacar`
+    repetido (cron, dedo no Enter) nao pode confirmar "o que estiver
+    pendente" as cegas -- com mais de uma recomendacao pendente ao mesmo
+    tempo (nao deveria acontecer, mas `LiveRuntime._expire_withdraw_advice`
+    grita se acontecer), `confirm_withdrawal` recusa em vez de adivinhar a
+    mais antiga."""
     rt = build(args)
     session = date.fromisoformat(args.data) if args.data else None
     report = rt.confirm_withdrawal(args.valor, session=session, intent_id=args.intent_id)
@@ -297,63 +289,6 @@ def cmd_unfreeze(args) -> None:
         return
     rt.unfreeze()
     print("disjuntor destravado.")
-
-
-def _require_manual_account(args) -> None:
-    """Recusa (`SystemExit`) se a conta '{ACCOUNT}' não existir ou se o modo
-    REAL dela não for `manual` — antes disso, `cmd_tickets`/`cmd_confirm`
-    faziam `args.mode = "manual"` incondicionalmente, então uma conta em
-    modo `mt5` (dinheiro real via corretora automática) rodava `tickets`/
-    `confirm` como se fosse manual, sem nenhum aviso. Só depois de validar
-    isso é que `args.mode` é fixado em `"manual"`, para `build()` funcionar."""
-    with store.live_journal() as conn:
-        acc = store.load_account(conn, ACCOUNT)
-    if acc is None:
-        raise SystemExit(f"conta '{ACCOUNT}' não existe — rode 'init' primeiro.")
-    if acc.mode != "manual":
-        raise SystemExit(
-            f"conta '{ACCOUNT}' está em modo {acc.mode!r}, não 'manual' — "
-            "'tickets'/'confirm' só fazem sentido para corretora manual "
-            "(uma corretora automática, como mt5, preenche sozinha)."
-        )
-    args.mode = "manual"
-
-
-def cmd_tickets(args) -> None:
-    _require_manual_account(args)
-    rt = build(args)
-    with store.live_journal() as conn:
-        acc = store.load_account(conn, ACCOUNT)
-        if acc is None:
-            print("conta inexistente — rode 'init' primeiro")
-            return
-        abertas = store.open_orders(conn, acc.id)
-    if not abertas:
-        print("nenhuma ordem pendente")
-        return
-    print(f"{len(abertas)} ordem(ns) a executar:\n")
-    for o in abertas:
-        print(f"  #{o.id}  {o.note or ''}")
-        print(f"        confirmar: python scripts/run_live.py confirm {o.id} "
-              f"<qtd> <preco_medio>")
-
-
-def cmd_confirm(args) -> None:
-    _require_manual_account(args)
-    rt = build(args)
-    with store.live_journal() as conn:
-        acc = store.load_account(conn, ACCOUNT)
-        abertas = {o.id: o for o in store.open_orders(conn, acc.id)}
-        order = abertas.get(args.order_id)
-        if order is None:
-            print(f"ordem #{args.order_id} nao esta aberta")
-            return
-        rt.broker.confirm(order, args.quantity, args.price, args.fees)
-        store.update_order(conn, order)
-    print(f"ordem #{order.id} confirmada: {order.filled_qty} @ {order.avg_price} "
-          f"({order.status.value})")
-    print("rode 'python scripts/run_live.py step' (ou o loop) para aplicar o fill "
-          "ao caixa/posicao da conta — e o que 'reconcile_pending_fills' faz.")
 
 
 def cmd_loop(args) -> None:
@@ -401,7 +336,7 @@ def cmd_loop(args) -> None:
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--mode", default=None, choices=("manual", "mt5"))
+    p.add_argument("--mode", default="mt5", choices=("mt5",))
     p.add_argument("--capital", type=float, default=1_000.0)
     p.add_argument("--floor", type=float, default=None,
                    help="piso do saque em R$ absoluto (default: 55x o capital)")
@@ -423,16 +358,8 @@ def main() -> None:
 
     for nome, fn in (("init", cmd_init), ("status", cmd_status), ("step", cmd_step),
                      ("decide", cmd_decide), ("execute", cmd_execute),
-                     ("reconcile", cmd_reconcile), ("unfreeze", cmd_unfreeze),
-                     ("tickets", cmd_tickets)):
+                     ("reconcile", cmd_reconcile), ("unfreeze", cmd_unfreeze)):
         sub.add_parser(nome).set_defaults(func=fn)
-
-    c = sub.add_parser("confirm")
-    c.add_argument("order_id", type=int)
-    c.add_argument("quantity", type=int)
-    c.add_argument("price", type=float)
-    c.add_argument("fees", type=float, nargs="?", default=0.0)
-    c.set_defaults(func=cmd_confirm)
 
     lp = sub.add_parser("loop")
     lp.add_argument("--seconds", type=int, default=60)

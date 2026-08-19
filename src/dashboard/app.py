@@ -342,12 +342,14 @@ def _operacao_ctx(**extra) -> dict:
     capturar isso aqui, ela subia crua até o handler e virava um 500 em
     `/operacao`. Captura ESPECIFICAMENTE essa exceção (não `Exception`
     genérico) e degrada para o estado "sem conta" com a mensagem real no
-    banner de erro, em vez de estourar."""
+    banner de erro, em vez de estourar. `LegacyManualAccountError` (modo
+    manual descontinuado) é a mesma situação por um motivo diferente —
+    mesmo tratamento."""
     from journal import live_store
 
     try:
         status_payload = live_service.get_status()
-    except live_store.LegacyPaperAccountError as e:
+    except (live_store.LegacyPaperAccountError, live_store.LegacyManualAccountError) as e:
         status_payload = {"conta": live_service.ACCOUNT_NAME, "existe": False}
         extra.setdefault("erro", str(e))
     return {
@@ -401,7 +403,7 @@ async def operacao_iniciar(request: Request):
     try:
         with live_store.live_journal() as conn:
             conta = live_store.load_account(conn, live_service.ACCOUNT_NAME)
-    except live_store.LegacyPaperAccountError as e:
+    except (live_store.LegacyPaperAccountError, live_store.LegacyManualAccountError) as e:
         # Correção pós-code-review (item 5): renderiza a mensagem no banner
         # de erro em vez de deixar a exceção subir crua até virar 500.
         ctx = _operacao_ctx(erro=str(e))
@@ -426,15 +428,14 @@ async def operacao_iniciar(request: Request):
             if mt5_shares_per_lot is None or mt5_shares_per_lot <= 0:
                 erro = "Informe quantas ações por lote o seu terminal MT5 usa para este símbolo."
     else:
-        mode = form.get("mode", "manual")
+        mode = "mt5"
         capital = float(form.get("capital") or live_service.DEFAULT_CAPITAL)
-        if mode == "mt5":
-            if not form.get("confirmar_real"):
-                erro = "Para operar em MT5 (dinheiro real), marque a confirmação antes de iniciar."
-            else:
-                mt5_shares_per_lot = _parse_optional_float(form.get("mt5_shares_per_lot"))
-                if mt5_shares_per_lot is None or mt5_shares_per_lot <= 0:
-                    erro = "Informe quantas ações por lote o seu terminal MT5 usa para este símbolo."
+        if not form.get("confirmar_real"):
+            erro = "Para operar em MT5 (dinheiro real), marque a confirmação antes de iniciar."
+        else:
+            mt5_shares_per_lot = _parse_optional_float(form.get("mt5_shares_per_lot"))
+            if mt5_shares_per_lot is None or mt5_shares_per_lot <= 0:
+                erro = "Informe quantas ações por lote o seu terminal MT5 usa para este símbolo."
 
     if erro is None:
         try:
@@ -477,12 +478,11 @@ _DEPOSIT_DEDUP_WINDOW_SECONDS = 5.0
 @app.post("/operacao/aportar", response_class=HTMLResponse)
 async def operacao_aportar(request: Request):
     """Registra que dinheiro foi depositado na corretora FORA deste sistema
-    (o dono aportou), creditando o valor direto ao caixa da conta. Fallback
-    manual: no modo MT5 o mesmo crédito acontece sozinho antes da abertura
-    (`live.runtime.reconcile_broker_cash`), mas Paper/Manual não têm saldo
-    externo para conferir, então este botão é o único jeito do sistema saber
-    que o caixa cresceu — e mesmo em MT5 serve para forçar o crédito sem
-    esperar o próximo PRE_OPEN.
+    (o dono aportou), creditando o valor direto ao caixa da conta. Em MT5 o
+    mesmo crédito já acontece sozinho antes da abertura
+    (`live.runtime.reconcile_broker_cash`) — este botão serve para forçar o
+    crédito sem esperar o próximo PRE_OPEN, sem precisar de decisão nenhuma
+    do robô.
 
     Mexe direto no diário (mesmo padrão de `operacao_iniciar`): não há
     decisão nenhuma aqui, só contabilidade, e montar um `LiveRuntime`

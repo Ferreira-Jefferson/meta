@@ -14,7 +14,6 @@ terminal e rodar `scripts/run_live.py init`.
 from __future__ import annotations
 
 from journal import live_store as store
-from live.broker import ManualBroker
 from live.feed import ParquetCloseFeed
 from live.runtime import LiveRuntime
 from strategy.portfolio_dip2_hw40 import DipTop1Portfolio
@@ -37,9 +36,7 @@ def _build_runtime(mode: str, capital: float) -> LiveRuntime:
     from core.config import BacktestConfig, WATCHLIST
 
     feed = ParquetCloseFeed()
-    if mode == "manual":
-        broker = ManualBroker()
-    elif mode == "mt5":
+    if mode == "mt5":
         from live.broker_mt5 import MT5Broker  # import tardio: nao conecta ao construir
         broker = MT5Broker()
     else:

@@ -136,8 +136,9 @@ class MigrationRefused(RuntimeError):
 
 class LegacySourceAccountError(RuntimeError):
     """`live_accounts` da ORIGEM tem conta(s) fora do vocabulário canônico
-    (`manual`/`mt5`, ver `core.live_models.BrokerMode`) — tipicamente
-    `mode='paper'`, uma conta de SIMULAÇÃO do vocabulário antigo.
+    (`mt5`, ver `core.live_models.BrokerMode`) — tipicamente `mode='paper'`
+    (conta de SIMULAÇÃO) ou `mode='manual'` (modo descontinuado), ambos do
+    vocabulário antigo.
 
     Correção pós-code-review (hipótese-agente, item 3): a origem é aberta via
     `ATTACH ... mode=ro`, então NUNCA passa por `journal.live_store.
@@ -243,13 +244,13 @@ def migrate(source: Path = DB_PATH, dest: Path = LIVE_DB_PATH, force: bool = Fal
             if "live_accounts" in existing:
                 legacy = dest_conn.execute(
                     "SELECT name, mode FROM src_ro.live_accounts "
-                    "WHERE mode NOT IN ('manual', 'mt5')"
+                    "WHERE mode != 'mt5'"
                 ).fetchall()
                 if legacy:
                     nomes = ", ".join(f"{name!r} (mode={mode!r})" for name, mode in legacy)
                     raise LegacySourceAccountError(
                         f"live_accounts na ORIGEM '{source}' tem conta(s) fora "
-                        f"do vocabulário canônico (manual/mt5): {nomes}. O "
+                        f"do vocabulário canônico (mt5): {nomes}. O "
                         "destino descartaria essa(s) linha(s) em silêncio "
                         "(INSERT OR IGNORE nunca sobrescreve nem avisa qual "
                         "conta sumiu) — decida antes de migrar: apague "

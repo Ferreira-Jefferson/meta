@@ -48,7 +48,7 @@ def _seed(source: Path) -> None:
         account = store.ensure_account(
             conn,
             name="principal",
-            mode="manual",
+            mode="mt5",
             initial_capital=10_000.0,
             investment_robot="dip2_hw40",
             withdrawal_robot="official_policy",
@@ -282,7 +282,7 @@ def test_migrate_reporta_divergencia_e_levanta_incompleto(tmp_path, capsys):
     Nota (correção pós-code-review, item 3): a divergência aqui é colocada em
     `live_intents.kind`, não em `live_accounts.mode` -- desde a checagem nova
     de `LegacySourceAccountError` (que recusa ANTES de copiar qualquer conta
-    fora do vocabulário manual/mt5), usar um `mode` inválido aqui pegaria
+    fora do vocabulário canônico, mt5), usar um `mode` inválido aqui pegaria
     aquela checagem em vez de chegar a esta, que testa o relatório de
     divergência GENÉRICO (qualquer tabela, não só contas)."""
     source = tmp_path / "journal.sqlite"
@@ -306,7 +306,7 @@ def test_migrate_reporta_divergencia_e_levanta_incompleto(tmp_path, capsys):
         )
         source_conn.execute(
             "INSERT INTO live_accounts (id, name, mode, initial_capital, cash) "
-            "VALUES (1, 'principal', 'manual', 1000.0, 1000.0)"
+            "VALUES (1, 'principal', 'mt5', 1000.0, 1000.0)"
         )
         # dest exige kind IN ('enter','exit','adjust_stop','withdraw') -- o
         # valor abaixo simula um kind que nunca foi válido em nenhum
@@ -404,7 +404,7 @@ def test_migrate_force_detecta_colisao_de_id_com_conteudo_divergente(tmp_path, c
     # script).
     with store.live_journal(dest) as conn:
         robot_account = store.ensure_account(
-            conn, name="principal", mode="manual", initial_capital=1_000.0,
+            conn, name="principal", mode="mt5", initial_capital=1_000.0,
             investment_robot="dip2_hw40", withdrawal_robot="official_policy",
         )
         assert robot_account.id == 1
@@ -413,7 +413,7 @@ def test_migrate_force_detecta_colisao_de_id_com_conteudo_divergente(tmp_path, c
     # pendurado nesse id.
     with store.live_journal(source) as conn:
         real_account = store.ensure_account(
-            conn, name="principal", mode="manual", initial_capital=47_321.55,
+            conn, name="principal", mode="mt5", initial_capital=47_321.55,
             investment_robot="dip2_hw40", withdrawal_robot="official_policy",
         )
         assert real_account.id == 1

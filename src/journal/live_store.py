@@ -121,24 +121,42 @@ def _live_ddl(schema_path: Path) -> str:
 
 
 class LegacyPaperAccountError(RuntimeError):
-    """`live_accounts` ainda usa o CHECK antigo (vocabulário `paper`/`manual`/
-    `broker`) e contém ao menos uma conta de SIMULAÇÃO (`mode='paper'`).
+    """`live_accounts` ainda usa um CHECK antigo (vocabulário `paper`/`manual`/
+    `broker`, ou o canônico intermediário `manual`/`mt5`) e contém ao menos
+    uma conta de SIMULAÇÃO (`mode='paper'`).
 
     Não é seguro converter isso em silêncio para o vocabulário canônico
-    (`manual`/`mt5`, ver `core.live_models.BrokerMode`) — uma conta de
-    simulação virar conta real por engano é o tipo de bug que só aparece
-    quando já é tarde. Renomear a conta NÃO desbloqueia nada (o CHECK novo
-    rejeita pelo VALOR da coluna `mode`, não pelo nome) — a única saída real
-    é apagar a(s) linha(s), ou um `UPDATE` manual de `mode` feito com decisão
-    humana consciente. Ver a mensagem da exceção para o texto completo.
+    (`mt5`, ver `core.live_models.BrokerMode`) — uma conta de simulação virar
+    conta real por engano é o tipo de bug que só aparece quando já é tarde.
+    Renomear a conta NÃO desbloqueia nada (o CHECK novo rejeita pelo VALOR da
+    coluna `mode`, não pelo nome) — a única saída real é apagar a(s)
+    linha(s), ou um `UPDATE` manual de `mode` feito com decisão humana
+    consciente. Ver a mensagem da exceção para o texto completo.
+    """
+
+
+class LegacyManualAccountError(RuntimeError):
+    """`live_accounts` contém ao menos uma conta em `mode='manual'` — modo
+    descontinuado: o usuário decidiu que o robô sempre decide E executa
+    sozinho, sem confirmação humana em nenhum momento, então só resta `mt5`.
+
+    Não é seguro converter isso em silêncio para `'mt5'`: uma conta manual
+    nunca teve `mt5_shares_per_lot`/credenciais MT5 configuradas, então virar
+    `'mt5'` de graça seria inventar configuração que não existe. A única
+    saída real é decisão humana consciente: recriar a conta em modo mt5 (com
+    os parâmetros mt5 corretos), ou apagar a linha. Ver a mensagem da
+    exceção para o texto completo.
     """
 
 
 def _legacy_check_present(conn: sqlite3.Connection) -> bool:
     """`True` se `live_accounts` já existe no banco E seu DDL (lido de
     `sqlite_master`, posicionalmente — sem depender de `row_factory`) ainda
-    tem o CHECK antigo. O marcador usado é `'broker'`: só existe no
-    vocabulário antigo, o vocabulário canônico (`manual`/`mt5`) nunca o tem.
+    permite um `mode` diferente de `'mt5'` sozinho. Dois marcadores cobrem as
+    duas fraturas de vocabulário que já existiram: `'broker'` (vocabulário
+    pré-FEAT-001: `paper`/`manual`/`broker`) e `'manual'` (vocabulário
+    canônico de FEAT-001, antes do modo manual ser descontinuado). O
+    vocabulário canônico atual (`mt5` sozinho) não contém nenhum dos dois.
     """
     row = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'live_accounts'"
@@ -146,7 +164,7 @@ def _legacy_check_present(conn: sqlite3.Connection) -> bool:
     if row is None:
         return False
     ddl = row[0] or ""
-    return "'broker'" in ddl
+    return "'broker'" in ddl or "'manual'" in ddl
 
 
 def _live_accounts_rebuild_ddl(schema_path: Path) -> str:
@@ -170,16 +188,20 @@ def _live_accounts_rebuild_ddl(schema_path: Path) -> str:
 
 
 def _migrate_account_mode_vocabulary(conn: sqlite3.Connection, schema_path: Path = SCHEMA_PATH) -> None:
-    """Rebuild de `live_accounts` do vocabulário antigo (`paper`/`manual`/
-    `broker`) para o canônico (`manual`/`mt5`) — chamado no início de
-    `ensure_tables`, antes de qualquer outra tabela ser tocada.
+    """Rebuild de `live_accounts` de um vocabulário antigo (`paper`/`manual`/
+    `broker`, ou o canônico intermediário `manual`/`mt5`) para o canônico
+    atual (`mt5` sozinho) — chamado no início de `ensure_tables`, antes de
+    qualquer outra tabela ser tocada.
 
     Recusa (levanta `LegacyPaperAccountError`, não mexe em nada) se houver
     alguma conta `mode='paper'` — nunca converte simulação em conta real em
-    silêncio. Caso contrário, reconstrói a tabela na ordem OBRIGATÓRIA
-    criar-nova -> copiar -> dropar-antiga -> renomear (nunca o inverso: a
-    partir do SQLite 3.25 `ALTER TABLE ... RENAME` reescreve as cláusulas
-    `REFERENCES` das tabelas FILHAS — renomear `live_accounts` para
+    silêncio. Pelo mesmo motivo, recusa (`LegacyManualAccountError`) se
+    houver alguma conta `mode='manual'` — modo descontinuado, e uma conta
+    manual nunca teve `mt5_shares_per_lot`/credenciais mt5 configuradas para
+    virar mt5 de graça. Caso contrário, reconstrói a tabela na ordem
+    OBRIGATÓRIA criar-nova -> copiar -> dropar-antiga -> renomear (nunca o
+    inverso: a partir do SQLite 3.25 `ALTER TABLE ... RENAME` reescreve as
+    cláusulas `REFERENCES` das tabelas FILHAS — renomear `live_accounts` para
     `live_accounts_old` primeiro deixaria `live_positions`/`live_orders`/
     `live_intents` apontando para o nome velho, corrompendo o banco em
     silêncio). `PRAGMA foreign_keys` é desligado/religado aqui (fora de
@@ -196,15 +218,31 @@ def _migrate_account_mode_vocabulary(conn: sqlite3.Connection, schema_path: Path
         nomes = ", ".join(str(row[0]) for row in legacy_paper)
         raise LegacyPaperAccountError(
             "live_accounts tem conta(s) de SIMULAÇÃO (mode='paper') que o "
-            f"vocabulário canônico (manual/mt5) não cobre: {nomes}. Renomear "
+            f"vocabulário canônico (mt5) não cobre: {nomes}. Renomear "
             "a conta NÃO resolve — o CHECK novo rejeita pelo VALOR da coluna "
             "mode, não pelo nome da conta. As únicas saídas reais são: "
             "apagar a(s) linha(s) (perde o histórico dela), ou, com decisão "
             "humana consciente de que é seguro tratar essa conta como real, "
-            "um UPDATE manual de mode para 'manual' ou 'mt5' depois de "
-            "confirmar isso. Se esta conexão é para o banco de SIMULAÇÃO "
-            "(db/live_sim.sqlite), a saída mais simples é apagar esse "
-            "arquivo inteiro — não mexa na conta real por engano."
+            "um UPDATE manual de mode para 'mt5' depois de confirmar isso. "
+            "Se esta conexão é para o banco de SIMULAÇÃO (db/live_sim.sqlite), "
+            "a saída mais simples é apagar esse arquivo inteiro — não mexa "
+            "na conta real por engano."
+        )
+
+    legacy_manual = conn.execute(
+        "SELECT name FROM live_accounts WHERE mode = 'manual'"
+    ).fetchall()
+    if legacy_manual:
+        nomes = ", ".join(str(row[0]) for row in legacy_manual)
+        raise LegacyManualAccountError(
+            f"live_accounts tem conta(s) em modo 'manual', que foi "
+            f"descontinuado: {nomes}. Modo manual não existe mais neste "
+            "sistema — o robô sempre decide E executa sozinho via MT5, sem "
+            "confirmação humana em nenhum momento. Não dá para converter "
+            "essa conta para 'mt5' automaticamente (ela nunca teve "
+            "mt5_shares_per_lot/credenciais mt5 configuradas) — é preciso "
+            "decidir manualmente: recriar a conta em modo mt5 com os "
+            "parâmetros corretos, ou apagar a linha."
         )
 
     conn.execute("PRAGMA foreign_keys = OFF")

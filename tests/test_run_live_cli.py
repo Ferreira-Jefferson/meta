@@ -1,13 +1,10 @@
 """Testes da linha de comando (`scripts/run_live.py`) — dispatch de `build()`
-(1.2) e recusa de `tickets`/`confirm` sobre conta cujo modo real nao e
-`manual` (1.5).
+(1.2).
 
 Isolamento obrigatorio do banco (FEAT-001, ACTION-PLAN secao 2): `build()`
-monta `LiveRuntime` com `db_path=None` (cai no default de modulo) e
-`_require_manual_account()`/`cmd_tickets`/`cmd_confirm` abrem
-`store.live_journal()` SEM argumento — sem isolar, este arquivo escreveria no
-`db/live.sqlite` REAL. Usa as duas mesmas tecnicas de
-`tests/test_dashboard_app.py` (docstring do modulo, linhas 9-26):
+monta `LiveRuntime` com `db_path=None` (cai no default de modulo) — sem
+isolar, este arquivo escreveria no `db/live.sqlite` REAL. Usa as duas mesmas
+tecnicas de `tests/test_dashboard_app.py` (docstring do modulo, linhas 9-26):
 `monkeypatch.setattr(live_store.live_journal.__wrapped__, "__defaults__", (tmp_db,))`
 e `monkeypatch.setattr(live_runtime, "DB_PATH", tmp_db)`.
 
@@ -54,7 +51,7 @@ def isolated_db(tmp_path, monkeypatch):
 
 def _args(**overrides) -> argparse.Namespace:
     base = dict(
-        feed="yfinance", mode="manual", capital=1_000.0, floor=None,
+        feed="yfinance", mode="mt5", capital=1_000.0, floor=None,
         notify_min_level="warn", daily_loss_limit=None, monthly_loss_limit=None,
         mt5_magic=20260817, mt5_shares_per_lot=None, mt5_symbol_map=None,
     )
@@ -100,11 +97,6 @@ def test_build_mt5_com_shares_per_lot_zero_ou_negativo_levanta_valueerror(cli, i
         cli.build(_args(mode="mt5", mt5_shares_per_lot=-1.0))
 
 
-def test_build_manual_monta_manual_broker(cli, isolated_db):
-    rt = cli.build(_args(mode="manual"))
-    assert rt.broker.mode == "manual"
-
-
 def test_build_mt5_com_shares_per_lot_monta_mt5_broker(cli, isolated_db):
     rt = cli.build(_args(mode="mt5", mt5_shares_per_lot=1.0))
     assert rt.broker.mode == "mt5"
@@ -114,10 +106,7 @@ def test_build_mt5_com_shares_per_lot_monta_mt5_broker(cli, isolated_db):
 
 def test_build_recusa_feed_parquet_em_operacao_real(cli, isolated_db):
     """`--feed parquet` (dado de D-1, ou mais velho) nunca pode operar
-    dinheiro real -- `build()` recusa para os dois modos reais (manual/mt5),
-    unicos que chegam ate a checagem do feed."""
-    with pytest.raises(ValueError):
-        cli.build(_args(mode="manual", feed="parquet"))
+    dinheiro real -- `build()` recusa no unico modo real que existe (mt5)."""
     with pytest.raises(ValueError):
         cli.build(_args(mode="mt5", feed="parquet", mt5_shares_per_lot=1.0))
 
@@ -157,7 +146,7 @@ def test_cmd_execute_recusa_fora_da_fase_open(cli, isolated_db, monkeypatch):
     monkeypatch.setattr(live_clock, "phase", lambda *a, **k: SessionPhase.POST_CLOSE)
 
     with pytest.raises(SystemExit):
-        cli.cmd_execute(_args(mode="manual"))
+        cli.cmd_execute(_args())
     assert fake_rt.executed is False
 
 
@@ -169,44 +158,8 @@ def test_cmd_execute_no_fase_open_nao_recusa(cli, isolated_db, monkeypatch):
     monkeypatch.setattr(cli, "build", lambda args: fake_rt)
     monkeypatch.setattr(live_clock, "phase", lambda *a, **k: SessionPhase.OPEN)
 
-    cli.cmd_execute(_args(mode="manual"))  # nao levanta SystemExit
+    cli.cmd_execute(_args())  # nao levanta SystemExit
     assert fake_rt.executed is True
-
-
-# ---------- recusa de tickets/confirm sobre conta nao-manual (1.5) ----------
-
-def _create_account(cli, isolated_db, mode: str) -> None:
-    rt = cli.build(_args(mode=mode, mt5_shares_per_lot=1.0 if mode == "mt5" else None,
-                         capital=1_000.0))
-    rt.ensure_account()
-
-
-def test_cmd_tickets_recusa_conta_nao_manual(cli, isolated_db, capsys):
-    _create_account(cli, isolated_db, mode="mt5")
-    args = _args(mode="mt5")
-
-    with pytest.raises(SystemExit) as exc_info:
-        cli.cmd_tickets(args)
-    assert "mt5" in str(exc_info.value)
-
-    with live_store.live_journal(isolated_db) as conn:
-        acc = live_store.load_account(conn, cli.ACCOUNT)
-        abertas = live_store.open_orders(conn, acc.id)
-    assert abertas == []
-
-
-def test_cmd_confirm_recusa_conta_nao_manual(cli, isolated_db):
-    _create_account(cli, isolated_db, mode="mt5")
-    args = _args(mode="mt5", order_id=1, quantity=100, price=40.0, fees=0.0)
-
-    with pytest.raises(SystemExit) as exc_info:
-        cli.cmd_confirm(args)
-    assert "mt5" in str(exc_info.value)
-
-    with live_store.live_journal(isolated_db) as conn:
-        acc = live_store.load_account(conn, cli.ACCOUNT)
-        abertas = live_store.open_orders(conn, acc.id)
-    assert abertas == []
 
 
 # ---------- cmd_loop: ValueError de conta/broker divergente e FATAL (item 6) --
@@ -229,7 +182,7 @@ class _FakeRuntimeValueError:
         self.notifier = _FakeNotifier()
 
     def run_once(self):
-        raise ValueError("conta 'principal' esta em modo 'manual', broker instanciado e 'mt5'")
+        raise ValueError("conta 'principal' esta em modo 'mt5', broker instanciado e 'mt5-mas-errado'")
 
 
 def test_cmd_loop_valueerror_de_conta_broker_divergente_e_fatal(cli, isolated_db, monkeypatch):
@@ -272,7 +225,7 @@ def _create_account_com_recomendacao(cli, isolated_db, amount=500.0):
     civil real virasse, quebrando o teste sem nenhuma mudanca de codigo."""
     from core.live_models import Intent, IntentKind, RobotRole
 
-    rt = cli.build(_args(mode="manual", capital=1_000.0))
+    rt = cli.build(_args(capital=1_000.0, mt5_shares_per_lot=1.0))
     rt.ensure_account()
     mes_corrente = clock.session_date().replace(day=1)
     with live_store.live_journal(isolated_db) as conn:
@@ -288,7 +241,7 @@ def _create_account_com_recomendacao(cli, isolated_db, amount=500.0):
 
 def test_cmd_sacar_confirma_recomendacao_pendente_debita_caixa(cli, isolated_db, capsys):
     _create_account_com_recomendacao(cli, isolated_db, amount=500.0)
-    args = _sacar_args(500.0, mode="manual", capital=1_000.0)
+    args = _sacar_args(500.0, capital=1_000.0, mt5_shares_per_lot=1.0)
 
     cli.cmd_sacar(args)
 
@@ -301,9 +254,9 @@ def test_cmd_sacar_confirma_recomendacao_pendente_debita_caixa(cli, isolated_db,
 
 
 def test_cmd_sacar_sem_recomendacao_pendente_sai_com_erro(cli, isolated_db):
-    rt = cli.build(_args(mode="manual", capital=1_000.0))
+    rt = cli.build(_args(capital=1_000.0, mt5_shares_per_lot=1.0))
     rt.ensure_account()
-    args = _sacar_args(500.0, mode="manual", capital=1_000.0)
+    args = _sacar_args(500.0, capital=1_000.0, mt5_shares_per_lot=1.0)
 
     with pytest.raises(SystemExit):
         cli.cmd_sacar(args)
@@ -315,7 +268,7 @@ def test_cmd_sacar_sem_recomendacao_pendente_sai_com_erro(cli, isolated_db):
 
 def test_cmd_sacar_com_intent_id_errado_sai_com_erro_sem_mexer_no_caixa(cli, isolated_db):
     _create_account_com_recomendacao(cli, isolated_db, amount=500.0)
-    args = _sacar_args(500.0, intent_id=999_999, mode="manual", capital=1_000.0)
+    args = _sacar_args(500.0, intent_id=999_999, capital=1_000.0, mt5_shares_per_lot=1.0)
 
     with pytest.raises(SystemExit):
         cli.cmd_sacar(args)

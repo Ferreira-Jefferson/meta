@@ -59,7 +59,7 @@ def _account(conn) -> AccountState:
     return ensure_account(
         conn,
         name="conta_teste",
-        mode="manual",
+        mode="mt5",
         initial_capital=10_000.0,
         investment_robot="dip2_hw40",
         withdrawal_robot="official_policy",
@@ -80,19 +80,68 @@ def test_ensure_account_idempotente(db_path):
 
 
 def test_ensure_account_recusa_divergencia_de_modo(db_path):
-    """Passo 4: uma segunda conta com o MESMO nome mas modo diferente do
+    """Passo 4: uma segunda chamada com o MESMO nome mas mode diferente do
     ja existente tem de ser recusada — hoje `ON CONFLICT DO NOTHING` ignora a
-    divergencia em silencio."""
-    with live_journal(db_path) as conn:
+    divergencia em silencio.
+
+    Usa uma tabela minima criada a mao, SEM o CHECK restritivo do schema real
+    (`mode IN ('mt5')`, so um valor canonico) — depois que o modo manual foi
+    descontinuado, nao sobra um segundo valor de `mode` genuinamente VALIDO
+    para forcar a divergencia via um INSERT que passaria pelo CHECK; o alvo
+    deste teste e a guarda em PYTHON de `ensure_account` (`account.mode !=
+    mode`), independente do que o CHECK do banco aceita."""
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("""
+            CREATE TABLE live_accounts (
+                id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+                name               TEXT    NOT NULL UNIQUE,
+                mode               TEXT    NOT NULL,
+                initial_capital    REAL    NOT NULL,
+                cash               REAL    NOT NULL,
+                investment_robot   TEXT    NOT NULL DEFAULT '',
+                withdrawal_robot   TEXT    NOT NULL DEFAULT '',
+                withdrawn_total    REAL    NOT NULL DEFAULT 0,
+                external_cash      REAL    NOT NULL DEFAULT 0,
+                policy_state       TEXT    NOT NULL DEFAULT '{}',
+                created_at         TEXT    NOT NULL DEFAULT (datetime('now')),
+                updated_at         TEXT    NOT NULL DEFAULT (datetime('now'))
+            )
+        """)
+        # `load_account` (chamado por `ensure_account`) sempre busca posicoes
+        # via `load_positions` -- precisa existir, mesmo vazia.
+        conn.execute("""
+            CREATE TABLE live_positions (
+                id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+                account_id         INTEGER NOT NULL REFERENCES live_accounts(id) ON DELETE CASCADE,
+                ticker             TEXT    NOT NULL,
+                quantity           INTEGER NOT NULL,
+                entry_date         TEXT    NOT NULL,
+                entry_price        REAL    NOT NULL,
+                capital_allocated  REAL    NOT NULL,
+                current_stop       REAL,
+                fees_paid          REAL    NOT NULL DEFAULT 0,
+                slippage_paid      REAL    NOT NULL DEFAULT 0,
+                max_price_seen     REAL    NOT NULL DEFAULT 0,
+                min_price_seen     REAL    NOT NULL DEFAULT 0,
+                bars_held          INTEGER NOT NULL DEFAULT 0,
+                kind               TEXT    NOT NULL DEFAULT 'main' CHECK (kind IN ('main','satellite')),
+                metadata           TEXT    NOT NULL DEFAULT '{}',
+                UNIQUE (account_id, ticker, kind)
+            )
+        """)
         ensure_account(
-            conn, name="conta_teste", mode="manual", initial_capital=10_000.0,
+            conn, name="conta_teste", mode="mt5", initial_capital=10_000.0,
             investment_robot="dip2_hw40", withdrawal_robot="official_policy",
         )
         with pytest.raises(ValueError):
             ensure_account(
-                conn, name="conta_teste", mode="mt5", initial_capital=10_000.0,
+                conn, name="conta_teste", mode="mt5-mas-errado", initial_capital=10_000.0,
                 investment_robot="dip2_hw40", withdrawal_robot="official_policy",
             )
+    finally:
+        conn.close()
 
 
 def test_save_account_persiste_cash_e_policy_state(db_path):
@@ -642,6 +691,34 @@ def test_migrate_vocabulario_recusa_quando_ha_conta_paper(tmp_path):
         conn.close()
 
 
+def test_migrate_vocabulario_recusa_quando_ha_conta_manual(tmp_path):
+    """Modo manual descontinuado: tabela com CHECK antigo (que ainda aceita
+    'manual', ver `_LEGACY_DDL`) + linha mode='manual' -> `ensure_tables`
+    levanta `LegacyManualAccountError` citando o nome da conta, em vez de
+    converter em silencio para 'mt5' (uma conta manual nunca teve
+    `mt5_shares_per_lot`/credenciais mt5 configuradas — mesmo padrao de
+    `LegacyPaperAccountError` para conta de SIMULACAO). Tabela permanece
+    intacta."""
+    db_path = tmp_path / "legacy_manual.sqlite"
+    _write_legacy_db(db_path, account_mode="manual", account_name="principal")
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        with pytest.raises(store.LegacyManualAccountError) as exc_info:
+            ensure_tables(conn)
+        message = str(exc_info.value)
+        assert "principal" in message
+        assert "manual" in message.lower()
+        assert "mt5" in message.lower()
+
+        # nada foi alterado: schema E dado continuam no formato antigo.
+        row = conn.execute("SELECT mode FROM live_accounts WHERE name = 'principal'").fetchone()
+        assert row["mode"] == "manual"
+    finally:
+        conn.close()
+
+
 def test_migrate_vocabulario_rebuild_limpa_live_accounts_new_orfa(tmp_path):
     """Item 9(a) da correcao pos-code-review (hipotese-agente): uma execucao
     anterior do rebuild interrompida no meio (crash, kill) pode deixar
@@ -697,7 +774,7 @@ def test_migrate_vocabulario_rebuild_aborta_antes_do_commit_se_fk_invalida(tmp_p
             ensure_tables(conn)
 
         # rebuild abortado ANTES do commit: schema continua o ANTIGO (ainda
-        # tem 'broker' no CHECK), nao o novo com 'manual','mt5' ja gravado.
+        # tem 'broker' no CHECK), nao o novo (so 'mt5') ja gravado.
         ddl = conn.execute(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'live_accounts'"
         ).fetchone()["sql"]

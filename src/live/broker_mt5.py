@@ -1,11 +1,11 @@
 """Tradutor `Order` <-> formato de request do pacote `MetaTrader5`.
 
-Este modulo implementa a TERCEIRA classe do port `Broker` (ver docstring de
-`live/broker.py`): `PaperBroker` preenche contra um feed, `ManualBroker`
-espera um humano, `MT5Broker` fala com um terminal MT5 ja aberto na mesma
-maquina via o pacote pip `MetaTrader5`. O trabalho aqui e 100% TRADUCAO de
-formato de dado e tratamento de erro — nenhuma regra de decisao mora aqui
-(mesma regra de fronteira de `core/live_models.py`): `MT5Broker` nao decide
+Este modulo implementa a classe de producao do port `Broker` (ver docstring
+de `live/broker.py`): `MT5Broker` fala com um terminal MT5 ja aberto na
+mesma maquina via o pacote pip `MetaTrader5` (`PaperBroker` e um dublê de
+teste, ver `tests/doubles.py`). O trabalho aqui e 100% TRADUCAO de formato
+de dado e tratamento de erro — nenhuma regra de decisao mora aqui (mesma
+regra de fronteira de `core/live_models.py`): `MT5Broker` nao decide
 comprar nem vender, so pega a `Order` que o runtime ja decidiu enviar e
 traduz para o dicionario `request` que `mt5.order_send()` espera, depois
 traduz a resposta de volta para os campos da `Order`.
@@ -305,9 +305,8 @@ class MT5Broker(Broker):
         filled_volume = getattr(result, "volume", volume)
         order.filled_qty = int(round(filled_volume * self._shares_per_lot))
         # Fill parcial de verdade da corretora (result.volume < volume pedido)
-        # vira PARTIAL, nunca FILLED — mesmo padrao ja usado por
-        # `ManualBroker.confirm` (`live/broker.py:146`). `Order.is_terminal`
-        # ja exclui PARTIAL corretamente (FEAT-004, item 4.4b).
+        # vira PARTIAL, nunca FILLED. `Order.is_terminal` ja exclui PARTIAL
+        # corretamente (FEAT-004, item 4.4b).
         order.status = (
             OrderStatus.FILLED if order.filled_qty >= order.quantity else OrderStatus.PARTIAL
         )
