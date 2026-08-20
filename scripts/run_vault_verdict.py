@@ -1,4 +1,4 @@
-"""COFRE — abre UMA VEZ o holdout 2003-2009 contra candidatos declarados antes.
+"""COFRE — abre UMA VEZ o holdout 2002-2009 contra candidatos declarados antes.
 
 ===========================================================================
 DESENHO CONGELADO. Escrito ANTES de a busca de hipoteses rodar.
@@ -156,9 +156,45 @@ L6  LOTE = 1 ACAO, R$ 1.000 iniciais, igual ao holdout anterior, para a
     aritmetica ser comparavel. Nao e operavel na Clear, cujo lote minimo e 100.
 
 L7  O COFRE NAO TEM 2008 COMO EVENTO ISOLAVEL. Toda janela iniciada em
-    2003-2004 contem a crise de 2008 na cauda. Nao ha janela deste cofre que
+    2002-2004 contem a crise de 2008 na cauda. Nao ha janela deste cofre que
     meca o candidato SEM 2008, e portanto nada aqui separa "sobrevive a crise"
     de "foi salvo pelo bull de 2003-2007 antes dela".
+
+L8  PODER ESTATISTICO — declarado com numero, MEDIDO antes de rodar a busca.
+    Simulacao de deteccao (200 meses, vol 6%/mes, 30 repeticoes por celula,
+    criterio "o alfa plantado vence E o DSR passa de 0,95"):
+
+      alfa/mes   Sharpe anual   N=15    N=40   N=120
+        0,5%         0,29         0%      0%      0%
+        1,0%         0,58         0%      0%      0%
+        1,5%         0,87        27%     30%     20%
+        2,0%         1,15        73%     67%     57%
+        3,0%         1,73       100%    100%    100%
+
+    Duas leituras, e a segunda e a que importa:
+
+    (a) A busca so detecta vantagem com Sharpe anual acima de ~0,9, e detecta
+        com confianca acima de ~1,7. Abaixo de Sharpe 0,6 o poder e ZERO. Como
+        a vantagem que sobreviveu ao holdout anterior e da ordem de indice mais
+        4,6 p.p. ao ano — Sharpe bem abaixo de 1 — este desenho pode
+        perfeitamente NAO ACHAR uma melhoria real que exista. "Nada passou" tem
+        de ser lido como "nada grande o suficiente para ser visto daqui", e nao
+        como "nada existe".
+
+    (b) O gargalo NAO e o numero de hipoteses: e o comprimento da serie. Entre
+        N=15 e N=120 o poder cai de 27% para 20% em Sharpe 0,87 — pouco. Com
+        ~200 observacoes mensais nao se distingue Sharpe 0,6 de zero, por mais
+        parcimoniosa que a busca seja. Rodar 120 hipoteses em vez de 15 custa
+        pouco poder; o que limita e existirem so 16 anos de dado.
+
+    Consequencia pratica: o resultado util desta busca provavelmente NAO sera
+    "achamos algo melhor". Sera o mapa de quais familias de mecanismo estouram o
+    teto de drawdown e quais nao, mais a confirmacao de que a barra e alta.
+
+    Fonte: `scripts/swing_lab/deflate.py`, calibrado contra ruido de media zero
+    (PBO nulo mediana 0,564, p5 0,358, p95 0,728; DSR nulo mediana 0,470,
+    p95 0,665). O PBO nulo NAO e exatamente 0,50 nesta configuracao, logo o
+    portao V5 e lido contra a nula EMPIRICA, nao contra o 0,50 teorico.
 
 CRITERIO DE DECISAO, EM UMA FRASE
 ----------------------------------
