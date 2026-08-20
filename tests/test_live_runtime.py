@@ -84,13 +84,15 @@ def universe(tmp_path):
 
 
 def _runtime(tmp_path, days_dir, script, policy=None, db_name="live.sqlite",
-            mode="mt5", capital=10_000.0) -> LiveRuntime:
+            mode="mt5", capital=10_000.0, strategy=None) -> LiveRuntime:
     assert mode == "mt5"  # unico modo que existe — parametro mantido so pra nao reescrever os call-sites
     feed = ReplayFeed()
     broker = PaperBroker(feed)
+    # `strategy` explicito quando o teste precisa OBSERVAR a estrategia (contar
+    # chamadas de `on_bar`); `None` mantem o default scriptado dos demais.
     return LiveRuntime(
         account_name="teste",
-        strategy=ScriptedStrategy(script),
+        strategy=strategy or ScriptedStrategy(script),
         policy=policy or FloorSkim(pct=0.5, floor=1e12),  # nunca saca por acidente
         feed=feed, broker=broker, config=BacktestConfig(initial_capital=capital, lot_size=1),
         tickers=(TICKER,), db_path=tmp_path / db_name, data_dir=days_dir,
@@ -1854,3 +1856,96 @@ def test_saque_multiplo_pendente_simultaneo_loga_invariante_quebrada(tmp_path, u
         e["level"] == "error" and "invariante quebrada" in e["message"]
         for e in eventos
     )
+
+
+# ---------- uma decisao por barra diaria, nunca por tick -------------------
+
+class _ContandoDecisoes(ScriptedStrategy):
+    """`ScriptedStrategy` que GRAVA cada chamada de `on_bar`.
+
+    Existe porque `test_close_and_decide_e_idempotente` prova o EFEITO (nao
+    duplica intencao nem equity) mas nao prova a CAUSA: que a estrategia foi
+    consultada uma vez so. Sao coisas diferentes — uma reordenacao das guardas
+    de `close_and_decide` (o achado E3 ja aconteceu uma vez) poderia voltar a
+    chamar `on_bar` varias vezes no mesmo pregao e ainda passar naquele teste,
+    porque a gravacao no diario seria barrada depois. Estrategia com estado
+    mutavel (`BuyTheDip._pending_rebalance`) sendo consultada N vezes por dia
+    nao e o robo que o backtest mediu.
+    """
+
+    name = "contando_decisoes"
+
+    def __init__(self, script: dict) -> None:
+        super().__init__(script)
+        self.chamadas: list[pd.Timestamp] = []
+
+    def on_bar(self, on_date, open_positions, cash_available):
+        self.chamadas.append(pd.Timestamp(on_date))
+        return super().on_bar(on_date, open_positions, cash_available)
+
+
+def test_estrategia_e_consultada_uma_vez_por_pregao_nunca_por_cotacao(tmp_path, universe):
+    """O medo tratado aqui: ao vivo o preco muda o tempo todo, e o supervisor
+    roda em loop. A estrategia tem de continuar vendo o mundo como no
+    backtest — UMA chamada de `on_bar` por barra diaria, no fecho.
+
+    Prova tres coisas de uma vez:
+      1. `close_and_decide` repetido no mesmo pregao consulta a estrategia
+         uma vez (as chamadas seguintes param na guarda de idempotencia,
+         ANTES de `on_bar`);
+      2. `intraday_tick` nunca consulta a estrategia, quantas cotacoes novas
+         cheguem — o caminho intra-dia so le `LivePosition.current_stop`
+         (`InvestmentRobot.on_intraday`), nao chama `on_bar`;
+      3. um pregao novo produz exatamente UMA chamada nova.
+    """
+    data_dir, days = universe
+    d0, d1 = days[0], days[1]
+    script = {pd.Timestamp(d0): [Enter(ticker=TICKER, initial_stop=None, size_hint=None)]}
+    bot = _ContandoDecisoes(script)
+    rt = _runtime(tmp_path, data_dir, {}, strategy=bot)
+    rt.feed.set(TICKER, 100.0)
+    rt.ensure_account()
+
+    for _ in range(5):
+        rt.close_and_decide(d0)
+    assert bot.chamadas == [pd.Timestamp(d0)], (
+        f"estrategia consultada {len(bot.chamadas)}x no mesmo pregao")
+
+    rt.execute_session(d1)
+
+    # 40 cotacoes novas no mesmo pregao, subindo e caindo: o "grafico mexendo"
+    for i in range(40):
+        rt.feed.set(TICKER, 100.0 + (i % 7) - 3)
+        rt.intraday_tick(d1)
+    assert bot.chamadas == [pd.Timestamp(d0)], (
+        "cotacao nova nao pode disparar decisao de estrategia")
+
+    rt.close_and_decide(d1)
+    assert bot.chamadas == [pd.Timestamp(d0), pd.Timestamp(d1)]
+
+
+def test_run_once_em_loop_no_pregao_nao_consulta_a_estrategia(tmp_path, universe):
+    """Mesma invariante pelo caminho REAL do supervisor: `run_once` chamado
+    repetidamente durante o pregao (fase OPEN) faz `execute_session` +
+    `intraday_tick` e nada mais. A decisao so nasce na fase de fecho.
+
+    Este e o teste que fecha o buraco de operacao: um supervisor em loop de
+    um minuto chama `run_once` ~400 vezes por pregao.
+    """
+    from datetime import time as _time
+
+    data_dir, days = universe
+    d1 = days[1]
+    bot = _ContandoDecisoes({})
+    rt = _runtime(tmp_path, data_dir, {}, strategy=bot)
+    rt.feed.set(TICKER, 100.0)
+    rt.ensure_account()
+
+    meio_do_pregao = datetime.combine(d1, _time(14, 0), tzinfo=clock.SAO_PAULO)
+    assert clock.phase(meio_do_pregao) == SessionPhase.OPEN
+
+    for i in range(30):
+        rt.feed.set(TICKER, 100.0 + (i % 5))
+        rt.run_once(meio_do_pregao + timedelta(minutes=i))
+
+    assert bot.chamadas == [], "fase OPEN nao pode consultar a estrategia"
