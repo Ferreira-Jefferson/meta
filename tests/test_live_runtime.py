@@ -1949,3 +1949,50 @@ def test_run_once_em_loop_no_pregao_nao_consulta_a_estrategia(tmp_path, universe
         rt.run_once(meio_do_pregao + timedelta(minutes=i))
 
     assert bot.chamadas == [], "fase OPEN nao pode consultar a estrategia"
+
+
+def test_dois_supervisores_no_mesmo_banco_nao_decidem_o_mesmo_pregao_duas_vezes(
+        tmp_path, universe, monkeypatch):
+    """Nao ha guarda de instancia unica no projeto — nenhum pidfile, nenhum
+    lock de arquivo — e dois processos no mesmo banco sao plausiveis (o painel
+    e `scripts/run_live.py`, ou um restart que nao matou o anterior). O
+    `SELECT` de "ja decidido" no inicio de `close_and_decide` nao resolve
+    isso: entre ler e gravar existe uma janela.
+
+    O teste reproduz exatamente essa janela. O supervisor B decide e commita;
+    o supervisor A entra com a leitura JA DESATUALIZADA (que e o que ele teria
+    lido se tivesse comecado antes do commit de B, simulado aqui zerando o
+    `last_equity`) e chega ate a gravacao. A reserva atomica
+    (`store.claim_session`) e o que impede a segunda decisao — sem ela, a
+    MESMA rotacao iria para a corretora duas vezes, com dinheiro de verdade.
+    """
+    data_dir, days = universe
+    d0, d1 = days[0], days[1]
+    script = {pd.Timestamp(d0): [Enter(ticker=TICKER, initial_stop=None, size_hint=None)]}
+
+    a = _runtime(tmp_path, data_dir, script, db_name="compartilhado.sqlite")
+    b = _runtime(tmp_path, data_dir, script, db_name="compartilhado.sqlite")
+    a.feed.set(TICKER, 100.0)
+    b.feed.set(TICKER, 100.0)
+    a.ensure_account()
+
+    assert b.close_and_decide(d0).action == "decide"
+
+    # A leitura de A ficou para tras: e o estado que ele teria visto se tivesse
+    # aberto a transacao antes de B commitar.
+    monkeypatch.setattr(store, "last_equity", lambda *_a, **_k: None)
+    r = a.close_and_decide(d0)
+    monkeypatch.undo()
+
+    assert r.action == "decide_skip"
+    assert r.detail["motivo"] == "ja decidido (corrida)"
+
+    with store.live_journal(a.db_path) as conn:
+        acc = store.load_account(conn, "teste")
+        pend = store.pending_intents(conn, acc.id, d1)
+        serie = store.equity_series(conn, acc.id)
+        eventos = store.recent_events(conn, acc.id, limit=50)
+    assert len(pend) == 1, "a mesma rotacao nao pode ser enfileirada duas vezes"
+    assert len(serie) == 1
+    assert any("outro processo decidiu" in e["message"] for e in eventos), (
+        "a corrida tem de ficar VISIVEL no diario — e sintoma de dois supervisores")

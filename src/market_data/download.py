@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import urllib.error
 import urllib.request
 from datetime import date
@@ -82,11 +83,38 @@ def parquet_path(ticker: str, out_dir: Path = DATA_DIR) -> Path:
     return out_dir / f"{safe}.parquet"
 
 
-def save_parquet(ticker: str, df: pd.DataFrame, out_dir: Path = DATA_DIR) -> Path:
-    out_dir.mkdir(parents=True, exist_ok=True)
-    path = parquet_path(ticker, out_dir)
-    df.to_parquet(path)
+def write_parquet_atomico(df: pd.DataFrame, path: Path) -> Path:
+    """Grava o parquet num temporario ao lado e o RENOMEIA para `path`.
+
+    `df.to_parquet(path)` grava no lugar: o arquivo passa por um estado
+    truncado/parcial no meio da escrita. Isso e um problema real com um unico
+    processo — o supervisor ao vivo chama `sync_data()` enquanto o painel e
+    qualquer backtest leem os MESMOS parquets — e vira corrupcao com dois
+    (nao existe guarda de instancia unica no projeto). Quem le durante a
+    escrita ou levanta excecao no meio de um pregao, ou, pior, le uma serie
+    incompleta e decide com ela.
+
+    `os.replace` e atomico no mesmo volume tanto no Windows quanto no POSIX:
+    o leitor ve o arquivo antigo ou o novo, nunca um pela metade. O
+    temporario e criado no MESMO diretorio de proposito — em `%TEMP%` ele
+    poderia cair em outro volume e o replace deixaria de ser atomico.
+
+    Falha na escrita nao pode destruir o parquet que ja existia: o
+    temporario e removido e o original fica intocado.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        df.to_parquet(tmp)
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
     return path
+
+
+def save_parquet(ticker: str, df: pd.DataFrame, out_dir: Path = DATA_DIR) -> Path:
+    return write_parquet_atomico(df, parquet_path(ticker, out_dir))
 
 
 def merge_preserving_history(
@@ -183,7 +211,7 @@ def download_macro(
             else:
                 print(f"[macro] {name}: falha na API ({e}); sem parquet local")
             continue
-        df.to_parquet(path)
+        write_parquet_atomico(df, path)
         written[name] = path
     return written
 

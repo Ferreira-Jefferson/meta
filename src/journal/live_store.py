@@ -921,6 +921,47 @@ def record_equity(
     )
 
 
+def claim_session(
+    conn: sqlite3.Connection,
+    account_id: int,
+    day: date,
+    cash: float,
+    invested: float,
+    equity: float,
+    external_cash: float,
+) -> bool:
+    """Reivindica ATOMICAMENTE o direito de decidir por `day`. `True` = venceu.
+
+    Mesma trava de `claim_intent`, aplicada à decisão do fecho em vez de à
+    intenção: `INSERT ... ON CONFLICT DO NOTHING` sobre a chave primária
+    `(account_id, date)` de `live_equity`, e `rowcount == 1` responde "fui eu
+    que marquei este pregão". Só o vencedor consulta a estratégia.
+
+    Por que não basta o `SELECT` de "já decidido" que `close_and_decide` faz
+    no início: entre ler e gravar existe uma janela, e nela cabe um segundo
+    supervisor. Não há guarda de instância única no projeto — nenhum pidfile,
+    nenhum lock de arquivo — e é plausível ter dois processos no mesmo banco
+    (o painel e `scripts/run_live.py`, ou um restart que não matou o anterior).
+    Duas decisões para o mesmo pregão significariam a MESMA rotação enviada
+    duas vezes à corretora, com dinheiro de verdade. O `SELECT` continua
+    existindo porque evita trabalho inútil no caso comum (`run_once` a cada
+    minuto); esta função é o que torna o erro impossível, não só improvável.
+
+    `record_equity` continua sendo upsert e continua existindo: ele é o
+    caminho de CORREÇÃO/montagem de estado (testes, `scripts/migrate_live_db`),
+    onde sobrescrever é o comportamento desejado. Quem decide usa este.
+    """
+    patrimonio = float(equity) + float(external_cash)
+    cur = conn.execute(
+        """INSERT INTO live_equity (account_id, date, cash, invested, equity, external_cash, patrimonio)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(account_id, date) DO NOTHING""",
+        (account_id, day.isoformat(), float(cash), float(invested), float(equity),
+         float(external_cash), patrimonio),
+    )
+    return cur.rowcount == 1
+
+
 def equity_series(conn: sqlite3.Connection, account_id: int) -> list[tuple[str, float, float]]:
     """Série (date, equity, patrimonio) em ordem cronológica."""
     rows = conn.execute(

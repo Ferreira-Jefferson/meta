@@ -163,3 +163,38 @@ def test_fill_gaps_sem_buracos_nao_altera_linhas():
     assert missing == []
     assert not filled["synthetic"].any()
     assert len(filled) == 2
+
+
+# ---------- escrita atomica do parquet -------------------------------------
+
+def test_save_parquet_nao_deixa_temporario_para_tras(tmp_path):
+    """Caminho felizmente comum: grava, renomeia, nao sobra lixo no diretorio."""
+    save_parquet("AAA.SA", _panel(["2026-01-02", "2026-01-05"]), out_dir=tmp_path)
+    arquivos = sorted(p.name for p in tmp_path.iterdir())
+    assert arquivos == ["AAA_SA.parquet"]
+
+
+def test_falha_de_escrita_preserva_o_parquet_anterior(tmp_path, monkeypatch):
+    """O motivo de existir `write_parquet_atomico`: o parquet nunca pode ficar
+    truncado nem desaparecer por causa de uma escrita que falhou no meio.
+
+    Antes, `df.to_parquet(path)` gravava NO LUGAR — o arquivo passava por um
+    estado parcial, e um erro no meio deixava o dado bom destruido. Como o
+    supervisor ao vivo chama `sync_data()` enquanto o painel le os mesmos
+    parquets, isso e risco com um unico processo, nao so com dois.
+    """
+    bom = _panel(["2026-01-02", "2026-01-05"])
+    caminho = save_parquet("AAA.SA", bom, out_dir=tmp_path)
+    antes = caminho.read_bytes()
+
+    def explode(self, *a, **k):
+        raise OSError("disco cheio no meio da escrita")
+
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", explode)
+    with pytest.raises(OSError):
+        save_parquet("AAA.SA", _panel(["2026-01-02"]), out_dir=tmp_path)
+    monkeypatch.undo()
+
+    assert caminho.read_bytes() == antes, "escrita falha destruiu o parquet anterior"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["AAA_SA.parquet"], (
+        "temporario ficou para tras")

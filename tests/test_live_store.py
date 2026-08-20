@@ -33,6 +33,7 @@ from journal.live_store import (
     open_orders,
     pending_intents,
     pending_withdraw_intents,
+    claim_session,
     record_equity,
     record_fill,
     record_deposit,
@@ -415,6 +416,32 @@ def test_order_and_fills_and_open_orders(db_path):
 # ---------------------------------------------------------------------------
 # equity e saques
 # ---------------------------------------------------------------------------
+
+def test_claim_session_so_o_primeiro_vence_e_nao_sobrescreve(db_path):
+    """`claim_session` e a trava de decisao: quem reivindica primeiro decide.
+
+    Diferenca deliberada de `record_equity`, testado logo abaixo: aquele
+    SOBRESCREVE (e o caminho de correcao/montagem de estado), este NAO —
+    perder a corrida tem de devolver `False` e deixar a linha do vencedor
+    intacta. Se ele sobrescrevesse, o segundo processo seguiria em frente e
+    mandaria a mesma ordem de novo.
+    """
+    with live_journal(db_path) as conn:
+        account = _account(conn)
+        day = date(2026, 8, 14)
+        assert claim_session(conn, account.id, day, cash=1_000.0, invested=9_000.0,
+                             equity=10_000.0, external_cash=0.0) is True
+        assert claim_session(conn, account.id, day, cash=7.0, invested=7.0,
+                             equity=7.0, external_cash=0.0) is False
+
+        series = equity_series(conn, account.id)
+        assert len(series) == 1
+        assert series[0][1] == 10_000.0, "o perdedor da corrida nao pode sobrescrever"
+
+        # dia seguinte e outra corrida, independente
+        assert claim_session(conn, account.id, date(2026, 8, 15), cash=1.0, invested=1.0,
+                             equity=2.0, external_cash=0.0) is True
+
 
 def test_record_equity_upsert_e_patrimonio(db_path):
     with live_journal(db_path) as conn:

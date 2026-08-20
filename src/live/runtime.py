@@ -677,6 +677,13 @@ class LiveRuntime:
         ter sido PERDIDA" para uma sessao que JA foi decidida com sucesso,
         so porque o dado sumiu DEPOIS.
 
+        Essa guarda de entrada e um `SELECT`, e portanto uma OTIMIZACAO, nao
+        uma garantia: entre ler e gravar cabe um segundo processo (nao existe
+        guarda de instancia unica no projeto). A garantia e a reserva atomica
+        `store.claim_session` mais abaixo, que substituiu o `record_equity`
+        deste caminho — quem perde a corrida abandona a decisao em vez de
+        mandar a mesma rotacao de novo para a corretora.
+
         Skip por dado incompleto (item 3.3): grava evento + notifica, com
         DEDUPE por `(sessao, faltantes)` persistido em `policy_state` (achado
         E2) — sem isso, `run_once` chamado a cada minuto inundaria o canal de
@@ -743,8 +750,24 @@ class LiveRuntime:
             marks = self._marks(session)
             equity = account.equity(marks)
             patrimonio = account.patrimonio(marks)
-            store.record_equity(conn, account.id, session, account.cash,
-                                account.invested(marks), equity, account.external_cash)
+            # Marcacao do fecho e RESERVA do direito de decidir, numa unica
+            # operacao atomica (ver `store.claim_session`). Perder a corrida
+            # aqui significa que um SEGUNDO processo decidiu este pregao entre
+            # o `SELECT` de "ja decidido" la em cima e esta linha — sem esta
+            # guarda, os dois gerariam a mesma rotacao e a corretora receberia
+            # a ordem duas vezes. O que `_expire_withdraw_advice` ja gravou
+            # acima pode ficar: expirar recomendacao vencida e idempotente e
+            # protegido pelo proprio `claim_intent`.
+            if not store.claim_session(conn, account.id, session, account.cash,
+                                       account.invested(marks), equity,
+                                       account.external_cash):
+                self._log(conn, account.id, "warn", "runtime",
+                          f"outro processo decidiu {session} durante esta chamada — "
+                          "decisao abandonada para nao duplicar ordem. Dois "
+                          "supervisores no mesmo banco?",
+                          {"session": session.isoformat()})
+                return StepReport("decide_skip", session,
+                                  detail={"motivo": "ja decidido (corrida)"})
 
             # Circuit breaker: observa o patrimonio do fecho ANTES de colher
             # decisoes, para o veto (se houver) valer para as intencoes que
