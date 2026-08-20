@@ -70,8 +70,17 @@ def _params_from_init(cls: type) -> list[tuple[str, str, str]]:
 
 
 def _build_registry() -> dict[str, StrategyInfo]:
+    """Tudo que existe em `strategy/`, INCLUSIVE o que foi aposentado do pódio.
+
+    A separação importa: `REGISTRY` serve para RESOLVER uma chave em objeto, e
+    `list_strategies()` serve para dizer quem disputa o ranking. Se as duas
+    fossem a mesma coisa, aposentar um robô (`candidate = False`) faria
+    `get_strategy()` levantar `KeyError` para toda conta ao vivo que já opera
+    esse robô — e uma decisão de curadoria de pódio derrubaria uma operação
+    real. Ver `discovery.discover_strategies(include_retired=True)`.
+    """
     reg: dict[str, StrategyInfo] = {}
-    for d in discover_strategies():
+    for d in discover_strategies(include_retired=True):
         short, long = _docstring_parts(d.cls)
         reg[d.key] = StrategyInfo(
             key=d.key,
@@ -88,7 +97,23 @@ def _build_registry() -> dict[str, StrategyInfo]:
 REGISTRY: dict[str, StrategyInfo] = _build_registry()
 
 
+def candidate_keys() -> frozenset[str]:
+    """Chaves que disputam o ranking automático (`candidate = True`)."""
+    return frozenset(d.key for d in discover_strategies())
+
+
 def list_strategies() -> list[StrategyInfo]:
+    """Só os candidatos — é isto que alimenta o pódio e o refresh do diário.
+
+    Robô aposentado continua em `REGISTRY` (resolvível por chave), mas some
+    daqui: não é rerrodado, não entra no ranking, não aparece como opção nova.
+    """
+    candidatos = candidate_keys()
+    return [i for i in REGISTRY.values() if i.key in candidatos]
+
+
+def list_all_strategies() -> list[StrategyInfo]:
+    """Todos, aposentados inclusive — para telas de histórico e diagnóstico."""
     return list(REGISTRY.values())
 
 

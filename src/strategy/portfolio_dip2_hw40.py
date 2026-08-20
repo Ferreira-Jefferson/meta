@@ -17,7 +17,22 @@ class DipTop1Portfolio(PortfolioHysteresis):
     """Hysteresis com dip 2%, janela 40 pregoes, sem satelites."""
     name = "portfolio_dip2_hw40"
     version = "1.0"
-    candidate = True  # reafirma participacao no ranking (classes-base ancestrais optaram por candidate=False)
+    # APOSENTADO do ranking em 2026-08-20. Nao foi refutado por desempenho — foi
+    # descoberto que o desempenho nao era dele. A `WATCHLIST` de sete tickers que
+    # ele opera foi escolhida em 2026 maximizando o capital de 2010-2026, entao o
+    # capital final que o punha em primeiro lugar e a resposta copiada do
+    # gabarito. `scripts/run_walk_forward.py` refez a selecao so com dado passado
+    # e o CAGR caiu de ~36% para 17,1% / -4,2% / 18,3%;
+    # `scripts/run_holdout_frozen.py` mostrou 57,4% de CAGR mediano justamente
+    # nas 48 janelas MAIS contaminadas, com 6 trades — assinatura de look-ahead.
+    # Some-se a isso a capacidade: EMAE4 gira R$ 141 mil/dia e ele satura o papel
+    # a partir de ~R$ 70 mil.
+    #
+    # A classe CONTINUA aqui e continua sendo a base de toda a familia
+    # (`liquid_sleeve.py` herda dela): as regras de sinal — momentum 12-1, dip
+    # 2%, histerese 15%, gate de Selic — nunca foram o problema. O problema era
+    # de onde ele escolhia. O sucessor e `strategy/liquid_champion.py`.
+    candidate = False
 
     satellite_pct: float = 0.00
 

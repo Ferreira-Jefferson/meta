@@ -236,10 +236,25 @@ def build(args) -> LiveRuntime:
         feed=feed,
         broker=broker,
         config=BacktestConfig(initial_capital=args.capital, lot_size=1),
-        tickers=WATCHLIST,
+        tickers=_universe_of(strategy_obj),
         notifier=_build_notifier(args.notify_min_level),
         risk_guard=_build_risk_guard(args.daily_loss_limit, args.monthly_loss_limit),
     )
+
+
+def _universe_of(strategy_obj) -> tuple[str, ...]:
+    """De quais tickers este robo precisa de cotacao.
+
+    `WATCHLIST` deixou de servir como universo unico em 2026-08-20, quando o
+    campeao passou a ser `liquid_champion`: ele escolhe o universo por liquidez
+    na data, dentro de um pool de 63 papeis, e nenhum dos sete da WATCHLIST e
+    garantido. Alimentar esse robo so com a WATCHLIST nao daria erro nenhum —
+    ele simplesmente decidiria com 7 dos 63 candidatos e operaria uma
+    estrategia que nunca foi testada, em silencio. Por isso o universo vem do
+    proprio robo (`Strategy.universe_tickers`) e a WATCHLIST fica so como
+    fallback para os robos antigos que nao declaram nada.
+    """
+    return tuple(getattr(strategy_obj, "universe_tickers", None) or WATCHLIST)
 
 
 def cmd_init(args) -> None:

@@ -15,7 +15,8 @@ Uso tipico (dentro de um script de familia de estrategia):
 metricas + diagnosticos de overfitting (contagem de trades, concentracao de
 lucro no top-1/top-3 trade, consistencia entre metades). Os GATES oficiais
 (NegYrs<=1, MaxDD>=-35%) sao os mesmos usados pelo ranking automatico do robo
-campeao (`journal/reader.py: CHAMPION_MAX_NEG_YEARS`, `CHAMPION_MAXDD_FLOOR`),
+campeao (`journal/reader.py`, portoes do pódio — desde 2026-08-20 medidos
+contra o INDICE da propria run, nao contra numeros absolutos),
 aplicados aqui sobre a janela FULL.
 """
 from __future__ import annotations

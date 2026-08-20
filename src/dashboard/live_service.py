@@ -16,12 +16,12 @@ from __future__ import annotations
 from journal import live_store as store
 from live.feed import ParquetCloseFeed
 from live.runtime import LiveRuntime
-from strategy.portfolio_dip2_hw40 import DipTop1Portfolio
+from strategy.registry import get_strategy
 
 ACCOUNT_NAME = "principal"
 
 
-def _build_runtime(mode: str, capital: float) -> LiveRuntime:
+def _build_runtime(mode: str, capital: float, robot: str | None) -> LiveRuntime:
     """A página é um painel de LEITURA — `status()` nunca envia ordem
     nenhuma, então o broker aqui não precisa (nem deve) estar conectado a
     nada de verdade. Mas o TIPO do broker precisa bater com o modo REAL da
@@ -33,6 +33,19 @@ def _build_runtime(mode: str, capital: float) -> LiveRuntime:
     from backtest.withdrawal import official_policy
     from core.config import BacktestConfig, WATCHLIST
 
+    # O robo vem da CONTA (`live_accounts.investment_robot`), nao de um import
+    # fixo. Ate 2026-08-20 este arquivo instanciava `DipTop1Portfolio()` direto:
+    # com um so robo operavel isso passava despercebido, mas o campeao virou
+    # `liquid_champion` e o painel passaria a mostrar as posicoes-alvo de OUTRO
+    # robo, com outro universo, como se fossem as da conta. Um painel de leitura
+    # que mente e pior que um painel que falta.
+    strategy_obj = get_strategy(robot).factory() if robot else None
+    if strategy_obj is None:
+        raise ValueError(
+            "conta sem `investment_robot` gravado — nao da para montar o painel "
+            "sem saber qual robo ela opera"
+        )
+
     feed = ParquetCloseFeed()
     if mode == "mt5":
         from live.broker_mt5 import MT5Broker  # import tardio: nao conecta ao construir
@@ -41,12 +54,12 @@ def _build_runtime(mode: str, capital: float) -> LiveRuntime:
         raise ValueError(f"modo de corretora desconhecido: {mode!r}")
     return LiveRuntime(
         account_name=ACCOUNT_NAME,
-        strategy=DipTop1Portfolio(),
+        strategy=strategy_obj,
         policy=official_policy(capital),
         feed=feed,
         broker=broker,
         config=BacktestConfig(initial_capital=capital, lot_size=1),
-        tickers=WATCHLIST,
+        tickers=tuple(getattr(strategy_obj, "universe_tickers", None) or WATCHLIST),
         risk_guard=_resolve_risk_guard(),
     )
 
@@ -79,4 +92,6 @@ def get_status() -> dict:
         account = store.load_account(conn, ACCOUNT_NAME)
     if account is None:
         return {"conta": ACCOUNT_NAME, "existe": False}
-    return _build_runtime(account.mode, account.initial_capital).status()
+    return _build_runtime(
+        account.mode, account.initial_capital, account.investment_robot
+    ).status()

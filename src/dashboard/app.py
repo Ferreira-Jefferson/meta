@@ -30,7 +30,7 @@ from live import clock
 from market_data.download import download_macro
 from market_data.loader import load_one
 from scheduler import refresh_champion_rankings, refresh_market_data
-from strategy.registry import get_strategy, list_strategies
+from strategy.registry import candidate_keys, get_strategy, list_strategies
 
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATES = Jinja2Templates(directory=str(BASE_DIR / "templates"))
@@ -241,9 +241,12 @@ def _parse_float(v: str | None) -> float | None:
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
     runs = reader.list_runs(limit=RUNS_PAGE_SIZE, offset=0)
-    top3_full = reader.top_strategies_by_final_capital(top_n=3, run_kind="champion_full")
-    top3_5y = reader.top_strategies_by_final_capital(top_n=3, run_kind="champion_5y")
-    top3_1y = reader.top_strategies_by_final_capital(top_n=3, run_kind="champion_1y")
+    top3_full = reader.top_strategies_by_final_capital(
+                top_n=3, run_kind="champion_full", only=candidate_keys())
+    top3_5y = reader.top_strategies_by_final_capital(
+        top_n=3, run_kind="champion_5y", only=candidate_keys())
+    top3_1y = reader.top_strategies_by_final_capital(
+        top_n=3, run_kind="champion_1y", only=candidate_keys())
     window_full = reader.latest_champion_window("champion_full")
     window_5y = reader.latest_champion_window("champion_5y")
     window_1y = reader.latest_champion_window("champion_1y")
@@ -417,7 +420,8 @@ def _operacao_ctx(**extra) -> dict:
     # quando ainda não há conta, pra não bater nele a cada poll HTMX de
     # 20s em 20s (`/operacao/fragment`) sobre uma conta já em operação.
     top3 = ([] if status_payload.get("existe")
-            else reader.top_strategies_by_final_capital(top_n=3, run_kind="champion_full"))
+            else reader.top_strategies_by_final_capital(
+                top_n=3, run_kind="champion_full", only=candidate_keys()))
     return {
         "status": status_payload,
         "proc": live_control.status(),
@@ -507,7 +511,8 @@ async def operacao_iniciar(request: Request):
         # form venha adulterado/desatualizado (mesmo espírito de floor/
         # disjuntor, ver teste `..._ignora_piso_e_disjuntor_arbitrarios...`).
         mode = "mt5"
-        top3 = reader.top_strategies_by_final_capital(top_n=3, run_kind="champion_full")
+        top3 = reader.top_strategies_by_final_capital(
+                top_n=3, run_kind="champion_full", only=candidate_keys())
         valid_keys = {c["strategy_name"] for c in top3}
         strategy_key = form.get("robo")
         if not valid_keys:

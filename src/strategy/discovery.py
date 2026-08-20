@@ -30,12 +30,12 @@ class DiscoveredStrategy:
     factory: Callable[[], Strategy]
 
 
-def _is_concrete_strategy(obj) -> bool:
+def _is_concrete_strategy(obj, include_retired: bool = False) -> bool:
     if not (inspect.isclass(obj) and issubclass(obj, Strategy) and obj is not Strategy):
         return False
     if inspect.isabstract(obj):
         return False
-    if not getattr(obj, "candidate", True):
+    if not include_retired and not getattr(obj, "candidate", True):
         return False
     # Precisa ser instanciável sem argumentos — todo robô do registry hoje
     # usa **kwargs com defaults, mas checamos para não quebrar em runtime.
@@ -52,12 +52,18 @@ def _is_concrete_strategy(obj) -> bool:
     return True
 
 
-def discover_strategies() -> list[DiscoveredStrategy]:
+def discover_strategies(include_retired: bool = False) -> list[DiscoveredStrategy]:
     """Importa todo módulo de `strategy/` e devolve as classes concretas achadas.
 
     Dedup por `name` (chave): se duas classes declararem o mesmo `name`,
     a primeira encontrada (ordem alfabética de módulo) vence — não deveria
     acontecer se cada robô mantiver `name` único, mas evita duplicar no pódio.
+
+    `include_retired=True` traz também as classes com `candidate = False`. Isso
+    existe para RESOLVER uma chave, nunca para ranquear: uma conta ao vivo que
+    já opera um robô aposentado (`portfolio_dip2_hw40`, por exemplo) precisa
+    continuar conseguindo instanciá-lo, senão aposentar um robô do pódio
+    derrubaria uma operação real em produção. Quem monta pódio usa o default.
     """
     found: dict[str, DiscoveredStrategy] = {}
     pkg_path = _strategy_pkg.__path__
@@ -68,7 +74,7 @@ def discover_strategies() -> list[DiscoveredStrategy]:
         for _, obj in inspect.getmembers(module, inspect.isclass):
             if obj.__module__ != module.__name__:
                 continue  # só classes definidas neste módulo, não as importadas
-            if not _is_concrete_strategy(obj):
+            if not _is_concrete_strategy(obj, include_retired):
                 continue
             key = obj.name
             if key not in found:

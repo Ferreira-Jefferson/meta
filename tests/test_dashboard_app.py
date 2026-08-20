@@ -61,7 +61,7 @@ def _create_account(db_path) -> int:
     with live_store.live_journal(db_path) as conn:
         acc = live_store.ensure_account(
             conn, name=live_service.ACCOUNT_NAME, mode="mt5",
-            initial_capital=1_000.0, investment_robot="dip2_hw40",
+            initial_capital=1_000.0, investment_robot="portfolio_dip2_hw40",
             withdrawal_robot="official_policy",
         )
         return acc.id
@@ -71,7 +71,7 @@ def _create_mt5_account(db_path, capital: float = 50_000.0) -> int:
     with live_store.live_journal(db_path) as conn:
         acc = live_store.ensure_account(
             conn, name=live_service.ACCOUNT_NAME, mode="mt5",
-            initial_capital=capital, investment_robot="dip2_hw40",
+            initial_capital=capital, investment_robot="portfolio_dip2_hw40",
             withdrawal_robot="official_policy",
         )
         return acc.id
@@ -109,15 +109,15 @@ def test_get_status_usa_capital_real_da_conta_atraves_de_build_runtime(isolated_
     with live_store.live_journal(db_path) as conn:
         live_store.ensure_account(
             conn, name=live_service.ACCOUNT_NAME, mode="mt5",
-            initial_capital=50_000.0, investment_robot="dip2_hw40",
+            initial_capital=50_000.0, investment_robot="portfolio_dip2_hw40",
             withdrawal_robot="official_policy",
         )
 
     captured: dict = {}
     original = live_service._build_runtime
 
-    def _spy(mode, capital):
-        rt = original(mode, capital)
+    def _spy(mode, capital, robot):
+        rt = original(mode, capital, robot)
         captured["rt"] = rt
         return rt
 
@@ -135,7 +135,7 @@ def test_get_status_disjuntor_nao_nulo_quando_ha_config_salva(isolated_journal, 
     with live_store.live_journal(db_path) as conn:
         live_store.ensure_account(
             conn, name=live_service.ACCOUNT_NAME, mode="mt5",
-            initial_capital=1_000.0, investment_robot="dip2_hw40",
+            initial_capital=1_000.0, investment_robot="portfolio_dip2_hw40",
             withdrawal_robot="official_policy",
         )
 
@@ -266,7 +266,7 @@ def test_operacao_iniciar_retoma_conta_mt5_existente_usa_shares_per_lot_detectad
     assert len(captured) == 1
     assert captured[0].mode == "mt5"
     assert captured[0].mt5_shares_per_lot == pytest.approx(3.5)
-    assert captured[0].strategy == "dip2_hw40"  # investment_robot da conta ja existente
+    assert captured[0].strategy == "portfolio_dip2_hw40"  # investment_robot da conta ja existente
 
 
 def test_operacao_iniciar_mt5_shares_per_lot_zero_detectado_pede_campo_sem_iniciar(
@@ -339,7 +339,7 @@ def test_operacao_iniciar_conta_existente_ignora_robo_do_form_usa_investment_rob
     explicitamente seria um incidente. `operacao_iniciar` tem de usar sempre
     `conta.investment_robot`, nunca o `robo` que porventura vier no form."""
     db_path = isolated_journal
-    _create_mt5_account(db_path)  # investment_robot="dip2_hw40" (ver _create_mt5_account)
+    _create_mt5_account(db_path)  # investment_robot="portfolio_dip2_hw40" (ver _create_mt5_account)
     monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda: 1.0)
     # Ranking mudou depois da criação -- top-3 atual nem contém o robô da conta.
     monkeypatch.setattr(dashboard_app.reader, "top_strategies_by_final_capital",
@@ -352,7 +352,7 @@ def test_operacao_iniciar_conta_existente_ignora_robo_do_form_usa_investment_rob
 
     assert resp.status_code == 200
     assert len(captured) == 1
-    assert captured[0].strategy == "dip2_hw40"
+    assert captured[0].strategy == "portfolio_dip2_hw40"
 
 
 # ---------- LegacyPaperAccountError não pode virar 500 cru (item 5) ---------
