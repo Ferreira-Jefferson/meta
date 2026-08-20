@@ -1,0 +1,121 @@
+[
+  {
+    "classe": "Hip06IliquidezRelativaAoGrupo",
+    "familia": "iliquidez",
+    "r1000": {
+      "median_cagr": 0.16839756152552687,
+      "worst_dd": -0.35985900297539164,
+      "median_exposure": 0.4601033363550294,
+      "n": 47
+    },
+    "r100": {
+      "median_cagr": 0.1713043100643692,
+      "worst_dd": -0.33676167957882475,
+      "median_exposure": 0.4076039451555726,
+      "n": 47
+    },
+    "delta_cagr": 0.0029067485388423187
+  },
+  {
+    "classe": "LongHorizonRiskAdjustedReturn",
+    "familia": "preco_qualidade",
+    "r1000": {
+      "median_cagr": 0.16110493259906655,
+      "worst_dd": -0.37561103439727705,
+      "median_exposure": 0.6117164360181524,
+      "n": 47
+    },
+    "r100": {
+      "median_cagr": 0.1518969192673354,
+      "worst_dd": -0.31856013612938916,
+      "median_exposure": 0.39774208928516314,
+      "n": 47
+    },
+    "delta_cagr": -0.009208013331731157
+  },
+  {
+    "classe": "MacroGatedBreakout",
+    "familia": "trend_ts",
+    "r1000": {
+      "median_cagr": 0.14501181270222974,
+      "worst_dd": -0.37891627511193404,
+      "median_exposure": 0.6622943704871388,
+      "n": 47
+    },
+    "r100": {
+      "median_cagr": 0.14448627708294537,
+      "worst_dd": -0.522373417688239,
+      "median_exposure": 0.6252988412300741,
+      "n": 47
+    },
+    "delta_cagr": -0.0005255356192843674
+  },
+  {
+    "classe": "Hip03ExcluiTopoLiquidez",
+    "familia": "iliquidez",
+    "r1000": {
+      "median_cagr": 0.1405899384852456,
+      "worst_dd": -0.35671549308351214,
+      "median_exposure": 0.4860347343508469,
+      "n": 47
+    },
+    "r100": {
+      "median_cagr": 0.18513656852860838,
+      "worst_dd": -0.34984799003731326,
+      "median_exposure": 0.42150444994429076,
+      "n": 47
+    },
+    "delta_cagr": 0.04454663004336279
+  },
+  {
+    "classe": "RiskCappedWithStop",
+    "familia": "risk_targeting",
+    "r1000": {
+      "median_cagr": 0.1294265306547877,
+      "worst_dd": -0.3390516323886429,
+      "median_exposure": 0.4818336463637539,
+      "n": 47
+    },
+    "r100": {
+      "median_cagr": 0.10537975787435316,
+      "worst_dd": -0.36888364616527325,
+      "median_exposure": 0.4468061956145439,
+      "n": 47
+    },
+    "delta_cagr": -0.024046772780434544
+  },
+  {
+    "classe": "IliquidezGrupoComQualidade5A",
+    "familia": "sintese",
+    "r1000": {
+      "median_cagr": 0.18345375869262548,
+      "worst_dd": -0.19709207360336023,
+      "median_exposure": 0.3823550952340327,
+      "n": 47
+    },
+    "r100": {
+      "median_cagr": 0.16592082034824807,
+      "worst_dd": -0.2025317927529251,
+      "median_exposure": 0.2767314206420952,
+      "n": 47
+    },
+    "delta_cagr": -0.017532938344377413
+  },
+  {
+    "classe": "IliquidezGrupoComRiscoOrcado",
+    "familia": "sintese",
+    "r1000": {
+      "median_cagr": 0.15535596232071214,
+      "worst_dd": -0.31240470147775234,
+      "median_exposure": 0.5291725679584456,
+      "n": 47
+    },
+    "r100": {
+      "median_cagr": 0.1566873587340365,
+      "worst_dd": -0.3024599147727235,
+      "median_exposure": 0.4851741363077516,
+      "n": 47
+    },
+    "delta_cagr": 0.0013313964133243594
+  }
+]

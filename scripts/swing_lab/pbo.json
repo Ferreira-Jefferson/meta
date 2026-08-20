@@ -1,0 +1,93 @@
+{
+  "pbo_finalistas": 0.014763014763014764,
+  "pbo_todas": 0.0005439005439005439,
+  "n_ensaios": 122,
+  "n_meses": 199,
+  "sr0_esperado_max": 0.23336517747917873,
+  "candidatos": [
+    {
+      "classe": "LowIbovCorrelation",
+      "familia": "preco_qualidade",
+      "dsr": 0.4593531936813983,
+      "sr_anual": 0.789542404133751,
+      "expos": 0.5353206519975924,
+      "median_cagr": 0.19129159082855396
+    },
+    {
+      "classe": "Hip06IliquidezRelativaAoGrupo",
+      "familia": "iliquidez",
+      "dsr": 0.5203399967843952,
+      "sr_anual": 0.8195104906315188,
+      "expos": 0.4582593030086423,
+      "median_cagr": 0.18411276292711953
+    },
+    {
+      "classe": "Hip08ScoreCombinado",
+      "familia": "iliquidez",
+      "dsr": 0.5274032383494054,
+      "sr_anual": 0.8232278677755918,
+      "expos": 0.46519198946316714,
+      "median_cagr": 0.17927011040633434
+    },
+    {
+      "classe": "Hip07IliquidezEstrutural",
+      "familia": "iliquidez",
+      "dsr": 0.31268859377425473,
+      "sr_anual": 0.6991526483420117,
+      "expos": 0.47977134668016136,
+      "median_cagr": 0.17410872994121696
+    },
+    {
+      "classe": "LongHorizonRiskAdjustedReturn",
+      "familia": "preco_qualidade",
+      "dsr": 0.8714719417285836,
+      "sr_anual": 1.0827295549233655,
+      "expos": 0.6106433229020186,
+      "median_cagr": 0.1600244983606216
+    },
+    {
+      "classe": "Hip09VolRegimeGate",
+      "familia": "baixa_vol",
+      "dsr": 0.5281083613952501,
+      "sr_anual": 0.8234951380477131,
+      "expos": 0.3800148241260249,
+      "median_cagr": 0.1550944630233826
+    },
+    {
+      "classe": "MacroGatedBreakout",
+      "familia": "trend_ts",
+      "dsr": 0.2820786526346518,
+      "sr_anual": 0.6785117574864135,
+      "expos": 0.6622943704871388,
+      "median_cagr": 0.14501181270222974
+    },
+    {
+      "classe": "Hip03ExcluiTopoLiquidez",
+      "familia": "iliquidez",
+      "dsr": 0.3005866094176436,
+      "sr_anual": 0.6971264247209848,
+      "expos": 0.49802731103204645,
+      "median_cagr": 0.14219288103880134
+    },
+    {
+      "classe": "Hip05TiltIliquidezNoTamanho",
+      "familia": "iliquidez",
+      "dsr": 0.14767086279314917,
+      "sr_anual": 0.5787128886739386,
+      "expos": 0.48525712609865157,
+      "median_cagr": 0.13802438757612667
+    },
+    {
+      "classe": "RiskCappedWithStop",
+      "familia": "risk_targeting",
+      "dsr": 0.2998999153651811,
+      "sr_anual": 0.6750274480367126,
+      "expos": 0.4830043765964606,
+      "median_cagr": 0.1343363245092395
+    }
+  ],
+  "nulo_pbo_mediana": 0.564,
+  "nulo_dsr_p95": 0.665,
+  "pbo": 0.0006216006216006216,
+  "nota": "atualizado para N=122 (120 hipoteses + 2 sinteses); pbo_candidatos=0.379 (pool dos 5 finalistas, diagnostico, NAO usado como V5)"
+}

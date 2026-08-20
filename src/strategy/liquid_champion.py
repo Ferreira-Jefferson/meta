@@ -103,4 +103,9 @@ class LiquidChampion(LiquidSleeves5):
 
     name = "liquid_champion"
     version = "1.0"
-    candidate = True
+    # Aposentado 2026-08-20: decisao do dono do capital apos `liquid_dual10`
+    # vencer no ranking automatico da janela FULL e a busca de swing (cofre
+    # 1998-2009) apontar `sintese_02_iliquidez_grupo_risco_orcado` como unica
+    # candidata sobrevivente. A classe continua aqui — nao ha problema de
+    # sinal, so deixou de ser quem dispara no ranking/dashboard.
+    candidate = False

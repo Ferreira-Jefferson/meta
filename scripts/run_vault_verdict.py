@@ -238,9 +238,18 @@ GATES = {
     "V6_top5_share_max":  1.00,
 }
 
-# Preenchido SO quando E3 terminar, como "modulo:Classe". Vazio de proposito:
-# executado antes da busca, este script nao mede nada.
-CANDIDATES: tuple[str, ...] = ()
+# Preenchido em 2026-08-20, depois de E1(120)->E2(30)->C2(exposicao pareada,
+# corrigido)->estresse de capital raso->E3(sintese). 3 melhores de E2 que
+# sobreviveram ao C2 + 2 sinteses. MacroGatedBreakout era a 3a melhor de E2 e
+# sobrevivia ao C2, mas estourou o teto de DD (-52,24%) no estresse de capital
+# raso (R$100 em vez de R$1.000) — substituida pela 4a, Hip03ExcluiTopoLiquidez.
+CANDIDATES: tuple[str, ...] = (
+    "strategy.lab.iliquidez.hip_06:Hip06IliquidezRelativaAoGrupo",
+    "strategy.lab.preco_qualidade.hip_10:LongHorizonRiskAdjustedReturn",
+    "strategy.lab.iliquidez.hip_03:Hip03ExcluiTopoLiquidez",
+    "strategy.lab.sintese.hip_01:IliquidezGrupoComQualidade5A",
+    "strategy.lab.sintese.hip_02:IliquidezGrupoComRiscoOrcado",
+)
 
 # ---------------------------------------------------------------------------
 # Maquinaria. Escrita junto com o protocolo, antes de existir candidato — para

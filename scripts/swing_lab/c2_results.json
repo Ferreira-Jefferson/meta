@@ -1,0 +1,201 @@
+{
+  "campeao_largo": {
+    "median_cagr": 0.06064329023914783,
+    "worst_cagr": -0.05191119545649436,
+    "worst_dd": -0.45090750922620093,
+    "worst_12m": -0.38981160894911204,
+    "n": 47
+  },
+  "candidatos": [
+    {
+      "classe": "LowIbovCorrelation",
+      "familia": "preco_qualidade",
+      "exposicao": 0.5353206519975924,
+      "candidato": {
+        "median_cagr": 0.19129159082855396,
+        "worst_cagr": -0.05890641809958075,
+        "worst_dd": -0.34543679784452397,
+        "worst_12m": -0.21552204753900484
+      },
+      "mistura": {
+        "median_cagr": 0.0843290329561488,
+        "worst_cagr": 0.025925042269301368,
+        "worst_dd": -0.214680919175393,
+        "worst_12m": -0.18114523572911534,
+        "n": 47
+      },
+      "sobrevive_c2": false
+    },
+    {
+      "classe": "Hip06IliquidezRelativaAoGrupo",
+      "familia": "iliquidez",
+      "exposicao": 0.4582593030086423,
+      "candidato": {
+        "median_cagr": 0.18411276292711953,
+        "worst_cagr": 0.020617422894100734,
+        "worst_dd": -0.3506732864344039,
+        "worst_12m": -0.14877409010196208
+      },
+      "mistura": {
+        "median_cagr": 0.08726199654026612,
+        "worst_cagr": 0.037971659864067586,
+        "worst_dd": -0.1722835587180227,
+        "worst_12m": -0.14153650449478572,
+        "n": 47
+      },
+      "sobrevive_c2": false
+    },
+    {
+      "classe": "Hip08ScoreCombinado",
+      "familia": "iliquidez",
+      "exposicao": 0.46519198946316714,
+      "candidato": {
+        "median_cagr": 0.17927011040633434,
+        "worst_cagr": -0.0348860928951914,
+        "worst_dd": -0.3392293963247415,
+        "worst_12m": -0.21255598710283463
+      },
+      "mistura": {
+        "median_cagr": 0.08698831374738591,
+        "worst_cagr": 0.0368912795583749,
+        "worst_dd": -0.1761773183978944,
+        "worst_12m": -0.14516163074688204,
+        "n": 47
+      },
+      "sobrevive_c2": false
+    },
+    {
+      "classe": "Hip07IliquidezEstrutural",
+      "familia": "iliquidez",
+      "exposicao": 0.47977134668016136,
+      "candidato": {
+        "median_cagr": 0.17410872994121696,
+        "worst_cagr": -0.04307720843621299,
+        "worst_dd": -0.3292541532645431,
+        "worst_12m": -0.22791635809089972
+      },
+      "mistura": {
+        "median_cagr": 0.08640517221162969,
+        "worst_cagr": 0.03461703806388816,
+        "worst_dd": -0.18431407054484483,
+        "worst_12m": -0.15274512783724303,
+        "n": 47
+      },
+      "sobrevive_c2": false
+    },
+    {
+      "classe": "LongHorizonRiskAdjustedReturn",
+      "familia": "preco_qualidade",
+      "exposicao": 0.6106433229020186,
+      "candidato": {
+        "median_cagr": 0.1600244983606216,
+        "worst_cagr": 0.07661163150690564,
+        "worst_dd": -0.3714695522152319,
+        "worst_12m": -0.22403221201024148
+      },
+      "mistura": {
+        "median_cagr": 0.0857859369162608,
+        "worst_cagr": 0.014074363330292883,
+        "worst_dd": -0.2550338231757784,
+        "worst_12m": -0.21842392540116762,
+        "n": 47
+      },
+      "sobrevive_c2": true
+    },
+    {
+      "classe": "Hip09VolRegimeGate",
+      "familia": "baixa_vol",
+      "exposicao": 0.3800148241260249,
+      "candidato": {
+        "median_cagr": 0.1550944630233826,
+        "worst_cagr": 0.007378221458863798,
+        "worst_dd": -0.2749652755542624,
+        "worst_12m": -0.17320591974228694
+      },
+      "mistura": {
+        "median_cagr": 0.09018913398728423,
+        "worst_cagr": 0.05011661161154213,
+        "worst_dd": -0.13825322093565617,
+        "worst_12m": -0.09976111475828553,
+        "n": 47
+      },
+      "sobrevive_c2": false
+    },
+    {
+      "classe": "MacroGatedBreakout",
+      "familia": "trend_ts",
+      "exposicao": 0.6622943704871388,
+      "candidato": {
+        "median_cagr": 0.14501181270222974,
+        "worst_cagr": -0.0489875040733877,
+        "worst_dd": -0.37891627511193404,
+        "worst_12m": -0.21685307763587347
+      },
+      "mistura": {
+        "median_cagr": 0.0832690945700465,
+        "worst_cagr": 0.005907640877432341,
+        "worst_dd": -0.2840468886996841,
+        "worst_12m": -0.24318445989725623,
+        "n": 47
+      },
+      "sobrevive_c2": false
+    },
+    {
+      "classe": "Hip03ExcluiTopoLiquidez",
+      "familia": "iliquidez",
+      "exposicao": 0.49802731103204645,
+      "candidato": {
+        "median_cagr": 0.14219288103880134,
+        "worst_cagr": 0.005877258411311814,
+        "worst_dd": -0.348520209899131,
+        "worst_12m": -0.178924847704241
+      },
+      "mistura": {
+        "median_cagr": 0.08566048500888557,
+        "worst_cagr": 0.03176510178235015,
+        "worst_dd": -0.19440440386235147,
+        "worst_12m": -0.162164701564955,
+        "n": 47
+      },
+      "sobrevive_c2": false
+    },
+    {
+      "classe": "Hip05TiltIliquidezNoTamanho",
+      "familia": "iliquidez",
+      "exposicao": 0.48525712609865157,
+      "candidato": {
+        "median_cagr": 0.13802438757612667,
+        "worst_cagr": -0.03880010369310871,
+        "worst_dd": -0.3588950869648009,
+        "worst_12m": -0.3170511082358849
+      },
+      "mistura": {
+        "median_cagr": 0.08618309168286964,
+        "worst_cagr": 0.033760537960098924,
+        "worst_dd": -0.18735759487487103,
+        "worst_12m": -0.15558453908696124,
+        "n": 47
+      },
+      "sobrevive_c2": false
+    },
+    {
+      "classe": "RiskCappedWithStop",
+      "familia": "risk_targeting",
+      "exposicao": 0.4830043765964606,
+      "candidato": {
+        "median_cagr": 0.1343363245092395,
+        "worst_cagr": -0.007277796238313816,
+        "worst_dd": -0.33715060197838653,
+        "worst_12m": -0.2216689743891822
+      },
+      "mistura": {
+        "median_cagr": 0.0862744656498482,
+        "worst_cagr": 0.03411231263356762,
+        "worst_dd": -0.18610895756186796,
+        "worst_12m": -0.1544194543307682,
+        "n": 47
+      },
+      "sobrevive_c2": false
+    }
+  ]
+}

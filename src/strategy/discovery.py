@@ -52,6 +52,24 @@ def _is_concrete_strategy(obj, include_retired: bool = False) -> bool:
     return True
 
 
+# `strategy/lab/` é o sandbox da busca de swing (ver `scripts/swing_lab/` e
+# `scripts/run_vault_verdict.py`) e NAO e varrido por padrao — uma hipotese
+# de busca so chega ao podio automatico se alguem promove-la aqui, de forma
+# explicita e auditavel, depois do escrutinio que o veredito do cofre exige.
+# Um `pkgutil.walk_packages` recursivo abriria a porta pra qualquer uma das
+# hipoteses (inclusive as que reprovaram) por acidente; esta lista e o
+# oposto disso: cada entrada e uma decisao, nao um efeito colateral de scan.
+#
+# sintese_02_iliquidez_grupo_risco_orcado — promovida 2026-08-20, unica
+# sobrevivente do cofre selado (1998-2009) entre 122 hipoteses medidas.
+# Decisao do dono do capital antes do walk-forward/C1/C3/C5 e do porte para
+# operacao ao vivo — competir no ranking automatico nao substitui esse
+# escrutinio, so deixa o robo visivel enquanto ele acontece.
+_PROMOTED_LAB_MODULES: tuple[str, ...] = (
+    "strategy.lab.sintese.hip_02",
+)
+
+
 def discover_strategies(include_retired: bool = False) -> list[DiscoveredStrategy]:
     """Importa todo módulo de `strategy/` e devolve as classes concretas achadas.
 
@@ -64,13 +82,17 @@ def discover_strategies(include_retired: bool = False) -> list[DiscoveredStrateg
     já opera um robô aposentado (`portfolio_dip2_hw40`, por exemplo) precisa
     continuar conseguindo instanciá-lo, senão aposentar um robô do pódio
     derrubaria uma operação real em produção. Quem monta pódio usa o default.
+
+    Alem de `strategy/`, importa tambem `_PROMOTED_LAB_MODULES` — a lista
+    explicita de hipoteses de `strategy/lab/` promovidas ao podio.
     """
     found: dict[str, DiscoveredStrategy] = {}
     pkg_path = _strategy_pkg.__path__
-    for mod_info in sorted(pkgutil.iter_modules(pkg_path), key=lambda m: m.name):
-        if mod_info.name in ("base", "registry", "discovery"):
-            continue
-        module = importlib.import_module(f"strategy.{mod_info.name}")
+    modulos = [f"strategy.{m.name}" for m in sorted(pkgutil.iter_modules(pkg_path), key=lambda m: m.name)
+               if m.name not in ("base", "registry", "discovery")]
+    modulos += list(_PROMOTED_LAB_MODULES)
+    for mod_name in modulos:
+        module = importlib.import_module(mod_name)
         for _, obj in inspect.getmembers(module, inspect.isclass):
             if obj.__module__ != module.__name__:
                 continue  # só classes definidas neste módulo, não as importadas
