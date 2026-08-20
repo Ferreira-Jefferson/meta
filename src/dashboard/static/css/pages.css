@@ -1358,6 +1358,17 @@
   transition: background 120ms linear;
 }
 .ops-start-form button:hover { background: var(--fg-strong); }
+.ops-start-form button:disabled {
+  background: var(--grid);
+  color: var(--fg-muted);
+  cursor: not-allowed;
+}
+.ops-start-form button:disabled:hover { background: var(--grid); }
+.ops-start-hint {
+  margin-top: var(--s-3);
+  font-size: var(--fs-metadata);
+  color: var(--fg-muted);
+}
 .ops-mode-fixed {
   display: block;
   font-family: var(--font-mono);

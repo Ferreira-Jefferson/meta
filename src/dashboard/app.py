@@ -301,12 +301,6 @@ async def strategies_run(
 
 # ============ OPERAÇÃO AO VIVO ===========================================
 
-def _parse_optional_float(raw: str | None) -> float | None:
-    if raw is None or raw.strip() == "":
-        return None
-    return float(raw)
-
-
 OPERACAO_POLL_ACTIVE_SECONDS = 20     # dentro da janela de pregão ±1h
 OPERACAO_POLL_IDLE_CAP_SECONDS = 1800  # teto fora da janela (30 min) — nunca fica cego
 
@@ -412,16 +406,20 @@ async def operacao_iniciar(request: Request):
 
     erro = None
     # "Ações por lote" é parâmetro do TERMINAL MT5 do usuário, não da
-    # estratégia nem da sessão -- fica salvo junto das credenciais MT5
-    # (Acesso e credenciais), nunca digitado no form de iniciar/retomar
-    # operação (decisão do dono, 2026-08-19; substitui o workaround antigo
-    # que reexibia o campo no form de retomada + fallback via
-    # `live_control.last_config()`).
-    mt5_shares_per_lot = _parse_optional_float(live_control.load_credentials().get("mt5_shares_per_lot"))
+    # estratégia nem da sessão -- detectado sozinho a cada clique em
+    # "Iniciar operação" via `detect_shares_per_lot()` (consulta o
+    # symbol_info do terminal MT5 já conectado), nunca digitado pelo
+    # usuário (decisão do dono, 2026-08-20; substitui o campo manual em
+    # Acesso e credenciais, que por sua vez substituiu o workaround ainda
+    # mais antigo que reexibia o campo no form de retomada).
+    mt5_shares_per_lot = live_control.detect_shares_per_lot()
     if mt5_shares_per_lot is None or mt5_shares_per_lot <= 0:
         erro = (
-            "Configure 'Ações por lote' em Acesso e credenciais → MetaTrader 5 "
-            "antes de iniciar — confira o symbol_info do seu terminal MT5."
+            "Não foi possível detectar 'ações por lote' automaticamente — "
+            "confirme que o terminal MetaTrader 5 está aberto e logado nesta "
+            "máquina (ou que login/senha/servidor MT5 foram salvos em 'Acesso "
+            "e credenciais') e que os papéis da watchlist têm o mesmo "
+            "contract_size no seu terminal."
         )
 
     if erro is None and conta is not None:

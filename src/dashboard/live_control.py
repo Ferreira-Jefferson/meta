@@ -55,11 +55,11 @@ CREDENTIAL_FIELDS = (
     "telegram_bot_token", "telegram_chat_id",
     "smtp_host", "smtp_port", "smtp_user", "smtp_password", "smtp_to", "smtp_from", "smtp_tls",
     "mt5_login", "mt5_password", "mt5_server", "mt5_terminal_path",
-    # "Ações por lote" nao e parametro de estrategia nem de sessao -- e do
-    # TERMINAL MT5 do usuario (quantas acoes por lote pro simbolo operado).
-    # Fica salvo aqui, junto do resto da config MT5, em vez de digitado a
-    # cada clique em "Iniciar operacao" (decisao do dono, 2026-08-19).
-    "mt5_shares_per_lot",
+    # "Ações por lote" NAO e mais campo salvo aqui (decisao do dono,
+    # 2026-08-20): e detectado sozinho a cada "Iniciar operacao" via
+    # `detect_shares_per_lot()` (symbol_info do terminal MT5 conectado),
+    # porque e um dado que o proprio terminal ja sabe -- pedir pro usuario
+    # abrir o MT5 e conferir na mao era trabalho que o codigo podia fazer.
 )
 _SECRET_FIELDS = frozenset({"telegram_bot_token", "smtp_password", "mt5_password"})
 _CHANNEL_FIELDS = {
@@ -249,6 +249,31 @@ def detect_broker_capital() -> Optional[float]:
     return broker.cash_balance()
 
 
+def detect_shares_per_lot() -> Optional[float]:
+    """Descobre quantas ações equivalem a 1.0 de volume no terminal MT5,
+    consultando o `symbol_info` de cada papel da watchlist — o usuário nunca
+    digita esse número (antes exigia abrir o MT5 e conferir na mão; ver
+    `MT5Broker.detect_shares_per_lot`).
+
+    Mesmo padrão de credenciais de `detect_broker_capital()` (lê
+    `load_credentials()` direto, nunca via `os.environ`). Devolve `None` se
+    a corretora não responder ou se os papéis da watchlist não tiverem um
+    `shares_per_lot` único no terminal — o chamador decide como bloquear
+    nesse caso, nunca inventa um default."""
+    from core.config import WATCHLIST
+    from live.broker_mt5 import MT5Broker
+
+    creds = load_credentials()
+    login = creds.get("mt5_login")
+    broker = MT5Broker(
+        login=int(login) if login else None,
+        password=creds.get("mt5_password"),
+        server=creds.get("mt5_server"),
+        path=creds.get("mt5_terminal_path"),
+    )
+    return broker.detect_shares_per_lot(WATCHLIST)
+
+
 def save_credentials(updates: dict, clear: set[str] = frozenset()) -> None:
     """Mescla campos não vazios do form com o que já estava salvo — mudar só
     o Telegram não obriga a redigitar SMTP/MT5 (campo em branco = "mantém o
@@ -318,8 +343,10 @@ def start(config: ProcessConfig) -> dict:
             raise RuntimeError("já existe um robô rodando — pare antes de iniciar outro.")
         if config.mt5_shares_per_lot is None or config.mt5_shares_per_lot <= 0:
             raise RuntimeError(
-                "modo mt5 exige o campo 'ações por lote' (mt5_shares_per_lot) — "
-                "não há valor universal, confira o symbol_info do seu terminal MT5."
+                "modo mt5 exige 'ações por lote' (mt5_shares_per_lot) — não foi "
+                "possível detectar automaticamente via detect_shares_per_lot() "
+                "(terminal MT5 fechado/deslogado, ou símbolos da watchlist com "
+                "contract_size diferente entre si)."
             )
         if not config.strategy:
             raise RuntimeError(

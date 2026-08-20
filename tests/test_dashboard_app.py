@@ -154,17 +154,18 @@ def test_get_status_disjuntor_nao_nulo_quando_ha_config_salva(isolated_journal, 
     assert status["disjuntor"] is not None
 
 
-def test_operacao_iniciar_sem_shares_per_lot_nas_credenciais_pede_campo_sem_iniciar(
+def test_operacao_iniciar_sem_shares_per_lot_detectavel_pede_campo_sem_iniciar(
     isolated_journal, client, monkeypatch,
 ):
-    """Regra do dono (2026-08-19): 'ações por lote' não é mais campo do form
-    de iniciar/retomar -- vem de `live_control.load_credentials()` (salvo em
-    Acesso e credenciais → MetaTrader 5). Banco isolado VAZIO (a rota só lê
-    o form quando não há conta ainda) e credenciais sem o campo: tem de
-    pedir a configuração em vez de subir o processo sem valor."""
+    """Regra do dono (2026-08-20): 'ações por lote' não é mais campo digitado
+    em lugar nenhum -- vem de `live_control.detect_shares_per_lot()`
+    (consulta o symbol_info do terminal MT5 conectado). Banco isolado VAZIO
+    (a rota só lê o form quando não há conta ainda) e detecção retornando
+    `None` (terminal fechado/deslogado): tem de bloquear com erro claro em
+    vez de subir o processo sem valor."""
     called: list = []
     monkeypatch.setattr(live_control, "start", lambda cfg: called.append(cfg))
-    monkeypatch.setattr(live_control, "load_credentials", lambda: {})
+    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda: None)
 
     resp = client.post("/operacao/iniciar", data={})
 
@@ -183,7 +184,7 @@ def test_operacao_iniciar_primeira_vez_usa_saldo_da_corretora_como_capital(
     captured: list = []
     monkeypatch.setattr(live_control, "start", lambda cfg: captured.append(cfg))
     monkeypatch.setattr(live_control, "detect_broker_capital", lambda: 7_530.0)
-    monkeypatch.setattr(live_control, "load_credentials", lambda: {"mt5_shares_per_lot": "1.0"})
+    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda: 1.0)
     monkeypatch.setattr(dashboard_app.reader, "top_strategies_by_final_capital",
                          lambda **kw: [{"strategy_name": "portfolio_dip2_hw40", "final_capital": 5_000.0}])
 
@@ -206,7 +207,7 @@ def test_operacao_iniciar_ignora_piso_e_disjuntor_arbitrarios_do_form(
     captured: list = []
     monkeypatch.setattr(live_control, "start", lambda cfg: captured.append(cfg))
     monkeypatch.setattr(live_control, "detect_broker_capital", lambda: 7_530.0)
-    monkeypatch.setattr(live_control, "load_credentials", lambda: {"mt5_shares_per_lot": "1.0"})
+    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda: 1.0)
     monkeypatch.setattr(dashboard_app.reader, "top_strategies_by_final_capital",
                          lambda **kw: [{"strategy_name": "portfolio_dip2_hw40", "final_capital": 5_000.0}])
 
@@ -231,7 +232,7 @@ def test_operacao_iniciar_primeira_vez_sem_saldo_da_corretora_bloqueia_com_erro_
     called: list = []
     monkeypatch.setattr(live_control, "start", lambda cfg: called.append(cfg))
     monkeypatch.setattr(live_control, "detect_broker_capital", lambda: None)
-    monkeypatch.setattr(live_control, "load_credentials", lambda: {"mt5_shares_per_lot": "1.0"})
+    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda: 1.0)
     monkeypatch.setattr(dashboard_app.reader, "top_strategies_by_final_capital",
                          lambda **kw: [{"strategy_name": "portfolio_dip2_hw40", "final_capital": 5_000.0}])
 
@@ -242,20 +243,19 @@ def test_operacao_iniciar_primeira_vez_sem_saldo_da_corretora_bloqueia_com_erro_
     assert called == []
 
 
-# ---------- ações por lote vem das credenciais, não do form (2026-08-19) ----
+# ---------- ações por lote é detectado sozinho, não é campo (2026-08-20) ----
 
-def test_operacao_iniciar_retoma_conta_mt5_existente_usa_shares_per_lot_das_credenciais(
+def test_operacao_iniciar_retoma_conta_mt5_existente_usa_shares_per_lot_detectado(
     isolated_journal, client, monkeypatch,
 ):
-    """'Ações por lote' é parâmetro do terminal MT5 do usuário, salvo junto
-    das credenciais (Acesso e credenciais → MetaTrader 5) -- POST
-    /operacao/iniciar sobre uma conta mt5 JÁ EXISTENTE (robô parado) chega
-    em `live_control.start` com o valor lido de lá, sem nenhum campo no
-    form de retomada (extingue o workaround antigo, ver
-    operacao_live_panel.html)."""
+    """'Ações por lote' é parâmetro do terminal MT5 do usuário, detectado
+    sozinho via `live_control.detect_shares_per_lot()` (symbol_info do
+    terminal MT5 conectado) -- POST /operacao/iniciar sobre uma conta mt5 JÁ
+    EXISTENTE (robô parado) chega em `live_control.start` com o valor
+    detectado, sem nenhum campo digitado em lugar nenhum."""
     db_path = isolated_journal
     _create_mt5_account(db_path)
-    monkeypatch.setattr(live_control, "load_credentials", lambda: {"mt5_shares_per_lot": "3.5"})
+    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda: 3.5)
 
     captured: list = []
     monkeypatch.setattr(live_control, "start", lambda cfg: captured.append(cfg))
@@ -269,17 +269,17 @@ def test_operacao_iniciar_retoma_conta_mt5_existente_usa_shares_per_lot_das_cred
     assert captured[0].strategy == "dip2_hw40"  # investment_robot da conta ja existente
 
 
-def test_operacao_iniciar_mt5_shares_per_lot_zero_nas_credenciais_pede_campo_sem_iniciar(
+def test_operacao_iniciar_mt5_shares_per_lot_zero_detectado_pede_campo_sem_iniciar(
     isolated_journal, client, monkeypatch,
 ):
     """Item 2 da correção pós-code-review (hipótese-agente): `0`/negativo tem
-    de ser recusado igual a ausente -- um valor assim causaria
+    de ser recusado igual a `None` -- um valor assim causaria
     `ZeroDivisionError` em `MT5Broker._to_volume` na hora de mandar ordem
     real (`volume = quantity / shares_per_lot`). Continua valendo agora que
-    o valor vem das credenciais, não do form."""
+    o valor vem de `detect_shares_per_lot()`, não de um campo salvo."""
     called: list = []
     monkeypatch.setattr(live_control, "start", lambda cfg: called.append(cfg))
-    monkeypatch.setattr(live_control, "load_credentials", lambda: {"mt5_shares_per_lot": "0"})
+    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda: 0.0)
 
     resp = client.post("/operacao/iniciar", data={})
 
@@ -300,7 +300,7 @@ def test_operacao_iniciar_robo_fora_do_top3_bloqueia_sem_iniciar(
     validado)."""
     called: list = []
     monkeypatch.setattr(live_control, "start", lambda cfg: called.append(cfg))
-    monkeypatch.setattr(live_control, "load_credentials", lambda: {"mt5_shares_per_lot": "1.0"})
+    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda: 1.0)
     monkeypatch.setattr(dashboard_app.reader, "top_strategies_by_final_capital",
                          lambda **kw: [{"strategy_name": "portfolio_dip2_hw40", "final_capital": 5_000.0}])
 
@@ -318,7 +318,7 @@ def test_operacao_iniciar_sem_ranking_ainda_bloqueia_com_erro_claro(
     mensagem clara em vez de deixar escolher qualquer coisa ou estourar."""
     called: list = []
     monkeypatch.setattr(live_control, "start", lambda cfg: called.append(cfg))
-    monkeypatch.setattr(live_control, "load_credentials", lambda: {"mt5_shares_per_lot": "1.0"})
+    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda: 1.0)
     monkeypatch.setattr(dashboard_app.reader, "top_strategies_by_final_capital", lambda **kw: [])
 
     resp = client.post("/operacao/iniciar", data={"robo": "portfolio_dip2_hw40"})
@@ -340,7 +340,7 @@ def test_operacao_iniciar_conta_existente_ignora_robo_do_form_usa_investment_rob
     `conta.investment_robot`, nunca o `robo` que porventura vier no form."""
     db_path = isolated_journal
     _create_mt5_account(db_path)  # investment_robot="dip2_hw40" (ver _create_mt5_account)
-    monkeypatch.setattr(live_control, "load_credentials", lambda: {"mt5_shares_per_lot": "1.0"})
+    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda: 1.0)
     # Ranking mudou depois da criação -- top-3 atual nem contém o robô da conta.
     monkeypatch.setattr(dashboard_app.reader, "top_strategies_by_final_capital",
                          lambda **kw: [{"strategy_name": "um-robo-novo-que-nao-e-o-da-conta", "final_capital": 9_000.0}])

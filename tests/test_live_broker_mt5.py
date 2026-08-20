@@ -27,12 +27,26 @@ from core.live_models import Order, OrderSide, OrderStatus
 
 # ---------- prova de import lazy (roda antes de qualquer mock) ------------
 
+@pytest.mark.skipif(
+    importlib.util.find_spec("MetaTrader5") is not None,
+    reason="pacote MetaTrader5 real instalado nesta maquina (operacao ao vivo) — "
+           "a premissa 'ausente' nao vale aqui; o invariante do import lazy "
+           "continua coberto por test_import_de_metatrader5_nunca_no_topo_do_modulo, "
+           "que e checagem estatica e nao depende do pacote existir ou nao",
+)
 def test_pacote_mt5_real_nao_instalado_e_import_ja_funcionou():
     """Confirma a premissa: o pacote real `MetaTrader5` de fato nao esta
     instalado neste ambiente, e mesmo assim `from live.broker_mt5 import
     MT5Broker` no topo deste arquivo ja funcionou sem erro — unica forma
     disso acontecer e o `import MetaTrader5` estar dentro de metodo, nunca no
-    topo de `broker_mt5.py`."""
+    topo de `broker_mt5.py`.
+
+    SKIPADO na maquina que opera de verdade: la o pacote esta instalado de
+    proposito (o terminal MT5 e local, ver `MT5Broker.connect`). Manter o
+    teste falhando ali treinaria o dono a ignorar suite vermelha — que custa
+    mais caro que este teste vale. Em CI, onde o pacote nao existe, ele roda e
+    prova o que sempre provou.
+    """
     assert "MetaTrader5" not in sys.modules
     assert importlib.util.find_spec("MetaTrader5") is None
 
@@ -487,3 +501,53 @@ def test_cash_balance_account_info_none_devolve_none(fake_mt5):
     broker = MT5Broker()
 
     assert broker.cash_balance() is None
+
+
+# ---------- detect_shares_per_lot (nao digitado, detectado do terminal) ----
+
+def test_detect_shares_per_lot_todos_tickers_com_mesmo_contract_size(fake_mt5):
+    mod, calls = fake_mt5(initialize_ok=True)
+    mod.symbol_info = lambda symbol: types.SimpleNamespace(trade_contract_size=1.0)
+    broker = MT5Broker()
+
+    assert broker.detect_shares_per_lot(["WEGE3.SA", "BRAP4.SA"]) == pytest.approx(1.0)
+
+
+def test_detect_shares_per_lot_contract_size_divergente_devolve_none(fake_mt5):
+    """O sistema assume UM `shares_per_lot` global pro portfolio inteiro
+    (ver `_resolve_volume`) -- se os tickers pedidos nao concordam num unico
+    valor, nao ha resposta automatica correta e a funcao recusa a inventar
+    uma."""
+    mod, calls = fake_mt5(initialize_ok=True)
+    sizes = {"WEGE3": 1.0, "BRAP4": 100.0}
+    mod.symbol_info = lambda symbol: types.SimpleNamespace(trade_contract_size=sizes[symbol])
+    broker = MT5Broker()
+
+    assert broker.detect_shares_per_lot(["WEGE3.SA", "BRAP4.SA"]) is None
+
+
+def test_detect_shares_per_lot_simbolo_ausente_no_terminal_devolve_none(fake_mt5):
+    mod, calls = fake_mt5(initialize_ok=True)
+    mod.symbol_info = lambda symbol: None
+    broker = MT5Broker()
+
+    assert broker.detect_shares_per_lot(["WEGE3.SA"]) is None
+
+
+def test_detect_shares_per_lot_falha_de_conexao_devolve_none_sem_excecao(fake_mt5):
+    fake_mt5(initialize_ok=False, last_error=(10004, "terminal nao encontrado"))
+    broker = MT5Broker()
+
+    assert broker.detect_shares_per_lot(["WEGE3.SA"]) is None
+
+
+def test_detect_shares_per_lot_usa_symbol_map_na_consulta(fake_mt5):
+    """`detect_shares_per_lot` traduz o ticker interno pro nome do simbolo no
+    terminal (`symbol_for`) antes de consultar, igual ao resto da classe."""
+    mod, calls = fake_mt5(initialize_ok=True)
+    mod.symbol_info = lambda symbol: (
+        types.SimpleNamespace(trade_contract_size=1.0) if symbol == "WEGE3F" else None
+    )
+    broker = MT5Broker(symbol_map={"WEGE3.SA": "WEGE3F"})
+
+    assert broker.detect_shares_per_lot(["WEGE3.SA"]) == pytest.approx(1.0)

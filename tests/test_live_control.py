@@ -287,3 +287,64 @@ def test_detect_broker_capital_sem_saldo_devolve_none(monkeypatch):
 
     assert live_control.detect_broker_capital() is None
     assert captured[0]["login"] is None
+
+
+# ---------- detect_shares_per_lot() -- não digitado, detectado (regra do dono, 2026-08-20) --
+
+class _FakeLotBroker:
+    """Substitui `live.broker_mt5.MT5Broker` para os testes de
+    `detect_shares_per_lot()` -- captura os kwargs de construção e os
+    tickers pedidos, e devolve um `shares_per_lot` fixo (ou `None`,
+    simulando corretora inacessível ou watchlist com contract_size misto)."""
+
+    def __init__(self, value, captured, **kwargs):
+        captured.append(kwargs)
+        self._value = value
+
+    def detect_shares_per_lot(self, tickers):
+        self.tickers = list(tickers)
+        return self._value
+
+
+def test_detect_shares_per_lot_usa_credenciais_salvas_e_watchlist(monkeypatch):
+    """Mesma regra de `detect_broker_capital()`: credenciais salvas vão pro
+    construtor do broker, nunca via `os.environ`; os tickers consultados são
+    os da watchlist oficial (`core.config.WATCHLIST`), não uma lista
+    arbitrária."""
+    monkeypatch.setattr(live_control, "load_credentials", lambda: {
+        "mt5_login": "12345", "mt5_password": "segredo",
+        "mt5_server": "Corretora-Live", "mt5_terminal_path": r"C:\mt5\terminal64.exe",
+    })
+    captured: list = []
+    import live.broker_mt5 as broker_mt5
+    from core.config import WATCHLIST
+    fakes: list = []
+
+    def _factory(**kwargs):
+        fake = _FakeLotBroker(1.0, captured, **kwargs)
+        fakes.append(fake)
+        return fake
+
+    monkeypatch.setattr(broker_mt5, "MT5Broker", _factory)
+
+    assert live_control.detect_shares_per_lot() == pytest.approx(1.0)
+    assert captured[0]["login"] == 12345
+    assert captured[0]["server"] == "Corretora-Live"
+    assert fakes[0].tickers == list(WATCHLIST)
+
+
+def test_detect_shares_per_lot_sem_valor_unico_devolve_none(monkeypatch):
+    """Terminal fechado/deslogado, ou papéis da watchlist com contract_size
+    diferente entre si: `MT5Broker.detect_shares_per_lot` devolve `None` e
+    `live_control.detect_shares_per_lot()` repassa isso -- nunca inventa um
+    valor default."""
+    monkeypatch.setattr(live_control, "load_credentials", lambda: {})
+    captured: list = []
+    import live.broker_mt5 as broker_mt5
+    monkeypatch.setattr(
+        broker_mt5, "MT5Broker",
+        lambda **kwargs: _FakeLotBroker(None, captured, **kwargs),
+    )
+
+    assert live_control.detect_shares_per_lot() is None
+    assert captured[0]["login"] is None

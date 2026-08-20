@@ -90,9 +90,8 @@
           Sem login/senha/servidor, o robô só consegue enviar ordens se um
           humano deixar o terminal MT5 aberto e logado nesta máquina; com eles
           salvos aqui, o próprio robô faz o login ao conectar. "Ações por
-          lote" é quantas ações equivalem a 1 lote pro símbolo operado NESTE
-          terminal — é configuração do terminal, não da estratégia, por isso
-          fica aqui e não no botão de iniciar.
+          lote" não é mais campo aqui: o sistema descobre isso sozinho,
+          consultando o terminal MT5 a cada clique em "Iniciar operação".
         </p>
         <div class="row">
           <label><span class="k">Login</span><input type="text" name="mt5_login" value="{{ creds.mt5_login or '' }}" /></label>
@@ -104,11 +103,6 @@
         </div>
         <label><span class="k">Caminho do terminal (opcional)</span>
           <input type="text" name="mt5_terminal_path" value="{{ creds.mt5_terminal_path or '' }}" placeholder="C:\Program Files\...\terminal64.exe" />
-        </label>
-        <label><span class="k">Ações por lote (mt5_shares_per_lot)</span>
-          <input type="number" name="mt5_shares_per_lot" min="0.01" step="0.01"
-                 placeholder="confira o symbol_info do SEU terminal MT5"
-                 value="{{ creds.mt5_shares_per_lot or '' }}" />
         </label>
         <label class="switch small"><input type="checkbox" name="remover_mt5" value="1" />
           <span class="switch-track"><span class="switch-dot"></span></span>
@@ -157,8 +151,14 @@
           {% endfor %}
         </select>
       </label>
-      <button type="submit">▶ Iniciar operação</button>
+      <button type="submit"{% if not creds_status.mt5 %} disabled{% endif %}>▶ Iniciar operação</button>
     </div>
+    {% if not creds_status.mt5 %}
+    <p class="ops-start-hint">
+      Preencha login, senha e servidor do MetaTrader 5 em "Acesso e
+      credenciais" para habilitar o início da operação.
+    </p>
+    {% endif %}
   </form>
 </section>
 
