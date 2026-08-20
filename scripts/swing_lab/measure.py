@@ -221,6 +221,21 @@ def screen(factory, name: str, family: str, note: str = "") -> dict:
     return s
 
 
+def monthly_returns_full(factory) -> pd.Series:
+    """Retornos MENSAIS na janela FULL — entrada da matriz do CSCV.
+
+    O PBO precisa de uma matriz T x N de retornos periodicos, nao de CAGR por
+    janela: as 47 janelas de E2 se sobrepoem quase todas e alimentar o CSCV com
+    elas contaria a mesma observacao dezenas de vezes. Mensal na FULL da ~200
+    observacoes independentes, que e o que a ferramenta espera.
+    """
+    r = run_bt(panels(), factory(), _cfg(), start=FULL_START, end=FULL_END)
+    eq = r.equity_curve
+    if len(eq) < 250:
+        return pd.Series(dtype=float)
+    return eq.resample("ME").last().pct_change().dropna()
+
+
 def select(factory, name: str, family: str, note: str = "") -> dict:
     """E2 — selecao: 47 janelas trimestrais, com o IBOV pareado janela a janela."""
     rows = measure_windows(factory, E2_WINDOWS)

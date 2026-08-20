@@ -238,13 +238,190 @@ GATES = {
     "V6_top5_share_max":  1.00,
 }
 
-# Preenchido SO quando E3 terminar. Vazio de proposito: executado antes da
-# busca, este script nao mede nada.
+# Preenchido SO quando E3 terminar, como "modulo:Classe". Vazio de proposito:
+# executado antes da busca, este script nao mede nada.
 CANDIDATES: tuple[str, ...] = ()
 
+# ---------------------------------------------------------------------------
+# Maquinaria. Escrita junto com o protocolo, antes de existir candidato — para
+# que implementar a medicao nao seja uma oportunidade de ajustar a medicao.
+# ---------------------------------------------------------------------------
+import glob
+import importlib
+import json
+import os
+import traceback
 
-if __name__ == "__main__":
+import numpy as np
+
+from backtest.metrics import max_drawdown
+from backtest.runner import run as run_bt
+from core.config import BENCHMARK, BacktestConfig
+from market_data.loader import load_one
+
+SELIC_V = str(VAULT_DIR / "selic.parquet")
+_CACHE: dict[str, pd.DataFrame] = {}
+
+
+def vault_pool() -> tuple[str, ...]:
+    macro = {"selic", "usd_brl", "ipca", "desemprego"}
+    out = []
+    for p in sorted(glob.glob(str(VAULT_DIR / "*.parquet"))):
+        base = os.path.basename(p)[:-8]
+        if base in macro or base.startswith("_"):
+            continue
+        out.append(base.replace("_SA", ".SA"))
+    return tuple(out)
+
+
+def vault_panel(ticker: str) -> pd.DataFrame:
+    if ticker not in _CACHE:
+        df = load_one(ticker, out_dir=VAULT_DIR)
+        _CACHE[ticker] = df[df["close"].notna()]
+    return _CACHE[ticker]
+
+
+def vault_panels() -> dict[str, pd.DataFrame]:
+    u = {t: vault_panel(t) for t in vault_pool()}
+    u[BENCHMARK] = vault_panel(BENCHMARK)
+    return u
+
+
+def _metricas(eq: pd.Series) -> dict | None:
+    if len(eq) < 250:
+        return None
+    anos = (eq.index[-1] - eq.index[0]).days / 365.25
+    tot = eq.iloc[-1] / eq.iloc[0]
+    return {
+        "cagr": float(tot ** (1.0 / anos) - 1.0) if anos > 0 and tot > 0 else -1.0,
+        "dd": float(max_drawdown(eq)),
+        "w12": float((eq / eq.shift(252) - 1.0).min()),
+    }
+
+
+def medir_no_cofre(cls) -> dict:
+    """As 36 janelas do cofre para uma classe. Uma leitura, sem reajuste."""
+    cfg = BacktestConfig(initial_capital=INITIAL, lot_size=1, cash_yield_path=SELIC_V)
+    P = vault_panels()
+    linhas, top5, trades = [], [], []
+    for s in VAULT_WINDOWS:
+        e = min(s + pd.DateOffset(years=ANOS), pd.Timestamp("2009-12-31"))
+        try:
+            r = run_bt(P, cls(), cfg, start=str(s.date()), end=str(e.date()))
+        except Exception:
+            continue
+        m = _metricas(r.equity_curve)
+        if not m:
+            continue
+        m["start"] = str(s.date())
+        linhas.append(m)
+        trades.append(len(r.trades))
+        pnls = sorted((float(t.pnl_brl) for t in r.trades if t.exit_price is not None), reverse=True)
+        tot = sum(pnls)
+        top5.append(sum(pnls[:5]) / tot if tot > 0 else float("inf"))
+    if not linhas:
+        return {"erro": "nenhuma janela mediu"}
+    return {
+        "n": len(linhas),
+        "median_cagr": float(np.median([r["cagr"] for r in linhas])),
+        "worst_cagr": float(min(r["cagr"] for r in linhas)),
+        "worst_dd": float(min(r["dd"] for r in linhas)),
+        "worst_12m": float(min(r["w12"] for r in linhas)),
+        "median_trades": float(np.median(trades)),
+        "top5_share_max": float(np.nanmax([x for x in top5 if np.isfinite(x)] or [float("nan")])),
+        "por_janela": linhas,
+    }
+
+
+def ibov_cofre() -> dict:
+    c = vault_panel(BENCHMARK)["close"]
+    linhas = []
+    for s in VAULT_WINDOWS:
+        e = min(s + pd.DateOffset(years=ANOS), pd.Timestamp("2009-12-31"))
+        m = _metricas(c.loc[str(s.date()):str(e.date())].dropna())
+        if m:
+            m["start"] = str(s.date())
+            linhas.append(m)
+    return {
+        "n": len(linhas),
+        "median_cagr": float(np.median([r["cagr"] for r in linhas])),
+        "worst_cagr": float(min(r["cagr"] for r in linhas)),
+        "worst_dd": float(min(r["dd"] for r in linhas)),
+        "worst_12m": float(min(r["w12"] for r in linhas)),
+        "por_janela": linhas,
+    }
+
+
+def _pbo_de_e2() -> float:
+    """V5 vem da matriz de E2, nao do cofre — e uma propriedade da BUSCA."""
+    p = Path(__file__).resolve().parents[1] / "scripts" / "swing_lab" / "pbo.json"
+    if not p.exists():
+        return float("nan")
+    return float(json.loads(p.read_text(encoding="utf-8")).get("pbo", float("nan")))
+
+
+def portoes(cand: dict, ib: dict, pbo: float) -> dict:
+    """V1..V6 com os limiares congelados. Nenhum limiar e recalculado aqui."""
+    venceu = 0
+    ibmap = {r["start"]: r["cagr"] for r in ib["por_janela"]}
+    for r in cand["por_janela"]:
+        if r["start"] in ibmap and r["cagr"] > ibmap[r["start"]]:
+            venceu += 1
+    return {
+        "V1_dd": cand["worst_dd"] >= GATES["V1_worst_dd"],
+        "V2_excesso": (cand["median_cagr"] - ib["median_cagr"]) >= GATES["V2_excess_median"],
+        "V3_bate_ibov": venceu >= GATES["V3_beat_ibov_min"],
+        "V4_w12": cand["worst_12m"] >= GATES["V4_worst_12m"],
+        "V5_pbo": (pbo <= GATES["V5_pbo_max"]) if np.isfinite(pbo) else False,
+        "V6_concentracao": cand.get("top5_share_max", float("inf")) < GATES["V6_top5_share_max"],
+        "_venceu_ibov": venceu,
+        "_excesso": cand["median_cagr"] - ib["median_cagr"],
+    }
+
+
+def main() -> None:
     if not CANDIDATES:
         print(__doc__)
         print(">>> CANDIDATES vazio. O cofre so abre depois de E3. <<<")
-        sys.exit(0)
+        return
+
+    print(f"ABRINDO O COFRE — {len(CANDIDATES)} candidatos, {len(VAULT_WINDOWS)} janelas.")
+    print("Esta e a UNICA leitura. Nao ha segunda tentativa.\n")
+
+    ib = ibov_cofre()
+    print(f"IBOV no cofre: CAGR mediano {ib['median_cagr']:+.2%}  "
+          f"pior {ib['worst_cagr']:+.2%}  pior DD {ib['worst_dd']:+.2%}  ({ib['n']} janelas)")
+
+    pbo = _pbo_de_e2()
+    resultados = {}
+    for ref in CANDIDATES:
+        mod, _, cls_nome = ref.partition(":")
+        try:
+            cls = getattr(importlib.import_module(mod), cls_nome)
+        except Exception:
+            print(f"\n[X] {ref}: {traceback.format_exc(limit=2)}")
+            continue
+        print(f"\nmedindo {cls_nome}...")
+        r = medir_no_cofre(cls)
+        if "erro" in r:
+            print(f"  {r['erro']}")
+            continue
+        g = portoes(r, ib, pbo)
+        resultados[ref] = {"metricas": r, "portoes": g}
+        passou = all(v for k, v in g.items() if not k.startswith("_"))
+        print(f"  CAGR mediano {r['median_cagr']:+.2%} (excesso {g['_excesso']:+.2f} p.p.)  "
+              f"pior DD {r['worst_dd']:+.2%}  pior 12m {r['worst_12m']:+.2%}  "
+              f"bate IBOV {g['_venceu_ibov']}/{r['n']}")
+        print(f"  portoes: " + "  ".join(
+            f"{k}={'OK' if v else 'X'}" for k, v in g.items() if not k.startswith("_")))
+        print(f"  >>> {'PASSA' if passou else 'REPROVADO'}")
+
+    out = Path(__file__).resolve().parents[1] / "scripts" / "swing_lab" / "vault_verdict.json"
+    out.write_text(json.dumps({"ibov": ib, "pbo_e2": pbo, "candidatos": resultados},
+                              indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+    print(f"\ngravado em {out.name}")
+    print("\nLEIA AS LIMITACOES L1-L8 NO DOCSTRING ANTES DE INTERPRETAR QUALQUER NUMERO.")
+
+
+if __name__ == "__main__":
+    main()
