@@ -16,6 +16,8 @@ import json
 import os
 import subprocess
 import sys
+import threading
+import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,6 +29,24 @@ _LOG_PATH = _ROOT / "db" / "live_process.log"
 _SCRIPT = _ROOT / "scripts" / "run_live.py"
 _SECRETS_PATH = _ROOT / "db" / "live_secrets.json"
 
+# Segundos entre o `Popen` do supervisor e a checagem de prova de vida
+# (`start()`, ver docstring lá embaixo) — módulo-nível, monkeypatchável em
+# teste (senão o teste esperaria de verdade). Um processo que vai falhar cedo
+# (terminal MT5 ausente, credencial errada) normalmente já morreu bem antes
+# disso; 2s é suficiente sem atrasar o clique "Iniciar" de forma perceptível.
+_STARTUP_GRACE_SECONDS = 2.0
+
+# Serializa `start()` inteira (correção pós-code-review, crítico nº2): dois
+# cliques em "Iniciar" quase simultâneos chegam por threads diferentes do
+# `asyncio.to_thread` (dashboard roda single-process, sem `workers=N` — ver
+# `scripts/run_dashboard.py`), e o guard `status() is not None` só enxerga um
+# robô já iniciado DEPOIS que `_write_state` roda no fim da função. Sem lock,
+# as duas threads passam pelo guard antes de qualquer uma escrever estado e
+# ambas dão `Popen` — dois processos `run_live.py loop` órfãos, só o segundo
+# rastreável. O lock precisa envolver do guard até `_write_state` (não só o
+# `Popen`) para a segunda chamada necessariamente ver o estado já gravado.
+_start_lock = threading.Lock()
+
 # Campos aceitos em `save_credentials`/exibidos no form. `_SECRET_FIELDS` sao
 # os que NUNCA voltam para o HTML (nem mascarados) — so um booleano
 # "configurado" via `credential_status()`; os demais (chat id, host, usuario
@@ -35,6 +55,11 @@ CREDENTIAL_FIELDS = (
     "telegram_bot_token", "telegram_chat_id",
     "smtp_host", "smtp_port", "smtp_user", "smtp_password", "smtp_to", "smtp_from", "smtp_tls",
     "mt5_login", "mt5_password", "mt5_server", "mt5_terminal_path",
+    # "Ações por lote" NAO e mais campo salvo aqui (decisao do dono,
+    # 2026-08-20): e detectado sozinho a cada "Iniciar operacao" via
+    # `detect_shares_per_lot()` (symbol_info do terminal MT5 conectado),
+    # porque e um dado que o proprio terminal ja sabe -- pedir pro usuario
+    # abrir o MT5 e conferir na mao era trabalho que o codigo podia fazer.
 )
 _SECRET_FIELDS = frozenset({"telegram_bot_token", "smtp_password", "mt5_password"})
 _CHANNEL_FIELDS = {
@@ -51,25 +76,51 @@ _ENV_VAR_BY_FIELD = {
 }
 
 
+_CLI_MODULE = None
+
+
 def _load_cli():
     """Importa `scripts/run_live.py` como módulo — reusa o MESMO `build()`
     que a linha de comando usa para montar o `LiveRuntime`, para o clique do
     botão criar a conta exatamente como `run_live.py init` criaria (sem
-    duplicar a lógica de qual broker/política/disjuntor montar)."""
-    spec = importlib.util.spec_from_file_location("run_live_cli", _SCRIPT)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    duplicar a lógica de qual broker/política/disjuntor montar).
+
+    Memoizado num cache de módulo: `_resolve_risk_guard()` (usado por
+    `live_service.get_status()`) passou a chamar isto em CADA poll HTMX de
+    `/operacao/fragment` — sem memoizar, isso re-executaria `run_live.py`
+    inteiro (todos os imports de topo, `sys.path.insert`) várias vezes por
+    minuto numa página de leitura, custo e efeito colateral gratuitos.
+    """
+    global _CLI_MODULE
+    if _CLI_MODULE is None:
+        spec = importlib.util.spec_from_file_location("run_live_cli", _SCRIPT)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _CLI_MODULE = module
+    return _CLI_MODULE
 
 
 @dataclass
 class ProcessConfig:
+    """Sem `floor`/`daily_loss_limit`/`monthly_loss_limit`: piso de saque e
+    disjuntor de risco não são escolha de quem opera — o robô já sabe qual é
+    o valor certo (`official_policy`/`CircuitBreaker` defaults), ver
+    docstring de `scripts/run_live.py` seção "Disjuntor de risco".
+
+    `strategy`: chave do robô (`strategy.registry`). Numa conta NOVA, quem
+    chama resolve isso a partir do top-3 do ranking automático (janela FULL,
+    ver `app.py::operacao_iniciar`); numa conta JÁ EXISTENTE, sempre
+    `conta.investment_robot` -- nunca recalculado do ranking corrente, senão
+    uma conta em operação trocaria de robô sozinha só porque o ranking
+    mudou (decisão do dono, 2026-08-19: "nada automático" na troca)."""
     mode: str
     capital: float
-    floor: Optional[float] = None
-    daily_loss_limit: Optional[float] = None
-    monthly_loss_limit: Optional[float] = None
+    strategy: str
     notify_min_level: str = "warn"
+    # Obrigatório sempre (sem valor universal — ver docstring de
+    # `live/broker_mt5.py`); `create_account()`/`start()` recusam cedo se
+    # vier `None`, em vez de herdar o default `1.0` do argparse.
+    mt5_shares_per_lot: Optional[float] = None
 
 
 def _read_state() -> Optional[dict]:
@@ -87,6 +138,18 @@ def _write_state(state: Optional[dict]) -> None:
         _STATE_PATH.unlink(missing_ok=True)
         return
     _STATE_PATH.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _tail_log(max_chars: int = 2_000) -> str:
+    """Últimos `max_chars` de `db/live_process.log` — usado para explicar
+    POR QUE o processo morreu logo após subir (ver `start()`)."""
+    if not _LOG_PATH.exists():
+        return "(sem log — o processo morreu antes de escrever qualquer coisa)"
+    try:
+        text = _LOG_PATH.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return "(não foi possível ler o log)"
+    return text[-max_chars:]
 
 
 def _pid_alive(pid: int) -> bool:
@@ -157,6 +220,60 @@ def credential_status() -> dict:
     }
 
 
+def detect_broker_capital() -> Optional[float]:
+    """Consulta o saldo real de caixa da corretora (MT5) para servir de
+    capital inicial da conta — o usuário nunca digita esse valor.
+
+    Usa as credenciais já salvas em `db/live_secrets.json`
+    (`load_credentials()`) diretamente, NUNCA via `os.environ`: diferente
+    de `start()` (que injeta `_credentials_env()` no `env` do processo
+    FILHO), uma chamada como `create_account()` -> `cli.build(args)` ->
+    `_mt5_credentials()` leria o `os.environ` do processo do DASHBOARD, que
+    nunca recebe essas variáveis — daria `login=None` mesmo com as
+    credenciais MT5 salvas corretamente.
+
+    Devolve `None` se a corretora não responder (terminal MT5 fechado ou
+    deslogado, credenciais ausentes, ou qualquer falha de conexão) — o
+    chamador decide como bloquear a criação da conta nesse caso; nunca
+    inventa um valor default."""
+    from live.broker_mt5 import MT5Broker
+
+    creds = load_credentials()
+    login = creds.get("mt5_login")
+    broker = MT5Broker(
+        login=int(login) if login else None,
+        password=creds.get("mt5_password"),
+        server=creds.get("mt5_server"),
+        path=creds.get("mt5_terminal_path"),
+    )
+    return broker.cash_balance()
+
+
+def detect_shares_per_lot() -> Optional[float]:
+    """Descobre quantas ações equivalem a 1.0 de volume no terminal MT5,
+    consultando o `symbol_info` de cada papel da watchlist — o usuário nunca
+    digita esse número (antes exigia abrir o MT5 e conferir na mão; ver
+    `MT5Broker.detect_shares_per_lot`).
+
+    Mesmo padrão de credenciais de `detect_broker_capital()` (lê
+    `load_credentials()` direto, nunca via `os.environ`). Devolve `None` se
+    a corretora não responder ou se os papéis da watchlist não tiverem um
+    `shares_per_lot` único no terminal — o chamador decide como bloquear
+    nesse caso, nunca inventa um default."""
+    from core.config import WATCHLIST
+    from live.broker_mt5 import MT5Broker
+
+    creds = load_credentials()
+    login = creds.get("mt5_login")
+    broker = MT5Broker(
+        login=int(login) if login else None,
+        password=creds.get("mt5_password"),
+        server=creds.get("mt5_server"),
+        path=creds.get("mt5_terminal_path"),
+    )
+    return broker.detect_shares_per_lot(WATCHLIST)
+
+
 def save_credentials(updates: dict, clear: set[str] = frozenset()) -> None:
     """Mescla campos não vazios do form com o que já estava salvo — mudar só
     o Telegram não obriga a redigitar SMTP/MT5 (campo em branco = "mantém o
@@ -197,10 +314,10 @@ def create_account(config: ProcessConfig):
 
     cli = _load_cli()
     args = argparse.Namespace(
-        mode=config.mode, capital=config.capital, floor=config.floor,
-        feed="parquet", notify_min_level=config.notify_min_level,
-        daily_loss_limit=config.daily_loss_limit, monthly_loss_limit=config.monthly_loss_limit,
-        mt5_magic=20260817, mt5_shares_per_lot=1.0, mt5_symbol_map=None,
+        mode=config.mode, capital=config.capital, strategy=config.strategy, floor=None,
+        feed="yfinance", notify_min_level=config.notify_min_level,
+        daily_loss_limit=None, monthly_loss_limit=None,
+        mt5_magic=20260817, mt5_shares_per_lot=config.mt5_shares_per_lot, mt5_symbol_map=None,
     )
     rt = cli.build(args)
     return rt.ensure_account()
@@ -208,43 +325,78 @@ def create_account(config: ProcessConfig):
 
 def start(config: ProcessConfig) -> dict:
     """Cria a conta se preciso e sobe `scripts/run_live.py loop` como
-    processo próprio, sobrevivendo ao dashboard fechar."""
-    if status() is not None:
-        raise RuntimeError("já existe um robô rodando — pare antes de iniciar outro.")
+    processo próprio, sobrevivendo ao dashboard fechar.
 
-    create_account(config)
+    Prova de vida (correção pós-code-review, crítico nº1): grava PID/estado
+    só DEPOIS de esperar `_STARTUP_GRACE_SECONDS` e confirmar que o processo
+    ainda está de pé (`proc.poll() is None`). Sem isso, um processo que
+    morre na hora (terminal MT5 fechado, credencial errada, `--mode`
+    recusado) fazia o dashboard gravar PID normalmente e continuar
+    mostrando "robô ativo" para sempre — o botão "Iniciar" mentindo sobre um
+    processo morto.
 
-    argv = [
-        sys.executable, str(_SCRIPT),
-        "--mode", config.mode, "--capital", str(config.capital),
-        "--notify-min-level", config.notify_min_level,
-    ]
-    if config.floor is not None:
-        argv += ["--floor", str(config.floor)]
-    if config.daily_loss_limit is not None:
-        argv += ["--daily-loss-limit", str(config.daily_loss_limit)]
-    if config.monthly_loss_limit is not None:
-        argv += ["--monthly-loss-limit", str(config.monthly_loss_limit)]
-    argv += ["loop", "--seconds", "60"]
+    Trava em `_start_lock` do começo ao fim (ver docstring do lock, crítico
+    nº2): dois cliques quase simultâneos não podem passar os dois pelo guard
+    `status() is not None` antes de qualquer um gravar estado."""
+    with _start_lock:
+        if status() is not None:
+            raise RuntimeError("já existe um robô rodando — pare antes de iniciar outro.")
+        if config.mt5_shares_per_lot is None or config.mt5_shares_per_lot <= 0:
+            raise RuntimeError(
+                "modo mt5 exige 'ações por lote' (mt5_shares_per_lot) — não foi "
+                "possível detectar automaticamente via detect_shares_per_lot() "
+                "(terminal MT5 fechado/deslogado, ou símbolos da watchlist com "
+                "contract_size diferente entre si)."
+            )
+        if not config.strategy:
+            raise RuntimeError(
+                "nenhum robô de investimento selecionado — não há robô "
+                "padrão (ver docstring de scripts/run_live.py, seção 'Robô "
+                "de investimento')."
+            )
 
-    _LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    log = open(_LOG_PATH, "a", encoding="utf-8")
-    creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
-    # Credenciais (Telegram/SMTP/MT5) só entram no ambiente do PROCESSO FILHO
-    # — nunca em argv (fica visível em `ps`/histórico), nunca no ambiente do
-    # próprio dashboard (persistem só em `db/live_secrets.json`).
-    env = {**os.environ, **_credentials_env()}
-    proc = subprocess.Popen(
-        argv, cwd=str(_ROOT), stdout=log, stderr=subprocess.STDOUT,
-        stdin=subprocess.DEVNULL, creationflags=creationflags, env=env,
-    )
-    state = {
-        "pid": proc.pid,
-        "started_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "config": asdict(config),
-    }
-    _write_state(state)
-    return state
+        create_account(config)
+
+        argv = [
+            sys.executable, str(_SCRIPT),
+            "--mode", config.mode, "--capital", str(config.capital),
+            "--strategy", config.strategy,
+            "--notify-min-level", config.notify_min_level,
+        ]
+        if config.mode == "mt5":
+            argv += ["--mt5-shares-per-lot", str(config.mt5_shares_per_lot)]
+        argv += ["loop", "--seconds", "60"]
+
+        _LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        log = open(_LOG_PATH, "a", encoding="utf-8")
+        creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+        # Credenciais (Telegram/SMTP/MT5) só entram no ambiente do PROCESSO FILHO
+        # — nunca em argv (fica visível em `ps`/histórico), nunca no ambiente do
+        # próprio dashboard (persistem só em `db/live_secrets.json`).
+        env = {**os.environ, **_credentials_env()}
+        proc = subprocess.Popen(
+            argv, cwd=str(_ROOT), stdout=log, stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL, creationflags=creationflags, env=env,
+        )
+
+        time.sleep(_STARTUP_GRACE_SECONDS)
+        exit_code = proc.poll()
+        if exit_code is not None:
+            # Já saiu (qualquer código, inclusive 0 — sair na hora também é
+            # falha de subida) — não grava estado nenhum, o clique tem de
+            # mostrar o erro real em vez de "rodando".
+            raise RuntimeError(
+                f"o processo do robô saiu logo após iniciar (código {exit_code}) — "
+                f"últimas linhas do log:\n{_tail_log()}"
+            )
+
+        state = {
+            "pid": proc.pid,
+            "started_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "config": asdict(config),
+        }
+        _write_state(state)
+        return state
 
 
 def stop() -> bool:

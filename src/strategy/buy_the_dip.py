@@ -16,6 +16,12 @@ class BuyTheDip(Strategy):
     name = "buy_the_dip"
     version = "1.0"
     candidate = False  # classe-base da familia dip (usada por composicao), fora do ranking
+    # Lista branca de `Strategy.state()`/`restore()` (ver `strategy/base.py`):
+    # so `_pending_rebalance` precisa sobreviver a um restart. Declarada na
+    # RAIZ da familia (nao na folha, `portfolio_dip2_hw40.py`) para ser
+    # herdada automaticamente por `DipTop1Hysteresis` -> `PortfolioHysteresis`
+    # -> `DipTop1Portfolio` (a campea), sem redeclarar em cada subclasse.
+    _stateful_keys = ("_pending_rebalance",)
 
     def __init__(
         self,
@@ -84,6 +90,10 @@ class BuyTheDip(Strategy):
             cands.append((t, float(v)))
         if not cands: return actions
         cands.sort(key=lambda x: x[1], reverse=True)
+        # Rank (1 = melhor momentum) e score por ticker, só para o `metadata`
+        # da entrada — `tgt` abaixo continua sendo a decisão.
+        rank_de = {t: i + 1 for i, (t, _) in enumerate(cands)}
+        score_de = {t: v for (t, v) in cands}
         tgt = {t for (t,_) in cands[:self.top_n]}
         # Exit por rotação
         for t in open_positions:
@@ -98,5 +108,22 @@ class BuyTheDip(Strategy):
             dist = dseries.loc[date]
             if pd.isna(dist) or float(dist) > -self.dip_pct:
                 continue  # não entra sem o dip
-            actions.append(Enter(ticker=t, size_hint=sh))
+            # `reason`/`metadata` são REGISTRO, não decisão: nada abaixo muda
+            # o que já foi decidido nas linhas acima. Guardam a resposta para
+            # "por que este papel neste dia?" — a regra que disparou mais os
+            # números que a satisfizeram. Ver `Enter` em `strategy/base.py`.
+            actions.append(Enter(
+                ticker=t, size_hint=sh, reason="dip_rank",
+                metadata={
+                    "rank": rank_de.get(t),
+                    "top_n": int(self.top_n),
+                    "momentum_score": score_de.get(t),
+                    "dist_from_high": float(dist),
+                    "dip_threshold": -float(self.dip_pct),
+                    "high_window": int(self.high_window),
+                    "lookback": int(self.lookback),
+                    "skip_recent": int(self.skip_recent),
+                    "trigger": "month_end" if is_me else "pending_rebalance",
+                },
+            ))
         return actions

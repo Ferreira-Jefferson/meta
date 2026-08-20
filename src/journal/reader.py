@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from core.config import DB_PATH
 
@@ -79,14 +79,33 @@ def latest_run(db_path: Path = DB_PATH) -> dict | None:
 # do TOP-1 vigente quando o gate foi definido — existe para barrar um robô de
 # capital final alto mas risco de ruína pior que o que já se provou sustentável;
 # revisitar se um candidato legítimo precisar de folga aqui.
-CHAMPION_MAX_NEG_YEARS = 1
-CHAMPION_MAXDD_FLOOR = -0.3512
+# Portoes do pódio, medidos contra o BENCHMARK da propria run.
+#
+# Ate 2026-08-20 eram dois numeros absolutos: `neg_years <= 1` e
+# `max_drawdown >= -0.3512`. Os dois eram o retrato exato do `portfolio_dip2_hw40`
+# — 1 ano negativo e -35,12% de MaxDD sao os numeros DELE, com quatro casas. Ou
+# seja: o portao era "ser o campeao antigo". Quando ele foi aposentado por vies de
+# selecao (a watchlist escolhida em 2026 maximizando 2010-2026), o portao ficou
+# orfao e reprovava todo robo honesto — o pódio das janelas FULL e 5Y ficou VAZIO,
+# o que por sua vez bloqueia criar conta de operacao (`dashboard/app.py`).
+#
+# A correcao nao foi afrouxar o numero ate o robo novo passar — isso seria mover a
+# trave para o lado da bola. Foi trocar a referencia por uma que nao e circular: o
+# INDICE, na mesma janela da run, com a mesma aritmetica. Um robo qualifica se
+# nao for pior que simplesmente comprar o IBOV, nem em drawdown nem em anos
+# negativos. Nao ha nada para ajustar aqui, e nenhum robo pode ser calibrado para
+# passar sem de fato bater o indice em risco.
+#
+# Margem: comparacao arredondada a 2 casas percentuais, como antes — ruido de
+# ponto flutuante nao deve reprovar ninguem quando os dados avancam um dia.
+CHAMPION_GATE_TOLERANCE_PP = 0.01
 
 
 def top_strategies_by_final_capital(
     top_n: int = 3,
     run_kind: str = "champion_full",
     db_path: Path = DB_PATH,
+    only: Iterable[str] | None = None,
 ) -> list[dict]:
     """Ranking automático de robôs por capital final, dentro de `run_kind`.
 
@@ -95,6 +114,15 @@ def top_strategies_by_final_capital(
     pega o run mais recente (maior id), aplica os gates de NegYrs e MaxDD, e
     ordena os sobreviventes por `final_capital`. Runs avulsos (`run_kind='ad_hoc'`,
     simulações manuais do dashboard) nunca entram nesta lista.
+
+    `only` restringe o pódio a um conjunto de chaves — na prática, os robôs que
+    ainda são candidatos (`strategy.registry.candidate_keys()`). Sem ele,
+    aposentar um robô não o tira do pódio: ele para de ser rerrodado mas a
+    última run dele fica congelada em primeiro lugar para sempre. Filtrar aqui,
+    e não apagar as runs, é deliberado — a run é registro do que foi medido, e
+    aposentar um robô é uma decisão de curadoria que não deve destruir medição
+    (AGENTS.md: "não descarte dado"). `only=None` mantém o comportamento antigo,
+    para não mudar em silêncio quem chama sem saber deste parâmetro.
     """
     q = (
         "WITH latest AS ( "
@@ -113,22 +141,62 @@ def top_strategies_by_final_capital(
     )
     with _conn(db_path) as c:
         rows = _rows(c.execute(q, (run_kind,)))
+    if only is not None:
+        permitidos = set(only)
+        rows = [r for r in rows if r["strategy_name"] in permitidos]
     ranked = []
     for r in rows:
+        bench = _benchmark_risk(r["id"], db_path)
+        r["bench_max_drawdown"] = bench["max_drawdown"] if bench else None
+        r["bench_neg_years"] = bench["neg_years"] if bench else None
         neg_years = r.get("neg_years")
         maxdd = r.get("max_drawdown")
-        # Compara arredondado a 2 casas percentuais: o piso foi definido como
-        # "-35,12%", nessa precisão — comparar em float cheio reprovaria o
-        # próprio robô de referência por ruído de ponto flutuante (ex.:
-        # -35,1223...% vs -35,12% quando os dados avançam um dia).
+        if bench is None or neg_years is None or maxdd is None:
+            # Sem benchmark gravado nao ha como julgar. Passa e fica marcado —
+            # reprovar por falta de dado esconderia um robô por um problema do
+            # diário, e aprovar em silêncio esconderia que ninguém checou.
+            r["disqualified"] = False
+            r["gate_unavailable"] = True
+            ranked.append(r)
+            continue
+        tol = CHAMPION_GATE_TOLERANCE_PP
         qualifies = (
-            neg_years is not None and neg_years <= CHAMPION_MAX_NEG_YEARS
-            and maxdd is not None and round(maxdd * 100, 2) >= round(CHAMPION_MAXDD_FLOOR * 100, 2)
+            round(maxdd * 100, 2) >= round(bench["max_drawdown"] * 100, 2) - tol
+            and neg_years <= bench["neg_years"]
         )
         r["disqualified"] = not qualifies
+        r["gate_unavailable"] = False
         if qualifies:
             ranked.append(r)
     return ranked[:top_n]
+
+
+def _benchmark_risk(run_id: int, db_path: Path = DB_PATH) -> dict | None:
+    """MaxDD e anos negativos do INDICE na janela exata desta run.
+
+    Sai da própria `equity_curve` da run (coluna `benchmark`), e não de um número
+    guardado em outro lugar: assim o portão compara robô e índice sobre o MESMO
+    calendário, com o mesmo primeiro e último dia. Um índice medido numa janela
+    ligeiramente diferente daria vantagem ou desvantagem de graça.
+
+    `neg_years` usa a mesma definição de `backtest.metrics.negative_years`
+    (primeiro contra último valor de cada ano-calendário) — se as duas contas
+    divergirem, o portão compara coisas diferentes e ninguém percebe.
+    """
+    q = ("SELECT date, benchmark FROM equity_curve "
+         "WHERE run_id = ? AND benchmark IS NOT NULL ORDER BY date")
+    with _conn(db_path) as c:
+        rows = c.execute(q, (run_id,)).fetchall()
+    if len(rows) < 2:
+        return None
+    import pandas as pd  # local: `reader` é lido por caminhos que não querem pandas
+
+    s = pd.Series([float(r["benchmark"]) for r in rows],
+                  index=pd.to_datetime([r["date"] for r in rows]))
+    anual = s.resample("YE").agg(["first", "last"])
+    ret = anual["last"] / anual["first"] - 1.0
+    return {"max_drawdown": float((s / s.cummax() - 1).min()),
+            "neg_years": int((ret < 0).sum())}
 
 
 def latest_champion_window(run_kind: str, db_path: Path = DB_PATH) -> tuple[str, str] | None:

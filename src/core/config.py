@@ -9,6 +9,15 @@ DATA_DIR = ROOT / "data" / "raw"
 DB_PATH = ROOT / "db" / "journal.sqlite"
 SCHEMA_PATH = ROOT / "src" / "journal" / "schema.sql"
 
+# Banco DEDICADO à operação real (tabelas `live_*`), separado fisicamente do
+# diário de backtest (`DB_PATH` acima). Existe porque um backtest longo
+# rodando em `threading.Thread` (ver `dashboard/app.py`) e a gravação de uma
+# ordem real disputavam lock do MESMO arquivo `.sqlite` — dois domínios que
+# não têm por que competir pelo mesmo I/O. Ver `journal.live_store` (usa este
+# caminho como default) e `scripts/migrate_live_db.py` (copia o que já
+# existia em `DB_PATH` para cá, sem apagar o original).
+LIVE_DB_PATH = ROOT / "db" / "live.sqlite"
+
 
 WATCHLIST: tuple[str, ...] = (
     # Top-7 selecionados por forward selection greedy (2026-08-15) maximizando
@@ -46,3 +55,8 @@ class BacktestConfig:
     ibov_defensive_days: int = 3
     lot_size: int = 100
     costs: CostModel = field(default_factory=CostModel)
+    # Caminho do parquet de Selic diária para remunerar o caixa parado.
+    # `None` = caixa a 0%, que é como TODO o diário foi gravado — ver
+    # `backtest.costs.cash_yield_series` para o porquê do default e para o
+    # tamanho do viés que ele introduz nas variantes defensivas.
+    cash_yield_path: str | None = None

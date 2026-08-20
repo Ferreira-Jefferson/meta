@@ -57,12 +57,25 @@ class Enter:
     - `metadata`: livre para o robô salvar contexto (ex.: banda no dia da
       entrada, ATR estimado). Fica preservado em `OpenPosition.metadata` para
       o robô consultar em `on_bar`.
+    - `reason`: qual REGRA do robô disparou esta compra, em código curto
+      (`"dip_rank"`, `"dip_rank1_rotation"`). Existe por simetria com
+      `Exit.reason`: sem ele o diário sabe explicar toda venda e nenhuma
+      compra, e a pergunta "por que este papel neste dia?" fica sem resposta
+      seis meses depois. Fica em `live_intents.reason`; os NÚMEROS que
+      acompanham a regra (rank, score, distância da máxima) vão em
+      `metadata`, que o runtime copia para `live_intents.payload`.
+
+      String e não enum de propósito: `ExitReason` é fechado porque as saídas
+      são poucas e comuns a todos os robôs, mas cada estratégia entra por um
+      motivo próprio, e um enum central obrigaria a editar `core/` a cada robô
+      novo — exatamente o acoplamento que a regra 2 do AGENTS.md evita.
     """
 
     ticker: str
     initial_stop: float | None = None
     size_hint: float | None = None
     metadata: dict | None = None
+    reason: str = ""
 
 
 @dataclass
@@ -98,6 +111,19 @@ class Strategy(ABC):
     # universo largo, etc.) sem mexer nos canonicals.
     universe_tickers: tuple[str, ...] | None = None
 
+    # Lista branca (class attribute) dos atributos privados que precisam
+    # sobreviver a um restart do processo ao vivo — ver `state()`/`restore()`
+    # abaixo. Vazia por default: a maioria dos robôs não tem nada que precise
+    # sobreviver a um restart (indicadores são recalculados por
+    # `initialize()`). Só entra aqui o que MUDA a decisão futura e não pode
+    # ser recomputado do histórico — ex.: `BuyTheDip._pending_rebalance`, o
+    # adiamento de rotação por blackout de resultados. Nunca usar
+    # `vars(self)` cru em `state()`: a família dip guarda `_scores`/
+    # `_dist_from_high` (`dict[str, pd.Series]`), não serializáveis em JSON
+    # e recalculados a cada `initialize()` — não precisam e não podem
+    # sobreviver a um restart.
+    _stateful_keys: tuple[str, ...] = ()
+
     def initialize(self, panels: dict[str, pd.DataFrame], ibov: pd.DataFrame) -> None:
         """Pré-calcula indicadores sobre o histórico completo.
 
@@ -117,3 +143,50 @@ class Strategy(ABC):
         cash_available: float,
     ) -> list[Action]:
         """Decisão do dia. Devolve ações declarativas ao engine."""
+
+    def state(self) -> dict:
+        """Estado a persistir para sobreviver a um restart do processo ao vivo.
+
+        Genérico sobre `_stateful_keys` (lista branca), de propósito: NUNCA
+        `vars(self)` cru — ver o comentário em `_stateful_keys` para o
+        motivo (indicadores não-serializáveis que não deveriam sobreviver a
+        restart de qualquer forma, porque `initialize()` os recalcula).
+        Mesma convenção de `backtest.withdrawal.WithdrawalPolicy.state()`.
+
+        `getattr(..., None)` com default (correção pós-review, tentativa 1):
+        sem ele, uma subclasse que declare `_stateful_keys` com um atributo
+        criado fora de `__init__` (ex.: só na primeira chamada de `on_bar`)
+        levantaria `AttributeError` aqui no meio de um `save_account` — o
+        mesmo cuidado que `restore()` logo abaixo já tinha.
+        """
+        return {k: getattr(self, k, None) for k in self._stateful_keys}
+
+    def restore(self, state: dict) -> None:
+        """Reidrata o estado devolvido por `state()`.
+
+        Ignora silenciosamente qualquer chave fora de `_stateful_keys` —
+        estado de uma versão diferente da estratégia (ou de outro robô, ver
+        `live.runtime._restore_robot_state`) não pode contaminar esta
+        instância. Normaliza lista→tupla (o caminho real de persistência
+        passa por JSON, que não tem tipo tupla — mesmo cuidado de
+        `CircuitBreaker.restore()`/`WithdrawalPolicy.restore()`) e COAGE o
+        tipo pelo valor atual do atributo (bool/int/float): sem isso,
+        `_pending_rebalance` persistido como a string `"false"` seria
+        truthy em Python e dispararia rotação fora de hora.
+        """
+        for k, v in state.items():
+            if k not in self._stateful_keys:
+                continue
+            if isinstance(v, list):
+                v = tuple(v)
+            default = getattr(self, k, None)
+            if isinstance(default, bool):
+                # `bool("false")` é `True` em Python (string não-vazia) — o
+                # motivo exato do achado C2. Interpreta a string pelo seu
+                # conteúdo; qualquer valor não-string cai no `bool()` normal.
+                v = v.strip().lower() not in ("false", "0", "") if isinstance(v, str) else bool(v)
+            elif isinstance(default, int):
+                v = int(v)
+            elif isinstance(default, float):
+                v = float(v)
+            setattr(self, k, v)

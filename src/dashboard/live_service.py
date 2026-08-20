@@ -14,53 +14,84 @@ terminal e rodar `scripts/run_live.py init`.
 from __future__ import annotations
 
 from journal import live_store as store
-from live.broker import ManualBroker, PaperBroker
 from live.feed import ParquetCloseFeed
 from live.runtime import LiveRuntime
-from strategy.portfolio_dip2_hw40 import DipTop1Portfolio
+from strategy.registry import get_strategy
 
 ACCOUNT_NAME = "principal"
-DEFAULT_CAPITAL = 1_000.0
 
 
-def _account_mode() -> str | None:
-    """Leitura rápida só do modo — para montar o runtime de status com o
-    broker CERTO (ver `_build_runtime`). Sem isso, o painel sempre relataria
-    'paper' mesmo para uma conta real em MT5."""
-    with store.live_journal() as conn:
-        acc = store.load_account(conn, ACCOUNT_NAME)
-    return acc.mode if acc else None
-
-
-def _build_runtime(mode: str = "paper") -> LiveRuntime:
+def _build_runtime(mode: str, capital: float, robot: str | None) -> LiveRuntime:
     """A página é um painel de LEITURA — `status()` nunca envia ordem
     nenhuma, então o broker aqui não precisa (nem deve) estar conectado a
-    nada de verdade. Mas o TIPO do broker precisa bater com o modo real da
-    conta (`account.mode`), senão o badge "corretora" mentiria para uma
-    conta mt5/manual dizendo "paper"."""
+    nada de verdade. Mas o TIPO do broker precisa bater com o modo REAL da
+    conta (`account.mode`) e `capital` precisa ser o `initial_capital` REAL
+    dela, lido do banco — nunca um valor inventado aqui: usar um default
+    vazaria capital/piso de simulação para uma conta real (crítico 1.7).
+    Dispatch explícito, sem default de `mode` — o `else: PaperBroker` de
+    antes era metade do bug (fallback silencioso para simulação)."""
     from backtest.withdrawal import official_policy
     from core.config import BacktestConfig, WATCHLIST
 
+    # O robo vem da CONTA (`live_accounts.investment_robot`), nao de um import
+    # fixo. Ate 2026-08-20 este arquivo instanciava `DipTop1Portfolio()` direto:
+    # com um so robo operavel isso passava despercebido, mas o campeao virou
+    # `liquid_champion` e o painel passaria a mostrar as posicoes-alvo de OUTRO
+    # robo, com outro universo, como se fossem as da conta. Um painel de leitura
+    # que mente e pior que um painel que falta.
+    strategy_obj = get_strategy(robot).factory() if robot else None
+    if strategy_obj is None:
+        raise ValueError(
+            "conta sem `investment_robot` gravado — nao da para montar o painel "
+            "sem saber qual robo ela opera"
+        )
+
     feed = ParquetCloseFeed()
-    if mode == "manual":
-        broker = ManualBroker()
-    elif mode == "mt5":
+    if mode == "mt5":
         from live.broker_mt5 import MT5Broker  # import tardio: nao conecta ao construir
         broker = MT5Broker()
     else:
-        broker = PaperBroker(feed)
+        raise ValueError(f"modo de corretora desconhecido: {mode!r}")
     return LiveRuntime(
         account_name=ACCOUNT_NAME,
-        strategy=DipTop1Portfolio(),
-        policy=official_policy(DEFAULT_CAPITAL),
+        strategy=strategy_obj,
+        policy=official_policy(capital),
         feed=feed,
         broker=broker,
-        config=BacktestConfig(initial_capital=DEFAULT_CAPITAL, lot_size=1),
-        tickers=WATCHLIST,
+        config=BacktestConfig(initial_capital=capital, lot_size=1),
+        tickers=tuple(getattr(strategy_obj, "universe_tickers", None) or WATCHLIST),
+        risk_guard=_resolve_risk_guard(),
+    )
+
+
+def _resolve_risk_guard():
+    """Reconstrói o `CircuitBreaker` da última config salva do processo
+    supervisor (`live_control.last_config()`), reusando
+    `run_live.py::_build_risk_guard` (via `live_control._load_cli()`,
+    memoizado — ver docstring de `_load_cli`) em vez de duplicar a lógica de
+    qual limite vira qual disjuntor. Sem isso, `status()` sempre reportava
+    `disjuntor: None` mesmo com um disjuntor configurado e rodando de
+    verdade (crítico 1.7)."""
+    from dashboard import live_control
+
+    config = live_control.last_config()
+    if not config:
+        return None
+    cli = live_control._load_cli()
+    return cli._build_risk_guard(
+        config.get("daily_loss_limit"), config.get("monthly_loss_limit")
     )
 
 
 def get_status() -> dict:
-    """Status da conta de operação, ou `{"existe": False}` se ainda não criada."""
-    mode = _account_mode() or "paper"
-    return _build_runtime(mode).status()
+    """Status da conta de operação, ou `{"conta": ACCOUNT_NAME, "existe":
+    False}` se ainda não criada — mesma forma que `LiveRuntime.status()` já
+    devolve nesse caso (o template lê `s.existe`, mas manter a chave `conta`
+    evita os dois caminhos divergirem de contrato)."""
+    with store.live_journal() as conn:
+        account = store.load_account(conn, ACCOUNT_NAME)
+    if account is None:
+        return {"conta": ACCOUNT_NAME, "existe": False}
+    return _build_runtime(
+        account.mode, account.initial_capital, account.investment_robot
+    ).status()

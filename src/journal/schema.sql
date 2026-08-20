@@ -136,6 +136,13 @@ CREATE INDEX IF NOT EXISTS idx_equity_run ON equity_curve(run_id);
 -- descrevem dinheiro de verdade: a conta que opera, as posições que a
 -- corretora confirmou, as decisões do robô e as ordens que tentam cumpri-las.
 --
+-- FEAT-000: estas tabelas continuam definidas AQUI (fonte única de verdade
+-- do DDL, extraída por `journal.live_store._live_ddl`), mas fisicamente
+-- passam a viver em um arquivo `.sqlite` SEPARADO do backtest —
+-- `db/live.sqlite` (`core.config.LIVE_DB_PATH`), não mais `db/journal.sqlite`
+-- (`core.config.DB_PATH`). Nenhuma mudança de DDL veio com essa separação;
+-- só o arquivo físico onde `journal.live_store.ensure_tables` as cria mudou.
+--
 -- `live_intents` e `live_orders` são tabelas SEPARADAS de propósito.
 -- Intent é o registro do CÉREBRO ("o robô decidiu X, para valer no pregão Y");
 -- Order é o registro do BRAÇO ("mandei isso para a corretora, e ela respondeu
@@ -158,7 +165,8 @@ CREATE INDEX IF NOT EXISTS idx_equity_run ON equity_curve(run_id);
 CREATE TABLE IF NOT EXISTS live_accounts (
     id                 INTEGER PRIMARY KEY AUTOINCREMENT,
     name               TEXT    NOT NULL UNIQUE,
-    mode               TEXT    NOT NULL CHECK (mode IN ('paper','manual','broker')),
+    -- Vocabulário canônico: ver `core.live_models.BrokerMode` (FEAT-001).
+    mode               TEXT    NOT NULL CHECK (mode IN ('mt5')),
     initial_capital    REAL    NOT NULL,
     cash               REAL    NOT NULL,
     investment_robot   TEXT    NOT NULL DEFAULT '',
@@ -298,9 +306,9 @@ CREATE INDEX IF NOT EXISTS idx_live_withdrawals_account ON live_withdrawals(acco
 -- distingue as duas origens legítimas: `'mt5_reconciliation'` (checagem
 -- automática do saldo real do terminal antes do pregão abrir, ver
 -- `live.runtime.reconcile_broker_cash`) e `'manual'` (botão "Registrar
--- aporte" do dashboard — fallback para quando não há saldo externo para
--- comparar sozinho, caso de Paper/Manual). `note` guarda o saldo real vs.
--- caixa esperado no caso automático, para o crédito ser auditável depois.
+-- aporte" do dashboard — força o crédito sem esperar a próxima checagem
+-- automática). `note` guarda o saldo real vs. caixa esperado no caso
+-- automático, para o crédito ser auditável depois.
 CREATE TABLE IF NOT EXISTS live_deposits (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     account_id     INTEGER NOT NULL REFERENCES live_accounts(id) ON DELETE CASCADE,
@@ -315,6 +323,53 @@ CREATE INDEX IF NOT EXISTS idx_live_deposits_account ON live_deposits(account_id
 -- Log operacional (não é métrica, é auditoria em texto): avisos do runtime,
 -- dado atrasado recusado, ordem rejeitada, etc. `account_id` pode ser NULL
 -- para eventos que não pertencem a nenhuma conta (ex.: falha ao abrir o feed).
+-- Contexto de mercado no momento em que o robô DECIDIU, ao vivo. Espelha
+-- coluna por coluna a `signal_snapshots` do backtest, de propósito: a
+-- pergunta que justifica a tabela é "o que o robô viu no dia da compra real,
+-- e como isso se compara com o que ele via nas compras simuladas?". Mesmas
+-- colunas, mesmas unidades, mesmo código de cálculo (`core/market_features.py`)
+-- => a comparação é um único SQL depois de um ATTACH dos dois arquivos.
+--
+-- Por que uma tabela NOVA em vez de reusar `signal_snapshots`: os dois bancos
+-- são arquivos SQLite separados (`DB_PATH` × `LIVE_DB_PATH`) e foram separados
+-- justamente para que backtest e operação real não disputassem lock do mesmo
+-- arquivo. Gravar o snapshot ao vivo dentro do banco de backtest reintroduziria
+-- essa disputa — o loop ao vivo passaria a escrever no arquivo que um sweep de
+-- 100 robôs pode estar segurando. Tabela espelhada no banco da operação
+-- preserva a comparabilidade sem reabrir o problema.
+--
+-- Ancorada em `live_intents` (a DECISÃO), não na ordem: o snapshot descreve o
+-- que o robô viu ao decidir, e essa leitura existe mesmo que a ordem seja
+-- rejeitada pela corretora depois. Ancorar na ordem perderia exatamente os
+-- casos mais informativos — as decisões que não viraram trade.
+CREATE TABLE IF NOT EXISTS live_signal_snapshots (
+    id                          INTEGER PRIMARY KEY AUTOINCREMENT,
+    intent_id                   INTEGER NOT NULL REFERENCES live_intents(id) ON DELETE CASCADE,
+    moment                      TEXT    NOT NULL CHECK (moment IN ('entry','exit')),
+    ticker                      TEXT    NOT NULL,
+    close                       REAL,
+    volume                      REAL,
+    volume_vs_avg20             REAL,
+    mm20                        REAL,
+    mm50                        REAL,
+    mm200                       REAL,
+    mm50_over_mm200_pct         REAL,
+    days_since_cross            INTEGER,
+    ifr14                       REAL,
+    atr14                       REAL,
+    historical_vol_30d          REAL,
+    distance_from_52w_high_pct  REAL,
+    distance_from_52w_low_pct   REAL,
+    ibov_close                  REAL,
+    ibov_mm200                  REAL,
+    ibov_above_mm200            INTEGER,
+    ibov_trend_strength         REAL,
+    correlation_with_ibov_60d   REAL,
+    UNIQUE (intent_id, moment)
+);
+
+CREATE INDEX IF NOT EXISTS idx_live_snapshots_intent ON live_signal_snapshots(intent_id);
+
 CREATE TABLE IF NOT EXISTS live_events (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     account_id   INTEGER REFERENCES live_accounts(id) ON DELETE CASCADE,

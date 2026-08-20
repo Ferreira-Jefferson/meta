@@ -1,11 +1,11 @@
 """Tradutor `Order` <-> formato de request do pacote `MetaTrader5`.
 
-Este modulo implementa a TERCEIRA classe do port `Broker` (ver docstring de
-`live/broker.py`): `PaperBroker` preenche contra um feed, `ManualBroker`
-espera um humano, `MT5Broker` fala com um terminal MT5 ja aberto na mesma
-maquina via o pacote pip `MetaTrader5`. O trabalho aqui e 100% TRADUCAO de
-formato de dado e tratamento de erro — nenhuma regra de decisao mora aqui
-(mesma regra de fronteira de `core/live_models.py`): `MT5Broker` nao decide
+Este modulo implementa a classe de producao do port `Broker` (ver docstring
+de `live/broker.py`): `MT5Broker` fala com um terminal MT5 ja aberto na
+mesma maquina via o pacote pip `MetaTrader5` (`PaperBroker` e um dublê de
+teste, ver `tests/doubles.py`). O trabalho aqui e 100% TRADUCAO de formato
+de dado e tratamento de erro — nenhuma regra de decisao mora aqui (mesma
+regra de fronteira de `core/live_models.py`): `MT5Broker` nao decide
 comprar nem vender, so pega a `Order` que o runtime ja decidiu enviar e
 traduz para o dicionario `request` que `mt5.order_send()` espera, depois
 traduz a resposta de volta para os campos da `Order`.
@@ -81,7 +81,7 @@ class MT5Broker(Broker):
     """
 
     name = "mt5"
-    mode = "broker"
+    mode = "mt5"
 
     def __init__(
         self,
@@ -303,8 +303,13 @@ class MT5Broker(Broker):
             return order
 
         filled_volume = getattr(result, "volume", volume)
-        order.status = OrderStatus.FILLED
         order.filled_qty = int(round(filled_volume * self._shares_per_lot))
+        # Fill parcial de verdade da corretora (result.volume < volume pedido)
+        # vira PARTIAL, nunca FILLED. `Order.is_terminal` ja exclui PARTIAL
+        # corretamente (FEAT-004, item 4.4b).
+        order.status = (
+            OrderStatus.FILLED if order.filled_qty >= order.quantity else OrderStatus.PARTIAL
+        )
         order.avg_price = float(result.price)
         order.broker_ref = str(getattr(result, "order", None) or "")
         order.fees = self._resolve_fees(mt5, result)
@@ -376,5 +381,41 @@ class MT5Broker(Broker):
             if info is None:
                 return None
             return float(info.balance)
+        except Exception:
+            return None
+
+    def detect_shares_per_lot(self, tickers) -> Optional[float]:
+        """Descobre `shares_per_lot` sozinho, consultando `symbol_info` de
+        cada ticker no terminal MT5 conectado — o usuario nao precisa mais
+        abrir o terminal e conferir isso na mao (ver ponto 1 da docstring do
+        modulo).
+
+        `trade_contract_size` E o `shares_per_lot`: e o numero de unidades do
+        ativo que 1.0 de `volume` representa, exatamente a razao que
+        `_resolve_volume` usa (`volume = quantity / shares_per_lot`). Devolve
+        `None` se a conexao falhar, se algum ticker nao existir no terminal,
+        ou se os tickers pedidos nao concordarem num unico valor — o resto do
+        sistema assume UM `shares_per_lot` global pro portfolio inteiro (ver
+        `__init__`), entao um portfolio com contract_size misto nao tem
+        resposta automatica unica; quem chama decide como bloquear, nunca
+        inventa um valor default."""
+        try:
+            import MetaTrader5 as mt5  # lazy: ver docstring do modulo
+        except Exception:
+            return None
+        try:
+            if not self.connect():
+                return None
+            sizes = set()
+            for ticker in tickers:
+                symbol = self.symbol_for(ticker)
+                mt5.symbol_select(symbol, True)
+                info = mt5.symbol_info(symbol)
+                if info is None:
+                    return None
+                sizes.add(float(info.trade_contract_size))
+            if len(sizes) != 1:
+                return None
+            return sizes.pop()
         except Exception:
             return None

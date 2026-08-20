@@ -142,15 +142,34 @@ class CircuitBreaker:
 
     # ---------- reset manual --------------------------------------------
 
-    def unfreeze(self) -> None:
+    def unfreeze(self, session: date | None = None, patrimonio: float | None = None) -> None:
         """Reset manual — usado por um humano via CLI depois de revisar.
 
         Limpa as DUAS travas de uma vez (nao e seletivo): e o botao de "revisei
         a situacao, pode voltar a operar normalmente", nao um reset fino por
         trava.
+
+        Re-ancoragem OPCIONAL (achado F2, FEAT-003): quando `session` E
+        `patrimonio` sao informados, as duas bases de comparacao (diaria e
+        mensal) sao re-fixadas no patrimonio CORRENTE. Sem isso, a partir do
+        momento em que o disjuntor passa a ser observado a cada minuto
+        (`intraday_tick`), o PROXIMO `observe()` depois do destravamento
+        recalcularia a MESMA perda contra a MESMA base antiga (ainda
+        deprimida) e recongelaria em segundos — o botao de panico
+        documentado viraria inoperante durante o pregao, exatamente o
+        oposto do que ele existe para fazer. Chamada SEM argumentos (o
+        unico call-site de producao hoje, `scripts/run_live.py cmd_unfreeze`)
+        preserva EXATAMENTE o comportamento antigo: so limpa o motivo do
+        congelamento, sem tocar nas bases.
         """
         self._daily_frozen_reason = None
         self._monthly_frozen_reason = None
+        if session is not None and patrimonio is not None:
+            patrimonio = float(patrimonio)
+            self._daily_ref_date = (session.year, session.month, session.day)
+            self._daily_ref_equity = patrimonio
+            self._monthly_ref_month = (session.year, session.month)
+            self._monthly_ref_equity = patrimonio
 
     # ---------- persistencia (restart do processo ao vivo) -----------------
 

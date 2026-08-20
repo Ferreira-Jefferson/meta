@@ -28,10 +28,12 @@ Por que este módulo NÃO reusa `journal.writer._connect`/`journal`
 -----------------------------------------------------------------------------
 `writer._connect` roda `_migrate`, que só sabe sobre as colunas de `runs`
 (schema de backtest). Reusá-lo criaria acoplamento entre o schema de
-backtest e o de operação ao vivo por nenhum motivo — são dois domínios que só
-compartilham o arquivo `.sqlite`. Este módulo define seu próprio `_connect`/
-`live_journal` no mesmo estilo (mesmo contextmanager, mesmo commit/rollback),
-mas chamando `ensure_tables(conn)` em vez de `_migrate`.
+backtest e o de operação ao vivo por nenhum motivo — são dois domínios que,
+desde a separação física do banco (FEAT-000), nem sequer compartilham o
+mesmo arquivo `.sqlite` (backtest fica em `core.config.DB_PATH`, operação
+real em `core.config.LIVE_DB_PATH`). Este módulo define seu próprio
+`_connect`/`live_journal` no mesmo estilo (mesmo contextmanager, mesmo
+commit/rollback), mas chamando `ensure_tables(conn)` em vez de `_migrate`.
 
 Por que `ensure_tables(conn)` roda a cada conexão
 -----------------------------------------------------------------------------
@@ -52,13 +54,14 @@ formato das tabelas.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import date, datetime
 from pathlib import Path
 from typing import Iterator, Optional
 
-from core.config import DB_PATH, SCHEMA_PATH
+from core.config import LIVE_DB_PATH, SCHEMA_PATH
 from core.live_models import (
     AccountState,
     Fill,
@@ -72,6 +75,7 @@ from core.live_models import (
     OrderType,
     RobotRole,
 )
+from core.models import MarketSnapshot
 
 # Status de Order que não vão mudar mais — não fazem sentido em "open_orders".
 _TERMINAL_ORDER_STATUSES = (
@@ -117,20 +121,200 @@ def _live_ddl(schema_path: Path) -> str:
     return ";\n".join(statements) + ";"
 
 
+class LegacyPaperAccountError(RuntimeError):
+    """`live_accounts` ainda usa um CHECK antigo (vocabulário `paper`/`manual`/
+    `broker`, ou o canônico intermediário `manual`/`mt5`) e contém ao menos
+    uma conta de SIMULAÇÃO (`mode='paper'`).
+
+    Não é seguro converter isso em silêncio para o vocabulário canônico
+    (`mt5`, ver `core.live_models.BrokerMode`) — uma conta de simulação virar
+    conta real por engano é o tipo de bug que só aparece quando já é tarde.
+    Renomear a conta NÃO desbloqueia nada (o CHECK novo rejeita pelo VALOR da
+    coluna `mode`, não pelo nome) — a única saída real é apagar a(s)
+    linha(s), ou um `UPDATE` manual de `mode` feito com decisão humana
+    consciente. Ver a mensagem da exceção para o texto completo.
+    """
+
+
+class LegacyManualAccountError(RuntimeError):
+    """`live_accounts` contém ao menos uma conta em `mode='manual'` — modo
+    descontinuado: o usuário decidiu que o robô sempre decide E executa
+    sozinho, sem confirmação humana em nenhum momento, então só resta `mt5`.
+
+    Não é seguro converter isso em silêncio para `'mt5'`: uma conta manual
+    nunca teve `mt5_shares_per_lot`/credenciais MT5 configuradas, então virar
+    `'mt5'` de graça seria inventar configuração que não existe. A única
+    saída real é decisão humana consciente: recriar a conta em modo mt5 (com
+    os parâmetros mt5 corretos), ou apagar a linha. Ver a mensagem da
+    exceção para o texto completo.
+    """
+
+
+def _legacy_check_present(conn: sqlite3.Connection) -> bool:
+    """`True` se `live_accounts` já existe no banco E seu DDL (lido de
+    `sqlite_master`, posicionalmente — sem depender de `row_factory`) ainda
+    permite um `mode` diferente de `'mt5'` sozinho. Dois marcadores cobrem as
+    duas fraturas de vocabulário que já existiram: `'broker'` (vocabulário
+    pré-FEAT-001: `paper`/`manual`/`broker`) e `'manual'` (vocabulário
+    canônico de FEAT-001, antes do modo manual ser descontinuado). O
+    vocabulário canônico atual (`mt5` sozinho) não contém nenhum dos dois.
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'live_accounts'"
+    ).fetchone()
+    if row is None:
+        return False
+    ddl = row[0] or ""
+    return "'broker'" in ddl or "'manual'" in ddl
+
+
+def _live_accounts_rebuild_ddl(schema_path: Path) -> str:
+    """DDL de `CREATE TABLE live_accounts_new (...)`, extraído de
+    `schema.sql` (fonte única de verdade do formato final da tabela) e
+    renomeado — nunca duplicado à mão aqui, senão o rebuild divergiria do
+    schema no primeiro `ALTER TABLE` que alguém fizer em `schema.sql`."""
+    text = schema_path.read_text(encoding="utf-8")
+    code_only = "\n".join(line for line in text.splitlines() if not line.strip().startswith("--"))
+    for raw in code_only.split(";"):
+        stmt = raw.strip()
+        if not stmt:
+            continue
+        head = stmt.upper().split("(", 1)[0].rstrip()
+        if head.startswith("CREATE TABLE") and head.endswith("LIVE_ACCOUNTS"):
+            return re.sub(
+                r"(?i)(CREATE TABLE(?:\s+IF NOT EXISTS)?\s+)live_accounts\b",
+                r"\1live_accounts_new", stmt, count=1,
+            ) + ";"
+    raise RuntimeError("definição de live_accounts não encontrada em schema.sql")
+
+
+def _migrate_account_mode_vocabulary(conn: sqlite3.Connection, schema_path: Path = SCHEMA_PATH) -> None:
+    """Rebuild de `live_accounts` de um vocabulário antigo (`paper`/`manual`/
+    `broker`, ou o canônico intermediário `manual`/`mt5`) para o canônico
+    atual (`mt5` sozinho) — chamado no início de `ensure_tables`, antes de
+    qualquer outra tabela ser tocada.
+
+    Recusa (levanta `LegacyPaperAccountError`, não mexe em nada) se houver
+    alguma conta `mode='paper'` — nunca converte simulação em conta real em
+    silêncio. Pelo mesmo motivo, recusa (`LegacyManualAccountError`) se
+    houver alguma conta `mode='manual'` — modo descontinuado, e uma conta
+    manual nunca teve `mt5_shares_per_lot`/credenciais mt5 configuradas para
+    virar mt5 de graça. Caso contrário, reconstrói a tabela na ordem
+    OBRIGATÓRIA criar-nova -> copiar -> dropar-antiga -> renomear (nunca o
+    inverso: a partir do SQLite 3.25 `ALTER TABLE ... RENAME` reescreve as
+    cláusulas `REFERENCES` das tabelas FILHAS — renomear `live_accounts` para
+    `live_accounts_old` primeiro deixaria `live_positions`/`live_orders`/
+    `live_intents` apontando para o nome velho, corrompendo o banco em
+    silêncio). `PRAGMA foreign_keys` é desligado/religado aqui (fora de
+    qualquer transação — o pragma é um no-op dentro de uma), porque
+    `_connect` já o liga ANTES de chamar `ensure_tables`.
+    """
+    if not _legacy_check_present(conn):
+        return
+
+    legacy_paper = conn.execute(
+        "SELECT name FROM live_accounts WHERE mode = 'paper'"
+    ).fetchall()
+    if legacy_paper:
+        nomes = ", ".join(str(row[0]) for row in legacy_paper)
+        raise LegacyPaperAccountError(
+            "live_accounts tem conta(s) de SIMULAÇÃO (mode='paper') que o "
+            f"vocabulário canônico (mt5) não cobre: {nomes}. Renomear "
+            "a conta NÃO resolve — o CHECK novo rejeita pelo VALOR da coluna "
+            "mode, não pelo nome da conta. As únicas saídas reais são: "
+            "apagar a(s) linha(s) (perde o histórico dela), ou, com decisão "
+            "humana consciente de que é seguro tratar essa conta como real, "
+            "um UPDATE manual de mode para 'mt5' depois de confirmar isso. "
+            "Se esta conexão é para o banco de SIMULAÇÃO (db/live_sim.sqlite), "
+            "a saída mais simples é apagar esse arquivo inteiro — não mexa "
+            "na conta real por engano."
+        )
+
+    legacy_manual = conn.execute(
+        "SELECT name FROM live_accounts WHERE mode = 'manual'"
+    ).fetchall()
+    if legacy_manual:
+        nomes = ", ".join(str(row[0]) for row in legacy_manual)
+        raise LegacyManualAccountError(
+            f"live_accounts tem conta(s) em modo 'manual', que foi "
+            f"descontinuado: {nomes}. Modo manual não existe mais neste "
+            "sistema — o robô sempre decide E executa sozinho via MT5, sem "
+            "confirmação humana em nenhum momento. Não dá para converter "
+            "essa conta para 'mt5' automaticamente (ela nunca teve "
+            "mt5_shares_per_lot/credenciais mt5 configuradas) — é preciso "
+            "decidir manualmente: recriar a conta em modo mt5 com os "
+            "parâmetros corretos, ou apagar a linha."
+        )
+
+    conn.execute("PRAGMA foreign_keys = OFF")
+    # Uma execução anterior interrompida no meio do rebuild pode ter deixado
+    # `live_accounts_new` para trás (criada, mas nunca dropada/renomeada) —
+    # sem este DROP, a tentativa seguinte quebraria com "table already
+    # exists" em vez de recomeçar do zero.
+    conn.execute("DROP TABLE IF EXISTS live_accounts_new")
+    conn.executescript(_live_accounts_rebuild_ddl(schema_path))
+    conn.execute(
+        """INSERT INTO live_accounts_new
+            (id, name, mode, initial_capital, cash, investment_robot, withdrawal_robot,
+             withdrawn_total, external_cash, policy_state, created_at, updated_at)
+           SELECT id, name, CASE WHEN mode = 'broker' THEN 'mt5' ELSE mode END,
+                  initial_capital, cash, investment_robot, withdrawal_robot,
+                  withdrawn_total, external_cash, policy_state, created_at, updated_at
+           FROM live_accounts"""
+    )
+    conn.execute("DROP TABLE live_accounts")
+    conn.execute("ALTER TABLE live_accounts_new RENAME TO live_accounts")
+
+    # `PRAGMA foreign_key_check` ANTES do commit, ainda dentro da mesma
+    # transação aberta pelo INSERT acima: uma violação tem de ABORTAR o
+    # rebuild (rollback) em vez de só ser reportada depois de o schema novo
+    # já estar gravado — checar depois do commit não desfaz nada, só avisa
+    # tarde demais.
+    fk_problems = conn.execute("PRAGMA foreign_key_check").fetchall()
+    if fk_problems:
+        conn.rollback()
+        raise RuntimeError(
+            f"rebuild de live_accounts deixou referência(s) inválida(s): {fk_problems}"
+        )
+
+    # Commit ANTES de religar o pragma: `PRAGMA foreign_keys` é um no-op
+    # dentro de uma transação aberta (a que o INSERT acima começou) — sem
+    # commitar primeiro, `foreign_keys=ON` abaixo não teria efeito nenhum
+    # pelo resto da vida desta conexão.
+    conn.commit()
+    conn.execute("PRAGMA foreign_keys = ON")
+
+
 def ensure_tables(conn: sqlite3.Connection, schema_path: Path = SCHEMA_PATH) -> None:
     """Cria as tabelas `live_*` se ainda não existirem. Idempotente e barato.
 
     Chamado a cada `_connect` — ver docstring do módulo para o porquê.
+    Primeiro passo: migrar o vocabulário de modo se `live_accounts` ainda
+    estiver no formato antigo (ver `_migrate_account_mode_vocabulary`).
     """
+    _migrate_account_mode_vocabulary(conn, schema_path)
     ddl = _live_ddl(schema_path)
     if ddl:
         conn.executescript(ddl)
         conn.commit()
 
 
-def _connect(db_path: Path = DB_PATH) -> sqlite3.Connection:
+def _connect(db_path: Path = LIVE_DB_PATH) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
+    # WAL + busy_timeout: o motivo desta feature. Sem os dois, um backtest
+    # longo em `threading.Thread` e a gravação de uma ordem real disputam
+    # lock do arquivo (WAL permite leitor+escritor concorrentes). O
+    # `sqlite3.connect` do Python já usa `timeout=5.0` (5s) por padrão — a
+    # linha abaixo NÃO é a origem da proteção atual contra "database is
+    # locked"; ela é uma defesa EXPLÍCITA para o dia em que alguém, no
+    # futuro, passar `timeout=0` (ou outro valor baixo) ao conectar sem notar
+    # que isso reduz o busy_timeout do driver junto — fixar o PRAGMA aqui
+    # garante os 5s independente do que `connect()` receber. `journal_mode=
+    # WAL` devolve uma linha com o modo resultante — precisa ser lida, senão
+    # o cursor fica pendente.
+    conn.execute("PRAGMA journal_mode=WAL").fetchone()
+    conn.execute("PRAGMA busy_timeout=5000")
     conn.execute("PRAGMA foreign_keys = ON")
     conn.row_factory = sqlite3.Row
     ensure_tables(conn)
@@ -138,7 +322,7 @@ def _connect(db_path: Path = DB_PATH) -> sqlite3.Connection:
 
 
 @contextmanager
-def live_journal(db_path: Path = DB_PATH) -> Iterator[sqlite3.Connection]:
+def live_journal(db_path: Path = LIVE_DB_PATH) -> Iterator[sqlite3.Connection]:
     """Contextmanager de transação, no mesmo estilo de `journal.writer.journal`."""
     conn = _connect(db_path)
     try:
@@ -180,8 +364,11 @@ def ensure_account(
     """Cria a conta se não existir; se já existir, não mexe nela.
 
     Idempotente por causa de `ON CONFLICT(name) DO NOTHING`: chamar duas vezes
-    com os mesmos dados (ou dados diferentes) não duplica linha nem sobrescreve
-    o estado atual — quem quer mudar cash/robôs usa `save_account`.
+    com os MESMOS dados não duplica linha nem sobrescreve o estado atual —
+    quem quer mudar cash/robôs usa `save_account`. Chamar com um `mode`
+    DIFERENTE do já gravado levanta `ValueError`: o modo de uma conta nunca
+    muda por baixo do broker que a criou (antes disso era ignorado em
+    silêncio pelo `ON CONFLICT DO NOTHING`).
     """
     conn.execute(
         """INSERT INTO live_accounts
@@ -192,6 +379,12 @@ def ensure_account(
     )
     account = load_account(conn, name)
     assert account is not None, "insert com ON CONFLICT DO NOTHING não pode deixar a conta ausente"
+    if account.mode != mode:
+        raise ValueError(
+            f"conta '{name}' já existe com mode={account.mode!r}, mas foi "
+            f"pedida com mode={mode!r} — divergência entre a conta gravada "
+            "e o broker/CLI que está chamando agora."
+        )
     return account
 
 
@@ -364,9 +557,10 @@ def record_intent(conn: sqlite3.Connection, account_id: int, intent: Intent) -> 
     vivo essa regra vira uma disciplina de relógio (ver docstring de
     `core.live_models`), e o ponto mais barato para impedi-la de vazar é aqui,
     na gravação — se `execute_on <= decided_on` para uma intent que NÃO é
-    imediata (`Intent.is_immediate` cobre as duas exceções legítimas,
-    ADJUST_STOP e reason == 'stop'), é bug de look-ahead e a gravação é
-    rejeitada antes de virar linha no diário.
+    imediata (`Intent.is_immediate` cobre as três exceções legítimas,
+    ADJUST_STOP, reason == 'stop' e WITHDRAW same-day por evento de
+    liquidez), é bug de look-ahead e a gravação é rejeitada antes de virar
+    linha no diário.
     """
     if not intent.is_immediate and intent.execute_on <= intent.decided_on:
         raise ValueError(
@@ -374,7 +568,8 @@ def record_intent(conn: sqlite3.Connection, account_id: int, intent: Intent) -> 
             f"decided_on ({intent.decided_on.isoformat()}) para intent "
             f"kind={intent.kind.value!r} reason={intent.reason!r}. Regra 4 do "
             "AGENTS.md: decisão no fecho de D só executa em D+1 (exceções: "
-            "ADJUST_STOP e reason='stop', ver Intent.is_immediate)."
+            "ADJUST_STOP, reason='stop' e WITHDRAW same-day por liquidez, "
+            "ver Intent.is_immediate)."
         )
     cur = conn.execute(
         """INSERT INTO live_intents
@@ -422,12 +617,36 @@ def stale_intents(conn: sqlite3.Connection, account_id: int, before: date) -> li
     Existe porque decisão atrasada não executa (regra 7 do AGENTS.md): o
     runtime usa isto para achar intents que ficaram para trás (máquina fora do
     ar) e marcá-las como `EXPIRED` em vez de executá-las tarde.
+
+    `kind != 'withdraw'` exclui recomendações de saque de propósito: elas não
+    expiram por dia (uma recomendação decidida ontem continua válida hoje,
+    amanhã, até o fim do mês) — quem expira recomendação de saque é
+    `LiveRuntime._expire_withdraw_advice`, na virada do mês civil, não este
+    filtro por data de execução.
     """
     rows = conn.execute(
         """SELECT * FROM live_intents
-           WHERE account_id = ? AND status = ? AND execute_on < ?
+           WHERE account_id = ? AND status = ? AND execute_on < ? AND kind != ?
            ORDER BY id""",
-        (account_id, IntentStatus.PENDING.value, before.isoformat()),
+        (account_id, IntentStatus.PENDING.value, before.isoformat(), IntentKind.WITHDRAW.value),
+    ).fetchall()
+    return [_row_to_intent(row) for row in rows]
+
+
+def pending_withdraw_intents(conn: sqlite3.Connection, account_id: int) -> list[Intent]:
+    """Todas as recomendações de saque (`kind='withdraw'`) ainda PENDING, de
+    qualquer dia — ao contrário de `pending_intents`, que filtra por uma
+    `execute_on` exata. Uma recomendação de saque fica visível/confirmável
+    o mês inteiro (ver `stale_intents` acima e `LiveRuntime.
+    _expire_withdraw_advice`), então quem precisa saber "o que está esperando
+    confirmação humana agora" pergunta aqui, não a `pending_intents`.
+    Ordenada por `id` (mais antiga primeiro).
+    """
+    rows = conn.execute(
+        """SELECT * FROM live_intents
+           WHERE account_id = ? AND status = ? AND kind = ?
+           ORDER BY id""",
+        (account_id, IntentStatus.PENDING.value, IntentKind.WITHDRAW.value),
     ).fetchall()
     return [_row_to_intent(row) for row in rows]
 
@@ -436,16 +655,24 @@ def set_intent_status(conn: sqlite3.Connection, intent_id: int, status: IntentSt
     conn.execute("UPDATE live_intents SET status = ? WHERE id = ?", (status.value, intent_id))
 
 
-def set_intent_payload(conn: sqlite3.Connection, intent_id: int, payload: dict) -> None:
-    """Sobrescreve o `payload` de uma intent já gravada.
+def claim_intent(
+    conn: sqlite3.Connection, intent_id: int, from_status: IntentStatus, to_status: IntentStatus
+) -> bool:
+    """Transição de status ATÔMICA — `UPDATE ... WHERE id=? AND status=?`,
+    devolve `cur.rowcount == 1`.
 
-    A intent em si é imutável (é o registro do CÉREBRO — ver `core.live_models`),
-    mas `payload` é o campo pensado para metadado de execução que só existe
-    DEPOIS da decisão (ex.: `equity_before` capturado no primeiro ciclo de um
-    saque que precisa de várias rodadas de liquidação sob corretora manual —
-    ver `live.runtime._withdraw_manual_step`). Sobrescreve inteiro, não faz
-    merge: quem chama é o único dono do payload desta intent neste momento."""
-    conn.execute("UPDATE live_intents SET payload = ? WHERE id = ?", (_dumps(payload), intent_id))
+    Esta é a TRAVA contra duplo-clique/confirmação concorrente: duas chamadas
+    disputando a mesma intent (um humano clicando duas vezes, um `sacar` de
+    CLI repetido, dois processos) só deixam UMA vencer — quem recebe `False`
+    perdeu a corrida e NÃO pode mover dinheiro (`set_intent_status` continua
+    existindo para as transições onde não há corrida, como marcar EXECUTING/
+    DONE/EXPIRED em fluxos que já são de dono único).
+    """
+    cur = conn.execute(
+        "UPDATE live_intents SET status = ? WHERE id = ? AND status = ?",
+        (to_status.value, intent_id, from_status.value),
+    )
+    return cur.rowcount == 1
 
 
 def intents_by_status(conn: sqlite3.Connection, account_id: int, status: IntentStatus) -> list[Intent]:
@@ -468,6 +695,88 @@ def all_intents(conn: sqlite3.Connection, account_id: int, limit: int = 500) -> 
         (account_id, limit),
     ).fetchall()
     return [_row_to_intent(row) for row in rows]
+
+
+# ---------------------------------------------------------------------------
+# snapshot de contexto de sinal (o "por que" de cada decisao)
+# ---------------------------------------------------------------------------
+
+# Ordem das colunas de `live_signal_snapshots` que vem do `MarketSnapshot`.
+# Uma tupla so, usada tanto no INSERT quanto na leitura, para que acrescentar
+# uma feature nova (regra 3 do AGENTS.md: "sempre que uma nova feature
+# aparecer no snapshot, adicione coluna") seja UMA edicao aqui + UMA no
+# schema, sem risco de desalinhar valor com coluna.
+_SNAPSHOT_COLUMNS: tuple[str, ...] = (
+    "close", "volume", "volume_vs_avg20", "mm20", "mm50", "mm200",
+    "mm50_over_mm200_pct", "days_since_cross", "ifr14", "atr14",
+    "historical_vol_30d", "distance_from_52w_high_pct",
+    "distance_from_52w_low_pct", "ibov_close", "ibov_mm200",
+    "ibov_above_mm200", "ibov_trend_strength", "correlation_with_ibov_60d",
+)
+
+
+def record_intent_snapshot(
+    conn: sqlite3.Connection,
+    intent_id: int,
+    moment: str,
+    ticker: str,
+    snapshot: MarketSnapshot,
+) -> int:
+    """Grava o contexto de mercado que o robo viu ao decidir.
+
+    `INSERT OR REPLACE` sobre o UNIQUE `(intent_id, moment)`: gravar duas
+    vezes o snapshot da MESMA intencao no mesmo momento nao e conflito de
+    dado, e reentrancia do runtime (um retry de sessao interrompida). A
+    segunda gravacao descreve o mesmo pregao com o mesmo painel, entao
+    sobrescrever e correto e nao duplica linha no diario.
+    """
+    if moment not in ("entry", "exit"):
+        raise ValueError(f"moment invalido: {moment!r} (esperado 'entry' ou 'exit')")
+    valores = [getattr(snapshot, c) for c in _SNAPSHOT_COLUMNS]
+    cols = ", ".join(_SNAPSHOT_COLUMNS)
+    marks = ", ".join("?" for _ in _SNAPSHOT_COLUMNS)
+    cur = conn.execute(
+        f"""INSERT OR REPLACE INTO live_signal_snapshots
+                (intent_id, moment, ticker, {cols})
+            VALUES (?, ?, ?, {marks})""",
+        (intent_id, moment, ticker, *valores),
+    )
+    return int(cur.lastrowid)
+
+
+def intent_snapshot(
+    conn: sqlite3.Connection, intent_id: int, moment: Optional[str] = None
+) -> Optional[dict]:
+    """Snapshot gravado de uma intencao, como dict coluna->valor.
+
+    Devolve dict (e nao `MarketSnapshot`) porque quem le isto e auditoria:
+    dashboard e query exploratoria querem os nomes das colunas do jeito que
+    estao no banco, iguais aos do backtest, para comparar lado a lado.
+    """
+    sql = "SELECT * FROM live_signal_snapshots WHERE intent_id = ?"
+    params: list = [intent_id]
+    if moment is not None:
+        sql += " AND moment = ?"
+        params.append(moment)
+    row = conn.execute(sql + " ORDER BY id DESC LIMIT 1", params).fetchone()
+    return dict(row) if row is not None else None
+
+
+def intent_snapshots(conn: sqlite3.Connection, account_id: int,
+                     limit: int = 500) -> dict[int, dict]:
+    """`intent_id` -> snapshot, para as intencoes mais recentes da conta.
+
+    Uma query so em vez de N: a pagina de historico lista centenas de
+    intencoes e precisa do contexto de cada uma.
+    """
+    rows = conn.execute(
+        """SELECT s.* FROM live_signal_snapshots s
+             JOIN live_intents i ON i.id = s.intent_id
+            WHERE i.account_id = ?
+            ORDER BY s.id DESC LIMIT ?""",
+        (account_id, limit),
+    ).fetchall()
+    return {int(r["intent_id"]): dict(r) for r in rows}
 
 
 # ---------------------------------------------------------------------------
@@ -619,6 +928,30 @@ def equity_series(conn: sqlite3.Connection, account_id: int) -> list[tuple[str, 
         (account_id,),
     ).fetchall()
     return [(row["date"], row["equity"], row["patrimonio"]) for row in rows]
+
+
+def last_equity(
+    conn: sqlite3.Connection, account_id: int, on_or_before: str
+) -> tuple[str, float, float] | None:
+    """Última linha de `live_equity` com `date <= on_or_before` (date, equity, patrimonio).
+
+    Existe porque o disjuntor intra-dia (FEAT-003) consulta a base do fecho
+    anterior em CADA `intraday_tick` — `run_once` roda a cada minuto, e
+    `equity_series` varre a tabela inteira (custo O(n) por chamada,
+    ~480x/pregão). `ORDER BY date DESC LIMIT 1` resolve em O(log n) com o
+    índice existente. Um único helper serve os três consumidores desta
+    feature: base do fecho anterior (`_previous_close_patrimonio`),
+    checagem de "já decidido" e a lista de pregões sem decisão em `status()`.
+    Devolve `None` quando não há nenhuma linha `<= on_or_before`.
+    """
+    row = conn.execute(
+        """SELECT date, equity, patrimonio FROM live_equity
+           WHERE account_id = ? AND date <= ? ORDER BY date DESC LIMIT 1""",
+        (account_id, on_or_before),
+    ).fetchone()
+    if row is None:
+        return None
+    return (row["date"], row["equity"], row["patrimonio"])
 
 
 def record_withdrawal(

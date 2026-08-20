@@ -2,8 +2,7 @@
 
 Foco: `PaperBroker` reusa o MESMO custo do backtest (slippage + fees de
 `backtest/costs.py`), rejeita sem cotacao, respeita limite em ordens LIMIT
-sem rejeitar (fica `SENT`). `ManualBroker` gera ticket legivel e so fecha o
-ciclo via `confirm()` com validacao.
+sem rejeitar (fica `SENT`).
 """
 from __future__ import annotations
 
@@ -11,8 +10,8 @@ import pytest
 
 from core.config import CostModel
 from core.live_models import Order, OrderSide, OrderStatus, OrderType
-from live.broker import Broker, ManualBroker, PaperBroker
-from live.feed import ReplayFeed
+from live.broker import Broker
+from tests.doubles import PaperBroker, ReplayFeed
 
 
 def _feed_with(ticker: str, price: float) -> ReplayFeed:
@@ -143,86 +142,8 @@ def test_paper_broker_cancel_ordem_terminal_nao_muda():
 def test_paper_broker_supports_automation():
     broker = PaperBroker(ReplayFeed())
     assert broker.supports_automation() is True
-    assert broker.mode == "paper"
-
-
-def test_manual_broker_place_gera_ticket_legivel_e_broker_ref():
-    broker = ManualBroker()
-    order = Order(
-        ticker="WEGE3.SA", side=OrderSide.SELL, quantity=300,
-        note="rotation_out",
-    )
-
-    sent = broker.place(order)
-
-    assert sent.status == OrderStatus.SENT
-    assert sent.broker_ref.startswith("MANUAL-")
-    assert "VENDER" in sent.note
-    assert "300" in sent.note
-    assert "WEGE3.SA" in sent.note
-    assert "rotation_out" in sent.note
-    assert order in broker.pending_tickets()
-
-
-def test_manual_broker_nao_inventa_fill_no_poll():
-    broker = ManualBroker()
-    order = broker.place(Order(ticker="WEGE3.SA", side=OrderSide.BUY, quantity=100))
-
-    polled = broker.poll(order)
-
-    assert polled.status == OrderStatus.SENT
-    assert polled.filled_qty == 0
-
-
-def test_manual_broker_confirm_total():
-    broker = ManualBroker()
-    order = broker.place(Order(ticker="WEGE3.SA", side=OrderSide.BUY, quantity=100))
-
-    confirmed = broker.confirm(order, filled_qty=100, avg_price=51.2, fees=3.5)
-
-    assert confirmed.status == OrderStatus.FILLED
-    assert confirmed.filled_qty == 100
-    assert confirmed.avg_price == pytest.approx(51.2)
-    assert confirmed.fees == pytest.approx(3.5)
-    assert confirmed.leaves_qty == 0
-    assert order not in broker.pending_tickets()
-
-
-def test_manual_broker_confirm_parcial():
-    broker = ManualBroker()
-    order = broker.place(Order(ticker="WEGE3.SA", side=OrderSide.BUY, quantity=100))
-
-    confirmed = broker.confirm(order, filled_qty=40, avg_price=51.0)
-
-    assert confirmed.status == OrderStatus.PARTIAL
-    assert confirmed.filled_qty == 40
-    assert confirmed.leaves_qty == 60
-    assert not confirmed.is_terminal
-
-
-def test_manual_broker_confirm_quantidade_invalida_levanta_valueerror():
-    broker = ManualBroker()
-    order = broker.place(Order(ticker="WEGE3.SA", side=OrderSide.BUY, quantity=100))
-
-    with pytest.raises(ValueError):
-        broker.confirm(order, filled_qty=0, avg_price=50.0)
-
-    with pytest.raises(ValueError):
-        broker.confirm(order, filled_qty=200, avg_price=50.0)
-
-
-def test_manual_broker_confirm_preco_invalido_levanta_valueerror():
-    broker = ManualBroker()
-    order = broker.place(Order(ticker="WEGE3.SA", side=OrderSide.BUY, quantity=100))
-
-    with pytest.raises(ValueError):
-        broker.confirm(order, filled_qty=100, avg_price=0.0)
-
-
-def test_manual_broker_supports_automation_false():
-    broker = ManualBroker()
-    assert broker.supports_automation() is False
-    assert broker.mode == "manual"
+    assert broker.mode == "mt5"
+    assert broker.is_test_double is True
 
 
 def test_broker_e_abstrata():

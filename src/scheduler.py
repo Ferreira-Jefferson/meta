@@ -39,6 +39,14 @@ from strategy.registry import list_strategies
 # inicial pequeno, lote fracionário — não os R$ 100k/lote 100 do canonical antigo.
 CHAMPION_CAPITAL = 1_000.0
 CHAMPION_LOT_SIZE = 1
+# Caixa parado rende Selic nas runs de ranking. Até 2026-08-20 rendia 0%, e isso
+# não era um detalhe: `liquid_champion` passa 32% do tempo com algum sleeve
+# descoberto, o campeão antigo 24%, e a Selic média do período foi 9,48% a.a. O
+# viés não era neutro — caía inteiro sobre quem segura mais caixa, exatamente os
+# robôs mais defensivos. O default do `BacktestConfig` continua `None` (não
+# reescreve o passado de quem chama sem saber), mas a run OFICIAL de ranking tem
+# de comparar robôs no mundo real, onde dinheiro parado rende.
+CHAMPION_CASH_YIELD = "data/raw/selic.parquet"
 CHAMPION_5Y_YEARS = 5
 
 
@@ -75,7 +83,8 @@ def _run_champion(strategy_key: str, factory, start: str, end: str, run_kind: st
     # largo, etc.) escolher seu próprio universo em vez do WATCHLIST canonical
     # — ver o comentário em `strategy/base.py`.
     universe = load_universe(tickers=strategy.universe_tickers) if strategy.universe_tickers else load_universe()
-    config = BacktestConfig(initial_capital=CHAMPION_CAPITAL, lot_size=CHAMPION_LOT_SIZE)
+    config = BacktestConfig(initial_capital=CHAMPION_CAPITAL, lot_size=CHAMPION_LOT_SIZE,
+                            cash_yield_path=CHAMPION_CASH_YIELD)
     result = run_backtest_dispatch(universe, strategy, config, start=start, end=end)
 
     metrics = dict(result.metrics)
@@ -181,7 +190,7 @@ def refresh_champion_rankings(force: bool = False) -> dict:
                 refreshed.append({"key": info.key, "run_kind": run_kind, "run_id": run_id, "seconds": round(dt, 1)})
             except Exception as e:
                 dt = time.perf_counter() - t0
-                print(f"  [FAIL] {info.key:30s} {run_kind:14s} {dt:.1f}s → {type(e).__name__}: {e}")
+                print(f"  [FAIL] {info.key:30s} {run_kind:14s} {dt:.1f}s -> {type(e).__name__}: {e}")
                 failed.append({"key": info.key, "run_kind": run_kind, "error": str(e)})
     return {
         "refreshed": refreshed,

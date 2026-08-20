@@ -62,6 +62,18 @@ class MarketSnapshot:
     correlation_with_ibov_60d: float
 
 
+# Aproximacao do risco por acao usada em `Trade.r_multiple` quando o trade nao
+# guarda o stop real usado na entrada (`Enter.initial_stop`) — `Trade` nao tem
+# esse campo hoje. Espelha `core.config.BacktestConfig.stop_loss_pct` (mesmo
+# valor, 0.15): nenhuma estrategia registrada passa `Enter(initial_stop=...)`
+# customizado (verificado por grep), entao esta aproximacao bate com o stop
+# real de todo trade historico do sistema. Se uma estrategia futura passar um
+# stop customizado, `r_multiple` fica impreciso para ela ate `Trade` ganhar um
+# campo de risco real — fora de escopo aqui (exigiria mudar toda construcao de
+# `Trade` em `engine.py` e `engine_portfolio.py`, nao so este modulo).
+_DEFAULT_RISK_PCT = 0.15
+
+
 @dataclass
 class Trade:
     ticker: str
@@ -109,7 +121,7 @@ class Trade:
     def r_multiple(self) -> float:
         if self.exit_price is None:
             return 0.0
-        risk_per_share = self.entry_price * 0.15
+        risk_per_share = self.entry_price * _DEFAULT_RISK_PCT
         if risk_per_share == 0:
             return 0.0
         return (self.exit_price - self.entry_price) / risk_per_share

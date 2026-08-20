@@ -16,7 +16,7 @@ def _account(conn):
     return ensure_account(
         conn,
         name="conta_teste",
-        mode="paper",
+        mode="mt5",
         initial_capital=10_000.0,
         investment_robot="dip2_hw40",
         withdrawal_robot="official_policy",

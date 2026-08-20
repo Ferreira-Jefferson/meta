@@ -23,7 +23,33 @@ def load_one(ticker: str, out_dir: Path = DATA_DIR) -> pd.DataFrame:
         )
     df = pd.read_parquet(path)
     df.index = pd.to_datetime(df.index)
-    return df.sort_index()
+    return _drop_incomplete_tail(df.sort_index(), ticker)
+
+
+def _drop_incomplete_tail(df: pd.DataFrame, ticker: str) -> pd.DataFrame:
+    """Corta pregoes do FIM da serie que ainda nao tem fechamento.
+
+    Um download feito com o mercado aberto grava a barra do dia com `open`
+    preenchido e `close` vazio. Isso nao e um pregao — e meio pregao. Em
+    2026-08-20, 40 dos 63 papeis de `strategy/liquid_sleeve.py::POOL` estavam
+    assim, e a consequencia nao era um erro visivel: o backtest ia ate o fim,
+    fechava a posicao aberta a mercado no ultimo dia e produzia um trade com
+    preco de saida NaN. Esse trade ia para o diario, `fees_total` NaN virava
+    NULL no SQLite e o INSERT estourava NOT NULL — derrubando a run inteira de
+    ranking. Era por isso que o podio so tinha o robo da WATCHLIST: os sete
+    papeis dela por acaso tinham fechamento, os do pool nao.
+
+    So o RABO e cortado. Buraco no meio da serie e outro problema, tratado na
+    origem por `market_data/quality.py` (`consensus_calendar` + `fill_gaps`) —
+    apagar dado do meio aqui esconderia justamente o que aquele modulo procura.
+    """
+    if "close" not in df.columns or df.empty:
+        return df
+    validos = df["close"].notna().to_numpy().nonzero()[0]
+    if len(validos) == 0:
+        return df.iloc[:0]
+    ultimo = int(validos[-1])
+    return df if ultimo == len(df) - 1 else df.iloc[: ultimo + 1]
 
 
 def load_universe(

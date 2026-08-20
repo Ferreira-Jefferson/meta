@@ -81,6 +81,27 @@ class SessionPhase(str, Enum):
     POST_CLOSE = "post_close"             # pregao encerrado, dia ainda corrente
 
 
+class BrokerMode(str, Enum):
+    """Vocabulário CANÔNICO de modo de corretora — o único que existe a
+    partir de FEAT-001.
+
+    Antes desta feature o vocabulário estava fraturado em três grafias:
+    `paper`/`manual`/`mt5` no CLI e no `<select>` do dashboard, mas
+    `paper`/`manual`/`broker` no `Broker.mode`/`live_accounts.mode` (schema).
+    Essa fratura é a causa-raiz do crítico nº1 da revisão: o botão "Iniciar"
+    do dashboard emitia `--mode broker` para uma conta MT5 real, o argparse
+    recusava (só aceitava `paper`/`manual`/`mt5`), o processo morria na hora,
+    e o dashboard continuava mostrando "rodando". `PaperBroker` sai de
+    produção junto (vira dublê de teste, ver `tests/doubles.py`) — sem
+    simulação no vocabulário. O modo `MANUAL` (humano confirma cada ordem)
+    foi removido depois: o usuário decidiu que o robô sempre decide E
+    executa sozinho, então só sobra o modo em que a corretora executa
+    sozinha (`MT5`).
+    """
+
+    MT5 = "mt5"
+
+
 class RobotRole(str, Enum):
     """Papel do robo dentro da conta. Um robo por papel, no maximo."""
 
@@ -135,12 +156,24 @@ class Intent:
     def is_immediate(self) -> bool:
         """Intencoes que NAO esperam o dia seguinte.
 
-        Duas excecoes legitimas a regra do D+1, ambas herdadas do backtest:
-        `ADJUST_STOP` nao movimenta dinheiro (o engine tambem aplica na hora), e
-        o stop intra-dia dispara na propria barra — no backtest quando
-        `low[D] <= stop`, ao vivo quando o preco negociado toca o stop.
+        Tres excecoes legitimas a regra do D+1: `ADJUST_STOP` nao movimenta
+        dinheiro (o engine tambem aplica na hora); o stop intra-dia dispara na
+        propria barra — no backtest quando `low[D] <= stop`, ao vivo quando o
+        preco negociado toca o stop; e uma recomendacao de `WITHDRAW` por
+        evento de liquidez (`execute_on == decided_on`), que nasce na mesma
+        barra em que o robo de investimento acabou de vender — paridade com
+        `WithdrawalRobot.on_liquidity` (`live/robots.py`), que ja antecipa a
+        data da recomendacao para o dia da venda, e com
+        `policy.on_liquidity_event` no engine de backtest. Isto NAO e
+        look-ahead de verdade: a recomendacao nao executa nada sozinha, so
+        notifica um humano — quem move dinheiro de fato e o dono, sacando
+        direto na corretora, se e quando quiser.
         """
-        return self.kind == IntentKind.ADJUST_STOP or self.reason == "stop"
+        return (
+            self.kind == IntentKind.ADJUST_STOP
+            or self.reason == "stop"
+            or (self.kind == IntentKind.WITHDRAW and self.execute_on == self.decided_on)
+        )
 
 
 # ---------- ordem (execucao na corretora) ---------------------------------
@@ -275,7 +308,7 @@ class AccountState:
     """
 
     name: str
-    mode: str                            # 'paper' | 'manual' | 'broker'
+    mode: str                            # 'mt5' (ver BrokerMode)
     initial_capital: float
     cash: float
     investment_robot: str = ""

@@ -25,36 +25,16 @@ from core.live_models import (
 )
 from core.models import ExitReason
 from live.robots import InvestmentRobot, LiveRobot, WithdrawalRobot, build_robots
-from strategy.base import Action, AdjustStop, Enter, Exit, Strategy
-
+from strategy.base import AdjustStop, Enter, Exit
+from strategy.buy_the_dip import BuyTheDip
+from tests.doubles import ScriptedStrategySequence
 
 # ---------- fixtures / helpers ---------------------------------------------
-
-class _ScriptedStrategy(Strategy):
-    """Estrategia sintetica: devolve uma lista fixa de acoes por chamada de
-    `on_bar`, gravando os argumentos recebidos para o teste inspecionar."""
-
-    name = "scripted"
-    version = "1"
-
-    def __init__(self, actions_by_call: list[list[Action]]):
-        self._actions_by_call = list(actions_by_call)
-        self.calls: list[tuple] = []
-        self.initialized_with: tuple | None = None
-
-    def initialize(self, panels, ibov) -> None:
-        self.initialized_with = (panels, ibov)
-
-    def on_bar(self, date, open_positions, cash_available):
-        self.calls.append((date, dict(open_positions), cash_available))
-        if self._actions_by_call:
-            return self._actions_by_call.pop(0)
-        return []
 
 
 def _account(cash: float = 100_000.0, positions: dict | None = None) -> AccountState:
     return AccountState(
-        name="conta-teste", mode="paper", initial_capital=100_000.0,
+        name="conta-teste", mode="mt5", initial_capital=100_000.0,
         cash=cash, positions=positions or {},
     )
 
@@ -84,7 +64,7 @@ def _pos(ticker="PETR4", current_stop=None, kind="main", bars_held=0) -> LivePos
 # ---------- InvestmentRobot: traducao de acoes ------------------------------
 
 def test_prepare_delega_para_strategy_initialize():
-    strat = _ScriptedStrategy([])
+    strat = ScriptedStrategySequence([])
     robot = InvestmentRobot(strat)
     panels = {"PETR4": pd.DataFrame()}
     ibov = pd.DataFrame()
@@ -93,13 +73,13 @@ def test_prepare_delega_para_strategy_initialize():
 
 
 def test_key_e_role_do_investment_robot():
-    robot = InvestmentRobot(_ScriptedStrategy([]))
+    robot = InvestmentRobot(ScriptedStrategySequence([]))
     assert robot.key == "scripted"
     assert robot.role == RobotRole.INVESTMENT
 
 
 def test_enter_vira_intent_com_execute_on_correto():
-    strat = _ScriptedStrategy([[Enter(ticker="PETR4", initial_stop=27.0, size_hint=0.5)]])
+    strat = ScriptedStrategySequence([[Enter(ticker="PETR4", initial_stop=27.0, size_hint=0.5)]])
     robot = InvestmentRobot(strat)
     ctx = _ctx(session=date(2026, 8, 17))
 
@@ -117,7 +97,7 @@ def test_enter_vira_intent_com_execute_on_correto():
 
 
 def test_exit_vira_intent_com_reason_e_execute_on_d_mais_1():
-    strat = _ScriptedStrategy([[Exit(ticker="VALE3", reason=ExitReason.ROTATION_OUT)]])
+    strat = ScriptedStrategySequence([[Exit(ticker="VALE3", reason=ExitReason.ROTATION_OUT)]])
     robot = InvestmentRobot(strat)
     ctx = _ctx(session=date(2026, 8, 17))
 
@@ -133,7 +113,7 @@ def test_exit_vira_intent_com_reason_e_execute_on_d_mais_1():
 
 
 def test_adjust_stop_e_imediato_execute_on_e_a_propria_sessao():
-    strat = _ScriptedStrategy([[AdjustStop(ticker="WEGE3", new_stop=42.0)]])
+    strat = ScriptedStrategySequence([[AdjustStop(ticker="WEGE3", new_stop=42.0)]])
     robot = InvestmentRobot(strat)
     ctx = _ctx(session=date(2026, 8, 17))
 
@@ -151,7 +131,7 @@ def test_adjust_stop_e_imediato_execute_on_e_a_propria_sessao():
 def test_on_close_so_repassa_posicao_principal_para_a_strategy():
     """Robo oficial roda com satellite_pct=0.00: satelite nunca deveria existir
     na operacao ao vivo, mas o filtro fica explicito para o dia em que existir."""
-    strat = _ScriptedStrategy([[]])
+    strat = ScriptedStrategySequence([[]])
     robot = InvestmentRobot(strat)
     positions = {
         "PETR4": _pos(ticker="PETR4", current_stop=28.0, kind="main", bars_held=5),
@@ -170,7 +150,7 @@ def test_on_close_so_repassa_posicao_principal_para_a_strategy():
 # ---------- InvestmentRobot: stop intra-dia ---------------------------------
 
 def test_on_intraday_nao_dispara_enquanto_preco_nao_cruza_o_stop():
-    robot = InvestmentRobot(_ScriptedStrategy([]))
+    robot = InvestmentRobot(ScriptedStrategySequence([]))
     positions = {"PETR4": _pos(current_stop=28.0)}
     quotes = {"PETR4": Quote(ticker="PETR4", price=28.5, ts=datetime(2026, 8, 17, 11, 0), source="test")}
     ctx = _ctx(session=date(2026, 8, 17), positions=positions, quotes=quotes)
@@ -179,7 +159,7 @@ def test_on_intraday_nao_dispara_enquanto_preco_nao_cruza_o_stop():
 
 
 def test_on_intraday_dispara_stop_quando_preco_cruza():
-    robot = InvestmentRobot(_ScriptedStrategy([]))
+    robot = InvestmentRobot(ScriptedStrategySequence([]))
     positions = {"PETR4": _pos(current_stop=28.0)}
     quotes = {"PETR4": Quote(ticker="PETR4", price=27.9, ts=datetime(2026, 8, 17, 11, 0), source="test")}
     ctx = _ctx(session=date(2026, 8, 17), positions=positions, quotes=quotes)
@@ -196,7 +176,7 @@ def test_on_intraday_dispara_stop_quando_preco_cruza():
 
 
 def test_on_intraday_ignora_posicao_sem_stop_e_sem_cotacao():
-    robot = InvestmentRobot(_ScriptedStrategy([]))
+    robot = InvestmentRobot(ScriptedStrategySequence([]))
     positions = {
         "PETR4": _pos(ticker="PETR4", current_stop=None),   # sem stop
         "VALE3": _pos(ticker="VALE3", current_stop=50.0),   # sem cotacao no ctx
@@ -204,6 +184,27 @@ def test_on_intraday_ignora_posicao_sem_stop_e_sem_cotacao():
     ctx = _ctx(session=date(2026, 8, 17), positions=positions, quotes={})
 
     assert robot.on_intraday(ctx) == []
+
+
+def test_state_restore_do_investment_robot_delega_para_a_estrategia():
+    """Passo 3 (RED antes de GREEN): `InvestmentRobot.state()`/`restore()`
+    hoje usam o default de `LiveRobot` (`{}`/no-op) -- o adiamento de
+    rotacao da campeã (`BuyTheDip._pending_rebalance`) nunca sobreviveria a
+    um restart. Mesmo padrao que `WithdrawalRobot` ja usa para a politica."""
+    strat = BuyTheDip()
+    robot = InvestmentRobot(strat)
+    strat._pending_rebalance = True
+
+    snapshot = robot.state()
+    assert snapshot == strat.state()
+    assert snapshot == {"_pending_rebalance": True}
+
+    fresh_strat = BuyTheDip()
+    fresh_robot = InvestmentRobot(fresh_strat)
+    assert fresh_strat._pending_rebalance is False   # premissa do teste
+
+    fresh_robot.restore(snapshot)
+    assert fresh_strat._pending_rebalance is True
 
 
 # ---------- WithdrawalRobot --------------------------------------------------
@@ -300,7 +301,7 @@ def test_official_policy_via_withdrawal_robot_paga_no_terceiro_pregao():
 # ---------- build_robots -----------------------------------------------------
 
 def test_build_robots_monta_um_robo_por_papel():
-    strat = _ScriptedStrategy([])
+    strat = ScriptedStrategySequence([])
     policy = FloorSkim(pct=0.01, floor=40_000.0)
 
     robots = build_robots(strat, policy)

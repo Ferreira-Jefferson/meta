@@ -1,12 +1,11 @@
 """Linha de comando da operacao ao vivo.
 
-    python scripts/run_live.py init --capital 50000 --mode paper
+    python scripts/run_live.py init --capital 50000 --mode mt5 \
+        --strategy portfolio_dip2_hw40 --mt5-shares-per-lot 1
     python scripts/run_live.py status
     python scripts/run_live.py step                 # um passo do supervisor
     python scripts/run_live.py decide               # forca o fecho do pregao
     python scripts/run_live.py execute              # forca a execucao do dia
-    python scripts/run_live.py tickets              # ordens a executar na mao
-    python scripts/run_live.py confirm 12 300 41.85 # confirma fill manual
     python scripts/run_live.py reconcile            # aplica fills confirmados ao caixa/posicao
     python scripts/run_live.py unfreeze             # destrava o disjuntor de risco manualmente
     python scripts/run_live.py loop --seconds 60
@@ -16,24 +15,28 @@ in_active_window`) — fora dela (noite, fim de semana, feriado) fica
 dormindo ate a janela abrir de novo, em vez de acordar a cada `--seconds`
 so para constatar que nao ha nada a fazer.
 
-Modos de corretora
-------------------
-  paper   `PaperBroker` — preenche contra o feed usando os MESMOS custos do
-          backtest. Serve para validar o encanamento e para acompanhar o robo
-          sem dinheiro em risco.
-  manual  `ManualBroker` — nao envia nada. Emite ticket legivel, voce executa na
-          corretora e confirma com `confirm`. E o modo para comecar a operar de
-          verdade sem depender de integracao.
+Cotacao (--feed)
+----------------
+Operacao real (`--mode mt5`) recusa `--feed parquet` (dado de fechamento de
+D-1, ou mais velho): stop e entrada intra-dia nao podem decidir sobre dado
+desse jeito velho. Default `yfinance` (~15min de atraso conhecido, ver
+`live/feed.py::YFinanceFeed`); `mt5` le o tick do MESMO terminal MT5 do
+broker (ver aviso sobre o fuso do relogio do servidor em
+`live/feed.py::MT5Feed`).
+
+Modo de corretora
+-----------------
   mt5     `MT5Broker` — fala com um terminal MetaTrader 5 JA ABERTO E LOGADO na
           MESMA maquina (pacote pip `MetaTrader5`, so funciona em Windows).
-          ATENCAO: este adaptador nao foi validado contra um terminal MT5 real
-          (sem ambiente disponivel para isso) — ver o aviso extenso no topo de
-          `live/broker_mt5.py`. Teste primeiro com o MENOR lote possivel, em
-          horario de pregao, observando o terminal ao vivo, antes de confiar
-          nisto operando sem supervisao. `--mt5-shares-per-lot`/`--mt5-magic`/
-          `--mt5-symbol-map` precisam ser conferidos contra o `symbol_info` do
-          SEU terminal (a relacao acao/lote e o nome do simbolo variam por
-          corretora — nao ha valor universal).
+          O robo decide E executa sozinho, sem confirmacao humana em nenhum
+          momento. ATENCAO: este adaptador nao foi validado contra um terminal
+          MT5 real (sem ambiente disponivel para isso) — ver o aviso extenso
+          no topo de `live/broker_mt5.py`. Teste primeiro com o MENOR lote
+          possivel, em horario de pregao, observando o terminal ao vivo, antes
+          de confiar nisto operando sem supervisao. `--mt5-shares-per-lot`/
+          `--mt5-magic`/`--mt5-symbol-map` precisam ser conferidos contra o
+          `symbol_info` do SEU terminal (a relacao acao/lote e o nome do
+          simbolo variam por corretora — nao ha valor universal).
 
 Alertas externos (opcionais, por variavel de ambiente — nunca em texto puro
 na linha de comando, que fica visivel no historico do shell e na lista de
@@ -56,8 +59,15 @@ proprio terminal fazer o login sozinho — necessario para operar sem depender
 de alguem manter o terminal logado (ex.: o `loop` rodando como servico em
 segundo plano, disparado pelo botao "Iniciar" do dashboard).
 
-Disjuntor de risco (circuit breaker) — opcional, opt-in
---------------------------------------------------------
+Disjuntor de risco (circuit breaker) — SEMPRE ligado, nao e escolha do usuario
+-------------------------------------------------------------------------------
+O disjuntor nao e parametro de estrategia (nao foi otimizado por backtest) nem
+capital: e trava operacional de risco, parte do proprio robo. Por isso roda
+SEMPRE, com os defaults de `live/riskguard.py::CircuitBreaker` (5% dia / 15%
+mes) quando nada e passado — nunca desligado por omissao, e o dashboard nunca
+expoe `--daily-loss-limit`/`--monthly-loss-limit` como campo editavel (decisao
+do dono, 2026-08-19: nao cabe a quem opera mudar um numero que o robo ja sabe
+qual e o certo pra ele).
   --daily-loss-limit 0.05    -> congela ENTRADA nova se o patrimonio cair
                                  mais que 5% no dia. Reseta sozinho no dia
                                  seguinte (um dia ruim isolado nao deve capar
@@ -67,8 +77,8 @@ Disjuntor de risco (circuit breaker) — opcional, opt-in
                                  um humano revisar. Perda mensal grande e
                                  tratada como sintoma de algo estruturalmente
                                  errado, nao como mau dia de mercado.
-Passar qualquer um dos dois liga o disjuntor (o outro cai no default da
-classe). Sem nenhum, o robo nunca veta entrada por conta propria.
+Estas duas flags de linha de comando continuam existindo só para uso
+manual/teste fora do dashboard (override explícito de quem roda o CLI direto).
 Em NENHUM caso o disjuntor forca uma venda, mexe em stop ou trava saque —
 so veta ABRIR posicao nova (ver `live/riskguard.py`).
 
@@ -76,6 +86,19 @@ O PISO DO SAQUE ACOMPANHA O APORTE. A politica oficial usa piso = 55x o capital
 inicial (ver `backtest/withdrawal.py`). Com `--capital 50000` o piso vira
 R$ 2.750.000 — o saque so comeca quando a carteira chegar la. Se a intencao e
 outra (sacar desde ja, ou piso em valor absoluto), passe `--floor`.
+
+Robo de investimento (--strategy) — sem default, escolha explicita sempre
+---------------------------------------------------------------------------
+Nao ha robo hardcoded: `--strategy` recebe a CHAVE de um robo do registry
+(`strategy.registry.list_strategies()` / pagina `/estrategias`) e o
+runtime resolve via `strategy.registry.get_strategy(chave).factory()`. O
+dashboard resolve isso sozinho (top-3 da janela FULL na criacao da conta,
+`live_accounts.investment_robot` da conta ja existente ao retomar — nunca
+troca de robo sozinho numa conta ja em operacao). Quem usa este CLI direto
+numa conta JA EXISTENTE precisa passar a MESMA chave usada na criacao —
+`status` mostra o `investment_robot` gravado; uma chave diferente aqui e a
+conta ja existente diverge silenciosamente (ver `LiveRuntime.
+_restore_robot_state`, que descarta o estado do robo antigo sem avisar).
 """
 from __future__ import annotations
 
@@ -93,9 +116,7 @@ if hasattr(sys.stdout, "reconfigure"):
 
 from backtest.withdrawal import FloorSkim, official_policy
 from core.config import WATCHLIST, BacktestConfig
-from journal import live_store as store
-from live.broker import ManualBroker, PaperBroker
-from live.feed import ParquetCloseFeed, YFinanceFeed
+from live.feed import MT5Feed, YFinanceFeed
 from live.notify import (
     CompositeNotifier,
     EmailNotifier,
@@ -105,7 +126,7 @@ from live.notify import (
 )
 from live.riskguard import CircuitBreaker
 from live.runtime import LiveRuntime
-from strategy.portfolio_dip2_hw40 import DipTop1Portfolio
+from strategy.registry import get_strategy
 
 ACCOUNT = "principal"
 
@@ -146,9 +167,10 @@ def _mt5_credentials() -> dict:
     )
 
 
-def _build_risk_guard(daily_limit: float | None, monthly_limit: float | None) -> CircuitBreaker | None:
-    if daily_limit is None and monthly_limit is None:
-        return None
+def _build_risk_guard(daily_limit: float | None, monthly_limit: float | None) -> CircuitBreaker:
+    """SEMPRE devolve um disjuntor ativo — nao e opt-in (ver docstring do
+    modulo, secao "Disjuntor de risco"). `None` em qualquer um dos dois cai
+    no default da propria classe (5% dia / 15% mes), nunca em "sem trava"."""
     kwargs = {}
     if daily_limit is not None:
         kwargs["daily_loss_pct"] = daily_limit
@@ -158,29 +180,81 @@ def _build_risk_guard(daily_limit: float | None, monthly_limit: float | None) ->
 
 
 def build(args) -> LiveRuntime:
-    feed = YFinanceFeed() if args.feed == "yfinance" else ParquetCloseFeed()
-    if args.mode == "manual":
-        broker = ManualBroker()
-    elif args.mode == "mt5":
+    # Sem robo default (regra do dono, 2026-08-19): quem cria a conta escolhe
+    # a chave explicitamente -- nao ha estrategia hardcoded que sirva de
+    # fallback silencioso, ver docstring do modulo, secao "Robo de
+    # investimento".
+    if not args.strategy:
+        raise ValueError(
+            "--strategy é obrigatório — não há robô padrão. Veja as chaves "
+            "disponíveis em strategy.registry.list_strategies() (ex.: "
+            "'portfolio_dip2_hw40') ou na página /estrategias do dashboard."
+        )
+    try:
+        strategy_obj = get_strategy(args.strategy).factory()
+    except KeyError as e:
+        raise ValueError(str(e)) from e
+
+    if args.mode == "mt5":
+        if args.mt5_shares_per_lot is None or args.mt5_shares_per_lot <= 0:
+            raise ValueError(
+                "--mt5-shares-per-lot é obrigatório no modo mt5 — confira o "
+                "symbol_info do SEU terminal MT5 antes de operar (não há "
+                "valor universal, ver docstring de live/broker_mt5.py)."
+            )
         from live.broker_mt5 import MT5Broker  # import tardio: so quando de fato usado
         symbol_map = json.loads(args.mt5_symbol_map) if args.mt5_symbol_map else None
         broker = MT5Broker(magic=args.mt5_magic, shares_per_lot=args.mt5_shares_per_lot,
                            symbol_map=symbol_map, **_mt5_credentials())
     else:
-        broker = PaperBroker(feed)
+        raise ValueError(
+            f"--mode inválido ou ausente: {args.mode!r} — use 'mt5' "
+            "(ver core.live_models.BrokerMode)."
+        )
+    # Operacao REAL (dinheiro de verdade) nunca pode ver so o fecho de ontem
+    # o dia inteiro -- `--feed parquet` e recusado aqui, nunca um fallback
+    # silencioso (FEAT-004, item 4.1).
+    if args.feed == "parquet":
+        raise ValueError(
+            f"--feed parquet não é aceito em operação real (--mode {args.mode!r}): "
+            "dado de fechamento de D-1 (ou mais velho) nunca deveria decidir stop "
+            "nem entrada intra-dia com dinheiro de verdade. Use --feed yfinance "
+            "(~15min de atraso, default) ou --feed mt5 (mesmo terminal do broker, "
+            "sem atraso conhecido — ver docstring de live/feed.py::MT5Feed)."
+        )
+    if args.feed == "mt5":
+        symbol_map = json.loads(args.mt5_symbol_map) if args.mt5_symbol_map else None
+        feed = MT5Feed(symbol_map=symbol_map, **_mt5_credentials())
+    else:
+        feed = YFinanceFeed()
     policy = (FloorSkim(floor=args.floor) if args.floor is not None
               else official_policy(initial_capital=args.capital))
     return LiveRuntime(
         account_name=ACCOUNT,
-        strategy=DipTop1Portfolio(),
+        strategy=strategy_obj,
         policy=policy,
         feed=feed,
         broker=broker,
         config=BacktestConfig(initial_capital=args.capital, lot_size=1),
-        tickers=WATCHLIST,
+        tickers=_universe_of(strategy_obj),
         notifier=_build_notifier(args.notify_min_level),
         risk_guard=_build_risk_guard(args.daily_loss_limit, args.monthly_loss_limit),
     )
+
+
+def _universe_of(strategy_obj) -> tuple[str, ...]:
+    """De quais tickers este robo precisa de cotacao.
+
+    `WATCHLIST` deixou de servir como universo unico em 2026-08-20, quando o
+    campeao passou a ser `liquid_champion`: ele escolhe o universo por liquidez
+    na data, dentro de um pool de 63 papeis, e nenhum dos sete da WATCHLIST e
+    garantido. Alimentar esse robo so com a WATCHLIST nao daria erro nenhum —
+    ele simplesmente decidiria com 7 dos 63 candidatos e operaria uma
+    estrategia que nunca foi testada, em silencio. Por isso o universo vem do
+    proprio robo (`Strategy.universe_tickers`) e a WATCHLIST fica so como
+    fallback para os robos antigos que nao declaram nada.
+    """
+    return tuple(getattr(strategy_obj, "universe_tickers", None) or WATCHLIST)
 
 
 def cmd_init(args) -> None:
@@ -222,6 +296,15 @@ def cmd_decide(args) -> None:
 def cmd_execute(args) -> None:
     rt = build(args)
     from live import clock
+    from core.live_models import SessionPhase
+
+    fase = clock.phase()
+    if fase != SessionPhase.OPEN:
+        print(f"'execute' recusado fora da fase OPEN (fase atual: {fase.value}) — "
+              "rodar fora do pregao executaria as intencoes de D+1 contra as "
+              "cotacoes de D (a sessao errada); espere o pregao abrir ou use "
+              "'decide'/'step' conforme a fase.")
+        sys.exit(1)
     print(rt.execute_session(clock.next_session(clock.session_date())))
 
 
@@ -238,43 +321,6 @@ def cmd_unfreeze(args) -> None:
         return
     rt.unfreeze()
     print("disjuntor destravado.")
-
-
-def cmd_tickets(args) -> None:
-    args.mode = "manual"
-    rt = build(args)
-    with store.live_journal() as conn:
-        acc = store.load_account(conn, ACCOUNT)
-        if acc is None:
-            print("conta inexistente — rode 'init' primeiro")
-            return
-        abertas = store.open_orders(conn, acc.id)
-    if not abertas:
-        print("nenhuma ordem pendente")
-        return
-    print(f"{len(abertas)} ordem(ns) a executar:\n")
-    for o in abertas:
-        print(f"  #{o.id}  {o.note or ''}")
-        print(f"        confirmar: python scripts/run_live.py confirm {o.id} "
-              f"<qtd> <preco_medio>")
-
-
-def cmd_confirm(args) -> None:
-    args.mode = "manual"
-    rt = build(args)
-    with store.live_journal() as conn:
-        acc = store.load_account(conn, ACCOUNT)
-        abertas = {o.id: o for o in store.open_orders(conn, acc.id)}
-        order = abertas.get(args.order_id)
-        if order is None:
-            print(f"ordem #{args.order_id} nao esta aberta")
-            return
-        rt.broker.confirm(order, args.quantity, args.price, args.fees)
-        store.update_order(conn, order)
-    print(f"ordem #{order.id} confirmada: {order.filled_qty} @ {order.avg_price} "
-          f"({order.status.value})")
-    print("rode 'python scripts/run_live.py step' (ou o loop) para aplicar o fill "
-          "ao caixa/posicao da conta — e o que 'reconcile_pending_fills' faz.")
 
 
 def cmd_loop(args) -> None:
@@ -296,6 +342,19 @@ def cmd_loop(args) -> None:
         except KeyboardInterrupt:
             print("\nencerrado")
             return
+        except ValueError as e:
+            # Correcao pos-code-review (item 6, hipotese-agente): ValueError
+            # aqui e a guarda de conta/broker divergente (`LiveRuntime.
+            # _load_account`) ou de modo invalido -- um bug ESTRUTURAL que
+            # nao se resolve sozinho no proximo passo. Deixar isso cair no
+            # `except Exception` generico abaixo faria o loop dormir e
+            # tentar de novo para sempre, com o processo vivo e o painel
+            # mostrando "ativo" enquanto nada e decidido. Encerra o processo
+            # (exit != 0) em vez de retry silencioso infinito -- so um
+            # humano pode corrigir conta x broker divergentes.
+            print(f"[erro fatal] {type(e).__name__}: {e}", flush=True)
+            rt.notifier.notify("error", "loop", f"FATAL: {type(e).__name__}: {e}")
+            sys.exit(1)
         except Exception as e:  # noqa: BLE001
             # Um erro num passo nao pode matar o supervisor: amanha ha outro
             # pregao. O evento fica no diario para diagnostico. Notifica
@@ -309,11 +368,15 @@ def cmd_loop(args) -> None:
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--mode", default="paper", choices=("paper", "manual", "mt5"))
+    p.add_argument("--mode", default="mt5", choices=("mt5",))
     p.add_argument("--capital", type=float, default=1_000.0)
+    p.add_argument("--strategy", default=None,
+                   help="chave do robo (strategy.registry.list_strategies()) -- "
+                        "obrigatorio, sem default (ver docstring, secao "
+                        "'Robo de investimento')")
     p.add_argument("--floor", type=float, default=None,
                    help="piso do saque em R$ absoluto (default: 55x o capital)")
-    p.add_argument("--feed", default="parquet", choices=("parquet", "yfinance"))
+    p.add_argument("--feed", default="yfinance", choices=("parquet", "yfinance", "mt5"))
     p.add_argument("--notify-min-level", default="warn", choices=("debug", "info", "warn", "error"),
                    help="nivel minimo que sai pelo canal externo (Telegram/e-mail); "
                         "o diario sempre grava tudo, sem filtro")
@@ -322,24 +385,17 @@ def main() -> None:
     p.add_argument("--monthly-loss-limit", type=float, default=None,
                    help="ex.: 0.15 = mesma ideia, base mensal — precisa de 'unfreeze' manual")
     p.add_argument("--mt5-magic", type=int, default=20260817)
-    p.add_argument("--mt5-shares-per-lot", type=float, default=1.0,
-                   help="confira em symbol_info do SEU terminal MT5 antes de operar")
+    p.add_argument("--mt5-shares-per-lot", type=float, default=None,
+                   help="obrigatorio no modo mt5 — confira em symbol_info do SEU "
+                        "terminal MT5 antes de operar, nao ha valor universal")
     p.add_argument("--mt5-symbol-map", default=None,
                    help='JSON, ex.: \'{"WEGE3.SA": "WEGE3F"}\'')
     sub = p.add_subparsers(dest="cmd", required=True)
 
     for nome, fn in (("init", cmd_init), ("status", cmd_status), ("step", cmd_step),
                      ("decide", cmd_decide), ("execute", cmd_execute),
-                     ("reconcile", cmd_reconcile), ("unfreeze", cmd_unfreeze),
-                     ("tickets", cmd_tickets)):
+                     ("reconcile", cmd_reconcile), ("unfreeze", cmd_unfreeze)):
         sub.add_parser(nome).set_defaults(func=fn)
-
-    c = sub.add_parser("confirm")
-    c.add_argument("order_id", type=int)
-    c.add_argument("quantity", type=int)
-    c.add_argument("price", type=float)
-    c.add_argument("fees", type=float, nargs="?", default=0.0)
-    c.set_defaults(func=cmd_confirm)
 
     lp = sub.add_parser("loop")
     lp.add_argument("--seconds", type=int, default=60)

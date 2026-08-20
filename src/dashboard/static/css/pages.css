@@ -392,7 +392,7 @@
   gap: var(--s-4);
   margin-bottom: var(--s-5);
 }
-.sim-form label { display: flex; flex-direction: column; gap: var(--s-2); }
+.sim-form label:not(.switch) { display: flex; flex-direction: column; gap: var(--s-2); }
 .sim-form label .k {
   font-size: var(--fs-metadata);
   color: var(--fg-muted);
@@ -1242,6 +1242,136 @@
 .status-pill.pending,
 .status-pill.executing { color: var(--fg-muted); }
 
+/* ---- o "por quê" de cada decisão -----------------------------------------
+   O diário passou a guardar motivo da entrada + contexto de mercado
+   (`live_signal_snapshots`). A tabela continua sendo a leitura principal — uma
+   linha por decisão, escaneável — e o detalhe fica atrás de um toggle: quem
+   audita quer os números de UMA decisão específica, não dos 200 de uma vez.
+   Estética inalterada: cantos vivos, 1px, sem sombra, só tokens. */
+
+.ops-table-diario tbody td.motivo {
+  /* frase em cima, código embaixo: leitura rápida sem perder o dado bruto
+     que o diário de fato guardou (e que uma query vai procurar). */
+  line-height: 1.35;
+}
+.motivo-frase {
+  display: block;
+  font-family: var(--font-serif);
+  font-size: var(--fs-body);
+  color: var(--fg);
+}
+.motivo-codigo {
+  display: block;
+  font-size: var(--fs-metadata);
+  letter-spacing: 0.06em;
+  color: var(--fg-faint);
+}
+
+/* `white-space: nowrap` em vez de `display: flex`: transformar um `<td>` em
+   container flex tira a celula do algoritmo de layout de tabela e desalinha a
+   coluna nas linhas que nao tem o botao. Pilula e botao lado a lado, sem
+   quebrar. */
+.ops-table-diario td.col-status { white-space: nowrap; }
+.ops-table-diario td.col-status .ctx-toggle { margin-left: var(--s-3); }
+
+.ctx-toggle {
+  appearance: none;
+  background: none;
+  border: 1px solid var(--grid-strong);
+  border-radius: 0;
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-metadata);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 2px var(--s-2);
+  cursor: pointer;
+  transition: color 120ms linear, border-color 120ms linear;
+}
+.ctx-toggle:hover {
+  color: var(--accent-amber);
+  border-color: var(--accent-amber);
+}
+.ctx-toggle[aria-expanded="true"] {
+  color: var(--bg);
+  background: var(--accent-amber);
+  border-color: var(--accent-amber);
+}
+
+/* A linha de contexto não é "mais uma linha da tabela": é um aparte. Fundo
+   recuado e uma barra âmbar à esquerda amarram visualmente o detalhe à
+   decisão que está logo acima. */
+.ctx-row > td {
+  padding: 0 !important;
+  background: var(--bg);
+  border-left: 2px solid var(--accent-amber);
+}
+.ctx {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr);
+  gap: var(--s-6);
+  padding: var(--s-4) var(--s-5) var(--s-5);
+}
+@media (max-width: 900px) {
+  .ctx { grid-template-columns: 1fr; gap: var(--s-5); }
+}
+
+.ctx-block h4 {
+  font-family: var(--font-mono);
+  font-size: var(--fs-metadata);
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--fg-muted);
+  margin: 0 0 var(--s-3);
+  padding-bottom: var(--s-2);
+  border-bottom: 1px solid var(--grid);
+}
+
+.ctx-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: var(--s-1) var(--s-5);
+  margin: 0;
+}
+.ctx-grid > div {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--s-2);
+  padding: 3px 0;
+  border-bottom: 1px dotted var(--grid);
+}
+.ctx-grid dt {
+  font-size: var(--fs-metadata);
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+.ctx-grid dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-metadata);
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-strong);
+  text-align: right;
+}
+.ctx-grid dd.pos { color: var(--accent-green); }
+.ctx-grid dd.neg { color: var(--accent-red); }
+
+.ctx-vazio {
+  margin: 0;
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: var(--fs-body);
+  color: var(--fg-muted);
+}
+.ctx-vazio code {
+  font-family: var(--font-mono);
+  font-style: normal;
+  font-size: var(--fs-metadata);
+  color: var(--fg-faint);
+}
+
 /* ============ OPERAÇÃO · CONTROLE (iniciar/parar) =========================
    Um clique liga/desliga o supervisor (`live_control.py`) — nada aqui
    decide, só reflete se o processo está de pé. Estado positivo (rodando)
@@ -1311,7 +1441,20 @@
   gap: var(--s-4);
   margin-bottom: var(--s-5);
 }
-.ops-start-form label { display: flex; flex-direction: column; gap: var(--s-2); }
+/* Modo sozinho (capital deixou de ser digitado -- ver detect_broker_capital):
+   1 coluna cheia, senao o texto fixo "MetaTrader 5 — dinheiro real" fica
+   espremido em 1/3 da largura e quebra em 2 linhas. */
+.ops-start-form .row.row-solo { grid-template-columns: 1fr; }
+/* Modo + Robô numa linha só, com o botão "Iniciar" alinhado ao lado --
+   `align-items: end` pra ele encostar na base dos dois campos (label + valor
+   empilhados), não no topo da linha. */
+.ops-start-form .row.row-launch {
+  grid-template-columns: 1fr 1fr auto;
+  align-items: end;
+}
+.ops-start-form .row.row-launch select { width: 100%; }
+.ops-start-form .row.row-launch button { white-space: nowrap; }
+.ops-start-form label:not(.switch) { display: flex; flex-direction: column; gap: var(--s-2); }
 .ops-start-form label .k {
   font-size: var(--fs-metadata);
   color: var(--fg-muted);
@@ -1345,25 +1488,24 @@
   transition: background 120ms linear;
 }
 .ops-start-form button:hover { background: var(--fg-strong); }
-.ops-advanced {
-  margin-bottom: var(--s-5);
-  padding: var(--s-4) 0;
-  border-top: 1px dashed var(--grid);
+.ops-start-form button:disabled {
+  background: var(--grid);
+  color: var(--fg-muted);
+  cursor: not-allowed;
 }
-.ops-advanced summary {
-  cursor: pointer;
+.ops-start-form button:disabled:hover { background: var(--grid); }
+.ops-start-hint {
+  margin-top: var(--s-3);
   font-size: var(--fs-metadata);
-  text-transform: uppercase;
-  letter-spacing: 0.14em;
   color: var(--fg-muted);
 }
-.ops-advanced summary:hover { color: var(--accent-amber); }
-.ops-advanced .row { margin-top: var(--s-4); margin-bottom: 0; }
-.ops-mt5-confirm {
-  margin-bottom: var(--s-5);
-  padding: var(--s-4);
-  border: 1px solid var(--accent-amber);
-  background: rgba(217,164,65,0.06);
+.ops-mode-fixed {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: var(--fs-body);
+  color: var(--fg-strong);
+  border: 1px solid var(--grid);
+  padding: var(--s-3);
 }
 
 /* ============ OPERAÇÃO · ACESSO E CREDENCIAIS ==============================
@@ -1422,7 +1564,7 @@
   gap: var(--s-4);
   margin: var(--s-4) 0;
 }
-.ops-creds-form label { display: flex; flex-direction: column; gap: var(--s-2); }
+.ops-creds-form label:not(.switch) { display: flex; flex-direction: column; gap: var(--s-2); }
 .ops-creds-form label .k {
   font-size: var(--fs-metadata);
   color: var(--fg-muted);
@@ -1467,6 +1609,26 @@
   margin-bottom: var(--s-5);
   font-family: var(--font-mono);
   font-size: var(--fs-body);
+  overflow: hidden;
+  animation: ops-alert-dismiss 3s ease forwards;
+}
+@keyframes ops-alert-dismiss {
+  0%, 85% {
+    opacity: 1;
+    max-height: 100px;
+    padding-top: var(--s-4);
+    padding-bottom: var(--s-4);
+    margin-bottom: var(--s-5);
+    border-width: 1px;
+  }
+  100% {
+    opacity: 0;
+    max-height: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    margin-bottom: 0;
+    border-width: 0;
+  }
 }
 
 /* ============ OPERAÇÃO · REGISTRAR APORTE ==================================

@@ -1,0 +1,172 @@
+{% set s = status %}
+<div id="ops-live-panel" hx-get="/operacao/fragment" hx-trigger="every {{ poll_seconds }}s" hx-swap="outerHTML">
+
+<section class="ops-control stagger">
+  {% if proc %}
+    <span class="ops-status running"><span class="dot"></span> Robô ativo desde {{ proc.started_at[:16].replace("T", " ") }}</span>
+    <form hx-post="/operacao/parar" hx-target="#ops-body" hx-swap="outerHTML">
+      <button type="submit" class="btn-stop">■ Parar operação</button>
+    </form>
+  {% else %}
+    <span class="ops-status stopped">
+      <span class="dot"></span> Robô parado
+      {% if s.modo == "mt5" %}<span class="dim">— ⚠ modo dinheiro real (MetaTrader 5)</span>{% endif %}
+    </span>
+    <form hx-post="/operacao/iniciar" hx-target="#ops-body" hx-swap="outerHTML"
+          hx-disabled-elt="find button[type=submit]">
+      {# modo e capital vêm sempre da conta, nunca do form (ver rota no
+         app.py). Piso do saque, disjuntor e ações por lote não são campo
+         nenhum aqui — o robô já decide sozinho (official_policy/
+         CircuitBreaker defaults) e ações por lote fica salvo junto das
+         credenciais MT5 (Acesso e credenciais), lido de lá direto em
+         `operacao_iniciar` (correção 2026-08-19: extingue o workaround
+         antigo que reexibia o campo aqui + fallback via `last_config()`
+         só pra evitar um botão "Iniciar" morto). #}
+      {% if config_anterior %}
+      <input type="hidden" name="notify_min_level" value="{{ config_anterior.notify_min_level or 'warn' }}" />
+      {% endif %}
+      <button type="submit">▶ Iniciar operação</button>
+    </form>
+  {% endif %}
+</section>
+
+<section class="ops-badges stagger">
+  <span class="ops-badge">
+    <span class="dot"></span> Modo · <strong>{{ s.modo }}</strong>
+  </span>
+  <span class="ops-badge {% if not s.corretora.automatica %}warn{% endif %}">
+    <span class="dot"></span> Corretora · <strong>{{ s.corretora.nome }}</strong>
+  </span>
+  <span class="ops-badge {% if not s.feed.tempo_real %}warn{% endif %}">
+    <span class="dot"></span> Feed · <strong>{{ s.feed.nome }}</strong>
+    {% if s.feed.atraso_s and s.feed.atraso_s > 60 %}
+      <span class="dim">· atraso {{ (s.feed.atraso_s / 60) | round(0, 'floor') | int }} min</span>
+    {% endif %}
+  </span>
+  <span class="ops-badge">
+    <span class="dot"></span> Robô · <strong>{{ s.robo_investimento }}</strong>
+  </span>
+  <span class="ops-badge">
+    <span class="dot"></span> Saque · <strong>{{ s.robo_saque.replace("withdrawal:", "") }}</strong>
+  </span>
+</section>
+
+<section class="capital-cards stagger">
+  <div class="capital-card">
+    <span class="k">Caixa</span>
+    <span class="v num">R$ {{ "{:,.0f}".format(s.caixa).replace(",", ".") }}</span>
+    <span class="sub">Livre, não alocado</span>
+  </div>
+  <div class="capital-card">
+    <span class="k">Carteira</span>
+    <span class="v num">R$ {{ "{:,.0f}".format(s.carteira).replace(",", ".") }}</span>
+    <span class="sub">Caixa + posições a mercado</span>
+  </div>
+  <div class="capital-card safe">
+    <span class="k">Caixa externo</span>
+    <span class="v num">R$ {{ "{:,.0f}".format(s.caixa_externo).replace(",", ".") }}</span>
+    <span class="sub">Sacado, fora do risco</span>
+  </div>
+  <div class="capital-card headline">
+    <span class="k">Patrimônio</span>
+    <span class="v num">R$ {{ "{:,.0f}".format(s.patrimonio).replace(",", ".") }}</span>
+    <span class="sub">Carteira + caixa externo</span>
+  </div>
+</section>
+
+<section class="metrics-grid stagger">
+  <div class="metric">
+    <span class="k">Investido a mercado</span>
+    <span class="v num">R$ {{ "{:,.0f}".format(s.investido).replace(",", ".") }}</span>
+    <span class="sub">{{ s.posicoes | length }} posiç{{ "ão" if s.posicoes | length == 1 else "ões" }} aberta{{ "" if s.posicoes | length == 1 else "s" }}</span>
+  </div>
+  <div class="metric">
+    <span class="k">Sacado (histórico)</span>
+    <span class="v num">R$ {{ "{:,.0f}".format(s.sacado_total).replace(",", ".") }}</span>
+    <span class="sub">Desde o início da conta</span>
+  </div>
+  <div class="metric">
+    <span class="k">Intenções pendentes</span>
+    <span class="v num">{{ s.intencoes_pendentes | length }}</span>
+    <span class="sub">Aguardando a próxima abertura</span>
+  </div>
+  <div class="metric">
+    <span class="k">Fase do pregão</span>
+    <span class="v" style="font-size: var(--fs-h3);">{{ s.fase }}</span>
+    <span class="sub">{{ s.pregao }}</span>
+  </div>
+</section>
+
+<section class="ops-panel stagger">
+  <h3>Posições abertas</h3>
+  <table class="ops-table">
+    <thead>
+      <tr>
+        <th>Ticker</th>
+        <th class="right">Qtd</th>
+        <th class="right">Entrada</th>
+        <th class="right">Stop</th>
+        <th class="right">Barras</th>
+        <th class="right">Valor</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for p in s.posicoes %}
+      <tr>
+        <td class="ticker">{{ p.ticker.replace(".SA", "") }}</td>
+        <td class="right num">{{ p.qtd }}</td>
+        <td class="right num">R$ {{ "%.2f"|format(p.entrada) }}</td>
+        <td class="right num">{% if p.stop %}R$ {{ "%.2f"|format(p.stop) }}{% else %}<span class="dim">—</span>{% endif %}</td>
+        <td class="right num dim">{{ p.barras }}</td>
+        <td class="right num">R$ {{ "{:,.0f}".format(p.valor).replace(",", ".") }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="ops-table-empty">Robô fora do mercado — nenhuma posição aberta.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="ops-panel stagger">
+  <h3>Intenções pendentes</h3>
+  <p class="dek">
+    Decididas no último fecho, valem para o próximo pregão — nunca para o mesmo dia (regra 4 do AGENTS.md).
+    Recomendação de saque é diferente: fica na fila até ser confirmada (acima)
+    ou expirar na virada do mês, não só no pregão seguinte.
+  </p>
+  <table class="ops-table">
+    <thead>
+      <tr>
+        <th>Robô</th>
+        <th>Tipo</th>
+        <th>Ticker</th>
+        <th>Motivo</th>
+        <th class="right">Valor</th>
+        <th class="right">Executa em</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for i in s.intencoes_pendentes %}
+      <tr>
+        <td class="dim">{{ i.robo.replace("withdrawal:", "saque:") }}</td>
+        <td>{{ i.tipo }}</td>
+        <td class="ticker">{{ i.ticker.replace(".SA", "") if i.ticker else "—" }}</td>
+        <td class="dim">{{ i.motivo or "—" }}</td>
+        <td class="right num">{% if i.valor %}R$ {{ "{:,.0f}".format(i.valor).replace(",", ".") }}{% else %}<span class="dim">—</span>{% endif %}</td>
+        <td class="right num">{{ i.executa_em }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="ops-table-empty">Nada na fila — o robô não decidiu nenhuma ação no último fecho.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="console-wrap stagger">
+  <div class="k console-label">Eventos recentes</div>
+  <pre class="console">{% for e in s.eventos %}[{{ e.ts }}] {{ e.level | upper }} {{ e.source }}: {{ e.message }}
+{% else %}(nenhum evento registrado ainda)
+{% endfor %}</pre>
+</section>
+
+</div>

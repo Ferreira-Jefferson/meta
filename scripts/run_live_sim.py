@@ -41,6 +41,13 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+# Raiz do repo (nao so `src/`), para `tests.doubles` resolver como pacote —
+# EXCECAO DELIBERADA (FEAT-001): este script simula com o MESMO test double
+# que a suite de testes usa (`PaperBroker`/`ReplayFeed`, corretora/feed que
+# preenchem sozinhos contra dado historico), nunca em producao real. Ver
+# docstring de `tests/doubles.py` para o porque dessas classes nao morarem
+# mais em `src/`.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -49,18 +56,41 @@ import pandas as pd
 
 from backtest.runner import run as run_backtest_dispatch
 from backtest.withdrawal import official_policy
-from core.config import BENCHMARK, HISTORY_START, WATCHLIST, BacktestConfig
+from core.config import BENCHMARK, DB_PATH, HISTORY_START, LIVE_DB_PATH, ROOT, WATCHLIST, BacktestConfig
 from core.live_models import IntentKind, IntentStatus
 from journal import live_store as store
-from live.broker import PaperBroker
-from live.feed import ReplayFeed
 from live.runtime import LiveRuntime
+from tests.doubles import PaperBroker, ReplayFeed
 from market_data.loader import load_universe
 from scheduler import latest_common_date
 from strategy.portfolio_dip2_hw40 import DipTop1Portfolio
 
 ACCOUNT_NAME = "simulacao"
-SIM_DB = Path("db/live_sim.sqlite")
+# Absoluto (ROOT, não `Path("db/...")` relativo ao cwd) — FEAT-000: rodar
+# `python scripts/run_live_sim.py` de outro diretório criava (e apagava) um
+# `db/` no lugar errado.
+SIM_DB = ROOT / "db" / "live_sim.sqlite"
+
+
+def _ensure_disposable_sim_db(path: Path) -> None:
+    """Recusa `path` se ele coincidir com um banco NÃO-descartável.
+
+    `main()` apaga `SIM_DB` no início de cada rodada (é um artefato
+    descartável do próprio script — ver docstring do módulo). Esta função
+    existe para o dia em que `SIM_DB` apontar, por engano, para o banco ao
+    vivo real (`LIVE_DB_PATH`) ou para o de backtest (`DB_PATH`) — sem ela, o
+    `.unlink()` de `main()` apagaria dado de produção sem aviso nenhum.
+
+    `SystemExit` (nunca `assert`): uma salvaguarda contra apagar o banco real
+    não pode evaporar sob `python -O`, que remove `assert` do bytecode.
+    """
+    resolved = path.resolve()
+    for guarded in (LIVE_DB_PATH, DB_PATH):
+        if resolved == guarded.resolve():
+            raise SystemExit(
+                f"[sim] recusando: {path} resolve para {guarded}, que NÃO é "
+                "descartável (banco de operação real ou de backtest)."
+            )
 
 
 def money(v: float) -> str:
@@ -68,6 +98,7 @@ def money(v: float) -> str:
 
 
 def main() -> None:
+    _ensure_disposable_sim_db(SIM_DB)
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--capital", type=float, default=1_000.0)
@@ -90,6 +121,20 @@ def main() -> None:
     if SIM_DB.exists() and not args.keep:
         print(f"[sim] apagando banco de simulacao anterior ({SIM_DB})")
         SIM_DB.unlink()
+
+    if not args.keep:
+        # WAL/SHM sidecars (journal.live_store liga journal_mode=WAL): fora do
+        # `if SIM_DB.exists()` acima de proposito -- se alguem apagar so o
+        # arquivo principal a mao (sem apagar os sidecars), SIM_DB.exists()
+        # da False e os sidecars orfaos sobreviveriam sem esta limpeza rodar.
+        # Apagar so o arquivo principal e deixar os dois para tras pode fazer
+        # o SQLite recriar dado a partir de um WAL orfao na proxima conexao.
+        # Nao e erro nenhum dos dois nao existir (rodada anterior pode ja ter
+        # feito checkpoint e fechado limpo).
+        for suffix in ("-wal", "-shm"):
+            sidecar = SIM_DB.with_name(SIM_DB.name + suffix)
+            if sidecar.exists():
+                sidecar.unlink()
 
     print(f"[sim] janela {start_ts.date()} -> {end_ts.date()} | capital R$ {args.capital:,.2f}"
           .replace(",", "."))
@@ -114,7 +159,7 @@ def main() -> None:
     )
     rt.ensure_account()
 
-    entradas = saidas = stops = saques = expiradas = 0
+    entradas = saidas = stops = recomendacoes_saque = expiradas = 0
     for i, d in enumerate(all_dates):
         today = d.date()
         df_by_ticker = {t: universe[t] for t in tickers}
@@ -126,7 +171,7 @@ def main() -> None:
         exec_report = rt.execute_session(today)
         entradas += exec_report.detail.get("entradas", 0)
         saidas += exec_report.detail.get("saidas", 0)
-        saques += exec_report.detail.get("saques", 0)
+        recomendacoes_saque += exec_report.detail.get("recomendacoes_saque", 0)
         expiradas += exec_report.detail.get("expiradas", 0)
 
         # intra-dia: cotacao no minimo do dia, checagem conservadora de stop
@@ -162,7 +207,7 @@ def main() -> None:
     print(f"entradas executadas      {entradas}")
     print(f"saídas executadas        {saidas}")
     print(f"stops disparados intra-dia {stops}")
-    print(f"saques executados        {saques}")
+    print(f"recomendações de saque   {recomendacoes_saque}  (saque nunca é executado pela máquina)")
     print(f"intenções expiradas      {expiradas}  (deveria ser 0 — indicaria bug de atraso)")
     print(f"posições abertas no fim  {len(acc.positions)}")
     print(f"caixa final              {money(acc.cash)}")

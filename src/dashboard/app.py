@@ -5,6 +5,7 @@ import csv
 import io
 import json
 import queue
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -29,10 +30,82 @@ from live import clock
 from market_data.download import download_macro
 from market_data.loader import load_one
 from scheduler import refresh_champion_rankings, refresh_market_data
-from strategy.registry import get_strategy, list_strategies
+from strategy.registry import candidate_keys, get_strategy, list_strategies
 
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATES = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+
+# Código de motivo (`Intent.reason`) -> frase de leitura humana. Mora aqui, na
+# camada de APRESENTAÇÃO, e não em `core/`: o código curto é o dado de
+# auditoria (estável, consultável, portável pro MQL5), a frase é enfeite de
+# tela e pode mudar sem migração. A tabela mostra os DOIS — a frase para ler
+# rápido, o código para conferir contra o diário.
+#
+# Entradas vêm de `Enter.reason` (`strategy/`), saídas de `ExitReason`, saque
+# de `WithdrawalPolicy.label`. Motivo desconhecido cai no próprio código, sem
+# inventar tradução: um robô novo aparece como o código dele até alguém
+# escrever a frase, o que é honesto e não esconde nada.
+_MOTIVO_LEGIVEL = {
+    # entradas
+    "dip_rank":            "topo do ranking de momentum, comprado numa queda",
+    "dip_rank1":           "melhor momentum da lista, comprado numa queda",
+    "dip_rank1_rotation":  "assumiu o lugar da posição anterior (rotação)",
+    # saídas
+    "cross_down":          "média curta cruzou para baixo",
+    "stop":                "stop atingido",
+    "trail_stop":          "stop móvel atingido",
+    "ibov_defensive":      "defesa: IBOV abaixo da média longa",
+    "defensive_absolute_mom": "defesa: momentum absoluto negativo",
+    "rotation_out":        "saiu do topo do ranking (rotação)",
+    "mean_reversion_done": "reversão à média concluída",
+    "target_mid_band":     "alvo na banda média",
+    "withdrawal":          "posição zerada para levantar caixa de saque",
+    "manual":              "decisão manual",
+    # saque (label da política em vigor, ver `backtest/withdrawal.py`)
+    "floor_skim":          "saque mensal sobre o excedente acima do piso",
+}
+
+
+def motivo_legivel(reason: str) -> str:
+    """Frase para o motivo, ou o próprio código quando não há tradução."""
+    return _MOTIVO_LEGIVEL.get(reason or "", reason or "")
+
+
+TEMPLATES.env.filters["motivo_legivel"] = motivo_legivel
+
+
+# `{:,.2f}` do Python produz "1,234.56" (padrão en-US) e o resto dos templates
+# corrige isso com `.replace(",", ".")` — que só funciona para valores SEM
+# decimal: em "1,234.56" o replace produz "1.234.56", com dois pontos. A troca
+# tem de ser SIMULTÂNEA, e é o que `str.translate` faz (o `.` não é reprocessado
+# depois de virar `,`).
+_SEPARADORES_BR = str.maketrans({",": ".", ".": ","})
+
+
+def num_br(valor, casas: int | None = 2) -> str:
+    """Número no formato brasileiro: 1.234,56. `casas=None` corta zeros à
+    direita (para campo de gatilho, onde a precisão varia por robô).
+
+    Devolve "—" para `None` e o próprio valor em texto para o que não for
+    número: o payload de gatilho é dict livre da estratégia e pode trazer
+    string (`rotated_from`) no meio dos números.
+    """
+    if valor is None:
+        return "—"
+    if isinstance(valor, bool):
+        return "sim" if valor else "não"
+    try:
+        f = float(valor)
+    except (TypeError, ValueError):
+        return str(valor)
+    if casas is None:
+        txt = f"{f:,.6f}".rstrip("0").rstrip(".")
+    else:
+        txt = f"{f:,.{casas}f}"
+    return txt.translate(_SEPARADORES_BR)
+
+
+TEMPLATES.env.filters["num_br"] = num_br
 
 
 def _static_v(css_filename: str) -> int:
@@ -168,9 +241,12 @@ def _parse_float(v: str | None) -> float | None:
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
     runs = reader.list_runs(limit=RUNS_PAGE_SIZE, offset=0)
-    top3_full = reader.top_strategies_by_final_capital(top_n=3, run_kind="champion_full")
-    top3_5y = reader.top_strategies_by_final_capital(top_n=3, run_kind="champion_5y")
-    top3_1y = reader.top_strategies_by_final_capital(top_n=3, run_kind="champion_1y")
+    top3_full = reader.top_strategies_by_final_capital(
+                top_n=3, run_kind="champion_full", only=candidate_keys())
+    top3_5y = reader.top_strategies_by_final_capital(
+        top_n=3, run_kind="champion_5y", only=candidate_keys())
+    top3_1y = reader.top_strategies_by_final_capital(
+        top_n=3, run_kind="champion_1y", only=candidate_keys())
     window_full = reader.latest_champion_window("champion_full")
     window_5y = reader.latest_champion_window("champion_5y")
     window_1y = reader.latest_champion_window("champion_1y")
@@ -300,18 +376,6 @@ async def strategies_run(
 
 # ============ OPERAÇÃO AO VIVO ===========================================
 
-def _parse_optional_float(raw: str | None) -> float | None:
-    if raw is None or raw.strip() == "":
-        return None
-    return float(raw)
-
-
-def _parse_optional_pct(raw: str | None) -> float | None:
-    """Campos de perda máxima vêm do form em porcentagem (ex.: '5' = 5%)."""
-    val = _parse_optional_float(raw)
-    return val / 100 if val is not None else None
-
-
 OPERACAO_POLL_ACTIVE_SECONDS = 20     # dentro da janela de pregão ±1h
 OPERACAO_POLL_IDLE_CAP_SECONDS = 1800  # teto fora da janela (30 min) — nunca fica cego
 
@@ -333,14 +397,39 @@ def _operacao_ctx(**extra) -> dict:
     """Contexto comum a toda rota que renderiza `operacao.html`/
     `operacao_body.html` — evita repetir as 4 chamadas em cada handler e
     esquecer uma delas (já aconteceu com `creds`/`creds_status` antes de
-    virar helper)."""
+    virar helper).
+
+    Correção pós-code-review (item 5, hipótese-agente): `live_service.
+    get_status()` pode levantar `journal.live_store.LegacyPaperAccountError`
+    (conta legada `mode='paper'` bloqueando o rebuild do vocabulário) — sem
+    capturar isso aqui, ela subia crua até o handler e virava um 500 em
+    `/operacao`. Captura ESPECIFICAMENTE essa exceção (não `Exception`
+    genérico) e degrada para o estado "sem conta" com a mensagem real no
+    banner de erro, em vez de estourar. `LegacyManualAccountError` (modo
+    manual descontinuado) é a mesma situação por um motivo diferente —
+    mesmo tratamento."""
+    from journal import live_store
+
+    try:
+        status_payload = live_service.get_status()
+    except (live_store.LegacyPaperAccountError, live_store.LegacyManualAccountError) as e:
+        status_payload = {"conta": live_service.ACCOUNT_NAME, "existe": False}
+        extra.setdefault("erro", str(e))
+    # `top3` só importa pro form de conta NOVA (o select "Robô") -- consulta
+    # o diário de backtests (`journal.reader`, banco SEPARADO do live) só
+    # quando ainda não há conta, pra não bater nele a cada poll HTMX de
+    # 20s em 20s (`/operacao/fragment`) sobre uma conta já em operação.
+    top3 = ([] if status_payload.get("existe")
+            else reader.top_strategies_by_final_capital(
+                top_n=3, run_kind="champion_full", only=candidate_keys()))
     return {
-        "status": live_service.get_status(),
+        "status": status_payload,
         "proc": live_control.status(),
         "config_anterior": live_control.last_config(),
         "creds": live_control.display_credentials(),
         "creds_status": live_control.credential_status(),
         "poll_seconds": _operacao_poll_seconds(),
+        "top3": top3,
         **extra,
     }
 
@@ -353,9 +442,24 @@ def operacao(request: Request):
 
 @app.get("/operacao/fragment", response_class=HTMLResponse)
 def operacao_fragment(request: Request):
-    """Corpo que o polling HTMX troca — mesmo parcial usado no load inicial
-    (ver `operacao.html`), assim a página nunca duplica a marcação."""
-    return TEMPLATES.TemplateResponse(request, "partials/operacao_body.html", _operacao_ctx())
+    """Fragmento que o polling HTMX troca (ver `hx-trigger` em
+    `operacao_live_panel.html`) -- só o painel operacional (status,
+    capital, posições, eventos), NUNCA credenciais nem o form de conta
+    nova. Achado ao vivo: quando esse polling trocava o `#ops-body`
+    inteiro, qualquer <details> aberto (credenciais, opções avançadas)
+    fechava sozinho a cada refresh de fundo, porque o servidor sempre
+    renderiza fechado e `outerHTML` recria o nó do zero -- credencial e
+    setup inicial são configuração do usuário, não dado que o robô gera,
+    então saíram do escopo do poll (ver `operacao_body.html`).
+    Se a conta ainda não existe (poll que sobrou de uma aba antiga,
+    por exemplo), cai pro corpo inteiro -- o painel ao vivo pressupõe
+    conta."""
+    ctx = _operacao_ctx()
+    template = (
+        "partials/operacao_live_panel.html" if ctx["status"].get("existe")
+        else "partials/operacao_body.html"
+    )
+    return TEMPLATES.TemplateResponse(request, template, ctx)
 
 
 @app.post("/operacao/iniciar", response_class=HTMLResponse)
@@ -367,31 +471,88 @@ async def operacao_iniciar(request: Request):
     form = await request.form()
     from journal import live_store
 
-    with live_store.live_journal() as conn:
-        conta = live_store.load_account(conn, live_service.ACCOUNT_NAME)
+    try:
+        with live_store.live_journal() as conn:
+            conta = live_store.load_account(conn, live_service.ACCOUNT_NAME)
+    except (live_store.LegacyPaperAccountError, live_store.LegacyManualAccountError) as e:
+        # Correção pós-code-review (item 5): renderiza a mensagem no banner
+        # de erro em vez de deixar a exceção subir crua até virar 500.
+        ctx = _operacao_ctx(erro=str(e))
+        return TEMPLATES.TemplateResponse(request, "partials/operacao_body.html", ctx)
 
     erro = None
-    if conta is not None:
-        # conta já existe: modo/capital são da conta, NUNCA do form — evita
-        # subir o loop com um broker que não bate com o que a conta espera.
-        mode, capital = conta.mode, conta.initial_capital
-    else:
-        mode = form.get("mode", "paper")
-        capital = float(form.get("capital") or live_service.DEFAULT_CAPITAL)
-        if mode == "mt5" and not form.get("confirmar_real"):
-            erro = "Para operar em MT5 (dinheiro real), marque a confirmação antes de iniciar."
+    # "Ações por lote" é parâmetro do TERMINAL MT5 do usuário, não da
+    # estratégia nem da sessão -- detectado sozinho a cada clique em
+    # "Iniciar operação" via `detect_shares_per_lot()` (consulta o
+    # symbol_info do terminal MT5 já conectado), nunca digitado pelo
+    # usuário (decisão do dono, 2026-08-20; substitui o campo manual em
+    # Acesso e credenciais, que por sua vez substituiu o workaround ainda
+    # mais antigo que reexibia o campo no form de retomada).
+    mt5_shares_per_lot = live_control.detect_shares_per_lot()
+    if mt5_shares_per_lot is None or mt5_shares_per_lot <= 0:
+        erro = (
+            "Não foi possível detectar 'ações por lote' automaticamente — "
+            "confirme que o terminal MetaTrader 5 está aberto e logado nesta "
+            "máquina (ou que login/senha/servidor MT5 foram salvos em 'Acesso "
+            "e credenciais') e que os papéis da watchlist têm o mesmo "
+            "contract_size no seu terminal."
+        )
+
+    if erro is None and conta is not None:
+        # conta já existe: modo/capital/robô são da conta, NUNCA do form --
+        # evita subir o loop com um broker que não bate com o que a conta
+        # espera, e evita a conta trocar de robô sozinha só porque o
+        # ranking automático mudou depois da criação (decisão do dono,
+        # 2026-08-19: "nada automático" na troca de robô).
+        mode, capital, strategy_key = conta.mode, conta.initial_capital, conta.investment_robot
+    elif erro is None:
+        # Primeira conta: o robô vem do TOP-3 do ranking automático (janela
+        # FULL) mostrado no form -- nunca uma chave arbitrária, mesmo que o
+        # form venha adulterado/desatualizado (mesmo espírito de floor/
+        # disjuntor, ver teste `..._ignora_piso_e_disjuntor_arbitrarios...`).
+        mode = "mt5"
+        top3 = reader.top_strategies_by_final_capital(
+                top_n=3, run_kind="champion_full", only=candidate_keys())
+        valid_keys = {c["strategy_name"] for c in top3}
+        strategy_key = form.get("robo")
+        if not valid_keys:
+            erro = (
+                "O ranking automático ainda não tem nenhum robô qualificado "
+                "para operar -- aguarde o próximo recálculo (a cada 6h) antes "
+                "de iniciar."
+            )
+        elif strategy_key not in valid_keys:
+            erro = "Escolha um robô da lista antes de iniciar."
+        else:
+            # Capital nunca é digitado -- é o saldo real da corretora (ver
+            # `live_control.detect_broker_capital()`). Só consulta a
+            # corretora depois das outras validações passarem, pra não
+            # gastar uma tentativa de conexão MT5 num form incompleto.
+            capital = live_control.detect_broker_capital()
+            if capital is None:
+                erro = (
+                    "Não foi possível ler o saldo disponível na sua conta MetaTrader 5 — "
+                    "confirme que o terminal MT5 está aberto e logado nesta máquina, ou "
+                    "que o login/senha/servidor MT5 foram salvos em 'Acesso e credenciais', "
+                    "e tente novamente."
+                )
 
     if erro is None:
         try:
             cfg = live_control.ProcessConfig(
-                mode=mode, capital=capital,
-                floor=_parse_optional_float(form.get("floor")),
-                daily_loss_limit=_parse_optional_pct(form.get("daily_loss_limit")),
-                monthly_loss_limit=_parse_optional_pct(form.get("monthly_loss_limit")),
+                mode=mode, capital=capital, strategy=strategy_key,
                 notify_min_level=form.get("notify_min_level") or "warn",
+                mt5_shares_per_lot=mt5_shares_per_lot,
             )
-            live_control.start(cfg)
-        except RuntimeError as e:
+            # Correção pós-code-review (item 7): `live_control.start()` faz
+            # `time.sleep(_STARTUP_GRACE_SECONDS)` de forma SÍNCRONA (prova
+            # de vida do processo) — chamado direto dentro deste handler
+            # `async def`, isso travava o event loop inteiro (todas as
+            # outras rotas/polls do dashboard) por ~2s a cada clique em
+            # "Iniciar". `asyncio.to_thread` roda a chamada bloqueante numa
+            # thread separada, sem travar o loop.
+            await asyncio.to_thread(live_control.start, cfg)
+        except (RuntimeError, ValueError) as e:
             erro = str(e)
 
     ctx = _operacao_ctx(erro=erro)
@@ -402,47 +563,6 @@ async def operacao_iniciar(request: Request):
 def operacao_parar(request: Request):
     live_control.stop()
     return TEMPLATES.TemplateResponse(request, "partials/operacao_body.html", _operacao_ctx())
-
-
-@app.post("/operacao/aportar", response_class=HTMLResponse)
-async def operacao_aportar(request: Request):
-    """Registra que dinheiro foi depositado na corretora FORA deste sistema
-    (o dono aportou), creditando o valor direto ao caixa da conta. Fallback
-    manual: no modo MT5 o mesmo crédito acontece sozinho antes da abertura
-    (`live.runtime.reconcile_broker_cash`), mas Paper/Manual não têm saldo
-    externo para conferir, então este botão é o único jeito do sistema saber
-    que o caixa cresceu — e mesmo em MT5 serve para forçar o crédito sem
-    esperar o próximo PRE_OPEN.
-
-    Mexe direto no diário (mesmo padrão de `operacao_iniciar`): não há
-    decisão nenhuma aqui, só contabilidade, e montar um `LiveRuntime`
-    completo (estratégia/feed/corretora) só para somar um valor ao caixa
-    seria peso desnecessário."""
-    form = await request.form()
-    from journal import live_store
-
-    erro = None
-    aporte_msg = None
-    try:
-        amount = _parse_optional_float(form.get("amount"))
-    except ValueError:
-        amount = None
-    if amount is None or amount <= 0:
-        erro = "Informe um valor de aporte maior que zero."
-    else:
-        with live_store.live_journal() as conn:
-            conta = live_store.load_account(conn, live_service.ACCOUNT_NAME)
-            if conta is None:
-                erro = "Nenhuma conta de operação ainda — inicie a operação primeiro."
-            else:
-                conta.cash += amount
-                live_store.save_account(conn, conta)
-                live_store.record_deposit(conn, conta.id, clock.session_date(), amount,
-                                          origin="manual", note="registrado via /operacao")
-                aporte_msg = f"Aporte de R$ {amount:.2f} registrado."
-
-    ctx = _operacao_ctx(erro=erro, aporte_msg=aporte_msg)
-    return TEMPLATES.TemplateResponse(request, "partials/operacao_body.html", ctx)
 
 
 @app.post("/operacao/credenciais", response_class=HTMLResponse)
@@ -696,17 +816,27 @@ def operacao_historico(request: Request):
     `/operacao` — nunca cria a conta."""
     from journal import live_store
 
-    with live_store.live_journal() as conn:
-        account = live_store.load_account(conn, live_service.ACCOUNT_NAME)
-        if account is None:
-            ctx = {"existe": False}
-        else:
-            ctx = {
-                "existe": True,
-                "conta": account.name,
-                "capital_inicial": account.initial_capital,
-                "equity_json": json.dumps(live_store.equity_series(conn, account.id)),
-                "intents": live_store.all_intents(conn, account.id, limit=200),
-                "withdrawals": live_store.withdrawals(conn, account.id),
-            }
+    try:
+        with live_store.live_journal() as conn:
+            account = live_store.load_account(conn, live_service.ACCOUNT_NAME)
+            if account is None:
+                ctx = {"existe": False}
+            else:
+                ctx = {
+                    "existe": True,
+                    "conta": account.name,
+                    "capital_inicial": account.initial_capital,
+                    "equity_json": json.dumps(live_store.equity_series(conn, account.id)),
+                    "intents": live_store.all_intents(conn, account.id, limit=200),
+                    # `intent_id` -> contexto de mercado da decisão, numa query
+                    # só (ver `live_store.intent_snapshots`) em vez de uma por
+                    # linha da tabela.
+                    "snapshots": live_store.intent_snapshots(conn, account.id, limit=400),
+                    "withdrawals": live_store.withdrawals(conn, account.id),
+                }
+    except live_store.LegacyPaperAccountError as e:
+        # Correção pós-code-review (item 5): mensagem amigável em vez de 500
+        # cru — este endpoint só lê, não tem template com banner de erro
+        # próprio, então devolve texto simples em vez de estourar.
+        return PlainTextResponse(str(e), status_code=200)
     return TEMPLATES.TemplateResponse(request, "historico.html", ctx)
