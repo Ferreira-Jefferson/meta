@@ -174,7 +174,14 @@ def test_dip_gate_2pct_sobre_maxima_40_bloqueia_entrada_sem_dip():
         month_end=pd.Series([True], index=[date]),
     )
     actions = com_dip.on_bar(date, {}, 10_000.0)
-    assert actions == [Enter(ticker="NEW.SA", size_hint=1.0)]
+    # Compara CAMPO A CAMPO em vez de igualdade do dataclass: `Enter` carrega
+    # `reason`/`metadata` de auditoria (ver `strategy/base.py`), e amarrar este
+    # teste ao conteudo exato desse dicionario faria toda feature nova de
+    # diario quebrar um teste que e sobre o GATE de dip, nao sobre registro.
+    assert len(actions) == 1
+    assert isinstance(actions[0], Enter)
+    assert actions[0].ticker == "NEW.SA"
+    assert actions[0].size_hint == 1.0
 
 
 # ---------------------------------------------------------------------------
@@ -221,7 +228,10 @@ def test_blackout_adia_rebalance_e_executa_no_primeiro_pregao_limpo():
 
     actions2 = strategy.on_bar(d2, {}, 10_000.0)
     assert strategy._pending_rebalance is False
-    assert actions2 == [Enter(ticker="NEW.SA", size_hint=1.0)]
+    assert len(actions2) == 1
+    assert isinstance(actions2[0], Enter)
+    assert actions2[0].ticker == "NEW.SA"
+    assert actions2[0].size_hint == 1.0
 
 
 # ---------------------------------------------------------------------------

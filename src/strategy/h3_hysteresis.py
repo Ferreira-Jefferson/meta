@@ -45,6 +45,10 @@ class DipTop1Hysteresis(BuyTheDip):
         cands.sort(key=lambda x: x[1], reverse=True)
 
         rank1_ticker, rank1_score = cands[0]
+        # Só para o `metadata` da entrada (registro, não decisão): de quem o
+        # robô rotacionou e com que folga a histerese foi vencida.
+        rotacionou_de: str | None = None
+        folga_histerese: float | None = None
 
         # If already holding a ticker, check hysteresis before rotating
         held = list(open_positions.keys()) if open_positions else []
@@ -65,6 +69,8 @@ class DipTop1Hysteresis(BuyTheDip):
                     # But still check if held ticker dip is ok (it's already in position, no dip check needed for holding)
                     return []
                 # Rotation justified
+                rotacionou_de = held_ticker
+                folga_histerese = rank1_score - threshold
                 actions.append(Exit(ticker=held_ticker, reason=ExitReason.ROTATION_OUT))
         else:
             # No position — check if rank-1 has dip
@@ -77,6 +83,23 @@ class DipTop1Hysteresis(BuyTheDip):
             if dseries is not None and date in dseries.index:
                 dist = dseries.loc[date]
                 if not pd.isna(dist) and float(dist) <= -self.dip_pct:
-                    actions.append(Enter(ticker=tgt_ticker, size_hint=1.0))
+                    # REGISTRO da entrada — ver `Enter` em `strategy/base.py`.
+                    # A distinção rotação × entrada limpa importa no diário:
+                    # uma compra que substituiu outra posição tem um "por quê"
+                    # diferente de uma compra feita com o caixa parado.
+                    actions.append(Enter(
+                        ticker=tgt_ticker, size_hint=1.0,
+                        reason=("dip_rank1_rotation" if rotacionou_de
+                                else "dip_rank1"),
+                        metadata={
+                            "rank": 1,
+                            "momentum_score": float(rank1_score),
+                            "dist_from_high": float(dist),
+                            "dip_threshold": -float(self.dip_pct),
+                            "hysteresis": float(self._hysteresis),
+                            "rotated_from": rotacionou_de,
+                            "hysteresis_margin": folga_histerese,
+                        },
+                    ))
 
         return actions

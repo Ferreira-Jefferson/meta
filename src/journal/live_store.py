@@ -75,6 +75,7 @@ from core.live_models import (
     OrderType,
     RobotRole,
 )
+from core.models import MarketSnapshot
 
 # Status de Order que não vão mudar mais — não fazem sentido em "open_orders".
 _TERMINAL_ORDER_STATUSES = (
@@ -694,6 +695,88 @@ def all_intents(conn: sqlite3.Connection, account_id: int, limit: int = 500) -> 
         (account_id, limit),
     ).fetchall()
     return [_row_to_intent(row) for row in rows]
+
+
+# ---------------------------------------------------------------------------
+# snapshot de contexto de sinal (o "por que" de cada decisao)
+# ---------------------------------------------------------------------------
+
+# Ordem das colunas de `live_signal_snapshots` que vem do `MarketSnapshot`.
+# Uma tupla so, usada tanto no INSERT quanto na leitura, para que acrescentar
+# uma feature nova (regra 3 do AGENTS.md: "sempre que uma nova feature
+# aparecer no snapshot, adicione coluna") seja UMA edicao aqui + UMA no
+# schema, sem risco de desalinhar valor com coluna.
+_SNAPSHOT_COLUMNS: tuple[str, ...] = (
+    "close", "volume", "volume_vs_avg20", "mm20", "mm50", "mm200",
+    "mm50_over_mm200_pct", "days_since_cross", "ifr14", "atr14",
+    "historical_vol_30d", "distance_from_52w_high_pct",
+    "distance_from_52w_low_pct", "ibov_close", "ibov_mm200",
+    "ibov_above_mm200", "ibov_trend_strength", "correlation_with_ibov_60d",
+)
+
+
+def record_intent_snapshot(
+    conn: sqlite3.Connection,
+    intent_id: int,
+    moment: str,
+    ticker: str,
+    snapshot: MarketSnapshot,
+) -> int:
+    """Grava o contexto de mercado que o robo viu ao decidir.
+
+    `INSERT OR REPLACE` sobre o UNIQUE `(intent_id, moment)`: gravar duas
+    vezes o snapshot da MESMA intencao no mesmo momento nao e conflito de
+    dado, e reentrancia do runtime (um retry de sessao interrompida). A
+    segunda gravacao descreve o mesmo pregao com o mesmo painel, entao
+    sobrescrever e correto e nao duplica linha no diario.
+    """
+    if moment not in ("entry", "exit"):
+        raise ValueError(f"moment invalido: {moment!r} (esperado 'entry' ou 'exit')")
+    valores = [getattr(snapshot, c) for c in _SNAPSHOT_COLUMNS]
+    cols = ", ".join(_SNAPSHOT_COLUMNS)
+    marks = ", ".join("?" for _ in _SNAPSHOT_COLUMNS)
+    cur = conn.execute(
+        f"""INSERT OR REPLACE INTO live_signal_snapshots
+                (intent_id, moment, ticker, {cols})
+            VALUES (?, ?, ?, {marks})""",
+        (intent_id, moment, ticker, *valores),
+    )
+    return int(cur.lastrowid)
+
+
+def intent_snapshot(
+    conn: sqlite3.Connection, intent_id: int, moment: Optional[str] = None
+) -> Optional[dict]:
+    """Snapshot gravado de uma intencao, como dict coluna->valor.
+
+    Devolve dict (e nao `MarketSnapshot`) porque quem le isto e auditoria:
+    dashboard e query exploratoria querem os nomes das colunas do jeito que
+    estao no banco, iguais aos do backtest, para comparar lado a lado.
+    """
+    sql = "SELECT * FROM live_signal_snapshots WHERE intent_id = ?"
+    params: list = [intent_id]
+    if moment is not None:
+        sql += " AND moment = ?"
+        params.append(moment)
+    row = conn.execute(sql + " ORDER BY id DESC LIMIT 1", params).fetchone()
+    return dict(row) if row is not None else None
+
+
+def intent_snapshots(conn: sqlite3.Connection, account_id: int,
+                     limit: int = 500) -> dict[int, dict]:
+    """`intent_id` -> snapshot, para as intencoes mais recentes da conta.
+
+    Uma query so em vez de N: a pagina de historico lista centenas de
+    intencoes e precisa do contexto de cada uma.
+    """
+    rows = conn.execute(
+        """SELECT s.* FROM live_signal_snapshots s
+             JOIN live_intents i ON i.id = s.intent_id
+            WHERE i.account_id = ?
+            ORDER BY s.id DESC LIMIT ?""",
+        (account_id, limit),
+    ).fetchall()
+    return {int(r["intent_id"]): dict(r) for r in rows}
 
 
 # ---------------------------------------------------------------------------

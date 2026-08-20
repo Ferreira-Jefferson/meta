@@ -69,6 +69,7 @@ from backtest.sizing import has_free_slot, initial_stop, plan_entry
 # continuar existindo aqui. O VALOR, porém, passa a ser o banco separado da
 # operação real (antes era o mesmo arquivo do backtest).
 from core.config import BENCHMARK, LIVE_DB_PATH as DB_PATH, WATCHLIST, BacktestConfig
+from core.market_features import enrich_features, snapshot_from_row
 from core.live_models import (
     AccountState,
     Intent,
@@ -91,6 +92,21 @@ from live.riskguard import CircuitBreaker
 from live.robots import InvestmentRobot, LiveRobot, WithdrawalRobot
 from market_data.download import download_all
 from market_data.loader import load_universe
+
+def _falha_snapshot(conn, account_id: Optional[int], intent_id: int, msg: str) -> None:
+    """Registra falha de SNAPSHOT no diario — e nao notifica, de proposito.
+
+    Excecao consciente a `Runtime._log` (que grava e notifica sempre juntos,
+    ver a docstring dele): aqui a decisao do robo e a ordem na corretora
+    seguiram normais, e o que falhou foi so a anotacao do contexto. Mandar
+    isso para o Telegram do dono trataria um problema de qualidade de diario
+    como incidente operacional — e alerta que chega sem exigir acao e
+    exatamente o que faz o dono parar de ler os alertas que exigem. Fica no
+    `live_events` (nivel `warn`), onde uma auditoria encontra, e onde uma
+    ocorrencia repetida aparece como padrao em vez de como 40 notificacoes.
+    """
+    store.log_event(conn, account_id, "warn", "diario", msg, {"intent_id": intent_id})
+
 
 # Idade maxima tolerada de uma cotacao para a checagem de stop intra-dia. Acima
 # disso o runtime ainda registra o preco, mas avisa: um stop avaliado sobre dado
@@ -201,6 +217,10 @@ class LiveRuntime:
         self._panels: dict[str, pd.DataFrame] = {}
         self._ibov: Optional[pd.DataFrame] = None
         self._prepared_through: Optional[date] = None
+        # ticker -> painel enriquecido com indicadores, para o snapshot de
+        # contexto gravado junto de cada intencao (ver `_record_intent`).
+        # Invalidado sempre que os paineis sao remontados, logo abaixo.
+        self._enriched_cache: dict[str, Optional[pd.DataFrame]] = {}
         # Marcador de dedupe do skip por dado incompleto (achado E2,
         # FEAT-003): guarda o ultimo `{"session": ..., "faltando": [...]}`
         # notificado, para `close_and_decide` nao repetir o mesmo alerta a
@@ -355,6 +375,10 @@ class LiveRuntime:
             for t, df in universe.items()
             if t != BENCHMARK
         }
+        # Painel novo => indicadores recalculados. Limpar aqui (e nao
+        # deixar expirar por conta) e o que garante que o snapshot gravado
+        # descreve o MESMO dado que o robo acabou de receber em `prepare`.
+        self._enriched_cache = {}
         self.investment.prepare(self._panels, self._ibov)
         self.withdrawal.prepare(self._panels, self._ibov)
         self._prepared_through = session
@@ -394,6 +418,76 @@ class LiveRuntime:
             account=account, marks=self._marks(session), phase=phase,
             quotes=quotes or {},
         )
+
+    # ---------- snapshot de contexto (o "por que") ------------------------
+
+    def _enriched(self, ticker: str):
+        """Painel do ticker com as colunas de indicador, com cache por sessao.
+
+        O cache existe porque uma sessao grava varias intencoes e mais de uma
+        pode ser do mesmo ticker (saida + entrada numa rotacao): enriquecer
+        200+ pregoes duas vezes para gravar a mesma leitura e desperdicio puro.
+        Invalidado em `_refresh_panels` — dado novo, painel novo.
+        """
+        if ticker in self._enriched_cache:
+            return self._enriched_cache[ticker]
+        df = self._panels.get(ticker)
+        if df is None or self._ibov is None or df.empty:
+            self._enriched_cache[ticker] = None
+            return None
+        try:
+            out = enrich_features(df, self._ibov)
+        except Exception:
+            # Registro nunca derruba decisao: um painel malformado (coluna
+            # faltando, indice torto) faz o snapshot faltar, nao a intencao.
+            out = None
+        self._enriched_cache[ticker] = out
+        return out
+
+    def _record_intent(self, conn, account: AccountState, intent: Intent) -> int:
+        """Grava a intencao E o contexto de mercado que a motivou.
+
+        Ponto UNICO de gravacao de intencao do runtime, de proposito: os tres
+        caminhos que decidem (fecho, entrada intra-dia e stop intra-dia)
+        passam por aqui, entao nao existe caminho que registre uma decisao sem
+        registrar o que o robo estava vendo quando a tomou. Antes disto o
+        diario respondia "o que foi feito" e "por que VENDEU", mas nao "por
+        que COMPROU este papel neste dia" — ver `live_signal_snapshots` no
+        schema.
+
+        Anti-look-ahead: o snapshot e lido da linha de `intent.decided_on` (o
+        fecho que gerou a decisao), NUNCA da ultima linha do painel. Se o
+        painel ja avancou (a gravacao acontece depois, e o processo pode ter
+        cruzado a virada do pregao), pegar `iloc[-1]` gravaria um contexto que
+        o robo nao viu — uma mentira de auditoria exatamente do tipo que a
+        regra 4 do AGENTS.md proibe. Sem a linha exata, o snapshot fica de
+        fora e a intencao e gravada mesmo assim.
+        """
+        intent_id = store.record_intent(conn, account.id, intent)
+        momento = {IntentKind.ENTER: "entry", IntentKind.EXIT: "exit"}.get(intent.kind)
+        if momento is None or not intent.ticker:
+            # ADJUST_STOP nao move dinheiro e WITHDRAW nao e sobre um papel —
+            # nenhum dos dois tem "contexto de sinal" a registrar.
+            return intent_id
+        e = self._enriched(intent.ticker)
+        if e is None:
+            return intent_id
+        try:
+            idx = pd.Timestamp(intent.decided_on)
+            if idx not in e.index:
+                _falha_snapshot(
+                    conn, account.id, intent_id,
+                    f"sem snapshot de contexto para {intent.ticker}: pregao "
+                    f"{intent.decided_on.isoformat()} nao esta no painel")
+                return intent_id
+            snap = snapshot_from_row(e.loc[idx])
+            store.record_intent_snapshot(conn, intent_id, momento, intent.ticker, snap)
+        except Exception as exc:
+            # Mesma regra do `except` de `_enriched`, com registro: perder o
+            # snapshot e ruim, perder a intencao e inaceitavel.
+            _falha_snapshot(conn, account.id, intent_id,
+                            f"falha ao gravar snapshot de {intent.ticker}: {exc}")
+        return intent_id
 
     def ensure_account(self) -> AccountState:
         with store.live_journal(self.db_path) as conn:
@@ -691,7 +785,7 @@ class LiveRuntime:
                         store.upsert_position(conn, account.id, pos)
                         aplicadas += 1
                     intent.status = IntentStatus.DONE
-                store.record_intent(conn, account.id, intent)
+                self._record_intent(conn, account, intent)
                 gravadas += 1
                 if intent.kind == IntentKind.WITHDRAW:
                     # Saque nunca mais e executado pela maquina — so registrado
@@ -794,7 +888,7 @@ class LiveRuntime:
             if motivo_liquidez:
                 ctx = self._context(session, account, SessionPhase.OPEN, quotes)
                 for intent in self.withdrawal.on_liquidity(ctx, motivo_liquidez):
-                    store.record_intent(conn, account.id, intent)
+                    self._record_intent(conn, account, intent)
                     self._log(conn, account.id, "warn", "saque",
                                     f"recomendacao de saque: R$ {intent.amount:.2f} "
                                     f"({intent.reason}) — saque direto na corretora, "
@@ -1329,7 +1423,7 @@ class LiveRuntime:
                     # caminho cruzado (saida decidida no FECHO enquanto este
                     # stop ainda esta em voo).
                     continue
-                store.record_intent(conn, account.id, intent)
+                self._record_intent(conn, account, intent)
                 if self._sell(conn, account, session, intent, quotes) == "done":
                     disparados += 1
                     self._log(conn, account.id, "warn", "runtime",

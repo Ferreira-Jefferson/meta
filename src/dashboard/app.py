@@ -35,6 +35,78 @@ from strategy.registry import get_strategy, list_strategies
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATES = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
+# Código de motivo (`Intent.reason`) -> frase de leitura humana. Mora aqui, na
+# camada de APRESENTAÇÃO, e não em `core/`: o código curto é o dado de
+# auditoria (estável, consultável, portável pro MQL5), a frase é enfeite de
+# tela e pode mudar sem migração. A tabela mostra os DOIS — a frase para ler
+# rápido, o código para conferir contra o diário.
+#
+# Entradas vêm de `Enter.reason` (`strategy/`), saídas de `ExitReason`, saque
+# de `WithdrawalPolicy.label`. Motivo desconhecido cai no próprio código, sem
+# inventar tradução: um robô novo aparece como o código dele até alguém
+# escrever a frase, o que é honesto e não esconde nada.
+_MOTIVO_LEGIVEL = {
+    # entradas
+    "dip_rank":            "topo do ranking de momentum, comprado numa queda",
+    "dip_rank1":           "melhor momentum da lista, comprado numa queda",
+    "dip_rank1_rotation":  "assumiu o lugar da posição anterior (rotação)",
+    # saídas
+    "cross_down":          "média curta cruzou para baixo",
+    "stop":                "stop atingido",
+    "trail_stop":          "stop móvel atingido",
+    "ibov_defensive":      "defesa: IBOV abaixo da média longa",
+    "defensive_absolute_mom": "defesa: momentum absoluto negativo",
+    "rotation_out":        "saiu do topo do ranking (rotação)",
+    "mean_reversion_done": "reversão à média concluída",
+    "target_mid_band":     "alvo na banda média",
+    "withdrawal":          "posição zerada para levantar caixa de saque",
+    "manual":              "decisão manual",
+    # saque (label da política em vigor, ver `backtest/withdrawal.py`)
+    "floor_skim":          "saque mensal sobre o excedente acima do piso",
+}
+
+
+def motivo_legivel(reason: str) -> str:
+    """Frase para o motivo, ou o próprio código quando não há tradução."""
+    return _MOTIVO_LEGIVEL.get(reason or "", reason or "")
+
+
+TEMPLATES.env.filters["motivo_legivel"] = motivo_legivel
+
+
+# `{:,.2f}` do Python produz "1,234.56" (padrão en-US) e o resto dos templates
+# corrige isso com `.replace(",", ".")` — que só funciona para valores SEM
+# decimal: em "1,234.56" o replace produz "1.234.56", com dois pontos. A troca
+# tem de ser SIMULTÂNEA, e é o que `str.translate` faz (o `.` não é reprocessado
+# depois de virar `,`).
+_SEPARADORES_BR = str.maketrans({",": ".", ".": ","})
+
+
+def num_br(valor, casas: int | None = 2) -> str:
+    """Número no formato brasileiro: 1.234,56. `casas=None` corta zeros à
+    direita (para campo de gatilho, onde a precisão varia por robô).
+
+    Devolve "—" para `None` e o próprio valor em texto para o que não for
+    número: o payload de gatilho é dict livre da estratégia e pode trazer
+    string (`rotated_from`) no meio dos números.
+    """
+    if valor is None:
+        return "—"
+    if isinstance(valor, bool):
+        return "sim" if valor else "não"
+    try:
+        f = float(valor)
+    except (TypeError, ValueError):
+        return str(valor)
+    if casas is None:
+        txt = f"{f:,.6f}".rstrip("0").rstrip(".")
+    else:
+        txt = f"{f:,.{casas}f}"
+    return txt.translate(_SEPARADORES_BR)
+
+
+TEMPLATES.env.filters["num_br"] = num_br
+
 
 def _static_v(css_filename: str) -> int:
     """Mtime do arquivo CSS, usado como query-string cache-buster nos <link>.
@@ -751,6 +823,10 @@ def operacao_historico(request: Request):
                     "capital_inicial": account.initial_capital,
                     "equity_json": json.dumps(live_store.equity_series(conn, account.id)),
                     "intents": live_store.all_intents(conn, account.id, limit=200),
+                    # `intent_id` -> contexto de mercado da decisão, numa query
+                    # só (ver `live_store.intent_snapshots`) em vez de uma por
+                    # linha da tabela.
+                    "snapshots": live_store.intent_snapshots(conn, account.id, limit=400),
                     "withdrawals": live_store.withdrawals(conn, account.id),
                 }
     except live_store.LegacyPaperAccountError as e:

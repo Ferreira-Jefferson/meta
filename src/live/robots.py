@@ -17,6 +17,7 @@ arquivo delega a decisao a `strategy.on_bar(...)`, `policy.on_close(...)` ou
 """
 from __future__ import annotations
 
+import math
 from abc import ABC, abstractmethod
 from datetime import date
 
@@ -25,6 +26,51 @@ import pandas as pd
 from backtest.withdrawal import WithdrawalPolicy
 from core.live_models import Intent, IntentKind, RobotContext, RobotRole
 from strategy.base import AdjustStop, Enter, Exit, OpenPosition, Strategy
+
+
+def _payload_safe(metadata: dict | None) -> dict:
+    """`Enter.metadata` -> dict garantidamente serializavel em JSON.
+
+    Guarda deliberada, nao paranoia decorativa: `metadata` e campo LIVRE da
+    estrategia, e `live_store.record_intent` serializa o payload com
+    `json.dumps`. Um robo que guardar um `numpy.float64` ali (o retorno cru de
+    `series.loc[date]` e exatamente isso) faria a gravacao da intencao levantar
+    `TypeError` — ou seja: uma decisao real do robo seria PERDIDA por causa do
+    tipo de um numero de registro. Registro nunca pode derrubar decisao, entao
+    o que nao for JSON nativo vira float (se der) ou string (se nao der).
+
+    Nao mexe em `Enter.metadata` em si — o engine de backtest continua
+    recebendo o dict original em `OpenPosition.metadata`.
+    """
+    if not metadata:
+        return {}
+    out: dict = {}
+    for k, v in metadata.items():
+        chave = str(k)
+        # Escalares de numpy/pandas expoem `.item()`, que devolve o tipo
+        # NATIVO equivalente. Normalizar por aqui antes dos testes de tipo
+        # preserva a natureza do numero: sem isto, um `numpy.bool_(True)`
+        # cairia no `float(v)` la embaixo e seria gravado como `1.0` — um
+        # booleano de auditoria virando numero e ruido gratuito no diario.
+        if hasattr(v, "item") and not isinstance(v, (bool, int, float, str)):
+            try:
+                v = v.item()
+            except (AttributeError, ValueError):
+                pass
+        if v is None or isinstance(v, (bool, int, str)):
+            out[chave] = v
+        elif isinstance(v, float):
+            # NaN/inf sao JSON invalido em parser estrito (o proprio sqlite
+            # devolve o texto de volta, mas quem le com json.loads estrito
+            # quebra) — viram None, que e o que "sem valor" significa aqui.
+            out[chave] = v if math.isfinite(v) else None
+        else:
+            try:
+                f = float(v)
+                out[chave] = f if math.isfinite(f) else None
+            except (TypeError, ValueError):
+                out[chave] = str(v)
+    return out
 
 
 class LiveRobot(ABC):
@@ -115,11 +161,17 @@ class InvestmentRobot(LiveRobot):
         intents: list[Intent] = []
         for act in actions:
             if isinstance(act, Enter):
+                # `reason`/`payload` vem PRONTOS da estrategia (ver `Enter`
+                # em `strategy/base.py`) — este wrapper so transporta. Deduzir
+                # aqui o motivo de uma compra seria `live/` opinando sobre
+                # decisao, o que a regra 6 do AGENTS.md proibe.
                 intents.append(Intent(
                     robot=self.key, role=self.role, kind=IntentKind.ENTER,
                     decided_on=ctx.session, execute_on=execute_on,
                     ticker=act.ticker, size_hint=act.size_hint,
                     stop_price=act.initial_stop,
+                    reason=act.reason,
+                    payload=_payload_safe(act.metadata),
                 ))
             elif isinstance(act, Exit):
                 intents.append(Intent(

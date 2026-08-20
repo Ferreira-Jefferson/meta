@@ -18,22 +18,11 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Callable, Optional
 
-import numpy as np
 import pandas as pd
 
 from backtest.costs import apply_slippage, fees_for_leg
 from core.config import BENCHMARK, BacktestConfig
-from core.indicators import (
-    atr,
-    cross_up,
-    days_since_last_true,
-    historical_volatility,
-    ifr,
-    rolling_correlation,
-    rolling_high,
-    rolling_low,
-    sma,
-)
+from core.market_features import enrich_features, snapshot_from_row
 from core.models import ExitReason, MarketSnapshot, Trade
 from strategy.base import AdjustStop, Enter, Exit, OpenPosition, Strategy
 
@@ -66,65 +55,15 @@ class BacktestResult:
     withdrawals: list = field(default_factory=list)
 
 
-def _enrich(df: pd.DataFrame, ibov: pd.DataFrame) -> pd.DataFrame:
-    """Anexa colunas de indicadores usadas para preencher o `MarketSnapshot`."""
-    close = df["close"]
-    out = df.copy()
-    out["mm20"] = sma(close, 20)
-    out["mm50"] = sma(close, 50)
-    out["mm200"] = sma(close, 200)
-    out["mm50_over_mm200_pct"] = out["mm50"] / out["mm200"] - 1.0
-
-    cross_events = cross_up(out["mm50"], out["mm200"])
-    out["days_since_cross"] = days_since_last_true(cross_events)
-    out["ifr14"] = ifr(close, 14)
-    out["atr14"] = atr(df["high"], df["low"], close, 14)
-    out["hvol30"] = historical_volatility(close, 30)
-    out["high_52w"] = rolling_high(close, 252)
-    out["low_52w"] = rolling_low(close, 252)
-    out["dist_from_high"] = close / out["high_52w"] - 1.0
-    out["dist_from_low"] = close / out["low_52w"] - 1.0
-    out["volume_avg20"] = df["volume"].rolling(20, min_periods=20).mean()
-    out["volume_vs_avg20"] = df["volume"] / out["volume_avg20"]
-
-    ibov_close = ibov["close"].reindex(df.index).ffill()
-    out["ibov_close"] = ibov_close
-    out["ibov_mm200"] = sma(ibov_close, 200)
-    out["ibov_above_mm200"] = ibov_close > out["ibov_mm200"]
-    out["ibov_trend_strength"] = ibov_close / out["ibov_mm200"] - 1.0
-    out["corr_ibov_60d"] = rolling_correlation(
-        close.pct_change(), ibov_close.pct_change(), 60
-    )
-    return out
-
-
-def _snapshot(row: pd.Series) -> MarketSnapshot:
-    def f(k, default=0.0):
-        v = row.get(k)
-        if v is None or (isinstance(v, float) and np.isnan(v)):
-            return default
-        return float(v) if not isinstance(v, bool) else bool(v)
-
-    return MarketSnapshot(
-        close=f("close"),
-        volume=f("volume"),
-        volume_vs_avg20=f("volume_vs_avg20"),
-        mm20=f("mm20"),
-        mm50=f("mm50"),
-        mm200=f("mm200"),
-        mm50_over_mm200_pct=f("mm50_over_mm200_pct"),
-        days_since_cross=int(row.get("days_since_cross") or 0),
-        ifr14=f("ifr14"),
-        atr14=f("atr14"),
-        historical_vol_30d=f("hvol30"),
-        distance_from_52w_high_pct=f("dist_from_high"),
-        distance_from_52w_low_pct=f("dist_from_low"),
-        ibov_close=f("ibov_close"),
-        ibov_mm200=f("ibov_mm200"),
-        ibov_above_mm200=bool(row.get("ibov_above_mm200") or False),
-        ibov_trend_strength=f("ibov_trend_strength"),
-        correlation_with_ibov_60d=f("corr_ibov_60d"),
-    )
+# `_enrich`/`_snapshot` foram EXTRAIDOS para `core/market_features.py` quando a
+# operacao ao vivo passou a registrar o mesmo contexto de sinal que o backtest
+# (`live_signal_snapshots`). Os aliases ficam porque `engine_portfolio` e
+# `engine_satellite` importam estes nomes daqui — e, mais importante, porque o
+# calculo agora tem UMA implementacao so: se o live e o backtest calculassem
+# MM200/IFR14 por caminhos diferentes, comparar o snapshot real com o simulado
+# viraria ficcao. Ver a docstring de `core/market_features.py`.
+_enrich = enrich_features
+_snapshot = snapshot_from_row
 
 
 def _positions_view(positions: dict[str, _Position]) -> dict[str, OpenPosition]:

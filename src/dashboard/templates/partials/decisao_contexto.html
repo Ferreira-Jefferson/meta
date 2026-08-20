@@ -1,0 +1,81 @@
+{#
+  Linha de contexto de uma decisão — o "por quê" completo, escondido por
+  padrão. Fica num partial porque a tabela de decisões já é longa e misturar
+  os dois níveis de detalhe no mesmo arquivo tornava as duas coisas ilegíveis.
+
+  Dois blocos, deliberadamente separados:
+
+    · GATILHO — o que a REGRA do robô mediu (`live_intents.payload`, vindo de
+      `Enter.metadata`). Varia por robô, então é renderizado genericamente:
+      chave/valor, sem lista fixa de campos. Um robô novo com um campo novo
+      aparece aqui sozinho, sem editar template.
+
+    · MERCADO — o contexto do papel naquele pregão (`live_signal_snapshots`),
+      colunas fixas e idênticas às do backtest. Aqui a lista é explícita de
+      propósito: são as MESMAS features que o backtest grava, e nomeá-las uma
+      a uma é o que permite rotular cada número em português.
+
+  Números passam pelo filtro `num_br` (ver `dashboard/app.py`) — o padrão
+  `.replace(",", ".")` usado no resto dos templates corrompe valor com decimal.
+#}
+<tr class="ctx-row" id="ctx-{{ i.id }}" hidden>
+  <td colspan="8">
+    <div class="ctx">
+
+      <div class="ctx-block">
+        <h4>Gatilho</h4>
+        {% if i.payload %}
+        <dl class="ctx-grid">
+          {% for k, v in i.payload.items() %}
+          <div>
+            <dt>{{ k.replace("_", " ") }}</dt>
+            <dd>{{ v|num_br(None) }}</dd>
+          </div>
+          {% endfor %}
+        </dl>
+        {% elif i.kind.value == "exit" %}
+        <p class="ctx-vazio">
+          Saída não tem números de gatilho: o motivo <em>é</em> a regra
+          (<code>{{ i.reason or "—" }}</code>). Os números que a satisfizeram
+          estão no bloco de mercado, ao lado.
+        </p>
+        {% else %}
+        <p class="ctx-vazio">
+          Sem números de gatilho — decisão anterior à gravação do racional, ou
+          robô que não os informa.
+        </p>
+        {% endif %}
+      </div>
+
+      <div class="ctx-block">
+        <h4>Mercado em {{ i.decided_on }}</h4>
+        {% if snap %}
+        <dl class="ctx-grid">
+          <div><dt>fechamento</dt><dd>R$ {{ snap.close|num_br }}</dd></div>
+          <div><dt>MM20</dt><dd>{{ snap.mm20|num_br }}</dd></div>
+          <div><dt>MM50</dt><dd>{{ snap.mm50|num_br }}</dd></div>
+          <div><dt>MM200</dt><dd>{{ snap.mm200|num_br }}</dd></div>
+          <div><dt>MM50 vs MM200</dt><dd>{{ "{:+.2f}".format(snap.mm50_over_mm200_pct * 100)|replace(".", ",") }}%</dd></div>
+          <div><dt>dias do cruzamento</dt><dd>{{ snap.days_since_cross }}</dd></div>
+          <div><dt>IFR14</dt><dd>{{ snap.ifr14|num_br(1) }}</dd></div>
+          <div><dt>ATR14</dt><dd>{{ snap.atr14|num_br }}</dd></div>
+          <div><dt>volatilidade 30d</dt><dd>{{ "{:.1f}".format(snap.historical_vol_30d * 100)|replace(".", ",") }}%</dd></div>
+          <div><dt>volume vs média 20d</dt><dd>{{ snap.volume_vs_avg20|num_br }}x</dd></div>
+          <div><dt>da máxima 52s</dt><dd class="{{ 'neg' if snap.distance_from_52w_high_pct < 0 else '' }}">{{ "{:+.1f}".format(snap.distance_from_52w_high_pct * 100)|replace(".", ",") }}%</dd></div>
+          <div><dt>da mínima 52s</dt><dd>{{ "{:+.1f}".format(snap.distance_from_52w_low_pct * 100)|replace(".", ",") }}%</dd></div>
+          <div><dt>IBOV</dt><dd>{{ snap.ibov_close|num_br(0) }}</dd></div>
+          <div><dt>IBOV vs MM200</dt><dd class="{{ 'pos' if snap.ibov_above_mm200 else 'neg' }}">{{ "acima" if snap.ibov_above_mm200 else "abaixo" }} · {{ "{:+.1f}".format(snap.ibov_trend_strength * 100)|replace(".", ",") }}%</dd></div>
+          <div><dt>correlação IBOV 60d</dt><dd>{{ snap.correlation_with_ibov_60d|num_br }}</dd></div>
+        </dl>
+        {% else %}
+        <p class="ctx-vazio">
+          Sem contexto de mercado gravado. Acontece em decisões anteriores a
+          esta feature, ou quando o pregão da decisão não estava no painel —
+          o motivo fica em <code>live_events</code>, origem <code>diario</code>.
+        </p>
+        {% endif %}
+      </div>
+
+    </div>
+  </td>
+</tr>

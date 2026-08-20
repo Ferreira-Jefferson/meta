@@ -323,6 +323,53 @@ CREATE INDEX IF NOT EXISTS idx_live_deposits_account ON live_deposits(account_id
 -- Log operacional (não é métrica, é auditoria em texto): avisos do runtime,
 -- dado atrasado recusado, ordem rejeitada, etc. `account_id` pode ser NULL
 -- para eventos que não pertencem a nenhuma conta (ex.: falha ao abrir o feed).
+-- Contexto de mercado no momento em que o robô DECIDIU, ao vivo. Espelha
+-- coluna por coluna a `signal_snapshots` do backtest, de propósito: a
+-- pergunta que justifica a tabela é "o que o robô viu no dia da compra real,
+-- e como isso se compara com o que ele via nas compras simuladas?". Mesmas
+-- colunas, mesmas unidades, mesmo código de cálculo (`core/market_features.py`)
+-- => a comparação é um único SQL depois de um ATTACH dos dois arquivos.
+--
+-- Por que uma tabela NOVA em vez de reusar `signal_snapshots`: os dois bancos
+-- são arquivos SQLite separados (`DB_PATH` × `LIVE_DB_PATH`) e foram separados
+-- justamente para que backtest e operação real não disputassem lock do mesmo
+-- arquivo. Gravar o snapshot ao vivo dentro do banco de backtest reintroduziria
+-- essa disputa — o loop ao vivo passaria a escrever no arquivo que um sweep de
+-- 100 robôs pode estar segurando. Tabela espelhada no banco da operação
+-- preserva a comparabilidade sem reabrir o problema.
+--
+-- Ancorada em `live_intents` (a DECISÃO), não na ordem: o snapshot descreve o
+-- que o robô viu ao decidir, e essa leitura existe mesmo que a ordem seja
+-- rejeitada pela corretora depois. Ancorar na ordem perderia exatamente os
+-- casos mais informativos — as decisões que não viraram trade.
+CREATE TABLE IF NOT EXISTS live_signal_snapshots (
+    id                          INTEGER PRIMARY KEY AUTOINCREMENT,
+    intent_id                   INTEGER NOT NULL REFERENCES live_intents(id) ON DELETE CASCADE,
+    moment                      TEXT    NOT NULL CHECK (moment IN ('entry','exit')),
+    ticker                      TEXT    NOT NULL,
+    close                       REAL,
+    volume                      REAL,
+    volume_vs_avg20             REAL,
+    mm20                        REAL,
+    mm50                        REAL,
+    mm200                       REAL,
+    mm50_over_mm200_pct         REAL,
+    days_since_cross            INTEGER,
+    ifr14                       REAL,
+    atr14                       REAL,
+    historical_vol_30d          REAL,
+    distance_from_52w_high_pct  REAL,
+    distance_from_52w_low_pct   REAL,
+    ibov_close                  REAL,
+    ibov_mm200                  REAL,
+    ibov_above_mm200            INTEGER,
+    ibov_trend_strength         REAL,
+    correlation_with_ibov_60d   REAL,
+    UNIQUE (intent_id, moment)
+);
+
+CREATE INDEX IF NOT EXISTS idx_live_snapshots_intent ON live_signal_snapshots(intent_id);
+
 CREATE TABLE IF NOT EXISTS live_events (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     account_id   INTEGER REFERENCES live_accounts(id) ON DELETE CASCADE,

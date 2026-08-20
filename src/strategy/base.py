@@ -57,12 +57,25 @@ class Enter:
     - `metadata`: livre para o robô salvar contexto (ex.: banda no dia da
       entrada, ATR estimado). Fica preservado em `OpenPosition.metadata` para
       o robô consultar em `on_bar`.
+    - `reason`: qual REGRA do robô disparou esta compra, em código curto
+      (`"dip_rank"`, `"dip_rank1_rotation"`). Existe por simetria com
+      `Exit.reason`: sem ele o diário sabe explicar toda venda e nenhuma
+      compra, e a pergunta "por que este papel neste dia?" fica sem resposta
+      seis meses depois. Fica em `live_intents.reason`; os NÚMEROS que
+      acompanham a regra (rank, score, distância da máxima) vão em
+      `metadata`, que o runtime copia para `live_intents.payload`.
+
+      String e não enum de propósito: `ExitReason` é fechado porque as saídas
+      são poucas e comuns a todos os robôs, mas cada estratégia entra por um
+      motivo próprio, e um enum central obrigaria a editar `core/` a cada robô
+      novo — exatamente o acoplamento que a regra 2 do AGENTS.md evita.
     """
 
     ticker: str
     initial_stop: float | None = None
     size_hint: float | None = None
     metadata: dict | None = None
+    reason: str = ""
 
 
 @dataclass

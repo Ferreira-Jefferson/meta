@@ -46,9 +46,11 @@
   <h3>Decisões</h3>
   <p class="dek">
     Toda intenção gravada pelo robô, mais recente primeiro — decidida no fecho
-    de um pregão, para executar no seguinte (regra 4 do AGENTS.md).
+    de um pregão, para executar no seguinte (regra 4 do AGENTS.md). Em
+    <em>por quê</em>, o que a regra mediu e como o mercado estava naquele
+    pregão.
   </p>
-  <table class="ops-table">
+  <table class="ops-table ops-table-diario">
     <thead>
       <tr>
         <th>Decidido em</th>
@@ -63,16 +65,36 @@
     </thead>
     <tbody>
       {% for i in intents %}
-      <tr>
+      {% set snap = snapshots.get(i.id) %}
+      {% set tem_ctx = i.payload or snap %}
+      <tr class="{{ 'tem-ctx' if tem_ctx else '' }}">
         <td class="num">{{ i.decided_on }}</td>
         <td class="dim">{{ i.robot.replace("withdrawal:", "saque:") }}</td>
         <td>{{ i.kind.value }}</td>
         <td class="ticker">{{ i.ticker.replace(".SA", "") if i.ticker else "—" }}</td>
-        <td class="dim">{{ i.reason or "—" }}</td>
+        <td class="motivo">
+          {% if i.reason %}
+          {% set frase = i.reason|motivo_legivel %}
+          <span class="motivo-frase">{{ frase }}</span>
+          {# Código só quando há tradução: sem isto, um motivo sem frase
+             aparece duas vezes na mesma célula e lê como bug. #}
+          {% if frase != i.reason %}<span class="motivo-codigo">{{ i.reason }}</span>{% endif %}
+          {% else %}
+          <span class="dim">—</span>
+          {% endif %}
+        </td>
         <td class="right num">{% if i.amount %}R$ {{ "{:,.0f}".format(i.amount).replace(",", ".") }}{% else %}<span class="dim">—</span>{% endif %}</td>
         <td class="right num">{{ i.execute_on }}</td>
-        <td><span class="status-pill {{ i.status.value }}">{{ i.status.value }}</span></td>
+        <td class="col-status">
+          <span class="status-pill {{ i.status.value }}">{{ i.status.value }}</span>
+          {% if tem_ctx %}
+          <button type="button" class="ctx-toggle" aria-expanded="false"
+                  aria-controls="ctx-{{ i.id }}"
+                  title="Por que esta decisão">por quê</button>
+          {% endif %}
+        </td>
       </tr>
+      {% if tem_ctx %}{% include "partials/decisao_contexto.html" %}{% endif %}
       {% else %}
       <tr><td colspan="8" class="ops-table-empty">Nenhuma decisão registrada ainda.</td></tr>
       {% endfor %}
@@ -108,6 +130,21 @@
     </tbody>
   </table>
 </section>
+
+<script>
+// Toggle da linha de contexto. Delegação num listener só (e não um por botão):
+// a tabela tem até 200 linhas, e ligar 200 listeners para uma interação que
+// acontece uma vez por leitura é desperdício sem ganho nenhum.
+document.addEventListener('click', function (ev) {
+  const btn = ev.target.closest('.ctx-toggle');
+  if (!btn) return;
+  const alvo = document.getElementById(btn.getAttribute('aria-controls'));
+  if (!alvo) return;
+  const aberto = btn.getAttribute('aria-expanded') === 'true';
+  btn.setAttribute('aria-expanded', String(!aberto));
+  alvo.hidden = aberto;
+});
+</script>
 
 <script>
 window.addEventListener('load', function () {
