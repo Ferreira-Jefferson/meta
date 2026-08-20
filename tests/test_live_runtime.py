@@ -1996,3 +1996,61 @@ def test_dois_supervisores_no_mesmo_banco_nao_decidem_o_mesmo_pregao_duas_vezes(
     assert len(serie) == 1
     assert any("outro processo decidiu" in e["message"] for e in eventos), (
         "a corrida tem de ficar VISIVEL no diario — e sintoma de dois supervisores")
+
+
+def test_pregao_sem_decisao_empurra_alerta_e_escala_no_fim_de_mes(tmp_path, universe):
+    """O risco OPOSTO ao da decisao dupla: a maquina fora do ar no fecho.
+
+    A decisao daquele pregao nao atrasa — ela se perde, porque `BuyTheDip` so
+    rebalanceia quando `is_month_end` e verdade naquele dia. `status()` ja
+    listava os pregoes sem decisao, mas painel e passivo: quem esta com a
+    maquina fora do ar nao esta olhando o painel. Aqui o buraco empurra aviso,
+    e escala para `error` quando um dos pregoes perdidos era virada de mes.
+
+    Nao ha retomada automatica — isso e mudanca de comportamento de dinheiro
+    (regra 7: intencao velha expira, nunca executa tarde) e nao esta neste
+    caminho de proposito.
+    """
+    data_dir, _ = universe
+    # janela real que ATRAVESSA a virada de mes, para o alerta ter o que escalar
+    dias = clock.sessions_between(date(2030, 1, 1), date(2030, 4, 1))
+    d0 = dias[0]
+    fim_de_mes = next(d for d in dias if clock.next_session(d).month != d.month)
+    depois = clock.next_session(clock.next_session(fim_de_mes))
+    _write_parquet(data_dir, TICKER, dias, [100.0] * len(dias))
+    _write_parquet(data_dir, BENCHMARK, dias, [50_000.0] * len(dias))
+
+    rt = _runtime(tmp_path, data_dir, {})
+    rt.feed.set(TICKER, 100.0)
+    rt.ensure_account()
+
+    assert rt.close_and_decide(d0).action == "decide"
+    # processo fora do ar entre d0 e `depois` — inclusive no fim de mes
+    assert rt.close_and_decide(depois).action == "decide"
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, "teste")
+        eventos = store.recent_events(conn, acc.id, limit=50)
+    alerta = [e for e in eventos if "sem decisao" in e["message"]]
+    assert alerta, "pregao perdido nao pode passar em silencio"
+    assert alerta[0]["level"] == "error", "virada de mes tem de escalar"
+    assert "PERDIDA" in alerta[0]["message"]
+    assert fim_de_mes.isoformat() in alerta[0]["payload"]["fim_de_mes"]
+
+
+def test_sequencia_normal_de_pregoes_nao_gera_alerta_de_pregao_perdido(tmp_path, universe):
+    """Contraprova do teste acima: dois pregoes consecutivos decididos em
+    sequencia nao podem gerar aviso nenhum — senao o alerta viraria ruido
+    diario e seria ignorado justamente no dia em que importa."""
+    data_dir, days = universe
+    rt = _runtime(tmp_path, data_dir, {})
+    rt.feed.set(TICKER, 100.0)
+    rt.ensure_account()
+
+    rt.close_and_decide(days[0])
+    rt.close_and_decide(days[1])
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, "teste")
+        eventos = store.recent_events(conn, acc.id, limit=50)
+    assert not [e for e in eventos if "sem decisao" in e["message"]]

@@ -769,6 +769,38 @@ class LiveRuntime:
                 return StepReport("decide_skip", session,
                                   detail={"motivo": "ja decidido (corrida)"})
 
+            # Pregao que passou SEM decisao nenhuma (processo fora do ar no
+            # fecho, maquina desligada, servico morto). O risco aqui e o
+            # OPOSTO de decidir duas vezes: a decisao daquele fecho nao
+            # atrasa, ela se PERDE — e se o pregao perdido era o ultimo do
+            # mes, perde-se a rotacao inteira, porque `BuyTheDip` so olha
+            # `is_month_end`. `status()` ja mostra a lista no painel (achado
+            # E4), mas painel e passivo: quem esta com a maquina fora do ar
+            # nao esta olhando o painel. Aqui o buraco EMPURRA um aviso.
+            #
+            # Nao ha retomada automatica de proposito: executar hoje uma
+            # rotacao decidida num fecho antigo e mudanca de comportamento de
+            # dinheiro (regra 7 do AGENTS.md manda a intencao velha expirar,
+            # nunca executar tarde), e essa e decisao do dono, nao deste
+            # commit. O que se corrige aqui e o silencio.
+            if ja_decidida is not None:
+                perdidos: list[date] = []
+                d = clock.next_session(date.fromisoformat(ja_decidida[0]))
+                while d < session and len(perdidos) < 30:
+                    perdidos.append(d)
+                    d = clock.next_session(d)
+                if perdidos:
+                    virada = [x for x in perdidos
+                              if clock.next_session(x).month != x.month]
+                    msg = (f"{len(perdidos)} pregao(oes) sem decisao antes de {session}: "
+                           f"{perdidos[0]} a {perdidos[-1]}")
+                    if virada:
+                        msg += (f" — inclui fim de mes ({', '.join(str(x) for x in virada)}): "
+                                "a rotacao daquele mes nao foi adiada, foi PERDIDA")
+                    self._log(conn, account.id, "error" if virada else "warn", "runtime", msg,
+                              {"perdidos": [x.isoformat() for x in perdidos],
+                               "fim_de_mes": [x.isoformat() for x in virada]})
+
             # Circuit breaker: observa o patrimonio do fecho ANTES de colher
             # decisoes, para o veto (se houver) valer para as intencoes que
             # vao ser geradas agora — nao para as do fecho anterior, que ja
