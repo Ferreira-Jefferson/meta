@@ -60,3 +60,24 @@ class BacktestConfig:
     # `backtest.costs.cash_yield_series` para o porquê do default e para o
     # tamanho do viés que ele introduz nas variantes defensivas.
     cash_yield_path: str | None = None
+    # Como o stop é PREENCHIDO — modelo de EXECUÇÃO, não regra de decisão (o
+    # nível do stop continua vindo da estratégia). Existe para medir a única
+    # divergência estrutural entre backtest e operação real: ao vivo o stop
+    # dispara no preço OBSERVADO pelo feed, não na barra fechada.
+    #
+    #   "stop_or_open"  dispara se `low <= stop`, preenche em `min(open, stop)`.
+    #                   Default e comportamento histórico de todo o diário.
+    #                   É a hipótese OTIMISTA: assume que se conseguiu sair no
+    #                   nível do stop (ou no open, se o gap foi pior).
+    #   "close"         dispara se `close <= stop`, preenche no `close`. É o
+    #                   que o `ParquetCloseFeed` faz de verdade em
+    #                   `scripts/run_live_sim.py`: um feed que só vê o
+    #                   fechamento não enxerga a perfuração intradiária, então
+    #                   além de sair pior ele às vezes NÃO SAI.
+    #   "low"           dispara se `low <= stop`, preenche no `low`. Limite
+    #                   inferior de qualquer feed intradiário com atraso:
+    #                   ninguém sai pior que a mínima do dia.
+    #
+    # Mudar isto NÃO melhora nem piora estratégia nenhuma — só troca a
+    # hipótese de execução. Comparar arms é o ponto.
+    stop_fill: str = "stop_or_open"

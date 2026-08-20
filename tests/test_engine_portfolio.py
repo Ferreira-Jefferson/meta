@@ -373,3 +373,77 @@ def test_mfe_mae_usa_apenas_close_nunca_high_low():
     expected_mae = (90.0 - entry_price) / entry_price
     assert trade.max_favorable_excursion == pytest.approx(expected_mfe)
     assert trade.max_adverse_excursion == pytest.approx(expected_mae)
+
+
+# ---------------------------------------------------------------------------
+# (j) `stop_fill`: hipotese de EXECUCAO do stop, nao regra de decisao
+# ---------------------------------------------------------------------------
+
+def _cenario_stop(fill: str):
+    """Mesma posicao, mesmo nivel de stop, tres hipoteses de saida.
+
+    Barra de saida desenhada para SEPARAR as tres: `low` perfura bem abaixo do
+    stop e o `close` RECUPERA para acima dele. Assim cada arm tem um desfecho
+    distinto e nenhum teste passa por coincidencia numerica.
+    """
+    dates = pd.bdate_range("2024-01-02", periods=5)
+    #                       entra em dates[2] no open=100; stop = 90 (10%)
+    opens = [50.0, 50.0, 100.0, 99.0, 95.0]
+    highs = [51.0, 51.0, 101.0, 99.5, 96.0]
+    lows = [49.0, 49.0, 99.0, 80.0, 94.0]   # dates[3]: perfura ate 80
+    closes = [50.0, 50.0, 100.0, 95.0, 95.0]  # dates[3]: fecha em 95, ACIMA do stop
+    universe = {
+        "TEST.SA": _ohlc(dates, opens, highs, lows, closes),
+        BENCHMARK: _panel(dates, [100_000.0] * 5),
+    }
+    strategy = _StubStrategy({dates[1]: [Enter(ticker="TEST.SA")]})
+    config = BacktestConfig(initial_capital=100_000.0, max_concurrent_positions=1,
+                            lot_size=1, stop_loss_pct=0.10, stop_fill=fill)
+    r = run_portfolio_backtest(universe, strategy, config,
+                               start=dates[0].strftime("%Y-%m-%d"),
+                               end=dates[-1].strftime("%Y-%m-%d"),
+                               satellite_pct=0.0, redist_mode="pool")
+    return r, config, dates
+
+
+def test_stop_fill_default_e_o_comportamento_historico_do_diario():
+    """`stop_or_open` e o default e tem de continuar sendo o que sempre foi:
+    dispara na perfuracao da minima e preenche no NIVEL do stop (o open de
+    dates[3] e 99, acima do stop de 90, entao `min(open, stop)` = stop).
+
+    Se este teste mudar de valor, todo o diario gravado passa a descrever
+    outra coisa — e por isso que o knob existe com default, em vez de o
+    comportamento ser trocado.
+    """
+    r, config, dates = _cenario_stop("stop_or_open")
+    entry = apply_slippage(100.0, "buy", config.costs)
+    stop = entry * (1.0 - config.stop_loss_pct)
+    assert len(r.trades) == 1
+    assert r.trades[0].exit_reason == ExitReason.STOP
+    assert r.trades[0].exit_date == dates[3].date()
+    assert r.trades[0].exit_price == pytest.approx(apply_slippage(stop, "sell", config.costs))
+
+
+def test_stop_fill_low_sai_na_minima_o_piso_de_qualquer_feed_atrasado():
+    """Limite inferior de um feed intradiario com atraso: ninguem sai pior que
+    a minima do dia. Mesmo gatilho, preco pior — e a conta de quanto a
+    hipotese otimista do diario vale em dinheiro."""
+    r, config, dates = _cenario_stop("low")
+    assert len(r.trades) == 1
+    assert r.trades[0].exit_reason == ExitReason.STOP
+    assert r.trades[0].exit_price == pytest.approx(apply_slippage(80.0, "sell", config.costs))
+
+
+def test_stop_fill_close_pode_NAO_disparar_quando_o_dia_recupera():
+    """O achado que faz este arm valer a pena: um feed que so ve o fechamento
+    nao enxerga a perfuracao. Em dates[3] a minima foi 80 (bem abaixo do stop
+    de 90) mas o fechamento voltou para 95 — o `ParquetCloseFeed` nunca veria
+    preco abaixo do stop, e a posicao FICA.
+
+    Ou seja: a divergencia entre backtest e operacao real nao e so "sai
+    pior". As vezes e "nao sai", o que pode terminar melhor ou pior. Por isso
+    o arm `close` pode aparecer ACIMA do REF na medicao sem ser boa noticia.
+    """
+    r, _config, _dates = _cenario_stop("close")
+    assert not [t for t in r.trades if t.exit_reason == ExitReason.STOP], (
+        "feed de fechamento nao deveria ter visto a perfuracao intradiaria")

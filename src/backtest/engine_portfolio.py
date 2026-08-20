@@ -303,9 +303,26 @@ def run_portfolio_backtest(
                 continue
             low = _price(ticker, today, "low")
             opn = _price(ticker, today, "open")
-            if low is None or low > pos.current_stop:
-                continue
-            exec_ref = min(opn, pos.current_stop)
+            # Gatilho E preenchimento dependem do modelo de EXECUCAO
+            # (`config.stop_fill`, documentado em `core/config.py`). O nivel do
+            # stop continua vindo da estrategia — aqui so se escolhe a hipotese
+            # sobre COMO se consegue sair, que e a unica divergencia estrutural
+            # entre este engine e a operacao real.
+            if config.stop_fill == "close":
+                # Feed que so ve o fechamento: nao enxerga a perfuracao
+                # intradiaria, entao as vezes nem dispara.
+                cls = _price(ticker, today, "close")
+                if cls is None or cls > pos.current_stop:
+                    continue
+                exec_ref = cls
+            elif config.stop_fill == "low":
+                if low is None or low > pos.current_stop:
+                    continue
+                exec_ref = low
+            else:
+                if low is None or low > pos.current_stop:
+                    continue
+                exec_ref = min(opn, pos.current_stop)
             exec_px = apply_slippage(exec_ref, "sell", config.costs)
             gross = exec_px * pos.quantity
             leg_fees = fees_for_leg(gross, config.costs)
