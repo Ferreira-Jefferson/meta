@@ -2054,3 +2054,98 @@ def test_sequencia_normal_de_pregoes_nao_gera_alerta_de_pregao_perdido(tmp_path,
         acc = store.load_account(conn, "teste")
         eventos = store.recent_events(conn, acc.id, limit=50)
     assert not [e for e in eventos if "sem decisao" in e["message"]]
+
+
+def _fim_de_mes_fora_de_blackout() -> tuple[date, date, date]:
+    """(pregao anterior, fim de mes, pregao de retorno) — nenhum em blackout.
+
+    Precisa dos tres livres de blackout de resultados: se o fim de mes caisse
+    em blackout, o adiamento viria do blackout e nao da maquina fora do ar, e
+    o teste provaria outra coisa. Se o retorno caisse em blackout, a rotacao
+    devida continuaria adiada e o teste falharia por motivo errado.
+    """
+    dias = clock.sessions_between(date(2030, 1, 1), date(2030, 12, 20))
+    for i, d in enumerate(dias[1:-2], start=1):
+        if clock.next_session(d).month == d.month:
+            continue
+        anterior, retorno = dias[i - 1], dias[i + 2]
+        if any(is_earnings_blackout(pd.Timestamp(x)) for x in (anterior, d, retorno)):
+            continue
+        return anterior, d, retorno
+    raise AssertionError("sem fim de mes fora de blackout no calendario de 2030")
+
+
+def test_fim_de_mes_perdido_pela_maquina_fora_do_ar_e_reavaliado_no_retorno(tmp_path):
+    """A politica escolhida: ao voltar, o robo REANALISA — nao executa o velho.
+
+    Cenario: o processo estava fora do ar exatamente no fecho do ultimo pregao
+    do mes, o unico dia em que a familia dip rebalanceia. Sem tratamento, o mes
+    inteiro passa sem rotacao e nada disso aparece.
+
+    O ambiente conta o buraco (`on_missed_bars`) e a ESTRATEGIA decide o que
+    ele significa: `BuyTheDip` marca a rotacao como devida e, no pregao de
+    retorno, recalcula momentum, distancia da maxima e gate de Selic com o dado
+    DAQUELE pregao. Nada decidido no fecho antigo e executado — a regra 7
+    continua valendo, porque a decisao que sai daqui e nova.
+    """
+    anterior, fim_de_mes, retorno = _fim_de_mes_fora_de_blackout()
+    data_dir = _painel_dip_para(tmp_path, retorno)
+    feed = ReplayFeed()
+    rt = LiveRuntime(
+        account_name="teste",
+        strategy=BuyTheDip(top_n=1, dip_pct=0.03, high_window=20,
+                           selic_path=str(tmp_path / "selic_inexistente.parquet")),
+        policy=FloorSkim(pct=0.5, floor=1e12),
+        feed=feed, broker=PaperBroker(feed),
+        config=BacktestConfig(initial_capital=10_000.0, lot_size=1),
+        tickers=("AAA.SA", "BBB.SA"), db_path=tmp_path / "live.sqlite", data_dir=data_dir,
+    )
+    rt.ensure_account()
+
+    assert rt.close_and_decide(anterior).detail["intencoes"] == 0, (
+        "dia comum antes do fim de mes nao deveria decidir nada")
+
+    # maquina fora do ar no fecho do fim de mes e no pregao seguinte
+    r = rt.close_and_decide(retorno)
+    assert r.action == "decide"
+    assert r.detail["intencoes"] >= 1, (
+        "fim de mes perdido nao foi reavaliado no retorno — mes sem rotacao")
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, "teste")
+        eventos = store.recent_events(conn, acc.id, limit=50)
+        intencoes = store.pending_intents(conn, acc.id, clock.next_session(retorno))
+    assert any(e["level"] == "error" and "PERDIDA" in e["message"] for e in eventos)
+    # a decisao e de HOJE: `execute_on` e o pregao seguinte ao RETORNO, nunca
+    # o pregao seguinte ao fim de mes perdido.
+    assert all(i.decided_on == retorno for i in intencoes)
+    assert all(i.execute_on == clock.next_session(retorno) for i in intencoes)
+
+
+def test_pregao_comum_perdido_nao_faz_o_robo_rebalancear_fora_de_hora(tmp_path):
+    """Contraprova: pregao perdido que NAO era fim de mes nao deve nada.
+
+    Sem isto, "reavaliar no retorno" viraria "rebalancear em qualquer dia em
+    que o processo tenha piscado" — o robo passaria a ter cadencia de uptime
+    da maquina em vez de cadencia mensal, e nenhum backtest descreveria isso.
+    """
+    dias = clock.sessions_between(date(2030, 2, 4), date(2030, 2, 20))
+    comuns = [d for d in dias if clock.next_session(d).month == d.month
+              and not is_earnings_blackout(pd.Timestamp(d))]
+    d0, retorno = comuns[0], comuns[3]
+    data_dir = _painel_dip_para(tmp_path, retorno)
+    feed = ReplayFeed()
+    rt = LiveRuntime(
+        account_name="teste",
+        strategy=BuyTheDip(top_n=1, dip_pct=0.03, high_window=20,
+                           selic_path=str(tmp_path / "selic_inexistente.parquet")),
+        policy=FloorSkim(pct=0.5, floor=1e12),
+        feed=feed, broker=PaperBroker(feed),
+        config=BacktestConfig(initial_capital=10_000.0, lot_size=1),
+        tickers=("AAA.SA", "BBB.SA"), db_path=tmp_path / "live.sqlite", data_dir=data_dir,
+    )
+    rt.ensure_account()
+
+    rt.close_and_decide(d0)
+    r = rt.close_and_decide(retorno)
+    assert r.detail["intencoes"] == 0, "pregao comum perdido nao autoriza rotacao"

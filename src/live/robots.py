@@ -105,6 +105,9 @@ class LiveRobot(ABC):
         """Reacao a cotacao intra-dia (ex.: stop). Default vazio."""
         return []
 
+    def on_missed_bars(self, missed: list[date]) -> None:
+        """Pregoes que passaram sem `on_close`. Default: nao faz nada."""
+
     def on_executed(self, intent: Intent, executed: float) -> None:
         """Confirmacao do que saiu de fato para uma intencao emitida. Default: nada."""
         return None
@@ -189,6 +192,18 @@ class InvestmentRobot(LiveRobot):
                     ticker=act.ticker, stop_price=act.new_stop,
                 ))
         return intents
+
+    def on_missed_bars(self, missed: list[date]) -> None:
+        """Conta a estrategia quais pregoes passaram sem decisao.
+
+        So TRANSPORTA o fato — nao interpreta. O que um pregao perdido
+        significa e decisao da estrategia (`Strategy.on_missed_bars`), nunca
+        deste modulo: um `live/` que decidisse "entao rebalanceia hoje" por
+        conta propria seria regra de decisao fora de `strategy/`, proibido
+        pela regra 6 do AGENTS.md, e o backtest deixaria de descrever a
+        operacao.
+        """
+        self.strategy.on_missed_bars([pd.Timestamp(d) for d in missed])
 
     def on_intraday(self, ctx: RobotContext) -> list[Intent]:
         """Stop intra-dia, verificado contra a cotacao observada.

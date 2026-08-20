@@ -164,6 +164,21 @@ class LiquidSleeves5(DipTop1Portfolio):
 
         return others + enters
 
+    def on_missed_bars(self, missed) -> None:
+        """Repassa aos cinco sleeves — eles sao quem tem cadencia mensal.
+
+        Mesmo motivo de `state()`/`restore()` logo abaixo: os sleeves sao
+        objetos internos e nenhum mecanismo generico enxerga dentro deles. Sem
+        este repasse, um pregao de fim de mes perdido deixaria a rotacao devida
+        no objeto de fora — que nao rebalanceia nada por conta propria, porque
+        `on_bar` delega tudo aos sleeves — e os cinco voltariam achando que nao
+        tem nada pendente. O robo ficaria um mes inteiro sem rotacao sem que
+        nenhum sinal disso aparecesse.
+        """
+        super().on_missed_bars(missed)
+        for s in self._sleeves:
+            s.on_missed_bars(missed)
+
     # ------------------------------------------------------------------ estado
 
     def state(self) -> dict:

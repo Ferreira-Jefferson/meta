@@ -289,3 +289,70 @@ def test_run_sem_benchmark_passa_marcada_em_vez_de_sumir(tmp_path):
     podio = reader.top_strategies_by_final_capital(db_path=db)
     assert len(podio) == 1
     assert podio[0]["gate_unavailable"] is True
+
+
+# ---------- pregao perdido: o campeao e composto, o repasse tem de existir ----
+
+def _campeao_inicializado():
+    """Campeao com `initialize()` rodado sobre um painel sintetico minimo.
+
+    `on_missed_bars` consulta `_month_end`, que so existe depois de
+    `initialize()` — testar antes disso passaria por acidente.
+    """
+    import pandas as pd
+
+    from strategy.liquid_champion import LiquidChampion
+
+    dias = pd.bdate_range("2028-01-03", periods=600)
+    painel = pd.DataFrame(
+        {"open": 10.0, "high": 10.5, "low": 9.5, "close": 10.0, "volume": 1_000_000.0},
+        index=pd.DatetimeIndex(dias, name="date"),
+    )
+    ibov = painel.copy()
+    bot = LiquidChampion()
+    bot.initialize({t: painel.copy() for t in bot.universe_tickers[:6]}, ibov)
+    fim_de_mes = [d for d in dias if d.month != (d + pd.offsets.BDay(1)).month]
+    return bot, dias, fim_de_mes
+
+
+def test_fim_de_mes_perdido_deixa_rotacao_devida_nos_CINCO_sleeves():
+    """O campeao nao rebalanceia nada por conta propria: `on_bar` delega tudo
+    aos cinco sleeves. Se `on_missed_bars` parasse no objeto de fora, o
+    pendente ficaria num lugar que nao decide, os cinco sleeves voltariam
+    achando que nao devem nada, e o robo passaria o mes sem rotacao — em
+    silencio, porque o alerta do runtime teria sido emitido normalmente.
+    """
+    bot, _dias, fim_de_mes = _campeao_inicializado()
+    assert not any(s._pending_rebalance for s in bot._sleeves)
+
+    bot.on_missed_bars([fim_de_mes[3]])
+
+    assert all(s._pending_rebalance for s in bot._sleeves), (
+        "repasse aos sleeves nao aconteceu — rotacao devida ficou orfa")
+
+
+def test_pregao_comum_perdido_nao_deixa_nada_devido_no_campeao():
+    """Contraprova: sem isto o campeao passaria a rebalancear em qualquer dia
+    em que o processo tenha piscado, trocando cadencia mensal por cadencia de
+    uptime da maquina."""
+    import pandas as pd
+
+    bot, dias, fim_de_mes = _campeao_inicializado()
+    comum = next(d for d in dias if d not in set(fim_de_mes))
+
+    bot.on_missed_bars([pd.Timestamp(comum)])
+
+    assert not any(s._pending_rebalance for s in bot._sleeves)
+
+
+def test_rotacao_devida_dos_sleeves_sobrevive_a_restart():
+    """`state()`/`restore()` ja serializavam `_sleeve_pending` para o blackout;
+    o pendente que vem de pregao perdido usa o MESMO campo e tem de sobreviver
+    igual — um restart depois do buraco nao pode apagar a rotacao devida."""
+    bot, _dias, fim_de_mes = _campeao_inicializado()
+    bot.on_missed_bars([fim_de_mes[3]])
+
+    outro, _d2, _f2 = _campeao_inicializado()
+    outro.restore(bot.state())
+
+    assert all(s._pending_rebalance for s in outro._sleeves)

@@ -778,11 +778,13 @@ class LiveRuntime:
             # E4), mas painel e passivo: quem esta com a maquina fora do ar
             # nao esta olhando o painel. Aqui o buraco EMPURRA um aviso.
             #
-            # Nao ha retomada automatica de proposito: executar hoje uma
-            # rotacao decidida num fecho antigo e mudanca de comportamento de
-            # dinheiro (regra 7 do AGENTS.md manda a intencao velha expirar,
-            # nunca executar tarde), e essa e decisao do dono, nao deste
-            # commit. O que se corrige aqui e o silencio.
+            # A intencao velha continua NAO sendo executada (regra 7): nada
+            # decidido naquele fecho antigo vira ordem. O que acontece e o
+            # ambiente CONTAR a estrategia quais pregoes faltaram
+            # (`on_missed_bars`) e ela decidir se ainda deve alguma coisa — a
+            # familia dip marca a rotacao como devida e recalcula tudo com o
+            # dado de HOJE no proximo pregao. Interpretar o buraco aqui seria
+            # regra de decisao em `live/`, proibido pela regra 6.
             if ja_decidida is not None:
                 perdidos: list[date] = []
                 d = clock.next_session(date.fromisoformat(ja_decidida[0]))
@@ -800,6 +802,7 @@ class LiveRuntime:
                     self._log(conn, account.id, "error" if virada else "warn", "runtime", msg,
                               {"perdidos": [x.isoformat() for x in perdidos],
                                "fim_de_mes": [x.isoformat() for x in virada]})
+                    self.investment.on_missed_bars(perdidos)
 
             # Circuit breaker: observa o patrimonio do fecho ANTES de colher
             # decisoes, para o veto (se houver) valer para as intencoes que

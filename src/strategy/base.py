@@ -144,6 +144,31 @@ class Strategy(ABC):
     ) -> list[Action]:
         """Decisão do dia. Devolve ações declarativas ao engine."""
 
+    def on_missed_bars(self, missed: list[pd.Timestamp]) -> None:
+        """Estes pregões passaram SEM que `on_bar` fosse chamado. O que fazer?
+
+        Existe porque ao vivo o processo pode estar fora do ar no fecho — e aí
+        a decisão daquele pregão não atrasa, ela se PERDE: um robô que só
+        rebalanceia no último pregão do mês perde a rotação do mês inteiro.
+        No backtest isto nunca acontece (o loop visita todo pregão), então o
+        ambiente ao vivo precisa de um jeito de contar o que faltou.
+
+        Quem decide o que um pregão perdido significa é a ESTRATÉGIA, nunca
+        `live/` (regra 6 do AGENTS.md): o ambiente só REPORTA o fato. Um robô
+        que decide todo dia não deve nada e o default aqui é não fazer nada;
+        um robô de cadência mensal pode querer marcar a rotação como devida.
+
+        Não é execução atrasada e não conflita com a regra 7: nada decidido
+        naquele fecho antigo é executado. O que a estratégia pode fazer é
+        pedir para DECIDIR DE NOVO no próximo pregão, com o dado desse
+        pregão — se o sinal não fizer mais sentido, não faz mais sentido, e a
+        decisão nova dirá isso. Mesmo mecanismo que a família dip já usa para
+        o blackout de resultados, que o backtest exercita.
+
+        Default no-op de propósito: um robô que não implementa isto continua
+        se comportando exatamente como antes.
+        """
+
     def state(self) -> dict:
         """Estado a persistir para sobreviver a um restart do processo ao vivo.
 

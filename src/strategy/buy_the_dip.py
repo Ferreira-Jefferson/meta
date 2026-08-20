@@ -67,6 +67,29 @@ class BuyTheDip(Strategy):
             hi = rolling_high(c, self.high_window)
             self._dist_from_high[t] = (c / hi) - 1.0  # negativo = abaixo do high
 
+    def on_missed_bars(self, missed):
+        """Pregão perdido que era fim de mês deixa a rotação DEVIDA.
+
+        Este robô só rebalanceia quando `is_month_end` é verdade naquele dia
+        (ver `on_bar`). Se o processo estava fora do ar exatamente naquele
+        fecho, o mês inteiro passa sem rotação — a carteira fica com o que
+        sobrou do mês anterior até a virada seguinte.
+
+        Marca `_pending_rebalance`, que é o MESMO mecanismo já usado para o
+        blackout de resultados: no próximo pregão o robô recalcula momentum,
+        distância da máxima e gate de Selic COM O DADO DESSE PREGÃO e decide
+        do zero. Não é a decisão velha sendo executada tarde (regra 7) — é
+        uma decisão nova, que pode perfeitamente ser "não entra".
+
+        Pregão perdido que não era fim de mês não deve nada: naquele dia o
+        robô teria devolvido lista vazia de qualquer forma.
+        """
+        for d in missed:
+            ts = pd.Timestamp(d)
+            if ts in self._month_end.index and bool(self._month_end.loc[ts]):
+                self._pending_rebalance = True
+                return
+
     def on_bar(self, date, open_positions, cash_available):
         is_me = date in self._month_end.index and bool(self._month_end.loc[date])
         should_rebalance = is_me or self._pending_rebalance
