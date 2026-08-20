@@ -12,3 +12,5 @@ db/live_secrets.json
 .DS_Store
 Thumbs.db
 screenshots/
+data/wide_e/*.parquet
+data/vault_1998_2009/*.parquet
