@@ -17,7 +17,7 @@ from typing import Callable, Literal, Optional
 
 import pandas as pd
 
-from backtest.costs import apply_slippage, fees_for_leg
+from backtest.costs import apply_slippage, cash_yield_series, fees_for_leg
 from backtest.engine import BacktestResult, _Position, _enrich, _snapshot
 from backtest.metrics import cagr, calmar, max_drawdown, sharpe, sortino, trade_stats
 from backtest.sizing import has_free_slot, initial_stop, liquidation_quantity, plan_entry
@@ -270,7 +270,15 @@ def run_portfolio_backtest(
         if withdrawal_policy is not None:
             withdrawal_policy.on_executed(today, executed)
 
+    cash_yield = cash_yield_series(config.cash_yield_path, all_dates)
+
     for i, today in enumerate(all_dates):
+        # Remuneracao do caixa ANTES de qualquer execucao do dia: o dinheiro que
+        # amanheceu parado rende; o que vai ser gasto hoje rendeu enquanto
+        # estava parado. Desligado por default (`cash_yield_path=None`).
+        if cash_yield is not None and cash > 0.0:
+            cash *= 1.0 + float(cash_yield.iat[i])
+
         # MFE/MAE
         for t, pos in positions.items():
             px = _price(t, today)

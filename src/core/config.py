@@ -55,3 +55,8 @@ class BacktestConfig:
     ibov_defensive_days: int = 3
     lot_size: int = 100
     costs: CostModel = field(default_factory=CostModel)
+    # Caminho do parquet de Selic diária para remunerar o caixa parado.
+    # `None` = caixa a 0%, que é como TODO o diário foi gravado — ver
+    # `backtest.costs.cash_yield_series` para o porquê do default e para o
+    # tamanho do viés que ele introduz nas variantes defensivas.
+    cash_yield_path: str | None = None

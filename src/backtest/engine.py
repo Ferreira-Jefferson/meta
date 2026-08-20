@@ -20,7 +20,7 @@ from typing import Callable, Optional
 
 import pandas as pd
 
-from backtest.costs import apply_slippage, fees_for_leg
+from backtest.costs import apply_slippage, cash_yield_series, fees_for_leg
 from core.config import BENCHMARK, BacktestConfig
 from core.market_features import enrich_features, snapshot_from_row
 from core.models import ExitReason, MarketSnapshot, Trade
@@ -130,7 +130,15 @@ def run_backtest(
 
     default_stop = config.stop_loss_pct  # fallback quando Enter não trouxer stop
 
+    cash_yield = cash_yield_series(config.cash_yield_path, all_dates)
+
     for i, today in enumerate(all_dates):
+        # (0) Remuneracao do caixa parado — mesma regra do engine de portfolio,
+        # aplicada antes das execucoes do dia. Desligada por default; ver
+        # `backtest.costs.cash_yield_series`.
+        if cash_yield is not None and cash > 0.0:
+            cash *= 1.0 + float(cash_yield.iat[i])
+
         # (1) MFE/MAE usando close do dia
         for ticker, pos in positions.items():
             df = enriched.get(ticker)
