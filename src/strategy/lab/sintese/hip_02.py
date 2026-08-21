@@ -74,7 +74,14 @@ class IliquidezGrupoComRiscoOrcado(RiskCappedWithStop):
     # operacao ao vivo: competir no ranking automatico (ver
     # `strategy/discovery.py::_PROMOTED_LAB_MODULES`) nao substitui esse
     # escrutinio, so deixa o robo visivel enquanto ele acontece.
-    candidate = True
+    #
+    # APOSENTADA do podio em 2026-08-21 — nao por desempenho medido, e' a
+    # decisao explicita do dono do capital de reduzir o podio a UM robo so
+    # (`liqflop`, ex-`liquid_focus_loss_pause`), apos a investigacao de capital real
+    # (R$100 + taxa fixa fracionaria) mostrar que esta classe (medida a
+    # R$1.000, sem essa taxa) nunca foi validada no regime que o dono
+    # realmente opera. Aposentar nao e apagar: continua resolvivel por chave.
+    candidate = False
     universe_tickers = wide_pool()
 
     def __init__(

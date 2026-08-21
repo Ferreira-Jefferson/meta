@@ -116,10 +116,12 @@ def test_restore_volta_com_os_dez_sleeves_marcados():
 # -------------------------------------------------------------- candidatura
 
 
-def test_dual10_e_candidato():
-    """Promovido em 2026-08-20 -- ver docstring de LiquidDual10."""
-    assert LiquidDual10.candidate is True
-    assert LiquidDual10().candidate is True
+def test_dual10_foi_aposentado():
+    """Promovido em 2026-08-20, APOSENTADO em 2026-08-21 -- o podio foi
+    reduzido a um robo so (`liqflop`, ex-`liquid_focus_loss_pause`). Ver docstring de
+    LiquidDual10."""
+    assert LiquidDual10.candidate is False
+    assert LiquidDual10().candidate is False
 
 
 # ------------------------------------------------- teto de posicoes do engine

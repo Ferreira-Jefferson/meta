@@ -122,35 +122,41 @@ def test_robo_aposentado_continua_resolvivel_por_chave(chave):
     assert chave in REGISTRY
 
 
-def test_o_podio_tem_exatamente_os_dois_robos_decididos():
+def test_o_podio_tem_exatamente_o_robo_decidido():
     """Decisao explicita: quem disputa o pódio é escolha, nunca acidente.
 
-    Historico da decisao, todo em 2026-08-20:
-      - manha: pódio com um robo so, `liquid_champion`.
-      - tarde: `liquid_dual10` promovido pelo dono do capital, depois de vencer
-        o campeao nas 48 janelas do holdout, no controle de k=10 (que separa
-        "segunda faixa" de "mais sleeves") e na medicao com o capital real de
-        R$ 100/mes.
-      - em seguida: `liquid_champion` APOSENTADO (`candidate = False`) — ele
-        perdeu no ranking automatico da janela FULL. Aposentar nao e apagar: a
-        classe continua no repo, resolvivel por chave, e continua sendo a base
-        da familia (`liquid_dual10` herda dela via `LiquidSleeves5`).
+    Historico da decisao (2026-08-20 e 2026-08-21) — resumido, ver os
+    proprios arquivos de cada robo para o detalhe completo:
+      - 2026-08-20: pódio cresceu de `liquid_champion` (aposentado) para
+        `liquid_dual10` + `sintese_02_iliquidez_grupo_risco_orcado`.
+      - 2026-08-21, manha: `liquid_focus` (fee_capacity/hip_01) promovido
+        apos holdout no regime R$100+taxa fixa real da Rico.
+      - 2026-08-21, apos investigar o capital real a fundo: confirmado que
+        o edge de TODOS os robos do podio depende de 3-5 eventos raros/
+        semi-raros (WEGE3/Covid, RADL3/fusao, BRAP4/commodity, CSNA3/
+        commodity, SBSP3/privatizacao) — sem eles, prejuizo. Quatro sinais
+        alternativos tentando nao depender disso foram testados e
+        refutados (medo+volume x2, baixa-vol, valor-relativo/pairs — ver
+        `strategy/lab/market_nature/`, `strategy/lab/quality_factor/`,
+        `strategy/lab/relative_value/`). `liqflop`
+        (fee_capacity/hip_03 — mesma entrada de `liquid_focus`, so
+        acrescenta pausa apos 2 saidas negativas seguidas) melhorou
+        `liquid_focus` em toda metrica do holdout e do FULL.
+      - Decisao final do dono do capital: reduzir o podio a ESTE UM robo
+        so. `liquid_dual10`, `sintese_02_iliquidez_grupo_risco_orcado` e
+        `liquid_focus` foram APOSENTADOS/DESPROMOVIDOS no mesmo dia — nao
+        por desempenho, por escolha explicita de concentrar o podio.
+        Aposentar nao e apagar: as classes continuam no repo, resolviveis
+        por chave.
 
     O teste existe para a decisao ser VISIVEL. Adicionar um arquivo novo em
     `strategy/` o torna candidato automaticamente (`discovery.py`), entao sem
     este teste o pódio ganharia robo sem ninguem decidir isso — e a escolha de
     quem opera deixaria de ser uma escolha.
-
-    2026-08-20, fim do dia: a busca de swing da sessao paralela concluiu e
-    `sintese_02_iliquidez_grupo_risco_orcado` entrou como TOP-1 (vence nas
-    tres janelas do ranking por capital final). A trava exaustiva chegou a ser
-    SUSPENSA enquanto aquela decisao estava em andamento — e ela tinha
-    funcionado, pegando o robo novo entrando sem registro aqui. Restaurada
-    agora que o podio estabilizou em dois.
     """
     from strategy.registry import candidate_keys as _ck
 
-    assert sorted(_ck()) == ["liquid_dual10", "sintese_02_iliquidez_grupo_risco_orcado"]
+    assert sorted(_ck()) == ["liqflop"]
 
 
 def test_campeao_antigo_continua_sendo_a_base_da_familia():

@@ -128,6 +128,18 @@ mede a exposicao media dos dois braços e, se a do dual10 for menor, roda o
 mesmo controle de mistura estatica com Selic antes de aceitar qualquer melhora
 de drawdown como real. Este arquivo so se sustenta como composicao de conta se
 esse controle passar -- ele mesmo nao decide nada sozinho.
+
+APOSENTADO do podio em 2026-08-21
+------------------------------------
+`candidate = False`. Nao foi refutado por desempenho -- foi a decisao
+explicita do dono do capital de reduzir o podio a UM robo so
+(`liqflop`, ex-`liquid_focus_loss_pause`, ver `strategy/lab/fee_capacity/
+hip_03_pausa_apos_perdas.py`), depois da investigacao de 2026-08-21 sobre
+capital real (R$100 + taxa fixa fracionaria da Rico) mostrar que este robo
+(medido a R$1.000, sem a taxa) nunca foi validado no regime de custo/
+capital que o dono realmente opera. Aposentar nao e apagar: a classe
+continua no repo, resolvivel por chave, caso algum dia seja preciso
+retomar o desenho de duas faixas de liquidez.
 """
 from __future__ import annotations
 
@@ -141,7 +153,7 @@ class LiquidDual10(LiquidSleeves5):
 
     name = "liquid_dual10"
     version = "1.0"
-    candidate = True
+    candidate = False  # aposentado 2026-08-21 -- ver docstring do modulo
 
     def __init__(
         self,

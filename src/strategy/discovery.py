@@ -60,13 +60,21 @@ def _is_concrete_strategy(obj, include_retired: bool = False) -> bool:
 # hipoteses (inclusive as que reprovaram) por acidente; esta lista e o
 # oposto disso: cada entrada e uma decisao, nao um efeito colateral de scan.
 #
-# sintese_02_iliquidez_grupo_risco_orcado — promovida 2026-08-20, unica
-# sobrevivente do cofre selado (1998-2009) entre 122 hipoteses medidas.
-# Decisao do dono do capital antes do walk-forward/C1/C3/C5 e do porte para
-# operacao ao vivo — competir no ranking automatico nao substitui esse
-# escrutinio, so deixa o robo visivel enquanto ele acontece.
+# HISTORICO — sintese_02_iliquidez_grupo_risco_orcado (promovida 2026-08-20)
+# e liquid_focus (fee_capacity/hip_01, promovido 2026-08-21) passaram por
+# este mecanismo e foram APOSENTADAS/DESPROMOVIDAS em 2026-08-21 (ver o
+# proprio arquivo de cada uma) — nao por desempenho, mas porque o dono do
+# capital decidiu reduzir o podio a UM robo so. liquid_dual10 (em
+# `strategy/liquid_dual10.py`, fora desta lista) foi aposentado no mesmo
+# dia pelo mesmo motivo.
+#
+# liqflop, ex-liquid_focus_loss_pause (fee_capacity/hip_03) — UNICO candidato desde
+# 2026-08-21. Holdout de 48 janelas no regime R$100+taxa fixa real da Rico
+# melhora `liquid_focus` em toda metrica (ver docstring da classe) — mesma
+# ressalva declarada de regime (podio roda R$1.000 sem taxa fixa) segue
+# valendo, aceita explicitamente pelo dono do capital.
 _PROMOTED_LAB_MODULES: tuple[str, ...] = (
-    "strategy.lab.sintese.hip_02",
+    "strategy.lab.fee_capacity.hip_03_pausa_apos_perdas",
 )
 
 
