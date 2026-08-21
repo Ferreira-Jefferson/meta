@@ -6,6 +6,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = ROOT / "data" / "raw"
+# Dado intradiario (M1 de futuros via MT5) — diretorio PROPRIO, nao dentro de
+# DATA_DIR: um parquet de minuto misturado com os parquets diarios de acao
+# faria qualquer `glob("data/raw/*.parquet")` existente (ex.
+# `scripts/run_walk_forward.py`) engolir um formato que nao e o dele por
+# acidente. Ver `market_data_intraday/storage.py`.
+INTRADAY_DATA_DIR = ROOT / "data" / "raw_intraday"
 DB_PATH = ROOT / "db" / "journal.sqlite"
 SCHEMA_PATH = ROOT / "src" / "journal" / "schema.sql"
 

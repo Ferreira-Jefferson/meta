@@ -26,6 +26,21 @@ class ExitReason(str, Enum):
     WITHDRAWAL = "withdrawal"  # posicao zerada para levantar caixa de saque programado
 
 
+class IntradayExitReason(str, Enum):
+    """Motivo de saida de um trade intradiario (`backtest/intraday`).
+
+    Distinto de `ExitReason` (swing/daily) porque `FORCED_FLATTEN` nao tem
+    equivalente do lado diario — day trade nunca carrega posicao overnight,
+    entao toda sessao tem um fechamento forcado que nao e nem stop nem sinal.
+    """
+
+    STOP = "stop"
+    TARGET = "target"
+    FORCED_FLATTEN = "forced_flatten"
+    MANUAL = "manual"
+    SIGNAL = "signal"
+
+
 @dataclass(frozen=True)
 class Signal:
     ticker: str

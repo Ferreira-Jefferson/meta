@@ -89,7 +89,7 @@ def discover_strategies(include_retired: bool = False) -> list[DiscoveredStrateg
     found: dict[str, DiscoveredStrategy] = {}
     pkg_path = _strategy_pkg.__path__
     modulos = [f"strategy.{m.name}" for m in sorted(pkgutil.iter_modules(pkg_path), key=lambda m: m.name)
-               if m.name not in ("base", "registry", "discovery")]
+               if m.name not in ("base", "registry", "discovery", "daytrade")]
     modulos += list(_PROMOTED_LAB_MODULES)
     for mod_name in modulos:
         module = importlib.import_module(mod_name)
