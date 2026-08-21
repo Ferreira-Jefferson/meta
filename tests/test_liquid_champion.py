@@ -29,9 +29,17 @@ from strategy.registry import REGISTRY, candidate_keys, get_strategy, list_strat
 
 # --------------------------------------------------------------- o robo novo
 
-def test_campeao_e_candidato_e_instanciavel_sem_argumentos():
-    chaves = [d.key for d in discover_strategies()]
+def test_campeao_aposentado_continua_descoberto_e_instanciavel_sem_argumentos():
+    """Aposentado 2026-08-20 (`candidate = False`) — mas NAO apagado.
+
+    `discover_strategies(include_retired=True)` tem de continuar achando-o e
+    a classe tem de continuar instanciavel: uma conta ao vivo que ja opera
+    este robo nao pode quebrar so porque ele saiu do podio. Ver
+    `test_robo_aposentado_continua_resolvivel_por_chave` logo abaixo.
+    """
+    chaves = [d.key for d in discover_strategies(include_retired=True)]
     assert "liquid_champion" in chaves
+    assert "liquid_champion" not in [d.key for d in discover_strategies()]
     bot = LiquidChampion()
     assert bot.name == "liquid_champion"
 
@@ -114,17 +122,35 @@ def test_robo_aposentado_continua_resolvivel_por_chave(chave):
     assert chave in REGISTRY
 
 
-def test_o_podio_tem_um_robo_so_e_e_o_campeao():
-    """Decisao explicita de 2026-08-20: pódio com um robo, o `liquid_champion`.
+def test_o_podio_tem_exatamente_os_dois_robos_decididos():
+    """Decisao explicita: quem disputa o pódio é escolha, nunca acidente.
+
+    Historico da decisao, todo em 2026-08-20:
+      - manha: pódio com um robo so, `liquid_champion`.
+      - tarde: `liquid_dual10` promovido pelo dono do capital, depois de vencer
+        o campeao nas 48 janelas do holdout, no controle de k=10 (que separa
+        "segunda faixa" de "mais sleeves") e na medicao com o capital real de
+        R$ 100/mes.
+      - em seguida: `liquid_champion` APOSENTADO (`candidate = False`) — ele
+        perdeu no ranking automatico da janela FULL. Aposentar nao e apagar: a
+        classe continua no repo, resolvivel por chave, e continua sendo a base
+        da familia (`liquid_dual10` herda dela via `LiquidSleeves5`).
 
     O teste existe para a decisao ser VISIVEL. Adicionar um arquivo novo em
     `strategy/` o torna candidato automaticamente (`discovery.py`), entao sem
-    este teste o pódio voltaria a ter varios robos sem ninguem decidir isso —
-    e a escolha de operar um so deixaria de ser uma escolha.
+    este teste o pódio ganharia robo sem ninguem decidir isso — e a escolha de
+    quem opera deixaria de ser uma escolha.
+
+    2026-08-20, fim do dia: a busca de swing da sessao paralela concluiu e
+    `sintese_02_iliquidez_grupo_risco_orcado` entrou como TOP-1 (vence nas
+    tres janelas do ranking por capital final). A trava exaustiva chegou a ser
+    SUSPENSA enquanto aquela decisao estava em andamento — e ela tinha
+    funcionado, pegando o robo novo entrando sem registro aqui. Restaurada
+    agora que o podio estabilizou em dois.
     """
     from strategy.registry import candidate_keys as _ck
 
-    assert sorted(_ck()) == ["liquid_champion"]
+    assert sorted(_ck()) == ["liquid_dual10", "sintese_02_iliquidez_grupo_risco_orcado"]
 
 
 def test_campeao_antigo_continua_sendo_a_base_da_familia():

@@ -86,6 +86,7 @@ class LiquidSleeve(DipTop1Portfolio):
         sleeve_index: int = 0,
         sleeve_count: int = 5,
         universe_n: int = 20,
+        rank_offset: int = 0,
         liquidity_window: int = 252,
         refresh_months: int = 12,
         min_history_days: int = 504,
@@ -96,6 +97,13 @@ class LiquidSleeve(DipTop1Portfolio):
         self.sleeve_index = sleeve_index
         self.sleeve_count = sleeve_count
         self.universe_n = universe_n
+        # Quantas posicoes do ranking de liquidez PULAR antes de cortar o
+        # universo. 0 = o top-N de sempre. 20 com `universe_n=20` = a faixa
+        # 21-40, um universo DISJUNTO do top-20 e ainda escolhido sem nenhuma
+        # informacao de retorno. Existe para testar se dois robos em conjuntos
+        # de papeis diferentes se complementam (hipotese H2) — nao para virar
+        # mais um grau de liberdade do campeao, que continua com offset 0.
+        self.rank_offset = rank_offset
         self.liquidity_window = liquidity_window
         self.refresh_months = refresh_months
         self.min_history_days = min_history_days
@@ -168,7 +176,8 @@ class LiquidSleeve(DipTop1Portfolio):
                 pos += 1
             if pos >= limit:
                 continue
-            top = list(ok.sort_values(ascending=False).head(self.universe_n).index)
+            ordenado = ok.sort_values(ascending=False)
+            top = list(ordenado.iloc[self.rank_offset : self.rank_offset + self.universe_n].index)
             mine = top[self.sleeve_index :: self.sleeve_count]
             if not mine:
                 continue
