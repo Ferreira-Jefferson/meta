@@ -110,7 +110,7 @@ def run_satellite_backtest(
         sat = satellites.pop(ticker)
         exec_px = apply_slippage(price, "sell", config.costs)
         gross = exec_px * sat.quantity
-        leg_fees = fees_for_leg(gross, config.costs)
+        leg_fees = fees_for_leg(gross, config.costs, sat.quantity)
         cash += gross - leg_fees
         df = enriched.get(ticker)
         snap = _snapshot(df.loc[today]) if (df is not None and today in df.index) else _snapshot(pd.Series(dtype=float))
@@ -161,7 +161,7 @@ def run_satellite_backtest(
                 exec_ref = min(open_px, pos.current_stop)
                 exec_px = apply_slippage(exec_ref, "sell", config.costs)
                 gross = exec_px * pos.quantity
-                leg_fees = fees_for_leg(gross, config.costs)
+                leg_fees = fees_for_leg(gross, config.costs, pos.quantity)
                 cash += gross - leg_fees
                 snap = _snapshot(df.loc[today])
                 closed.append(Trade(
@@ -215,7 +215,7 @@ def run_satellite_backtest(
                 if sell_qty > 0:
                     exec_px = apply_slippage(open_px, "sell", config.costs)
                     gross = exec_px * sell_qty
-                    leg_fees = fees_for_leg(gross, config.costs)
+                    leg_fees = fees_for_leg(gross, config.costs, sell_qty)
                     cash += gross - leg_fees
                     closed.append(Trade(
                         ticker=act.ticker, strategy_name=strategy.name, strategy_version=strategy.version,
@@ -258,7 +258,7 @@ def run_satellite_backtest(
                 # ── SAÍDA TOTAL (Selic defensive, manual) ────────────────────
                 exec_px = apply_slippage(open_px, "sell", config.costs)
                 gross = exec_px * pos.quantity
-                leg_fees = fees_for_leg(gross, config.costs)
+                leg_fees = fees_for_leg(gross, config.costs, pos.quantity)
                 cash += gross - leg_fees
                 closed.append(Trade(
                     ticker=act.ticker, strategy_name=strategy.name, strategy_version=strategy.version,
@@ -298,7 +298,7 @@ def run_satellite_backtest(
                     sat_px = float(sat_df.at[today, "open"])
                     exec_px_sat = apply_slippage(sat_px, "sell", config.costs)
                     gross_sat = exec_px_sat * sat.quantity
-                    leg_fees_sat = fees_for_leg(gross_sat, config.costs)
+                    leg_fees_sat = fees_for_leg(gross_sat, config.costs, sat.quantity)
                     cash += gross_sat - leg_fees_sat
                 del satellites[act.ticker]
 
@@ -316,7 +316,7 @@ def run_satellite_backtest(
             if raw_qty <= 0:
                 continue
             gross = exec_px * raw_qty
-            leg_fees = fees_for_leg(gross, config.costs)
+            leg_fees = fees_for_leg(gross, config.costs, raw_qty)
             cost = gross + leg_fees
             if cost > cash:
                 continue
@@ -379,7 +379,7 @@ def run_satellite_backtest(
         close_px = float(df.at[last_day, "close"])
         exec_px = apply_slippage(close_px, "sell", config.costs)
         gross = exec_px * pos.quantity
-        leg_fees = fees_for_leg(gross, config.costs)
+        leg_fees = fees_for_leg(gross, config.costs, pos.quantity)
         cash += gross - leg_fees
         closed.append(Trade(
             ticker=ticker, strategy_name=strategy.name, strategy_version=strategy.version,

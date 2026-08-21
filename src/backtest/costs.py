@@ -44,5 +44,10 @@ def apply_slippage(price: float, side: str, model: CostModel) -> float:
     return price * factor
 
 
-def fees_for_leg(gross: float, model: CostModel) -> float:
-    return gross * model.per_side_pct
+def fees_for_leg(gross: float, model: CostModel, quantity: float) -> float:
+    """Custo de UMA perna (compra ou venda): percentual sobre `gross` +
+    corretagem FIXA quando `quantity` não fecha lote padrão (ver docstring de
+    `CostModel.fractional_fixed_fee`) -- essa parte fixa é 0.0 por default,
+    preservando byte-a-byte todo backtest gravado antes dela existir."""
+    fixo = model.fractional_fixed_fee if quantity < model.fractional_lot_shares else 0.0
+    return gross * model.per_side_pct + fixo

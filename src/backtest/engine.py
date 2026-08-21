@@ -203,7 +203,7 @@ def run_backtest(
                 exec_ref = min(open_px, pos.current_stop)
                 exec_px = apply_slippage(exec_ref, "sell", config.costs)
                 gross = exec_px * pos.quantity
-                leg_fees = fees_for_leg(gross, config.costs)
+                leg_fees = fees_for_leg(gross, config.costs, pos.quantity)
                 cash += gross - leg_fees
                 snap = _snapshot(df.loc[today])
                 closed.append(
@@ -246,7 +246,7 @@ def run_backtest(
             open_px = float(df.at[today, "open"])
             exec_px = apply_slippage(open_px, "sell", config.costs)
             gross = exec_px * pos.quantity
-            leg_fees = fees_for_leg(gross, config.costs)
+            leg_fees = fees_for_leg(gross, config.costs, pos.quantity)
             cash += gross - leg_fees
             snap = _snapshot(df.loc[today])
             closed.append(
@@ -293,7 +293,7 @@ def run_backtest(
             if raw_qty <= 0:
                 continue
             gross = exec_px * raw_qty
-            leg_fees = fees_for_leg(gross, config.costs)
+            leg_fees = fees_for_leg(gross, config.costs, raw_qty)
             cost = gross + leg_fees
             if cost > cash:
                 continue
@@ -373,7 +373,7 @@ def run_backtest(
         close_px = float(df.at[last_day, "close"])
         exec_px = apply_slippage(close_px, "sell", config.costs)
         gross = exec_px * pos.quantity
-        leg_fees = fees_for_leg(gross, config.costs)
+        leg_fees = fees_for_leg(gross, config.costs, pos.quantity)
         cash += gross - leg_fees
         snap = _snapshot(df.loc[last_day])
         closed.append(

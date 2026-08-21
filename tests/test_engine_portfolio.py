@@ -199,7 +199,7 @@ def test_ordem_das_operacoes_na_barra():
     exec_ref_stop = min(95.0, stop_price)
     exec_price_stop = apply_slippage(exec_ref_stop, "sell", config.costs)
     gross_stop = exec_price_stop * plan_a.quantity
-    fees_stop = fees_for_leg(gross_stop, config.costs)
+    fees_stop = fees_for_leg(gross_stop, config.costs, plan_a.quantity)
     cash_after_stop = cash_after_a_entry + (gross_stop - fees_stop)
 
     plan_b_correct_order = plan_entry(cash_after_stop, 10.0, 1.0, config)

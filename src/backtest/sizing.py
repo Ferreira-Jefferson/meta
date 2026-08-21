@@ -74,7 +74,7 @@ def plan_entry(
     if quantity <= 0:
         return EntryPlan(0, exec_price, 0.0, 0.0, 0.0)
     gross = exec_price * quantity
-    fees = fees_for_leg(gross, config.costs)
+    fees = fees_for_leg(gross, config.costs, quantity)
     cost = gross + fees
     if cost > cash:
         return EntryPlan(0, exec_price, 0.0, 0.0, 0.0)

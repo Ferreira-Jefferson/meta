@@ -145,7 +145,7 @@ def run_portfolio_backtest(
         sat = satellites.pop(ticker)
         exec_px = apply_slippage(price, "sell", config.costs)
         gross = exec_px * sat.quantity
-        leg_fees = fees_for_leg(gross, config.costs)
+        leg_fees = fees_for_leg(gross, config.costs, sat.quantity)
         net = gross - leg_fees
         df = enriched.get(ticker)
         snap = _snapshot(df.loc[today]) if (df is not None and today in df.index) else _snapshot(pd.Series(dtype=float))
@@ -194,7 +194,7 @@ def run_portfolio_backtest(
             extra_qty = int(net // px)
             if extra_qty > 0:
                 exec_px = apply_slippage(px, "buy", config.costs)
-                cost = exec_px * extra_qty + fees_for_leg(exec_px * extra_qty, config.costs)
+                cost = exec_px * extra_qty + fees_for_leg(exec_px * extra_qty, config.costs, extra_qty)
                 if cost <= net:
                     sat = satellites[best_ticker]
                     sat.quantity += extra_qty
@@ -250,7 +250,7 @@ def run_portfolio_backtest(
                 if qty <= 0:
                     continue
                 gross = exec_px * qty
-                leg_fees = fees_for_leg(gross, config.costs)
+                leg_fees = fees_for_leg(gross, config.costs, qty)
                 net = gross - leg_fees
                 cash += net
                 fees_paid += leg_fees
@@ -413,7 +413,7 @@ def run_portfolio_backtest(
                 exec_ref = opn
                 exec_px = apply_slippage(exec_ref, "sell", config.costs)
                 gross = exec_px * pos.quantity
-                leg_fees = fees_for_leg(gross, config.costs)
+                leg_fees = fees_for_leg(gross, config.costs, pos.quantity)
                 cash += gross - leg_fees
                 df = enriched.get(ticker)
                 snap = _snapshot(df.loc[today]) if (df is not None and today in df.index) else _snapshot(pd.Series(dtype=float))
@@ -460,7 +460,7 @@ def run_portfolio_backtest(
                 exec_ref = min(opn, pos.current_stop)
             exec_px = apply_slippage(exec_ref, "sell", config.costs)
             gross = exec_px * pos.quantity
-            leg_fees = fees_for_leg(gross, config.costs)
+            leg_fees = fees_for_leg(gross, config.costs, pos.quantity)
             cash += gross - leg_fees
             df = enriched.get(ticker)
             snap = _snapshot(df.loc[today]) if (df is not None and today in df.index) else _snapshot(pd.Series(dtype=float))
@@ -540,7 +540,7 @@ def run_portfolio_backtest(
                 if sell_qty > 0:
                     exec_px = apply_slippage(opn, "sell", config.costs)
                     gross = exec_px * sell_qty
-                    leg_fees = fees_for_leg(gross, config.costs)
+                    leg_fees = fees_for_leg(gross, config.costs, sell_qty)
                     cash += gross - leg_fees
                     closed.append(Trade(
                         ticker=act.ticker, strategy_name=strategy.name, strategy_version=strategy.version,
@@ -574,7 +574,7 @@ def run_portfolio_backtest(
                 liquidity_reason = getattr(act.reason, "value", str(act.reason))
                 exec_px = apply_slippage(opn, "sell", config.costs)
                 gross = exec_px * pos.quantity
-                leg_fees = fees_for_leg(gross, config.costs)
+                leg_fees = fees_for_leg(gross, config.costs, pos.quantity)
                 cash += gross - leg_fees
                 closed.append(Trade(
                     ticker=act.ticker, strategy_name=strategy.name, strategy_version=strategy.version,
@@ -621,7 +621,7 @@ def run_portfolio_backtest(
                 sp = _price(act.ticker, today, "open") or sat.entry_price
                 exec_px_s = apply_slippage(sp, "sell", config.costs)
                 gross_s = exec_px_s * sat.quantity
-                leg_s = fees_for_leg(gross_s, config.costs)
+                leg_s = fees_for_leg(gross_s, config.costs, sat.quantity)
                 cash += gross_s - leg_s
                 del satellites[act.ticker]
 
@@ -702,7 +702,7 @@ def run_portfolio_backtest(
         px = float(df.at[last_day, "close"])
         exec_px = apply_slippage(px, "sell", config.costs)
         gross = exec_px * pos.quantity
-        leg_fees = fees_for_leg(gross, config.costs)
+        leg_fees = fees_for_leg(gross, config.costs, pos.quantity)
         cash += gross - leg_fees
         closed.append(Trade(
             ticker=ticker, strategy_name=strategy.name, strategy_version=strategy.version,
