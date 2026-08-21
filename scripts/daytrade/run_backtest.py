@@ -36,12 +36,22 @@ FROZEN_NOTE = (
     "~6 meses IS (2025-12-01..2026-05-31), ~2,6 meses OOS travado"
 )
 
-# Corretagem/emolumento por round-trip: PLACEHOLDER ZERADO. O usuario nao
-# tinha o valor real da tabela de tarifas da Clear no momento desta
-# implementacao (2026-08-20) — o MT5 nao expoe isso, e' tarifa da
-# corretora, nao do terminal. NAO CONFIAR no resultado como retorno
-# LIQUIDO real ate este numero ser calibrado contra a tarifa de verdade.
-FEE_ROUND_TRIP_BRL_PLACEHOLDER = 0.0
+# Corretagem/emolumento por ROUND-TRIP (entrada+saida) de 1 contrato WIN,
+# pesquisado 2026-08-20 (ver conversa/sources do commit) — nao vem do MT5
+# (e tarifa de corretora/bolsa, nao do terminal):
+#   - corretagem Rico SEM RLP ativo: R$0,49 por contrato EXECUTADO -> 2
+#     execucoes (entrada+saida) = R$0,98. COM RLP ativo, corretagem cai a
+#     zero -- depende de o usuario ter RLP habilitado, nao assumido aqui.
+#   - taxa de liquidacao B3 (WIN): R$0,30 por contrato executado -> R$0,60
+#     por round-trip, ANTES do desconto de day trade (B3 aplica reducao de
+#     35% a 75% conforme volume diario medio da conta — nao aplicada aqui
+#     por nao saber o ADV do usuario; portanto este numero e o PIOR CASO,
+#     nao o melhor).
+#   - ISS sobre a corretagem: alguns centavos, ignorado (imaterial).
+# Cenario usado (conservador, PIOR caso -- sem RLP, sem desconto de ADV):
+# R$0,98 + R$0,60 = R$1,58 por round-trip. Com RLP ativo cairia para
+# R$0,60. Revisar se o usuario confirmar RLP ativo ou o ADV real da conta.
+FEE_ROUND_TRIP_BRL_WORST_CASE = 1.58
 
 # Horario de flatten forcado: calibrado do PROPRIO dado salvo (fechamento
 # real observado em 177 de 179 pregoes, apos a correcao do fuso do
@@ -87,14 +97,14 @@ def main() -> None:
     costs = FuturesCostModel.from_symbol_info(
         trade_tick_value=econ.trade_tick_value,
         trade_tick_size=econ.trade_tick_size,
-        fee_round_trip_brl=FEE_ROUND_TRIP_BRL_PLACEHOLDER,
+        fee_round_trip_brl=FEE_ROUND_TRIP_BRL_WORST_CASE,
     )
     config = IntradayBacktestConfig(costs=costs, session_end_time=SESSION_END_TIME)
     strategy = STRATEGIES[args.strategy]()
 
     print(f"[run_backtest] {label}: {len(run_bars)} barras, {run_bars.index.min()} -> {run_bars.index.max()}")
     print(f"[run_backtest] custo: point_value_brl={costs.point_value_brl} "
-          f"fee_round_trip_brl={costs.fee_round_trip_brl} (PLACEHOLDER — calibrar contra a tarifa real da Clear)")
+          f"fee_round_trip_brl={costs.fee_round_trip_brl} (Rico, pior caso sem RLP/desconto ADV — ver comentario)")
 
     result = run_intraday_backtest(run_bars, strategy, config)
 
