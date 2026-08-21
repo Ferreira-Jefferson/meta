@@ -212,7 +212,10 @@ class LiveRuntime:
         self.sync_interval_seconds = float(sync_interval_seconds)
         self._last_sync_at: Optional[datetime] = None
 
-        self.investment: LiveRobot = InvestmentRobot(strategy)
+        # `gap_exit_pct` vem da MESMA config do backtest: se o limiar puder
+        # divergir entre os dois, um dia ele diverge, e so o extrato conta.
+        self.investment: LiveRobot = InvestmentRobot(
+            strategy, gap_exit_pct=getattr(self.config, "gap_exit_pct", None))
         self.withdrawal: LiveRobot = WithdrawalRobot(policy)
         self._panels: dict[str, pd.DataFrame] = {}
         self._ibov: Optional[pd.DataFrame] = None

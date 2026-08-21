@@ -132,9 +132,15 @@ class InvestmentRobot(LiveRobot):
 
     role = RobotRole.INVESTMENT
 
-    def __init__(self, strategy: Strategy) -> None:
+    def __init__(self, strategy: Strategy, gap_exit_pct: float | None = None) -> None:
         self.strategy = strategy
         self.key = strategy.name
+        # Limiar de queda subita, o MESMO campo que o backtest usa
+        # (`BacktestConfig.gap_exit_pct`). Recebido por parametro em vez de lido
+        # de um default local de proposito: se ao vivo e no backtest o numero
+        # puder divergir, um dia ele diverge — e a divergencia so aparece no
+        # extrato. `None` = desligado, que e o default do backtest.
+        self.gap_exit_pct = gap_exit_pct
 
     def prepare(self, panels: dict[str, pd.DataFrame], ibov: pd.DataFrame) -> None:
         self.strategy.initialize(panels, ibov)
@@ -225,10 +231,28 @@ class InvestmentRobot(LiveRobot):
         """
         intents: list[Intent] = []
         for ticker, pos in ctx.account.positions.items():
-            if pos.kind != "main" or pos.current_stop is None:
+            if pos.kind != "main":
                 continue
             quote = ctx.quotes.get(ticker)
-            if quote is None or quote.price > pos.current_stop:
+            if quote is None:
+                continue
+
+            # Queda SUBITA vem antes do stop: no dia do salto as duas condicoes
+            # podem valer ao mesmo tempo, e o gap e o motivo mais informativo
+            # para o diario. Cobre tambem o caso que o stop NAO cobre — papel que
+            # subiu muito desde a entrada desaba num pregao e ainda fica ACIMA de
+            # um stop que nunca sobe.
+            if self.gap_exit_pct is not None:
+                fecho_ontem = self._fecho_anterior(ctx, ticker)
+                if fecho_ontem and quote.price <= fecho_ontem * (1.0 - self.gap_exit_pct):
+                    intents.append(Intent(
+                        robot=self.key, role=self.role, kind=IntentKind.EXIT,
+                        decided_on=ctx.session, execute_on=ctx.session,
+                        ticker=ticker, reason="gap",
+                    ))
+                    continue
+
+            if pos.current_stop is None or quote.price > pos.current_stop:
                 continue
             intents.append(Intent(
                 robot=self.key, role=self.role, kind=IntentKind.EXIT,
@@ -236,6 +260,25 @@ class InvestmentRobot(LiveRobot):
                 ticker=ticker, reason="stop",
             ))
         return intents
+
+    @staticmethod
+    def _fecho_anterior(ctx: RobotContext, ticker: str) -> float | None:
+        """Fechamento do pregao ANTERIOR, tirado do painel do proprio ticker.
+
+        `ctx.panels` chega carregado ate `clock.previous_session(session)` (ver
+        `live/runtime.py::intraday_tick`), entao a ultima linha do painel E o
+        fecho de ontem. Nao usa `ctx.marks`: em intra-dia `marks` carrega o
+        preco de AGORA, e comparar o preco de agora contra ele mesmo daria
+        queda zero sempre — o gatilho nunca dispararia.
+        """
+        df = ctx.panels.get(ticker)
+        if df is None or not hasattr(df, "empty") or df.empty or "close" not in df:
+            return None
+        try:
+            valor = float(df["close"].iloc[-1])
+        except (IndexError, TypeError, ValueError):
+            return None
+        return valor if valor > 0.0 else None
 
     def state(self) -> dict:
         return self.strategy.state()
@@ -301,13 +344,14 @@ class WithdrawalRobot(LiveRobot):
         self.policy.restore(state)
 
 
-def build_robots(strategy: Strategy, policy: WithdrawalPolicy) -> dict[RobotRole, LiveRobot]:
+def build_robots(strategy: Strategy, policy: WithdrawalPolicy,
+                 gap_exit_pct: float | None = None) -> dict[RobotRole, LiveRobot]:
     """Monta o par de robos (um por `RobotRole`) que o runtime ao vivo precisa.
 
     Fabrica simples — nao ha decisao aqui, so composicao. Mantida porque o
     runtime nao deveria saber construir `InvestmentRobot`/`WithdrawalRobot`
     diretamente; ele so pede "os robos para esta estrategia e esta politica".
     """
-    investment = InvestmentRobot(strategy)
+    investment = InvestmentRobot(strategy, gap_exit_pct=gap_exit_pct)
     withdrawal = WithdrawalRobot(policy)
     return {investment.role: investment, withdrawal.role: withdrawal}

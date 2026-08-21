@@ -23,7 +23,7 @@ Tres implementacoes de producao (`src/`):
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Optional, Sequence
 
@@ -221,15 +221,27 @@ class MT5Feed(QuoteFeed):
     agora um 5o item: `tick.time` (o instante do tick, segundo o pacote
     `MetaTrader5`) e o horario do RELOGIO DO SERVIDOR do terminal, NAO
     necessariamente UTC — corretoras costumam configurar o servidor MT5 num
-    fuso proprio (ex.: GMT+2/GMT+3), deslocado de UTC por horas. Este feed
-    calcula `delay_seconds = now_fn() - tick.time` assumindo os dois lados no
-    mesmo referencial; se o servidor estiver ADIANTADO em relacao a UTC, essa
-    conta pode SUBESTIMAR o atraso real (cotacao parecendo mais fresca do que
-    e) — exatamente a direcao perigosa para o invariante de stop nunca disparar
-    sobre dado velho (ver `live.runtime.intraday_tick`). Quem for apontar isto
-    para um terminal real e mexer com volume relevante PRECISA calibrar esse
-    offset servidor<->UTC antes de operar; nao ha valor universal, mesma
-    categoria dos 4 itens ja documentados em `broker_mt5.py`.
+    fuso proprio (ex.: GMT+2/GMT+3, ou UTC-3 no caso medido na Clear em
+    2026-08-20), deslocado de UTC por horas. Esse offset, nao calibrado,
+    SUBESTIMA o atraso real quando o servidor esta ADIANTADO em relacao a UTC
+    (cotacao parecendo mais fresca do que e) — exatamente a direcao perigosa
+    para o invariante de stop nunca disparar sobre dado velho (ver
+    `live.runtime.intraday_tick`) — e, quando o servidor esta ATRASADO (caso
+    medido na Clear, UTC-3), SOBRESTIMA o atraso a ponto de fazer `tick.time`
+    parecer horas mais velho do que e, o que tambem e perigoso: com
+    `staleness_report(max_quote_age=300)` isso faz TODA cotacao parecer velha
+    demais e SUPRIME todo stop intradiario, silenciosamente, sem erro nenhum.
+
+    Por isso este feed AUTOCALIBRA o offset servidor<->UTC por padrao (ver
+    `server_utc_offset_hours` no construtor e `_calibrate_offset` abaixo): a
+    cada leitura, usa o tick MAIS FRESCO do lote para estimar quantas horas
+    INTEIRAS separam o relogio do servidor do UTC, e so aceita a calibracao se
+    o residuo depois de arredondar para a hora for pequeno (dado velho demais
+    nao calibra — mantem o offset anterior e reporta erro). Fusos de meia hora
+    existem no mundo, mas nenhuma corretora brasileira usa um; nao tentamos
+    resolver esse caso. Quem prefere nao depender de deteccao automatica (ou
+    ja mediu o offset e quer travar) passa `server_utc_offset_hours` explicito
+    no construtor — nesse caso a autocalibracao NUNCA roda.
 
     `now_fn` e injetavel (mesma convencao de `ParquetCloseFeed`) por isso: sem
     relogio injetavel, a idade do tick nao e testavel de forma deterministica
@@ -243,6 +255,10 @@ class MT5Feed(QuoteFeed):
     name = "mt5"
     source = "mt5"
 
+    #: residuo maximo aceito, em segundos, entre `bruto` e a hora inteira mais
+    #: proxima para uma calibracao ser aceita (ver `_calibrate_offset`).
+    _MAX_CALIBRATION_RESIDUAL_SECONDS = 900.0
+
     def __init__(
         self,
         symbol_map: Optional[dict[str, str]] = None,
@@ -252,6 +268,8 @@ class MT5Feed(QuoteFeed):
         path: Optional[str] = None,
         on_error: Optional[Callable[[str, Exception], None]] = None,
         now_fn: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+        server_utc_offset_hours: Optional[float] = None,
+        on_info: Optional[Callable[[str, str], None]] = None,
     ) -> None:
         self._symbol_map = dict(symbol_map) if symbol_map else {}
         self._login = login
@@ -259,15 +277,36 @@ class MT5Feed(QuoteFeed):
         self._server = server
         self._path = path
         self._on_error = on_error
+        self._on_info = on_info
         self._now_fn = now_fn
         self._connected = False
         self._last_delay_seconds = 0.0
+        # offset servidor<->UTC (em horas, somado ao `tick.time` convertido
+        # para UTC). `None` no construtor = autocalibra (ver `quotes` e
+        # `_calibrate_offset`); valor explicito = usa esse, sem calibrar.
+        if server_utc_offset_hours is not None:
+            self._offset_hours = float(server_utc_offset_hours)
+            self._offset_source = "explicito"
+        else:
+            self._offset_hours = 0.0
+            self._offset_source = "auto"
+        # `now` da ultima calibracao aceita (None antes da primeira). So
+        # avanca em modo "auto" — em modo "explicito" fica sempre None,
+        # porque nunca ha calibracao de verdade.
+        self._offset_calibrated_at: Optional[datetime] = None
 
     @property
     def delay_seconds(self) -> float:
         """Maior atraso observado na leitura MAIS RECENTE (ver `quotes`).
         Antes de qualquer leitura, 0.0 — nao ha dado ainda para ter idade."""
         return self._last_delay_seconds
+
+    @property
+    def server_utc_offset_hours(self) -> float:
+        """Offset (em horas) somado ao `tick.time` (relogio do servidor MT5)
+        para chegar em UTC. Autocalibrado por padrao (ver `_calibrate_offset`)
+        ou fixo, se `server_utc_offset_hours` foi passado ao construtor."""
+        return self._offset_hours
 
     def symbol_for(self, ticker: str) -> str:
         """Ticker interno (`"WEGE3.SA"`) -> nome do simbolo no terminal MT5.
@@ -328,8 +367,12 @@ class MT5Feed(QuoteFeed):
         if now.tzinfo is None:
             now = now.replace(tzinfo=timezone.utc)
 
-        result: dict[str, Quote] = {}
-        max_delay = 0.0
+        # 1a passada: le os ticks CRUS de todos os tickers pedidos, sem
+        # converter `tick.time` ainda. Precisa do lote inteiro antes de
+        # calibrar (ver `_calibrate_offset`): a calibracao usa o tick MAIS
+        # NOVO do lote como referencia, e calibrar tick a tick usaria uma
+        # referencia diferente a cada ticker dentro da MESMA leitura.
+        raw_ticks: dict[str, object] = {}
         for ticker in tickers:
             try:
                 symbol = self.symbol_for(ticker)
@@ -337,11 +380,29 @@ class MT5Feed(QuoteFeed):
                 tick = mt5.symbol_info_tick(symbol)
                 if tick is None:
                     continue
+                raw_ticks[ticker] = tick
+            except Exception as exc:
+                self._report_error(ticker, exc)
+                continue
+
+        self._calibrate_offset(raw_ticks, now)
+
+        # 2a passada: converte preco e horario, com o offset ja calibrado
+        # (ou explicito) aplicado por igual a todos os tickers do lote.
+        result: dict[str, Quote] = {}
+        max_delay = 0.0
+        for ticker, tick in raw_ticks.items():
+            try:
                 last = getattr(tick, "last", None)
                 price = float(last) if last else (float(tick.bid) + float(tick.ask)) / 2.0
                 # `tick.time`: instante do tick segundo o RELOGIO DO SERVIDOR
                 # do terminal — ver aviso de fuso na docstring da classe.
-                tick_time = datetime.fromtimestamp(tick.time, tz=timezone.utc)
+                # Corrigido pelo offset servidor<->UTC antes de comparar com
+                # `now` (que esta em UTC) — sem essa correcao o `delay`
+                # calculado aqui herda o offset inteiro do servidor.
+                tick_time = datetime.fromtimestamp(tick.time, tz=timezone.utc) + timedelta(
+                    hours=self._offset_hours
+                )
                 delay = max(0.0, (now - tick_time).total_seconds())
                 max_delay = max(max_delay, delay)
                 result[ticker] = Quote(
@@ -356,6 +417,71 @@ class MT5Feed(QuoteFeed):
                 continue
         self._last_delay_seconds = max_delay
         return result
+
+    def _calibrate_offset(self, raw_ticks: dict[str, object], now: datetime) -> None:
+        """Autocalibra `self._offset_hours` a partir do tick mais fresco do
+        lote. Nao faz nada em modo explicito (ver `__init__`).
+
+        `bruto` e a diferenca (em horas) entre `now` e o `tick.time` MAIS
+        NOVO do lote, cru (sem nenhuma correcao de fuso ainda) — e a melhor
+        estimativa disponivel do offset servidor<->UTC porque o tick mais
+        novo e o que tem mais chance de ser fresco de verdade (idade real
+        proxima de zero). Arredondamos para a hora inteira mais proxima
+        porque fusos de servidor sao, na pratica de corretora brasileira,
+        multiplos de hora (fusos de meia hora existem no mundo, mas nenhuma
+        corretora BR usa um — nao tentamos cobrir esse caso).
+
+        So aceitamos a calibracao se o residuo depois de arredondar for
+        pequeno (<= 15min): um residuo grande significa que o tick mais novo
+        do lote JA ESTA velho de verdade (mercado fechado, papel sem
+        negocio), e calibrar sobre um tick velho produziria um offset
+        errado — nesse caso preferimos manter o offset anterior (ou 0.0, se
+        nunca calibramos) e reportar o problema via `_report_error`, em vez
+        de silenciosamente adotar um offset invalido.
+        """
+        if self._offset_source == "explicito":
+            return
+        if not raw_ticks:
+            return  # nada nesta leitura para calibrar; mantem offset anterior
+
+        newest_tick_time = max(tick.time for tick in raw_ticks.values())
+        bruto_horas = (
+            now - datetime.fromtimestamp(newest_tick_time, tz=timezone.utc)
+        ).total_seconds() / 3600.0
+        offset = round(bruto_horas)
+        residual_seconds = abs(bruto_horas - offset) * 3600.0
+
+        if residual_seconds > self._MAX_CALIBRATION_RESIDUAL_SECONDS:
+            self._report_error(
+                "calibracao",
+                RuntimeError(
+                    "tick mais fresco do lote esta velho demais para calibrar o offset "
+                    f"servidor<->UTC com confianca (residuo de {residual_seconds:.0f}s apos "
+                    f"arredondar para hora inteira, bruto={bruto_horas:+.4f}h); mantendo offset "
+                    f"atual ({self._offset_hours:+.1f}h)"
+                ),
+            )
+            return
+
+        offset = float(offset)
+        primeira_calibracao = self._offset_calibrated_at is None
+        mudou = (not primeira_calibracao) and offset != self._offset_hours
+        anterior = self._offset_hours
+        if primeira_calibracao or mudou:
+            self._offset_hours = offset
+            if self._on_info is not None:
+                if primeira_calibracao:
+                    self._on_info(
+                        "calibracao",
+                        f"offset do servidor MT5 detectado: {offset:+.0f}h em relacao a UTC",
+                    )
+                else:
+                    self._on_info(
+                        "calibracao",
+                        f"offset do servidor MT5 mudou de {anterior:+.0f}h para {offset:+.0f}h "
+                        "em relacao a UTC (horario de verao ou troca de servidor?)",
+                    )
+        self._offset_calibrated_at = now
 
     def _report_error(self, ticker: str, exc: Exception) -> None:
         if self._on_error is not None:

@@ -8,12 +8,35 @@
     python scripts/run_live.py execute              # forca a execucao do dia
     python scripts/run_live.py reconcile            # aplica fills confirmados ao caixa/posicao
     python scripts/run_live.py unfreeze             # destrava o disjuntor de risco manualmente
-    python scripts/run_live.py loop --seconds 60
+    python scripts/run_live.py loop --seconds 5
 
 `loop` so da passo dentro da janela de pregao B3 +/-1h (ver `live.clock.
 in_active_window`) — fora dela (noite, fim de semana, feriado) fica
 dormindo ate a janela abrir de novo, em vez de acordar a cada `--seconds`
 so para constatar que nao ha nada a fazer.
+
+Frequencia do passo (--seconds)
+-------------------------------
+Default 5s. O numero nao e chute: foi MEDIDO contra o terminal real da Clear
+em 2026-08-20, pregao aberto, os 7 tickers da watchlist, 60 leituras seguidas.
+
+  custo  : 0,8ms por leitura dos 7 tickers (p95 1,8ms, max 1,9ms). A uma
+           leitura por segundo isso ocupa 0,08% do processo — custo nao e
+           argumento para espacar o passo. O terminal nao degradou nem
+           enfileirou nas 60 chamadas.
+  ganho  : o preco muda a cada 2,3s (CSMG3) a 5,4s (KEPL3) nos papeis
+           liquidos. EMAE4 nao mudou NENHUMA vez em 60s — papel iliquido nao
+           melhora com frequencia nenhuma, e a defesa dele nao e o stop.
+
+Ou seja: a 60s o supervisor perdia ate ~22 mudancas de preco entre duas
+olhadas. Isso importa porque o stop intra-dia (`live/robots.py::on_intraday`)
+so ve o preco que o feed entregou NAQUELE instante — nao existe "a barra
+inteira" como no backtest. Num tombo como o de HAPV3 em 2025-11-13, que caiu
+25% DEPOIS da abertura, 60s e tempo de sobra para sair muito abaixo do stop.
+
+Abaixo de ~2s nao ha ganho: o feed nao atualiza mais rapido, e a leitura extra
+so reve o mesmo tick. 5s pega quase todo o ganho e deixa margem para o
+terminal ficar mais lento com mais papeis ou hardware pior.
 
 Cotacao (--feed)
 ----------------
@@ -398,7 +421,15 @@ def main() -> None:
         sub.add_parser(nome).set_defaults(func=fn)
 
     lp = sub.add_parser("loop")
-    lp.add_argument("--seconds", type=int, default=60)
+    # 5s, e nao 60s: MEDIDO contra o terminal real da Clear em 2026-08-20, com
+    # o pregao aberto e os 7 tickers da watchlist (ver o bloco "Frequencia do
+    # passo" na docstring do modulo). Uma leitura custa 0,8ms (p95 1,8ms), e o
+    # preco muda a cada 2,3-5,4s nos papeis liquidos: a 60s o supervisor perdia
+    # ate ~22 mudancas de preco entre duas olhadas, o que num tombo intra-dia
+    # (HAPV3 caiu 25% DEPOIS de abrir) e tempo de sobra para o preco andar
+    # muito antes de o stop ser visto. Abaixo de ~2s nao ha ganho: o feed nao
+    # atualiza mais rapido que isso e a leitura extra so reve o mesmo tick.
+    lp.add_argument("--seconds", type=int, default=5)
     lp.set_defaults(func=cmd_loop)
 
     args = p.parse_args()
