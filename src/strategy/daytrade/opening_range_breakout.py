@@ -29,13 +29,21 @@ class _SessionState:
 
 
 class OpeningRangeBreakout(IntradayStrategy):
-    name = "orb_win"
-    version = "0.1"
-    symbol = "WIN@"
+    """Generica sobre instrumento — `symbol` e passavel no construtor
+    (default `"WIN@"` preservado pra quem ja instanciava sem argumento).
+    A logica de sinal (range + rompimento) nao depende de o instrumento
+    ser futuro ou acao; o que muda por instrumento e' custo/tamanho/
+    horario, tratados fora da estrategia (`FuturesCostModel`,
+    `IntradayBacktestConfig`), nao aqui — mesma separacao de
+    responsabilidade que `strategy.base.Strategy` ja tem do lado diario."""
 
-    def __init__(self, range_minutes: int = 30, target_r_multiple: float = 1.5):
+    name = "orb"
+    version = "0.1"
+
+    def __init__(self, range_minutes: int = 30, target_r_multiple: float = 1.5, symbol: str = "WIN@"):
         self.range_minutes = range_minutes
         self.target_r_multiple = target_r_multiple
+        self.symbol = symbol
         self._session_start: pd.Timestamp | None = None
         self._state = _SessionState()
 

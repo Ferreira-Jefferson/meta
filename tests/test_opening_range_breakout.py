@@ -18,6 +18,14 @@ def _bar(o, h, l, c):
     return Bar(ts=pd.Timestamp("2026-01-05 09:00", tz="UTC"), open=o, high=h, low=l, close=c, volume=10)
 
 
+def test_symbol_e_configuravel_no_construtor():
+    default = OpeningRangeBreakout()
+    assert default.symbol == "WIN@"
+
+    outro = OpeningRangeBreakout(symbol="PMAM3")
+    assert outro.symbol == "PMAM3"
+
+
 def test_forma_range_e_nao_decide_nada_dentro_da_janela():
     strat = OpeningRangeBreakout(range_minutes=5)
     strat.on_session_start(None)
