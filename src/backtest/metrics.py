@@ -77,3 +77,41 @@ def trade_stats(pnls: Iterable[float]) -> dict[str, float]:
     profit_factor = gross_win / gross_loss if gross_loss > 0 else float("inf")
     expectancy = float(arr.mean())
     return {"win_rate": win_rate, "profit_factor": profit_factor, "expectancy": expectancy}
+
+def irr_annual(flows: list[tuple[object, float]], tol: float = 1e-7) -> float:
+    """Taxa interna de retorno ANUAL de uma serie de fluxos datados.
+
+    `flows` = [(data, valor)], valor NEGATIVO para dinheiro que entra na conta
+    (aporte, capital inicial) e POSITIVO para o resgate final. E a unica medida
+    de retorno honesta quando ha aporte: `cagr` sobre a curva de patrimonio
+    contaria dinheiro novo como se fosse rendimento, e a curva de COTA responde
+    outra pergunta (quanto o gestor rendeu, nao quanto o dono ganhou).
+
+    Bisseccao em vez de Newton: o intervalo [-0,99, +10] cobre qualquer
+    resultado plausivel de uma conta de acoes e nao depende de derivada nem de
+    palpite inicial, que e onde Newton falha em fluxo com muitos sinais.
+    Devolve `nan` quando nao ha troca de sinal (fluxo sem solucao).
+    """
+    if len(flows) < 2:
+        return float("nan")
+    t0 = min(d for d, _ in flows)
+    anos = [((d - t0).days / 365.25) for d, _ in flows]
+    vals = [v for _, v in flows]
+
+    def vpl(r: float) -> float:
+        return sum(v / ((1.0 + r) ** a) for v, a in zip(vals, anos))
+
+    lo, hi = -0.9899, 10.0
+    f_lo, f_hi = vpl(lo), vpl(hi)
+    if f_lo * f_hi > 0:
+        return float("nan")
+    for _ in range(200):
+        mid = (lo + hi) / 2.0
+        f_mid = vpl(mid)
+        if abs(f_mid) < tol:
+            return mid
+        if f_lo * f_mid <= 0:
+            hi, f_hi = mid, f_mid
+        else:
+            lo, f_lo = mid, f_mid
+    return (lo + hi) / 2.0

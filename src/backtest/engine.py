@@ -53,6 +53,14 @@ class BacktestResult:
     # Saques executados pelo overlay de gestao de capital (ver
     # `backtest/withdrawal.py`). Vazio quando o run nao usa politica de saque.
     withdrawals: list = field(default_factory=list)
+    # Curva de COTA: patrimonio dividido pelo numero de cotas, onde cada aporte
+    # compra cotas ao valor do dia. Igual a `equity_curve` quando nao ha aporte
+    # (`monthly_contribution=0`), que e o caso de todo o diario gravado. Existe
+    # porque com aporte a curva de patrimonio sobe por dinheiro novo, e usar
+    # CAGR/MaxDD dela compararia coisas diferentes.
+    unit_curve: pd.Series | None = None
+    # (data, valor) de cada aporte creditado.
+    contributions: list = field(default_factory=list)
 
 
 # `_enrich`/`_snapshot` foram EXTRAIDOS para `core/market_features.py` quando a
@@ -132,12 +140,46 @@ def run_backtest(
 
     cash_yield = cash_yield_series(config.cash_yield_path, all_dates)
 
+    # Aporte mensal e contabilidade de COTA. Espelha `engine_portfolio.py`:
+    # existia so la, e este engine ACEITAVA `monthly_contribution` e o
+    # ignorava em silencio — um robo roteado para ca (ex.: a familia
+    # `strategy/lab/`) media "com aporte" sem aporte nenhum, e nada avisava.
+    # Comparar dois robos de engines diferentes com o mesmo config produzia
+    # numeros incomparaveis sem erro.
+    units = 1.0
+    unit_records: list[tuple[pd.Timestamp, float]] = []
+    contributions: list[tuple[pd.Timestamp, float]] = []
+    mes_anterior: tuple[int, int] | None = None
+
     for i, today in enumerate(all_dates):
         # (0) Remuneracao do caixa parado — mesma regra do engine de portfolio,
         # aplicada antes das execucoes do dia. Desligada por default; ver
         # `backtest.costs.cash_yield_series`.
         if cash_yield is not None and cash > 0.0:
             cash *= 1.0 + float(cash_yield.iat[i])
+
+        # (0b) Aporte: primeiro pregao de cada mes civil, depois do juro de
+        # ontem e antes de qualquer execucao. O mes do capital inicial NAO
+        # recebe aporte — ele JA e o primeiro deposito. Cotizado pelo
+        # patrimonio de FECHAMENTO ANTERIOR (`last_price`), nunca pelo preco
+        # de hoje: usar o preco de hoje daria ao aporte uma cota que so seria
+        # conhecida no fim do pregao (look-ahead).
+        mes = (today.year, today.month)
+        if config.monthly_contribution > 0.0 and mes_anterior is not None and mes != mes_anterior:
+            aporte = float(config.monthly_contribution)
+            patrimonio_antes = cash
+            for t, pos in positions.items():
+                patrimonio_antes += last_price.get(t, 0.0) * pos.quantity
+            if patrimonio_antes > 0.0:
+                units += aporte / (patrimonio_antes / units)
+            else:
+                # Patrimonio zerado: nao ha cota valida para emitir. Reancora
+                # em vez de dividir por zero — a serie de cota recomeca aqui e
+                # isso fica visivel no proprio numero.
+                units = 1.0
+            cash += aporte
+            contributions.append((today, aporte))
+        mes_anterior = mes
 
         # (1) MFE/MAE usando close do dia
         for ticker, pos in positions.items():
@@ -289,6 +331,7 @@ def run_backtest(
             if px is not None:
                 equity += px * pos.quantity
         equity_records.append((today, float(equity)))
+        unit_records.append((today, float(equity) / units if units > 0 else 0.0))
 
         # (5) Chama on_bar do robô no close de D
         actions = strategy.on_bar(today, _positions_view(positions), cash)
@@ -359,7 +402,8 @@ def run_backtest(
     ibov_close = ibov_slice["close"]
     ibov_norm = ibov_close / ibov_close.iloc[0] * config.initial_capital if len(ibov_close) else ibov_close
 
-    from backtest.metrics import cagr, calmar, max_drawdown, sharpe, sortino, trade_stats
+    from backtest.metrics import (cagr, calmar, irr_annual, max_drawdown, sharpe,
+                                  sortino, trade_stats)
 
     pnls = [t.pnl_pct for t in closed if not t.is_open]
     stats = trade_stats(pnls)
@@ -376,9 +420,30 @@ def run_backtest(
         "trades_count": len(closed),
         "benchmark_cagr": cagr(ibov_norm) if len(ibov_norm) else 0.0,
     }
+
+    # Metricas de fluxo. So aparecem quando houve aporte: sem dinheiro novo a
+    # cota E a curva de patrimonio, e publicar as duas sugeriria uma distincao
+    # que nao existe. Mesma regra do `engine_portfolio.py`.
+    unit_series = pd.Series(dict(unit_records)).sort_index() if unit_records else None
+    if contributions:
+        metrics["contributed_total"] = float(sum(v for _, v in contributions))
+        metrics["contributions_count"] = len(contributions)
+        if unit_series is not None and len(unit_series):
+            # CAGR/MaxDD da COTA: neutros a fluxo. `cagr` sobre a curva de
+            # patrimonio subiria so por dinheiro novo ter entrado.
+            metrics["cagr_unit"] = cagr(unit_series)
+            metrics["max_drawdown_unit"] = max_drawdown(unit_series)
+        if len(equity_series):
+            fluxos = [(equity_series.index[0].date(), -float(config.initial_capital))]
+            fluxos += [(d.date(), -float(v)) for d, v in contributions]
+            fluxos.append((equity_series.index[-1].date(), float(equity_series.iloc[-1])))
+            metrics["irr"] = irr_annual(fluxos)
+
     return BacktestResult(
         trades=closed,
         equity_curve=equity_series,
         benchmark_curve=ibov_norm,
         metrics=metrics,
+        unit_curve=unit_series,
+        contributions=contributions,
     )

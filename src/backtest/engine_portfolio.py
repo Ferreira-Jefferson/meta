@@ -19,7 +19,15 @@ import pandas as pd
 
 from backtest.costs import apply_slippage, cash_yield_series, fees_for_leg
 from backtest.engine import BacktestResult, _Position, _enrich, _snapshot
-from backtest.metrics import cagr, calmar, max_drawdown, sharpe, sortino, trade_stats
+from backtest.metrics import (
+    cagr,
+    calmar,
+    irr_annual,
+    max_drawdown,
+    sharpe,
+    sortino,
+    trade_stats,
+)
 from backtest.sizing import has_free_slot, initial_stop, liquidation_quantity, plan_entry
 from backtest.withdrawal import WithdrawalEvent, WithdrawalPolicy
 from core.config import BENCHMARK, BacktestConfig
@@ -204,8 +212,23 @@ def run_portfolio_backtest(
         sao residuais por desenho e ficam de fora). Vende so o necessario, com
         slippage e taxas normais — sacar custa dinheiro. Se nem liquidando tudo
         da, o evento registra o `shortfall` em vez de inventar caixa.
+
+        Saque e fluxo, igual aporte — so que no sentido contrario. Por isso
+        REDIME cotas aqui, na mesma proporcao do dinheiro que de fato saiu
+        (`executed`), ao valor de cota calculado com `equity_before` (o
+        patrimonio ja marcado ANTES deste debito, o mesmo numero que vira
+        `WithdrawalEvent.equity_before` — nunca um valor marcado depois do
+        saque). Isto roda sempre que ha saque, com ou sem `monthly_contribution`
+        configurado: a cota so faz sentido como medida de desempenho se ela
+        neutralizar TODO fluxo de caixa externo, nao so a entrada.
+
+        `fees_paid` (a taxa de liquidar posicao para levantar o caixa do
+        saque) FICA de fora dessa redencao de proposito: a taxa e custo real
+        da estrategia e ja reduz o patrimonio (logo ja reduz a cota via
+        `equity/units`); ela nao e dinheiro que voltou para o dono, entao
+        redimir cotas por ela tambem contaria o mesmo prejuizo duas vezes.
         """
-        nonlocal cash
+        nonlocal cash, units
         fees_paid = 0.0
         liquidated: list[tuple[str, int, float]] = []
         need = want - cash
@@ -263,6 +286,24 @@ def run_portfolio_backtest(
 
         executed = max(0.0, min(want, cash))
         cash -= executed
+        if executed > 0.0:
+            if equity_before > 0 and units > 0:
+                valor_cota = equity_before / units
+                units -= executed / valor_cota
+            else:
+                # Patrimonio anterior <=0 OU cotas ja zeradas (redencao total
+                # anterior): nao ha base positiva para dividir. Ao contrario
+                # do aporte, aqui nao existe "capital novo" que justifique
+                # reancorar — sacar dinheiro de um patrimonio nulo/negativo,
+                # ou de uma conta sem cota nenhuma, so pode ser sintoma de bug
+                # em outro lugar do engine (ex.: liquidacao gerando caixa
+                # alem do patrimonio real). Preferimos falhar alto e explicito
+                # a inventar uma contagem de cotas que ninguem pode confiar.
+                raise ValueError(
+                    f"saque de {executed!r} executado em {today} com "
+                    f"equity_before={equity_before!r} e units={units!r}: "
+                    "cota indefinida para redencao"
+                )
         withdrawals.append(WithdrawalEvent(
             date=today, requested=want, executed=executed,
             equity_before=equity_before, fees_paid=fees_paid, liquidated=liquidated,
@@ -272,12 +313,60 @@ def run_portfolio_backtest(
 
     cash_yield = cash_yield_series(config.cash_yield_path, all_dates)
 
+    # Contabilidade de COTA (ver `BacktestConfig.monthly_contribution` e
+    # `_execute_withdrawal`). Comeca com 1 cota valendo o capital inicial;
+    # cada aporte COMPRA cotas ao valor da cota do dia e cada saque REDIME
+    # cotas na mesma proporcao do dinheiro que saiu — a serie `equity/units`
+    # mede desempenho, nao fluxo de caixa (entrada OU saida). Sem aporte e sem
+    # saque, `units` fica 1.0 para sempre e a curva de cota e identica a de
+    # patrimonio — byte a byte, e ha teste para isso.
+    units = 1.0
+    unit_records: list[tuple[pd.Timestamp, float]] = []
+    contributions: list[tuple[object, float]] = []
+    mes_anterior: tuple[int, int] | None = None
+
     for i, today in enumerate(all_dates):
         # Remuneracao do caixa ANTES de qualquer execucao do dia: o dinheiro que
         # amanheceu parado rende; o que vai ser gasto hoje rendeu enquanto
         # estava parado. Desligado por default (`cash_yield_path=None`).
         if cash_yield is not None and cash > 0.0:
             cash *= 1.0 + float(cash_yield.iat[i])
+
+        # Aporte: primeiro pregao de cada mes civil, ANTES de qualquer execucao
+        # do dia — o dinheiro que entrou hoje ja pode cumprir a decisao tomada
+        # no fecho de ontem. Nao rende juro de ontem (entra depois da linha
+        # acima) e nao e creditado no mes do capital inicial, que JA e o
+        # primeiro deposito. Valorizado pela cota de FECHAMENTO ANTERIOR
+        # (`last_mark_price`), nunca pelo preco de hoje: cotizar um aporte com
+        # preco que ainda nao existia quando o dinheiro entrou seria
+        # look-ahead, mesma regra 4 do AGENTS.md que vale para o sinal.
+        mes = (today.year, today.month)
+        if config.monthly_contribution > 0.0 and mes_anterior is not None and mes != mes_anterior:
+            patrimonio_antes = cash
+            for t, pos in positions.items():
+                patrimonio_antes += last_mark_price.get(t, 0.0) * pos.quantity
+            for t, sat in satellites.items():
+                patrimonio_antes += last_mark_price.get(t, 0.0) * sat.quantity
+            aporte = float(config.monthly_contribution)
+            if patrimonio_antes > 0 and units > 0:
+                valor_cota = patrimonio_antes / units
+                units += aporte / valor_cota
+            else:
+                # Patrimonio zerado/negativo OU cotas ja zeradas (ex.: um
+                # saque anterior redimiu tudo): a cota anterior nao tem valor
+                # definido, nao ha base positiva para dividir. Ao contrario do
+                # saque, aqui HA capital novo entrando — entao reancora:
+                # descarta a contagem de cotas anterior (que so podia
+                # representar zero ou prejuizo) e reinicia em 1.0, tratando
+                # este aporte como se fosse um novo capital inicial. Abortar
+                # pareceria pior: um robo que zerou a conta e cujo dono
+                # continua aportando e um cenario plausivel, nao
+                # necessariamente um bug, e nao deveria interromper o
+                # backtest inteiro.
+                units = 1.0
+            cash += aporte
+            contributions.append((today.date(), aporte))
+        mes_anterior = mes
 
         # MFE/MAE
         for t, pos in positions.items():
@@ -295,6 +384,52 @@ def run_portfolio_backtest(
         # Alimenta o gancho de saque por evento de liquidez, mais abaixo.
         # Satelites, quando existem, sao residuais por desenho e nao disparam.
         liquidity_reason: str | None = None
+
+        # Gatilho de queda SUBITA (`config.gap_exit_pct`, desligado por default).
+        #
+        # Vem ANTES do stop de proposito: no dia do salto as duas condicoes podem ser
+        # verdadeiras ao mesmo tempo, e sair no `open` e o que descreve a operacao real
+        # — ao vivo o robo ve o preco JA la embaixo na primeira cotacao do dia e vende a
+        # mercado; ele nao consegue o preco do stop, que ficou num nivel por onde nao
+        # passou negocio. Sair aqui tira o ticker de `positions`, e o bloco de stop
+        # abaixo itera `list(positions.keys())` — nao ha dupla venda.
+        #
+        # Referencia = `last_mark_price`, que no inicio do dia guarda o FECHAMENTO DE
+        # ONTEM da posicao (so e atualizado no fim do laco) e ja e a prova de buraco de
+        # dado. O que se mede aqui e VELOCIDADE de queda; perda acumulada continua
+        # sendo trabalho do stop.
+        #
+        # `ExitReason.STOP` e nao um valor novo: e uma saida protetiva de fato, e
+        # `CROSS_DOWN` ja significa "cruzamento de medias" no painel e no
+        # `journal/enrichment.py`. Reusar aquele rotulo daria nome errado ao evento.
+        if config.gap_exit_pct is not None:
+            limiar = 1.0 - float(config.gap_exit_pct)
+            for ticker in list(positions.keys()):
+                pos = positions[ticker]
+                fecho_ontem = last_mark_price.get(ticker)
+                opn = _price(ticker, today, "open")
+                if not fecho_ontem or opn is None or opn > fecho_ontem * limiar:
+                    continue
+                exec_ref = opn
+                exec_px = apply_slippage(exec_ref, "sell", config.costs)
+                gross = exec_px * pos.quantity
+                leg_fees = fees_for_leg(gross, config.costs)
+                cash += gross - leg_fees
+                df = enriched.get(ticker)
+                snap = _snapshot(df.loc[today]) if (df is not None and today in df.index) else _snapshot(pd.Series(dtype=float))
+                closed.append(Trade(
+                    ticker=ticker, strategy_name=strategy.name, strategy_version=strategy.version,
+                    entry_date=pos.entry_date, entry_price=pos.entry_price, quantity=pos.quantity,
+                    capital_allocated=pos.capital_allocated, exit_date=today.date(),
+                    exit_price=exec_px, exit_reason=ExitReason.STOP,
+                    fees_total=pos.fees_paid + leg_fees,
+                    slippage_total=pos.slippage_paid + abs(exec_px - exec_ref) * pos.quantity,
+                    max_favorable_excursion=(pos.max_price_seen - pos.entry_price) / pos.entry_price,
+                    max_adverse_excursion=(pos.min_price_seen - pos.entry_price) / pos.entry_price,
+                    entry_snapshot=pos.entry_snapshot, exit_snapshot=snap,
+                ))
+                del positions[ticker]
+                liquidity_reason = ExitReason.STOP.value
 
         # Stop principal
         for ticker in list(positions.keys()):
@@ -529,6 +664,7 @@ def run_portfolio_backtest(
                 last_mark_price[t] = px
             equity += last_mark_price.get(t, 0.0) * sat.quantity
         equity_records.append((today, float(equity)))
+        unit_records.append((today, float(equity) / units if units > 0 else 0.0))
 
         # Politica de saque decide no close — executa no open de amanha.
         # `invested` = quanto esta a mercado (equity - caixa); 0 significa robo
@@ -603,10 +739,31 @@ def run_portfolio_backtest(
         "trades_count": len(closed),
         "benchmark_cagr": cagr(ibov_norm) if len(ibov_norm) else 0.0,
     }
+    unit_series = pd.Series(dict(unit_records)).sort_index() if unit_records else pd.Series(dtype=float)
+    if contributions:
+        metrics["contributed_total"] = float(sum(v for _, v in contributions))
+        metrics["contributions_count"] = len(contributions)
     if withdrawals:
         metrics["withdrawn_total"] = float(sum(w.executed for w in withdrawals))
         metrics["withdrawals_count"] = len(withdrawals)
         metrics["withdrawal_fees"] = float(sum(w.fees_paid for w in withdrawals))
+    if contributions or withdrawals:
+        # Com QUALQUER fluxo de caixa externo (aporte OU saque), `cagr`/
+        # `max_drawdown` acima medem a curva de PATRIMONIO, que se move por
+        # dinheiro que entrou ou saiu, nao so por desempenho. As metricas
+        # honestas usam a curva de COTA (que agora neutraliza os dois
+        # sentidos — ver `_execute_withdrawal`), e por isso aparecem sempre
+        # que existir aporte OU saque, nao so quando ha aporte.
+        metrics["cagr_unit"] = cagr(unit_series)
+        metrics["max_drawdown_unit"] = max_drawdown(unit_series)
+        fluxos: list[tuple[object, float]] = [(all_dates[0].date(), -config.initial_capital)]
+        fluxos += [(d, -v) for d, v in contributions]
+        # Saque e dinheiro que VOLTOU para o dono: fluxo POSITIVO, na data em
+        # que saiu da conta — sem isso a TIR ficaria cega para metade do
+        # fluxo real sempre que aporte e saque coexistissem no mesmo run.
+        fluxos += [(w.date.date(), float(w.executed)) for w in withdrawals]
+        fluxos.append((all_dates[-1].date(), float(equity_series.iloc[-1])))
+        metrics["irr"] = irr_annual(fluxos)
     if entry_fill_mode != "open":
         # So aparece fora do modo default — o modo 'open' tem de devolver o
         # mesmo dict de sempre, byte-a-byte, para nao quebrar quem ja consome
@@ -616,4 +773,5 @@ def run_portfolio_backtest(
         metrics["entries_skipped"] = entries_attempted - entries_filled
     return BacktestResult(trades=closed, equity_curve=equity_series,
                           benchmark_curve=ibov_norm, metrics=metrics,
-                          withdrawals=withdrawals)
+                          withdrawals=withdrawals, unit_curve=unit_series,
+                          contributions=contributions)

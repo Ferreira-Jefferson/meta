@@ -81,3 +81,36 @@ class BacktestConfig:
     # Mudar isto NÃO melhora nem piora estratégia nenhuma — só troca a
     # hipótese de execução. Comparar arms é o ponto.
     stop_fill: str = "stop_or_open"
+    # Gatilho de queda SUBITA, independente do stop — cobre o buraco que
+    # `stop_loss_pct` nao cobre: um papel que subiu bastante desde a entrada
+    # pode desabar 25% num unico pregao e ainda ficar ACIMA do stop (que fica
+    # `stop_loss_pct` abaixo da ENTRADA original e nunca sobe). Nesse caso o
+    # robo hoje nao faz nada ate o rebalance de fim de mes. Medido contra
+    # desastres reais (`scripts/run_disaster_forced_entry.py`): HAPV3
+    # 2025-11-13, DASA3 2021-04-07, IRBR3 2020-03-04, ENEV3 2015-02-13.
+    #
+    # `None` = desligado, e e o DEFAULT de proposito: o robo do podio
+    # (`liquid_dual10`) foi medido e promovido SEM este gatilho, e liga-lo por
+    # default mudaria em silencio um robo ja aprovado.
+    #
+    # Quando ligado: se o preco cair `gap_exit_pct` ou mais em relacao ao
+    # FECHAMENTO ANTERIOR, sai a mercado imediatamente, independente do nivel
+    # do stop. A referencia e o fechamento anterior (nao a entrada, nao a
+    # maxima) porque o que se quer detectar e VELOCIDADE de queda, nao perda
+    # acumulada — perda acumulada ja e trabalho do stop.
+    #
+    # Valor natural = o mesmo `stop_loss_pct` (0.15): a MESMA tolerancia que o
+    # robo ja declara, so com outra referencia. Nao e um parametro novo de
+    # ajuste.
+    gap_exit_pct: float | None = None
+    # Aporte mensal em reais, creditado no PRIMEIRO pregão de cada mês civil
+    # (o mês do capital inicial não recebe aporte — ele JÁ é o primeiro
+    # depósito). 0.0 = conta fechada, que é como todo o diário foi medido.
+    #
+    # Com aporte, `cagr` e `max_drawdown` da curva de patrimônio deixam de ser
+    # comparáveis com uma conta fechada: dinheiro novo empurra o patrimônio
+    # para cima sem que nada tenha rendido. Por isso o engine passa a devolver
+    # também uma curva UNITIZADA (cota, no sentido de fundo): cada aporte
+    # compra cotas ao valor do dia, então a cota mede só o desempenho. Ver
+    # `BacktestResult.unit_curve` e as métricas `*_unit` / `irr`.
+    monthly_contribution: float = 0.0
