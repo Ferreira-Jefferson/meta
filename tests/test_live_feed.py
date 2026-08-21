@@ -18,8 +18,9 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from live import feed as feed_mod
 from live.feed import MT5Feed, ParquetCloseFeed, QuoteFeed, YFinanceFeed, staleness_report
-from core.live_models import Quote
+from core.live_models import Quote, SessionPhase
 from tests.doubles import ReplayFeed
 
 
@@ -191,7 +192,9 @@ def _tick(*, bid=49.9, ask=50.1, last=None, time=0):
 
 def test_mt5feed_le_tick_e_declara_atraso_real(monkeypatch):
     now = datetime(2026, 8, 18, 15, 0, 0, tzinfo=timezone.utc)
-    epoch_agora = int(now.timestamp())
+    # epoch da hora de PAREDE do servidor (Brasilia, UTC-3) — ver comentario
+    # em `test_mt5feed_now_fn_injetavel_permite_idade_deterministica`.
+    epoch_agora = int((now - timedelta(hours=3)).timestamp())
     tick = _tick(bid=49.9, ask=50.1, last=50.0, time=epoch_agora - 12)
     mod = _make_fake_mt5_feed_module(ticks={"WEGE3": tick})
     monkeypatch.setitem(sys.modules, "MetaTrader5", mod)
@@ -256,7 +259,11 @@ def test_mt5feed_now_fn_injetavel_permite_idade_deterministica(monkeypatch):
     idade e CALCULADA (nao uma constante) e independe do relogio real da
     maquina rodando o teste."""
     now_fixo = datetime(2026, 8, 18, 15, 0, 0, tzinfo=timezone.utc)
-    epoch_agora = int(now_fixo.timestamp())
+    # `tick.time` e a hora de PAREDE do servidor (Brasilia, UTC-3), nao UTC —
+    # entao o epoch de referencia de um tick "agora" e `now - 3h`. Montar o
+    # fake com o epoch de UTC direto simularia um servidor 3h adiantado (e
+    # acenderia, com razao, o alarme de tick no futuro).
+    epoch_agora = int((now_fixo - timedelta(hours=3)).timestamp())
     tick_fresco = _tick(last=50.0, time=epoch_agora - 5)
     tick_velho = _tick(last=50.0, time=epoch_agora - 400)
     mod = _make_fake_mt5_feed_module(ticks={"AAA": tick_fresco, "BBB": tick_velho})
@@ -270,14 +277,19 @@ def test_mt5feed_now_fn_injetavel_permite_idade_deterministica(monkeypatch):
     assert quotes["BBB.SA"].delay_seconds != quotes["AAA.SA"].delay_seconds
 
 
-# ---------- MT5Feed: autocalibracao do offset servidor<->UTC ---------------
+# ---------- MT5Feed: offset declarado + conferencia do relogio -------------
 #
 # `tick.time` do MetaTrader5 e o relogio do SERVIDOR do terminal, nao UTC. Nos
 # fakes abaixo, para simular isso, construimos o "tick.time" cru a partir do
 # horario LOCAL do servidor, mas rotulado como UTC (exatamente o jeito errado
 # que `datetime.fromtimestamp(tick.time, tz=utc)` interpreta o valor antes da
-# correcao) — e' a mesma tecnica que revelou o bug na medicao real contra o
-# terminal da Clear em 2026-08-20 (ver contexto da tarefa).
+# correcao).
+#
+# A AUTOCALIBRACAO do offset foi REMOVIDA em 2026-08-21 (ver docstring de
+# `MT5Feed`): ela inferia o offset da idade aparente do tick mais novo, e essa
+# inferencia e ambigua por construcao — "tick de 1h atras" e "fuso 1h errado"
+# dao o mesmo numero. Estes testes cobrem o que ficou no lugar: offset vindo do
+# fuso declarado e medido, e uma conferencia que so acusa quando ha prova.
 
 def _epoch_rotulado_utc(ano, mes, dia, hora, minuto, segundo=0) -> int:
     """Epoch de um horario LOCAL do servidor, como se fosse UTC (o jeito
@@ -285,12 +297,12 @@ def _epoch_rotulado_utc(ano, mes, dia, hora, minuto, segundo=0) -> int:
     return int(datetime(ano, mes, dia, hora, minuto, segundo, tzinfo=timezone.utc).timestamp())
 
 
-def test_mt5feed_autocalibra_offset_utc_menos_3_com_ticks_reais_da_clear(monkeypatch):
-    """Cenario da medicao real (2026-08-20, terminal da Clear conectado,
-    pregao aberto): agora UTC 18:41:20, agora local (servidor) 15:41:20 ->
-    offset servidor<->UTC = +3h. WEGE3/CSMG3 frescos, EMAE4 parado ha ~521s
-    (papel iliquido, atraso genuino) — a autocalibracao usa o tick mais novo
-    do lote (CSMG3) como referencia."""
+def test_mt5feed_usa_o_offset_do_fuso_declarado(monkeypatch):
+    """Cenario da medicao real (terminal conectado, pregao aberto): agora UTC
+    18:41:20, relogio do servidor 15:41:20 -> +3h, que e exatamente o offset do
+    fuso declarado em `core.b3_session`. WEGE3/CSMG3 frescos, EMAE4 parado ha
+    ~521s (papel iliquido, atraso genuino) — e o atraso de cada um sai em
+    SEGUNDOS, nao nas ~3h que o bug de fuso produzia."""
     now_utc = datetime(2026, 8, 20, 18, 41, 20, tzinfo=timezone.utc)
     tick_wege3 = _tick(last=50.0, time=_epoch_rotulado_utc(2026, 8, 20, 15, 41, 19))
     tick_csmg3 = _tick(last=15.0, time=_epoch_rotulado_utc(2026, 8, 20, 15, 41, 20))
@@ -304,47 +316,46 @@ def test_mt5feed_autocalibra_offset_utc_menos_3_com_ticks_reais_da_clear(monkeyp
     quotes = feed.quotes(["WEGE3.SA", "CSMG3.SA", "EMAE4.SA"])
 
     assert feed.server_utc_offset_hours == pytest.approx(3.0)
-    # idade REAL, em segundos (nao em horas, e nao mais os ~10800s do bug).
+    assert feed.offset_source == "fuso_declarado"
     assert quotes["WEGE3.SA"].delay_seconds == pytest.approx(1.0, abs=1.0)
     assert quotes["CSMG3.SA"].delay_seconds == pytest.approx(0.0, abs=1.0)
     assert quotes["EMAE4.SA"].delay_seconds == pytest.approx(521.0, abs=1.0)
+    assert feed.server_clock_alarm is None
 
 
-def test_mt5feed_autocalibra_offset_positivo_quando_servidor_adiantado_utc():
-    """Teste de SINAL: servidor ADIANTADO em relacao ao UTC (ex.: UTC+2,
-    caso europeu) tem de corrigir na direcao certa tambem — senao o sinal do
-    offset esta invertido e o fix dobra o bug em vez de corrigir."""
-    now_utc = datetime(2026, 3, 15, 10, 0, 0, tzinfo=timezone.utc)
-    tick_fresco_idade_real = 3  # segundos
-    servidor_local_no_tick = (
-        now_utc - timedelta(seconds=tick_fresco_idade_real) + timedelta(hours=2)
-    )
-    tick = _tick(
-        last=100.0,
-        time=int(servidor_local_no_tick.replace(tzinfo=timezone.utc).timestamp()),
-    )
-    mod = _make_fake_mt5_feed_module(ticks={"AAA": tick})
+def test_mt5feed_nao_adota_offset_de_tick_parado(monkeypatch):
+    """REGRESSAO do bug medido em 2026-08-21 no terminal real da Rico.
 
-    import sys as _sys
+    Um unico papel iliquido, com o ultimo negocio de ~1h atras, faz a idade
+    aparente do tick cru ser de 4h. A autocalibracao antiga arredondava isso
+    para +4h COM RESIDUO PEQUENO — aceitava a calibracao e deslocava o dia
+    inteiro do robo (fase da ancora, minuto do flatten). O offset agora vem do
+    fuso e nao se move.
 
-    _sys.modules["MetaTrader5"] = mod
-    try:
-        feed = MT5Feed(now_fn=lambda: now_utc)
-        quotes = feed.quotes(["AAA.SA"])
-    finally:
-        del _sys.modules["MetaTrader5"]
+    O atraso reportado, esse sim, tem de ficar grande: e isso que faz
+    `staleness_report` recusar decisao sobre dado velho, que e a defesa certa
+    para este caso.
+    """
+    now_utc = datetime(2026, 8, 21, 21, 42, 44, tzinfo=timezone.utc)
+    # relogio do servidor: 18:42:44. Ultimo negocio do papel: 17:42:44 (1h atras).
+    tick_parado = _tick(last=0.13, time=_epoch_rotulado_utc(2026, 8, 21, 17, 42, 44))
+    mod = _make_fake_mt5_feed_module(ticks={"PMAM3": tick_parado})
+    monkeypatch.setitem(sys.modules, "MetaTrader5", mod)
 
-    assert feed.server_utc_offset_hours == pytest.approx(-2.0)
-    assert quotes["AAA.SA"].delay_seconds == pytest.approx(tick_fresco_idade_real, abs=1.0)
+    feed = MT5Feed(now_fn=lambda: now_utc)
+    quotes = feed.quotes(["PMAM3.SA"])
+
+    assert feed.server_utc_offset_hours == pytest.approx(3.0)  # NAO virou 4.0
+    assert quotes["PMAM3.SA"].delay_seconds == pytest.approx(3600.0, abs=2.0)
+    # tick velho nao e prova de relogio errado — e indistinguivel de iliquidez.
+    assert feed.server_clock_alarm is None
 
 
-def test_mt5feed_offset_explicito_desliga_autocalibracao(monkeypatch):
-    """`server_utc_offset_hours` explicito e respeitado tal qual, mesmo
-    quando o tick esta FRESCO ao ponto de a autocalibracao (se estivesse
-    ligada) teria escolhido offset 0 — prova que a autocalibracao nao roda
-    neste modo."""
+def test_mt5feed_offset_explicito_vence_o_fuso_declarado(monkeypatch):
+    """`server_utc_offset_hours` explicito e respeitado tal qual — e o escape
+    para quem mediu outro offset (troca de corretora/servidor)."""
     now_utc = datetime(2026, 8, 18, 15, 0, 0, tzinfo=timezone.utc)
-    tick = _tick(last=50.0, time=int(now_utc.timestamp()))  # tick "cru" == now, offset auto seria 0
+    tick = _tick(last=50.0, time=int(now_utc.timestamp()))
     mod = _make_fake_mt5_feed_module(ticks={"WEGE3": tick})
     monkeypatch.setitem(sys.modules, "MetaTrader5", mod)
 
@@ -352,40 +363,101 @@ def test_mt5feed_offset_explicito_desliga_autocalibracao(monkeypatch):
     quotes = feed.quotes(["WEGE3.SA"])
 
     assert feed.server_utc_offset_hours == pytest.approx(-3.0)
+    assert feed.offset_source == "explicito"
     # offset explicito -3h aplicado ao tick "cru" desloca o tick 3h para
     # TRAS -> atraso de 3h, mesmo o tick sendo cru-identico a `now`.
     assert quotes["WEGE3.SA"].delay_seconds == pytest.approx(3 * 3600.0)
 
 
-def test_mt5feed_tick_velho_demais_nao_recalibra_e_reporta_erro(monkeypatch):
-    """Depois de calibrar com um tick fresco (offset +3h), uma leitura
-    seguinte cujo tick mais novo do lote esta genuinamente velho (residuo
-    depois de arredondar para hora inteira > 15min) NAO pode recalibrar —
-    os dados nao dao confianca suficiente. O offset anterior e mantido e o
-    erro e reportado via `on_error`."""
+def test_mt5feed_acusa_tick_no_futuro(monkeypatch):
+    """Tick ADIANTADO e a unica prova incondicional de que o offset aplicado
+    esta grande demais: nenhum atraso de dado faz um tick chegar do futuro.
+    Cenario: servidor na verdade em UTC-2, offset declarado +3h -> o tick
+    aparece 1h a frente."""
     now_utc = datetime(2026, 8, 20, 18, 41, 20, tzinfo=timezone.utc)
-    tick_fresco = _tick(last=50.0, time=_epoch_rotulado_utc(2026, 8, 20, 15, 41, 20))
-    mod = _make_fake_mt5_feed_module(ticks={"WEGE3": tick_fresco})
+    tick = _tick(last=50.0, time=_epoch_rotulado_utc(2026, 8, 20, 16, 41, 20))
+    mod = _make_fake_mt5_feed_module(ticks={"WEGE3": tick})
     monkeypatch.setitem(sys.modules, "MetaTrader5", mod)
 
     erros = []
     feed = MT5Feed(now_fn=lambda: now_utc, on_error=lambda t, e: erros.append((t, str(e))))
     feed.quotes(["WEGE3.SA"])
-    assert feed.server_utc_offset_hours == pytest.approx(3.0)  # calibracao inicial ok
 
-    # 2a leitura, MESMO `now`: tick mais novo do lote esta 2h18min (8280s)
-    # "atras" no relogio cru -> bruto = 2.3h, arredonda p/ 2h, residuo =
-    # 0.3*3600 = 1080s > 900s -> nao calibra.
-    tick_velho = _tick(last=51.0, time=int(now_utc.timestamp()) - 8280)
-    mod.symbol_info_tick = lambda symbol: {"WEGE3": tick_velho}.get(symbol)
+    assert feed.server_clock_alarm is not None
+    assert "FUTURO" in feed.server_clock_alarm
+    assert any(ticker == "relogio" for ticker, _ in erros)
+    # o offset NAO e corrigido sozinho: quem decide o que fazer e quem opera.
+    assert feed.server_utc_offset_hours == pytest.approx(3.0)
 
-    quotes2 = feed.quotes(["WEGE3.SA"])
 
-    assert feed.server_utc_offset_hours == pytest.approx(3.0)  # inalterado
-    assert any(ticker == "calibracao" for ticker, _ in erros)
-    # o quote ainda sai (o feed nao trava so porque a calibracao falhou),
-    # so que com o offset ANTERIOR aplicado.
-    assert "WEGE3.SA" in quotes2
+def test_mt5feed_tick_levemente_adiantado_nao_acusa(monkeypatch):
+    """Dessincronia normal de relogio (NTP, latencia) nao pode acender alarme:
+    senao o robo pararia por ruido de segundos."""
+    now_utc = datetime(2026, 8, 20, 18, 41, 20, tzinfo=timezone.utc)
+    tick = _tick(last=50.0, time=_epoch_rotulado_utc(2026, 8, 20, 15, 42, 20))  # 60s a frente
+    mod = _make_fake_mt5_feed_module(ticks={"WEGE3": tick})
+    monkeypatch.setitem(sys.modules, "MetaTrader5", mod)
+
+    feed = MT5Feed(now_fn=lambda: now_utc)
+    feed.quotes(["WEGE3.SA"])
+
+    assert feed.server_clock_alarm is None
+
+
+# ---------- verify_server_clock: o teste que resolve o caso ambiguo --------
+
+def _feed_com_tick_de_referencia(monkeypatch, now_utc, idade_segundos):
+    """`MT5Feed` cujo papel de REFERENCIA tem um tick com a idade pedida."""
+    parede = now_utc - timedelta(hours=3) - timedelta(seconds=idade_segundos)
+    tick = _tick(last=44.0, time=int(parede.replace(tzinfo=timezone.utc).timestamp()))
+    mod = _make_fake_mt5_feed_module(ticks={"PETR4": tick})
+    monkeypatch.setitem(sys.modules, "MetaTrader5", mod)
+    return MT5Feed(now_fn=lambda: now_utc)
+
+
+def test_verify_server_clock_acusa_tick_velho_do_papel_liquido_com_pregao_aberto(monkeypatch):
+    """Dentro do continuo o papel de REFERENCIA negocia todo minuto. Um tick
+    dele com 1h de idade nao tem a desculpa de iliquidez — e prova de que o
+    relogio do servidor nao esta no fuso declarado."""
+    now_utc = datetime(2026, 8, 20, 16, 0, 0, tzinfo=timezone.utc)  # 13:00 Brasilia
+    feed = _feed_com_tick_de_referencia(monkeypatch, now_utc, idade_segundos=3600)
+    monkeypatch.setattr(feed_mod.clock, "phase", lambda *a, **k: SessionPhase.OPEN)
+
+    alarme = feed.verify_server_clock()
+
+    assert alarme is not None
+    assert "referencia" in alarme
+    assert feed.server_clock_alarm == alarme
+
+
+def test_verify_server_clock_nao_acusa_fora_do_continuo(monkeypatch):
+    """Com o mercado FECHADO todo tick esta velho por definicao — foi
+    exatamente assim que a autocalibracao antiga errou. Aqui a conferencia por
+    atraso simplesmente nao roda."""
+    now_utc = datetime(2026, 8, 20, 21, 42, 44, tzinfo=timezone.utc)
+    feed = _feed_com_tick_de_referencia(monkeypatch, now_utc, idade_segundos=3600)
+    monkeypatch.setattr(feed_mod.clock, "phase", lambda *a, **k: SessionPhase.POST_CLOSE)
+
+    assert feed.verify_server_clock() is None
+
+
+def test_verify_server_clock_nao_acusa_com_tick_fresco(monkeypatch):
+    now_utc = datetime(2026, 8, 20, 16, 0, 0, tzinfo=timezone.utc)
+    feed = _feed_com_tick_de_referencia(monkeypatch, now_utc, idade_segundos=2)
+    monkeypatch.setattr(feed_mod.clock, "phase", lambda *a, **k: SessionPhase.OPEN)
+
+    assert feed.verify_server_clock() is None
+
+
+def test_verify_server_clock_sem_tick_nenhum_nao_conclui(monkeypatch):
+    """Terminal sem o papel de referencia disponivel nao e prova de nada — nao
+    pode acender alarme nem dar um OK falso."""
+    mod = _make_fake_mt5_feed_module(ticks={})
+    monkeypatch.setitem(sys.modules, "MetaTrader5", mod)
+    feed = MT5Feed(now_fn=lambda: datetime(2026, 8, 20, 16, 0, tzinfo=timezone.utc))
+    monkeypatch.setattr(feed_mod.clock, "phase", lambda *a, **k: SessionPhase.OPEN)
+
+    assert feed.verify_server_clock() is None
 
 
 def test_mt5feed_ticker_atrasado_entre_frescos_continua_velho_apos_correcao(monkeypatch):
@@ -413,29 +485,3 @@ def test_mt5feed_ticker_atrasado_entre_frescos_continua_velho_apos_correcao(monk
     assert "CSMG3.SA" not in report
 
 
-def test_mt5feed_offset_muda_entre_leituras_recalibra_e_chama_on_info(monkeypatch):
-    """Horario de verao (ou troca de servidor): o offset detectado muda
-    entre duas leituras -> o feed recalibra e avisa via `on_info` (nao
-    `on_error` — mudanca de offset e informacao operacional, nao erro)."""
-    now_utc = datetime(2026, 10, 20, 12, 0, 0, tzinfo=timezone.utc)
-    tick_offset_3 = _tick(last=50.0, time=_epoch_rotulado_utc(2026, 10, 20, 9, 0, 0))
-    mod = _make_fake_mt5_feed_module(ticks={"WEGE3": tick_offset_3})
-    monkeypatch.setitem(sys.modules, "MetaTrader5", mod)
-
-    infos = []
-    feed = MT5Feed(now_fn=lambda: now_utc, on_info=lambda ctx, msg: infos.append((ctx, msg)))
-    feed.quotes(["WEGE3.SA"])
-
-    assert feed.server_utc_offset_hours == pytest.approx(3.0)
-    assert len(infos) == 1  # primeira calibracao tambem avisa
-
-    # servidor passou a reportar offset +2h (ex.: fim de horario de verao
-    # do lado do servidor, ou troca de servidor) — tick fresco novo.
-    tick_offset_2 = _tick(last=51.0, time=_epoch_rotulado_utc(2026, 10, 20, 10, 0, 0))
-    mod.symbol_info_tick = lambda symbol: {"WEGE3": tick_offset_2}.get(symbol)
-
-    feed.quotes(["WEGE3.SA"])
-
-    assert feed.server_utc_offset_hours == pytest.approx(2.0)
-    assert len(infos) == 2
-    assert infos[1][0] == "calibracao"

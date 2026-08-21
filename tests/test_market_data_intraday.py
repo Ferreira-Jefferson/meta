@@ -66,7 +66,7 @@ def test_fetch_m1_recent_nunca_pede_mais_que_o_maximo(monkeypatch):
     mod.copy_rates_from_pos = _spy
     monkeypatch.setitem(sys.modules, "MetaTrader5", mod)
 
-    mt5_source.fetch_m1_recent("WIN@", count=200_000)
+    mt5_source.fetch_m1_recent("PMAM3", count=200_000)
 
     assert all(c <= mt5_source.MAX_BARS_PER_REQUEST for c in pedidos)
 
@@ -76,7 +76,7 @@ def test_fetch_m1_recent_devolve_dataframe_indexado_por_tempo(monkeypatch):
     mod = _make_fake_mt5_module(rates=rates)
     monkeypatch.setitem(sys.modules, "MetaTrader5", mod)
 
-    df = mt5_source.fetch_m1_recent("WIN@", count=5)
+    df = mt5_source.fetch_m1_recent("PMAM3", count=5)
 
     assert len(df) == 5
     assert isinstance(df.index, pd.DatetimeIndex)
@@ -88,7 +88,7 @@ def test_fetch_falha_de_conexao_devolve_dataframe_vazio_e_chama_on_error(monkeyp
     monkeypatch.setitem(sys.modules, "MetaTrader5", mod)
 
     erros = []
-    df = mt5_source.fetch_m1_recent("WIN@", on_error=lambda k, e: erros.append((k, e)))
+    df = mt5_source.fetch_m1_recent("PMAM3", on_error=lambda k, e: erros.append((k, e)))
 
     assert df.empty
     assert len(erros) == 1
@@ -103,7 +103,7 @@ def test_fetch_m1_full_history_pagina_ate_lote_menor_que_o_maximo(monkeypatch):
     mod = _make_fake_mt5_module(rates=rates)
     monkeypatch.setitem(sys.modules, "MetaTrader5", mod)
 
-    df = mt5_source.fetch_m1_full_history("WIN@")
+    df = mt5_source.fetch_m1_full_history("PMAM3")
 
     assert len(df) == total
     assert df.index.is_monotonic_increasing
@@ -114,7 +114,7 @@ def test_fetch_m1_full_history_sem_dado_devolve_vazio(monkeypatch):
     mod = _make_fake_mt5_module(rates=[])
     monkeypatch.setitem(sys.modules, "MetaTrader5", mod)
 
-    df = mt5_source.fetch_m1_full_history("WIN@")
+    df = mt5_source.fetch_m1_full_history("PMAM3")
 
     assert df.empty
 
@@ -124,7 +124,7 @@ def test_symbol_economics_mapeia_campos(monkeypatch):
     mod = _make_fake_mt5_module(symbol_info=info)
     monkeypatch.setitem(sys.modules, "MetaTrader5", mod)
 
-    econ = mt5_source.symbol_economics("WIN@")
+    econ = mt5_source.symbol_economics("PMAM3")
 
     assert econ is not None
     assert econ.trade_tick_size == pytest.approx(5.0)
@@ -155,8 +155,8 @@ def _df(timestamps, closes):
 def test_merge_m1_idempotente(tmp_path):
     novo = _df(["2026-01-01 10:00", "2026-01-01 10:01"], [100.0, 101.0])
 
-    merged1, n1 = storage.merge_m1("WIN@", novo, data_dir=tmp_path)
-    merged2, n2 = storage.merge_m1("WIN@", novo, data_dir=tmp_path)
+    merged1, n1 = storage.merge_m1("PMAM3", novo, data_dir=tmp_path)
+    merged2, n2 = storage.merge_m1("PMAM3", novo, data_dir=tmp_path)
 
     assert n1 == 2
     assert n2 == 0  # segunda vez, mesmas barras -> 0 genuinamente novas
@@ -166,10 +166,10 @@ def test_merge_m1_idempotente(tmp_path):
 
 def test_merge_m1_novo_vence_em_timestamp_sobreposto(tmp_path):
     velho = _df(["2026-01-01 10:00"], [100.0])
-    storage.merge_m1("WIN@", velho, data_dir=tmp_path)
+    storage.merge_m1("PMAM3", velho, data_dir=tmp_path)
 
     corrigido = _df(["2026-01-01 10:00"], [999.0])
-    merged, n_novos = storage.merge_m1("WIN@", corrigido, data_dir=tmp_path)
+    merged, n_novos = storage.merge_m1("PMAM3", corrigido, data_dir=tmp_path)
 
     assert merged.loc[pd.Timestamp("2026-01-01 10:00", tz="UTC"), "close"] == pytest.approx(999.0)
     assert n_novos == 0  # timestamp nao e novo, so foi corrigido
@@ -180,10 +180,10 @@ def test_merge_m1_resgata_barra_antiga_ausente_do_fetch_novo(tmp_path):
     anterior salvou e que o fetch de hoje nao consegue mais pedir tem que
     sobreviver ao merge, nunca ser apagada."""
     velho = _df(["2025-12-01 10:00", "2025-12-01 10:01"], [50.0, 51.0])
-    storage.merge_m1("WIN@", velho, data_dir=tmp_path)
+    storage.merge_m1("PMAM3", velho, data_dir=tmp_path)
 
     novo_apenas_recente = _df(["2026-08-20 10:00"], [200.0])
-    merged, n_novos = storage.merge_m1("WIN@", novo_apenas_recente, data_dir=tmp_path)
+    merged, n_novos = storage.merge_m1("PMAM3", novo_apenas_recente, data_dir=tmp_path)
 
     assert len(merged) == 3
     assert pd.Timestamp("2025-12-01 10:00", tz="UTC") in merged.index
@@ -191,4 +191,4 @@ def test_merge_m1_resgata_barra_antiga_ausente_do_fetch_novo(tmp_path):
 
 
 def test_load_m1_sem_parquet_devolve_vazio(tmp_path):
-    assert storage.load_m1("WIN@", data_dir=tmp_path).empty
+    assert storage.load_m1("PMAM3", data_dir=tmp_path).empty

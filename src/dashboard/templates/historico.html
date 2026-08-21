@@ -13,22 +13,30 @@
       sacado, uma linha por decisão.
     </p>
   </div>
-  {% if existe %}
   <aside>
-    <div>Conta · {{ conta }}</div>
+    {% for s in slots %}
+    <div>
+      {% if s.id == slot.id %}<strong>{{ s.label }}</strong>
+      {% else %}<a href="/operacao/historico?slot={{ s.id }}">{{ s.label }}</a>{% endif %}
+    </div>
+    {% endfor %}
+    {% if existe %}
     <div>Capital inicial · <span class="num">R$ {{ "{:,.0f}".format(capital_inicial).replace(",", ".") }}</span></div>
+    {% endif %}
   </aside>
-  {% endif %}
 </section>
 
 {% if not existe %}
 
 <div class="empty">
   <div>
-    <h1>Nenhuma conta de operação ainda</h1>
-    <p>Crie a conta com o robô oficial e a política de saque em vigor primeiro:</p>
-    <p><code>python scripts/run_live.py init --capital SEU_CAPITAL --mode paper</code></p>
-    <p>Depois volte aqui para acompanhar o histórico.</p>
+    <h1>Nenhuma conta de operação para "{{ slot.label }}"</h1>
+    <p>
+      Informe o caixa destinado a este robô em
+      <a href="/operacao">Operação</a> e clique em "Iniciar operação" — a
+      conta é criada nesse momento. Depois volte aqui para acompanhar o
+      histórico.
+    </p>
   </div>
 </div>
 

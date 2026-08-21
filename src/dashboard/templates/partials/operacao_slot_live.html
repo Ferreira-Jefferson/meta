@@ -1,0 +1,282 @@
+{% set s = status %}
+{# Painel operacional de UM slot. Nó próprio, poll próprio: o refresh de
+   fundo de um robô não recria o DOM do outro, e nem o form de caixa nem as
+   credenciais (que ficam fora daqui) são apagados no meio da digitação.
+   Ver `app.py::operacao_fragment`. #}
+<div id="ops-slot-live-{{ slot.id }}" hx-get="/operacao/{{ slot.id }}/fragment"
+     hx-trigger="every {{ poll_seconds }}s" hx-swap="outerHTML">
+
+<section class="ops-control stagger">
+  {% if proc %}
+    <span class="ops-status running"><span class="dot"></span> Robô ativo desde {{ proc.started_at[:16].replace("T", " ") }}</span>
+    <form hx-post="/operacao/{{ slot.id }}/parar" hx-target="#ops-body" hx-swap="outerHTML">
+      <button type="submit" class="btn-stop">■ Parar operação</button>
+    </form>
+  {% else %}
+    <span class="ops-status stopped">
+      <span class="dot"></span> Robô parado
+      {% if s.existe and s.modo == "mt5" %}<span class="dim">— ⚠ modo dinheiro real (MetaTrader 5)</span>{% endif %}
+    </span>
+    <form hx-post="/operacao/{{ slot.id }}/iniciar" hx-target="#ops-body" hx-swap="outerHTML"
+          hx-disabled-elt="find button[type=submit]">
+      {# Capital vem do ledger manual (form de caixa acima), robô vem da conta
+         ou do catálogo do slot. Piso do saque, disjuntor e ações por lote não
+         são campo nenhum aqui — o robô já decide sozinho (official_policy/
+         CircuitBreaker defaults) e ações por lote é detectado no terminal MT5
+         a cada clique. #}
+      {% if config_anterior %}
+      <input type="hidden" name="notify_min_level" value="{{ config_anterior.notify_min_level or 'warn' }}" />
+      {% endif %}
+      {% if not s.existe and not slot.is_intraday and top3 %}
+      <label class="ops-inline-field">
+        <span class="k">Robô</span>
+        {# Top-3 do ranking automático, janela FULL (`journal.reader.
+           top_strategies_by_final_capital`) -- nunca uma lista fixa. Só vale
+           pra CONTA NOVA: uma conta já existente sempre reusa o
+           `investment_robot` gravado na criação (decisão do dono,
+           2026-08-19). O slot de day trade não tem select: não há pódio
+           intradiário, o robô dele é o declarado no catálogo. #}
+        <select name="robo" required>
+          {% for cand in top3 %}
+          <option value="{{ cand.strategy_name }}"{% if cand.strategy_name == slot.robot_key %} selected{% endif %}>
+            {{ cand.strategy_name }} — R$ {{ "{:,.0f}".format(cand.final_capital).replace(",", ".") }}
+          </option>
+          {% endfor %}
+        </select>
+      </label>
+      {% endif %}
+      <button type="submit"
+              {% if not creds_status.mt5 or not caixa_ok %} disabled{% endif %}>▶ Iniciar operação</button>
+    </form>
+  {% endif %}
+</section>
+
+{% if not creds_status.mt5 %}
+<p class="ops-start-hint">
+  Preencha login, senha e servidor do MetaTrader 5 em "Acesso e credenciais"
+  para habilitar o início da operação.
+</p>
+{% elif not caixa_ok %}
+<p class="ops-start-hint">
+  Informe acima o caixa destinado a este robô — mínimo
+  R$ {{ "%.2f"|format(slot.min_cash_brl) }} para operar.
+</p>
+{% endif %}
+
+{% if not s.existe %}
+
+<div class="empty ops-empty">
+  <h3>Ainda sem conta para este robô</h3>
+  <p class="dek">
+    O caixa que você informar acima passa a ser o capital deste robô. Ao
+    iniciar, ele decide e executa dentro do que foi destinado a ele — nunca
+    olha o saldo total da corretora.
+  </p>
+</div>
+
+{% else %}
+
+<section class="ops-badges stagger">
+  <span class="ops-badge">
+    <span class="dot"></span> Modo · <strong>{{ s.modo }}</strong>
+  </span>
+  {% if s.daytrade %}
+  {# O modo de execução já tem a faixa própria acima do cartão (a informação
+     mais importante da tela); aqui só entra o que ela não cobre: a razão
+     entre ordens postas e preenchidas, que é o sinal de prioridade de fila
+     que o modo sombra existe para medir. #}
+  <span class="ops-badge">
+    <span class="dot"></span> Ordens hoje ·
+    <strong>{{ s.daytrade.trades_na_sessao }}/{{ s.daytrade.ordens_postas }}</strong>
+    <span class="dim">preenchidas/postas</span>
+  </span>
+  {% endif %}
+  <span class="ops-badge {% if not s.corretora.automatica %}warn{% endif %}">
+    <span class="dot"></span> Corretora · <strong>{{ s.corretora.nome }}</strong>
+  </span>
+  <span class="ops-badge {% if not s.feed.tempo_real %}warn{% endif %}">
+    <span class="dot"></span> Feed · <strong>{{ s.feed.nome }}</strong>
+    {% if s.feed.atraso_s and s.feed.atraso_s > 60 %}
+      <span class="dim">· atraso {{ (s.feed.atraso_s / 60) | round(0, 'floor') | int }} min</span>
+    {% endif %}
+  </span>
+  <span class="ops-badge">
+    <span class="dot"></span> Robô · <strong>{{ s.robo_investimento }}</strong>
+  </span>
+  {% if s.robo_saque %}
+  <span class="ops-badge">
+    <span class="dot"></span> Saque · <strong>{{ s.robo_saque.replace("withdrawal:", "") }}</strong>
+  </span>
+  {% endif %}
+  {# O fuso do servidor nao e' mais adivinhado (era, e adivinhava errado): ele
+     vem medido de `core.b3_session`. O que precisa aparecer aqui e' o
+     resultado da CONFERENCIA — e ela impede a operacao, entao e' erro, nao
+     aviso. #}
+  {% if s.daytrade and s.daytrade.relogio_alarme %}
+  <span class="ops-badge err">
+    <span class="dot"></span> Relógio do servidor · <strong>não confere — robô não opera</strong>
+  </span>
+  {% endif %}
+  {% if s.daytrade %}
+  <span class="ops-badge">
+    <span class="dot"></span> Achata às · <strong>{{ s.daytrade.corte_flatten_utc[:5] }} UTC</strong>
+  </span>
+  {% endif %}
+</section>
+
+<section class="capital-cards stagger">
+  <div class="capital-card">
+    <span class="k">Caixa</span>
+    <span class="v num">R$ {{ s.caixa | num_br }}</span>
+    <span class="sub">Destinado a este robô</span>
+  </div>
+  <div class="capital-card">
+    <span class="k">Carteira</span>
+    <span class="v num">R$ {{ s.carteira | num_br }}</span>
+    <span class="sub">Caixa + posições a mercado</span>
+  </div>
+  {% if s.daytrade %}
+  <div class="capital-card {% if s.daytrade.resultado_sombra >= 0 %}safe{% endif %}">
+    <span class="k">Resultado em sombra</span>
+    <span class="v num">R$ {{ s.daytrade.resultado_sombra | num_br }}</span>
+    <span class="sub">Não tocou o caixa · {{ s.daytrade.trades_na_sessao }} trade(s) hoje</span>
+  </div>
+  {% else %}
+  <div class="capital-card safe">
+    <span class="k">Caixa externo</span>
+    <span class="v num">R$ {{ s.caixa_externo | num_br }}</span>
+    <span class="sub">Sacado, fora do risco</span>
+  </div>
+  {% endif %}
+  <div class="capital-card headline">
+    <span class="k">Patrimônio</span>
+    <span class="v num">R$ {{ s.patrimonio | num_br }}</span>
+    <span class="sub">Carteira + caixa externo</span>
+  </div>
+</section>
+
+<section class="metrics-grid stagger">
+  <div class="metric">
+    <span class="k">Investido a mercado</span>
+    <span class="v num">R$ {{ s.investido | num_br }}</span>
+    <span class="sub">{{ s.posicoes | length }} posiç{{ "ão" if s.posicoes | length == 1 else "ões" }} aberta{{ "" if s.posicoes | length == 1 else "s" }}</span>
+  </div>
+  {% if s.daytrade %}
+  <div class="metric">
+    <span class="k">Resultado da sessão</span>
+    <span class="v num">R$ {{ s.daytrade.resultado_sessao | num_br }}</span>
+    <span class="sub">{{ s.daytrade.simbolo }} · zera no fim do pregão</span>
+  </div>
+  <div class="metric">
+    <span class="k">Ordem em pé</span>
+    {% if s.daytrade.ordem_em_pe %}
+    <span class="v" style="font-size: var(--fs-h3);">{{ s.daytrade.ordem_em_pe.lado }} @ {{ "%.4f"|format(s.daytrade.ordem_em_pe.preco) }}</span>
+    <span class="sub">Limite esperando o preço tocar</span>
+    {% else %}
+    <span class="v" style="font-size: var(--fs-h3);">—</span>
+    <span class="sub">Nenhuma ordem-limite vigiada</span>
+    {% endif %}
+  </div>
+  {% else %}
+  <div class="metric">
+    <span class="k">Sacado (histórico)</span>
+    <span class="v num">R$ {{ s.sacado_total | num_br }}</span>
+    <span class="sub">Desde o início da conta</span>
+  </div>
+  <div class="metric">
+    <span class="k">Intenções pendentes</span>
+    <span class="v num">{{ s.intencoes_pendentes | length }}</span>
+    <span class="sub">Aguardando a próxima abertura</span>
+  </div>
+  {% endif %}
+  <div class="metric">
+    <span class="k">Fase do pregão</span>
+    <span class="v" style="font-size: var(--fs-h3);">{{ s.fase }}</span>
+    <span class="sub">
+      {{ s.pregao }}
+      {% if s.daytrade and s.daytrade.ultima_barra %}
+        · última barra {{ s.daytrade.ultima_barra[11:16] }}
+      {% endif %}
+    </span>
+  </div>
+</section>
+
+<section class="ops-panel stagger">
+  <h3>Posições abertas</h3>
+  <table class="ops-table">
+    <thead>
+      <tr>
+        <th>Ticker</th>
+        <th class="right">Qtd</th>
+        <th class="right">Entrada</th>
+        <th class="right">Stop</th>
+        <th class="right">Barras</th>
+        <th class="right">Valor</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for p in s.posicoes %}
+      <tr>
+        <td class="ticker">{{ p.ticker.replace(".SA", "") }}</td>
+        {# Quantidade NEGATIVA = posição vendida (short). Só o day trade
+           opera os dois lados; o robô de swing é long-only. #}
+        <td class="right num">{{ p.qtd }}{% if p.qtd < 0 %} <span class="dim">(venda)</span>{% endif %}</td>
+        <td class="right num">R$ {{ "%.4f"|format(p.entrada) }}</td>
+        <td class="right num">{% if p.stop %}R$ {{ "%.4f"|format(p.stop) }}{% else %}<span class="dim">—</span>{% endif %}</td>
+        <td class="right num dim">{{ p.barras }}</td>
+        <td class="right num">R$ {{ p.valor | num_br }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="ops-table-empty">Robô fora do mercado — nenhuma posição aberta.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+{% if not s.daytrade %}
+<section class="ops-panel stagger">
+  <h3>Intenções pendentes</h3>
+  <p class="dek">
+    Decididas no último fecho, valem para o próximo pregão — nunca para o mesmo dia (regra 4 do AGENTS.md).
+    Recomendação de saque é diferente: fica na fila até ser confirmada
+    ou expirar na virada do mês, não só no pregão seguinte.
+  </p>
+  <table class="ops-table">
+    <thead>
+      <tr>
+        <th>Robô</th>
+        <th>Tipo</th>
+        <th>Ticker</th>
+        <th>Motivo</th>
+        <th class="right">Valor</th>
+        <th class="right">Executa em</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for i in s.intencoes_pendentes %}
+      <tr>
+        <td class="dim">{{ i.robo.replace("withdrawal:", "saque:") }}</td>
+        <td>{{ i.tipo }}</td>
+        <td class="ticker">{{ i.ticker.replace(".SA", "") if i.ticker else "—" }}</td>
+        <td class="dim">{{ i.motivo or "—" }}</td>
+        <td class="right num">{% if i.valor %}R$ {{ i.valor | num_br }}{% else %}<span class="dim">—</span>{% endif %}</td>
+        <td class="right num">{{ i.executa_em }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="ops-table-empty">Nada na fila — o robô não decidiu nenhuma ação no último fecho.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+<section class="console-wrap stagger">
+  <div class="k console-label">Eventos recentes</div>
+  <pre class="console">{% for e in s.eventos %}[{{ e.ts }}] {{ e.level | upper }} {{ e.source }}: {{ e.message }}
+{% else %}(nenhum evento registrado ainda)
+{% endfor %}</pre>
+</section>
+
+{% endif %}
+
+</div>

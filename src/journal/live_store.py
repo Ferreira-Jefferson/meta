@@ -1030,6 +1030,46 @@ def record_deposit(
     return int(cur.lastrowid)
 
 
+def reconcile_cash(
+    conn: sqlite3.Connection,
+    account: AccountState,
+    target_balance: float,
+    day: date,
+    origin: str,
+    note: str = "",
+    tolerance: float = 1.0,
+) -> tuple[float, bool]:
+    """Ajusta `account.cash` para `target_balance` (mutação in-place +
+    `save_account`) e audita em `live_deposits`, SE a diferença passar de
+    `tolerance` -- caso contrário não toca em nada. Devolve `(diferenca,
+    aplicado)`; `diferenca` vem sempre arredondada a 2 casas, mesmo quando
+    `aplicado` é `False`, porque quem chama (ver `dashboard/app.py::
+    operacao_caixa`) quer reportar "já convergiu, diferença de R$0,00" em vez
+    de esconder o número.
+
+    Único chamador desde 2026-08-21: o LEDGER MANUAL de caixa por robô
+    (`origin="manual_ledger"`). Antes havia dois — o sync automático com o
+    saldo do MT5 (`origin="mt5_auto_sync"`, `LiveRuntime.
+    reconcile_broker_cash`) e o override manual (`origin="manual_override"`)
+    — e o primeiro foi removido porque o terminal atrasa em relação ao saldo
+    real da corretora. `origin` continua parâmetro (e não constante) porque é
+    o que distingue as linhas HISTÓRICAS de `live_deposits` na auditoria.
+
+    `tolerance` importa: o default de R$1,00 foi calibrado para contas de
+    milhares de reais e engoliria uma correção de R$0,50 num caixa de R$50 —
+    quem opera com pouco capital passa um valor menor (ver
+    `dashboard/app.py::operacao_caixa`, que usa `0.005`)."""
+    diff = round(target_balance - account.cash, 2)
+    if abs(diff) <= tolerance:
+        return diff, False
+    anterior = account.cash
+    account.cash = target_balance
+    save_account(conn, account)
+    record_deposit(conn, account.id, day, diff, origin=origin,
+                    note=note or f"caixa anterior {anterior:.2f} -> {target_balance:.2f}")
+    return diff, True
+
+
 def withdrawals(conn: sqlite3.Connection, account_id: int) -> list[dict]:
     rows = conn.execute(
         "SELECT * FROM live_withdrawals WHERE account_id = ? ORDER BY date, id",

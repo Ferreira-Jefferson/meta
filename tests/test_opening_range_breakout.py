@@ -7,7 +7,7 @@ from datetime import time
 import pandas as pd
 import pytest
 
-from backtest.intraday.costs import FuturesCostModel
+from backtest.intraday.costs import IntradayCostModel
 from backtest.intraday.engine import IntradayBacktestConfig, run_intraday_backtest
 from core.models import IntradayExitReason
 from strategy.daytrade.base import Bar
@@ -18,16 +18,40 @@ def _bar(o, h, l, c):
     return Bar(ts=pd.Timestamp("2026-01-05 09:00", tz="UTC"), open=o, high=h, low=l, close=c, volume=10)
 
 
-def test_symbol_e_configuravel_no_construtor():
-    default = OpeningRangeBreakout()
-    assert default.symbol == "WIN@"
+def test_symbol_e_obrigatorio_no_construtor():
+    """`symbol` deixou de ter default em 2026-08-21 (era `"WIN@"`): um default
+    aqui e' um robo operando o ativo errado em silencio, e custo/tick/horario
+    de fechamento sao diferentes por instrumento."""
+    with pytest.raises(TypeError):
+        OpeningRangeBreakout()  # type: ignore[call-arg]
 
-    outro = OpeningRangeBreakout(symbol="PMAM3")
-    assert outro.symbol == "PMAM3"
+    assert OpeningRangeBreakout(symbol="PMAM3").symbol == "PMAM3"
+
+
+def test_min_range_price_ignora_sessao_com_range_pequeno_demais():
+    strat = OpeningRangeBreakout(symbol="PMAM3", range_minutes=1, min_range_price=0.5)
+    strat.on_session_start(None)
+    base = pd.Timestamp("2026-01-05 09:00", tz="UTC")
+
+    strat.on_bar(base, _bar(100, 100.1, 99.9, 100), position=None, session_pnl_brl=0.0)  # range=0.2 < 0.5
+    actions = strat.on_bar(base + pd.Timedelta(minutes=1), _bar(101, 110, 100, 105), position=None, session_pnl_brl=0.0)
+
+    assert actions == []
+
+
+def test_min_range_price_zero_preserva_comportamento_antigo():
+    strat = OpeningRangeBreakout(symbol="PMAM3", range_minutes=1, min_range_price=0.0)
+    strat.on_session_start(None)
+    base = pd.Timestamp("2026-01-05 09:00", tz="UTC")
+
+    strat.on_bar(base, _bar(100, 100.1, 99.9, 100), position=None, session_pnl_brl=0.0)
+    actions = strat.on_bar(base + pd.Timedelta(minutes=1), _bar(101, 110, 100, 105), position=None, session_pnl_brl=0.0)
+
+    assert len(actions) == 1
 
 
 def test_forma_range_e_nao_decide_nada_dentro_da_janela():
-    strat = OpeningRangeBreakout(range_minutes=5)
+    strat = OpeningRangeBreakout(symbol="PMAM3", range_minutes=5)
     strat.on_session_start(None)
     ts0 = pd.Timestamp("2026-01-05 09:00", tz="UTC")
 
@@ -39,7 +63,7 @@ def test_forma_range_e_nao_decide_nada_dentro_da_janela():
 
 
 def test_rompimento_de_alta_apos_o_range_entra_comprado_com_stop_e_alvo_corretos():
-    strat = OpeningRangeBreakout(range_minutes=5, target_r_multiple=1.5)
+    strat = OpeningRangeBreakout(symbol="PMAM3", range_minutes=5, target_r_multiple=1.5)
     strat.on_session_start(None)
     base = pd.Timestamp("2026-01-05 09:00", tz="UTC")
 
@@ -58,7 +82,7 @@ def test_rompimento_de_alta_apos_o_range_entra_comprado_com_stop_e_alvo_corretos
 
 
 def test_uma_entrada_por_sessao():
-    strat = OpeningRangeBreakout(range_minutes=1, target_r_multiple=1.0)
+    strat = OpeningRangeBreakout(symbol="PMAM3", range_minutes=1, target_r_multiple=1.0)
     strat.on_session_start(None)
     base = pd.Timestamp("2026-01-05 09:00", tz="UTC")
 
@@ -71,7 +95,7 @@ def test_uma_entrada_por_sessao():
 
 
 def test_reseta_estado_entre_sessoes():
-    strat = OpeningRangeBreakout(range_minutes=1)
+    strat = OpeningRangeBreakout(symbol="PMAM3", range_minutes=1)
     strat.on_session_start(None)
     base = pd.Timestamp("2026-01-05 09:00", tz="UTC")
     strat.on_bar(base, _bar(100, 105, 95, 100), position=None, session_pnl_brl=0.0)
@@ -99,8 +123,8 @@ def test_integracao_com_o_motor_entra_e_sai_pelo_target():
     bars = pd.DataFrame(rows, columns=["open", "high", "low", "close"], index=idx)
     bars["tick_volume"] = 10
 
-    strat = OpeningRangeBreakout(range_minutes=5, target_r_multiple=1.5)
-    costs = FuturesCostModel(point_value_brl=0.2, tick_size=1.0, fee_round_trip_brl=0.0, slippage_ticks=0.0)
+    strat = OpeningRangeBreakout(symbol="PMAM3", range_minutes=5, target_r_multiple=1.5)
+    costs = IntradayCostModel(point_value_brl=0.2, tick_size=1.0, fee_round_trip_brl=0.0, slippage_ticks=0.0)
     config = IntradayBacktestConfig(costs=costs, session_end_time=time(23, 59))
 
     result = run_intraday_backtest(bars, strat, config)

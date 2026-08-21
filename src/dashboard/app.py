@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
-from fastapi import FastAPI, Form, Request
+from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import (
     HTMLResponse,
     JSONResponse,
@@ -393,11 +393,9 @@ def _operacao_poll_seconds() -> int:
     return min(int(clock.seconds_until_active_window()) + 1, OPERACAO_POLL_IDLE_CAP_SECONDS)
 
 
-def _operacao_ctx(**extra) -> dict:
-    """Contexto comum a toda rota que renderiza `operacao.html`/
-    `operacao_body.html` — evita repetir as 4 chamadas em cada handler e
-    esquecer uma delas (já aconteceu com `creds`/`creds_status` antes de
-    virar helper).
+def _slot_ctx(slot) -> dict:
+    """Tudo o que UM cartão de slot precisa: status da conta, processo,
+    caixa do ledger manual e se o botão "Iniciar" pode estar habilitado.
 
     Correção pós-code-review (item 5, hipótese-agente): `live_service.
     get_status()` pode levantar `journal.live_store.LegacyPaperAccountError`
@@ -410,28 +408,67 @@ def _operacao_ctx(**extra) -> dict:
     mesmo tratamento."""
     from journal import live_store
 
+    erro = None
     try:
-        status_payload = live_service.get_status()
+        status_payload = live_service.get_status(slot.id)
     except (live_store.LegacyPaperAccountError, live_store.LegacyManualAccountError) as e:
-        status_payload = {"conta": live_service.ACCOUNT_NAME, "existe": False}
-        extra.setdefault("erro", str(e))
-    # `top3` só importa pro form de conta NOVA (o select "Robô") -- consulta
-    # o diário de backtests (`journal.reader`, banco SEPARADO do live) só
-    # quando ainda não há conta, pra não bater nele a cada poll HTMX de
-    # 20s em 20s (`/operacao/fragment`) sobre uma conta já em operação.
-    top3 = ([] if status_payload.get("existe")
-            else reader.top_strategies_by_final_capital(
-                top_n=3, run_kind="champion_full", only=candidate_keys()))
+        status_payload = {"conta": slot.id, "existe": False, "kind": slot.kind}
+        erro = str(e)
+    caixa = live_control.available_cash(slot.id) or 0.0
+    proc = live_control.status(slot.id)
     return {
+        "slot": slot,
         "status": status_payload,
-        "proc": live_control.status(),
-        "config_anterior": live_control.last_config(),
+        "proc": proc,
+        "config_anterior": live_control.last_config(slot.id),
+        "caixa_ledger": caixa,
+        "caixa_ok": caixa >= slot.min_cash_brl,
+        "erro_slot": erro,
+    }
+
+
+def _top3_para(slot, bloco: dict) -> list:
+    """Top-3 do ranking automático (janela FULL) — só para o select "Robô" do
+    form de conta NOVA de um slot de SWING.
+
+    Restringir a esse caso não é micro-otimização: sem isso, o cartão de day
+    trade dispararia uma consulta ao banco de BACKTESTS (`journal.reader`,
+    arquivo separado do live) a cada poll de 20s, por um número que ele nem
+    mostra — e não existe pódio intradiário para consultar (ver
+    `strategy/daytrade/base.py`)."""
+    if slot.is_intraday or bloco["status"].get("existe"):
+        return []
+    return reader.top_strategies_by_final_capital(
+        top_n=3, run_kind="champion_full", only=candidate_keys())
+
+
+def _operacao_ctx(**extra) -> dict:
+    """Contexto comum a toda rota que renderiza `operacao.html`/
+    `operacao_body.html`: um bloco por SLOT (`core.config.SLOTS`, em ordem de
+    exibição — day trade em cima) mais o que é global (credenciais, poll)."""
+    from core.config import ordered_slots
+
+    slots = [_slot_ctx(s) for s in ordered_slots()]
+    for bloco in slots:
+        if bloco["erro_slot"]:
+            extra.setdefault("erro", bloco["erro_slot"])
+        bloco["top3"] = _top3_para(bloco["slot"], bloco)
+    return {
+        "slots": slots,
         "creds": live_control.display_credentials(),
         "creds_status": live_control.credential_status(),
         "poll_seconds": _operacao_poll_seconds(),
-        "top3": top3,
         **extra,
     }
+
+
+def _slot_or_404(slot_id: str):
+    from core.config import slot_by_id
+
+    try:
+        return slot_by_id(slot_id)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
 
 
 @app.get("/operacao", response_class=HTMLResponse)
@@ -440,40 +477,49 @@ def operacao(request: Request):
     return TEMPLATES.TemplateResponse(request, "operacao.html", ctx)
 
 
-@app.get("/operacao/fragment", response_class=HTMLResponse)
-def operacao_fragment(request: Request):
+@app.get("/operacao/{slot_id}/fragment", response_class=HTMLResponse)
+def operacao_fragment(request: Request, slot_id: str):
     """Fragmento que o polling HTMX troca (ver `hx-trigger` em
-    `operacao_live_panel.html`) -- só o painel operacional (status,
-    capital, posições, eventos), NUNCA credenciais nem o form de conta
-    nova. Achado ao vivo: quando esse polling trocava o `#ops-body`
-    inteiro, qualquer <details> aberto (credenciais, opções avançadas)
-    fechava sozinho a cada refresh de fundo, porque o servidor sempre
-    renderiza fechado e `outerHTML` recria o nó do zero -- credencial e
-    setup inicial são configuração do usuário, não dado que o robô gera,
-    então saíram do escopo do poll (ver `operacao_body.html`).
-    Se a conta ainda não existe (poll que sobrou de uma aba antiga,
-    por exemplo), cai pro corpo inteiro -- o painel ao vivo pressupõe
-    conta."""
-    ctx = _operacao_ctx()
-    template = (
-        "partials/operacao_live_panel.html" if ctx["status"].get("existe")
-        else "partials/operacao_body.html"
-    )
-    return TEMPLATES.TemplateResponse(request, template, ctx)
+    `operacao_slot_live.html`) -- só o painel operacional DESTE slot (status,
+    capital, posições, eventos), NUNCA credenciais e nunca o form de caixa.
+
+    Achado ao vivo: quando esse polling trocava o `#ops-body` inteiro,
+    qualquer <details> aberto (credenciais, opções avançadas) fechava sozinho
+    a cada refresh de fundo, porque o servidor sempre renderiza fechado e
+    `outerHTML` recria o nó do zero. O form de caixa fica fora pelo mesmo
+    motivo, agravado: um `<input>` sendo digitado seria apagado no meio da
+    digitação. Credencial, caixa e setup inicial são configuração do usuário,
+    não dado que o robô gera.
+
+    Um poll por slot (não um poll global): cada cartão troca só o seu nó,
+    então o refresh de um robô não recria o DOM do outro."""
+    slot = _slot_or_404(slot_id)
+    bloco = _slot_ctx(slot)
+    ctx = {
+        **bloco,
+        "poll_seconds": _operacao_poll_seconds(),
+        # O painel usa isto para decidir se o botão "Iniciar" pode estar
+        # habilitado — sem credencial MT5 salva não há como operar.
+        "creds_status": live_control.credential_status(),
+        "top3": _top3_para(slot, bloco),
+    }
+    return TEMPLATES.TemplateResponse(request, "partials/operacao_slot_live.html", ctx)
 
 
-@app.post("/operacao/iniciar", response_class=HTMLResponse)
-async def operacao_iniciar(request: Request):
-    """Um clique cria a conta (se preciso) e sobe o supervisor como processo
-    próprio — o mesmo que `scripts/run_live.py init` + `loop` fariam na mão.
-    Mode/capital só vêm do form na PRIMEIRA vez (conta ainda não existe);
-    depois disso a conta já fixou os dois e não são mais editáveis por aqui."""
+@app.post("/operacao/{slot_id}/iniciar", response_class=HTMLResponse)
+async def operacao_iniciar(request: Request, slot_id: str):
+    """Um clique cria a conta deste slot (se preciso) e sobe o supervisor como
+    processo próprio — o mesmo que `scripts/run_live.py --slot X init` +
+    `loop` fariam na mão. Capital/robô só vêm do form na PRIMEIRA vez (conta
+    ainda não existe); depois disso a conta já os fixou e não são mais
+    editáveis por aqui."""
+    slot = _slot_or_404(slot_id)
     form = await request.form()
     from journal import live_store
 
     try:
         with live_store.live_journal() as conn:
-            conta = live_store.load_account(conn, live_service.ACCOUNT_NAME)
+            conta = live_store.load_account(conn, slot.id)
     except (live_store.LegacyPaperAccountError, live_store.LegacyManualAccountError) as e:
         # Correção pós-code-review (item 5): renderiza a mensagem no banner
         # de erro em vez de deixar a exceção subir crua até virar 500.
@@ -481,6 +527,14 @@ async def operacao_iniciar(request: Request):
         return TEMPLATES.TemplateResponse(request, "partials/operacao_body.html", ctx)
 
     erro = None
+    # "Nunca começou" != "não existe": `POST /operacao/{slot}/caixa` cria a
+    # linha contábil só para guardar o caixa digitado, com `investment_robot`
+    # vazio de propósito -- quem escolhe o robô é este handler. Sem esta
+    # distinção, informar o caixa antes de iniciar congelaria o robô do slot
+    # e o ranking do swing nunca seria consultado.
+    nunca_comecou = conta is None or not conta.investment_robot
+    capital = conta.initial_capital if not nunca_comecou else 0.0
+    strategy_key = None
     # "Ações por lote" é parâmetro do TERMINAL MT5 do usuário, não da
     # estratégia nem da sessão -- detectado sozinho a cada clique em
     # "Iniciar operação" via `detect_shares_per_lot()` (consulta o
@@ -488,33 +542,35 @@ async def operacao_iniciar(request: Request):
     # usuário (decisão do dono, 2026-08-20; substitui o campo manual em
     # Acesso e credenciais, que por sua vez substituiu o workaround ainda
     # mais antigo que reexibia o campo no form de retomada).
-    mt5_shares_per_lot = live_control.detect_shares_per_lot()
+    mt5_shares_per_lot = live_control.detect_shares_per_lot(slot.id)
     if mt5_shares_per_lot is None or mt5_shares_per_lot <= 0:
         erro = (
             "Não foi possível detectar 'ações por lote' automaticamente — "
             "confirme que o terminal MetaTrader 5 está aberto e logado nesta "
             "máquina (ou que login/senha/servidor MT5 foram salvos em 'Acesso "
-            "e credenciais') e que os papéis da watchlist têm o mesmo "
+            "e credenciais') e que os papéis deste robô têm o mesmo "
             "contract_size no seu terminal."
         )
 
-    if erro is None and conta is not None:
-        # conta já existe: modo/capital/robô são da conta, NUNCA do form --
-        # evita subir o loop com um broker que não bate com o que a conta
-        # espera, e evita a conta trocar de robô sozinha só porque o
-        # ranking automático mudou depois da criação (decisão do dono,
-        # 2026-08-19: "nada automático" na troca de robô).
-        mode, capital, strategy_key = conta.mode, conta.initial_capital, conta.investment_robot
+    if erro is None and not nunca_comecou:
+        # conta já em operação: robô é o da conta, NUNCA do form -- evita que
+        # a conta troque de robô sozinha só porque o ranking automático mudou
+        # depois da criação (decisão do dono, 2026-08-19: "nada automático").
+        strategy_key = conta.investment_robot
+    elif erro is None and slot.is_intraday:
+        # Day trade não tem ranking automático (não há pódio intradiário — ver
+        # `strategy/daytrade/base.py`): o robô do slot é o declarado no
+        # catálogo, e o form não escolhe nada.
+        strategy_key = slot.robot_key
     elif erro is None:
-        # Primeira conta: o robô vem do TOP-3 do ranking automático (janela
-        # FULL) mostrado no form -- nunca uma chave arbitrária, mesmo que o
-        # form venha adulterado/desatualizado (mesmo espírito de floor/
+        # Primeira conta de swing: o robô vem do TOP-3 do ranking automático
+        # (janela FULL) mostrado no form -- nunca uma chave arbitrária, mesmo
+        # que o form venha adulterado/desatualizado (mesmo espírito de floor/
         # disjuntor, ver teste `..._ignora_piso_e_disjuntor_arbitrarios...`).
-        mode = "mt5"
         top3 = reader.top_strategies_by_final_capital(
                 top_n=3, run_kind="champion_full", only=candidate_keys())
         valid_keys = {c["strategy_name"] for c in top3}
-        strategy_key = form.get("robo")
+        strategy_key = form.get("robo") or slot.robot_key
         if not valid_keys:
             erro = (
                 "O ranking automático ainda não tem nenhum robô qualificado "
@@ -523,26 +579,62 @@ async def operacao_iniciar(request: Request):
             )
         elif strategy_key not in valid_keys:
             erro = "Escolha um robô da lista antes de iniciar."
-        else:
-            # Capital nunca é digitado -- é o saldo real da corretora (ver
-            # `live_control.detect_broker_capital()`). Só consulta a
-            # corretora depois das outras validações passarem, pra não
-            # gastar uma tentativa de conexão MT5 num form incompleto.
-            capital = live_control.detect_broker_capital()
-            if capital is None:
-                erro = (
-                    "Não foi possível ler o saldo disponível na sua conta MetaTrader 5 — "
-                    "confirme que o terminal MT5 está aberto e logado nesta máquina, ou "
-                    "que o login/senha/servidor MT5 foram salvos em 'Acesso e credenciais', "
-                    "e tente novamente."
-                )
+
+    if erro is None:
+        # Piso de caixa: checado SEMPRE (não só na conta nova). O botão
+        # desabilitado no template não cobre um POST repetido, um fragmento
+        # HTMX velho nem a linha de comando; `live_control.start()` checa de
+        # novo, mas aqui a mensagem pode dizer o número em vez de só falhar.
+        ledger = live_control.available_cash(slot.id) or 0.0
+        if ledger < slot.min_cash_brl:
+            erro = (
+                f"Informe o caixa destinado a este robô (mínimo R$ "
+                f"{slot.min_cash_brl:.2f}) antes de iniciar — o valor atual é "
+                f"R$ {ledger:.2f}."
+            )
+        elif nunca_comecou:
+            # Capital inicial de um robô que nunca começou = o caixa que o dono
+            # destinou a ELE no ledger manual. Não é lido da corretora (ver o
+            # comentário no lugar de `live_control.detect_broker_capital`,
+            # removida em 2026-08-21): o saldo do MT5 atrasa em relação ao da
+            # Rico, e com dois robôs disputando a mesma conta um número
+            # atrasado viraria dois livros-caixa errados.
+            capital = ledger
+
+    mt5_fractional_map = None
+    if erro is None:
+        # Mapa fracionário (ver docstring de `detect_fractional_symbol_map`):
+        # detectado sozinho a cada clique, igual "ações por lote" -- falha
+        # aqui NUNCA bloqueia o início, só degrada para só lote padrão (mesmo
+        # comportamento de antes desta detecção existir). O broker decide, a
+        # cada ordem, entre lote padrão (grátis na Rico) e fracionário (paga
+        # por ordem) conforme a quantidade pedida — nunca fixo por conta.
+        mt5_fractional_map = live_control.detect_fractional_symbol_map(slot.id)
+
+    if erro is None and nunca_comecou and conta is not None:
+        # A conta já existia só como linha de caixa (criada por
+        # `operacao_caixa`, sem robô): grava o robô e o capital escolhidos
+        # AGORA. `live_store.ensure_account` é `ON CONFLICT DO NOTHING` —
+        # sozinho, ele deixaria `investment_robot` vazio para sempre e o
+        # painel não teria como montar o runtime de leitura.
+        with live_store.live_journal() as conn:
+            conta = live_store.load_account(conn, slot.id)
+            conta.investment_robot = strategy_key
+            conta.initial_capital = capital
+            live_store.save_account(conn, conta)
 
     if erro is None:
         try:
             cfg = live_control.ProcessConfig(
-                mode=mode, capital=capital, strategy=strategy_key,
+                mode="mt5", capital=capital, strategy=strategy_key,
+                slot=slot.id,
+                # Modo sombra é o default e NÃO é escolhível na tela: sair de
+                # sombra é uma decisão de risco que depende de medição (ver
+                # `live/intraday_runtime.py`), não de um clique.
+                execution_mode="shadow" if slot.is_intraday else "live",
                 notify_min_level=form.get("notify_min_level") or "warn",
                 mt5_shares_per_lot=mt5_shares_per_lot,
+                mt5_fractional_map=mt5_fractional_map,
             )
             # Correção pós-code-review (item 7): `live_control.start()` faz
             # `time.sleep(_STARTUP_GRACE_SECONDS)` de forma SÍNCRONA (prova
@@ -559,10 +651,94 @@ async def operacao_iniciar(request: Request):
     return TEMPLATES.TemplateResponse(request, "partials/operacao_body.html", ctx)
 
 
-@app.post("/operacao/parar", response_class=HTMLResponse)
-def operacao_parar(request: Request):
-    live_control.stop()
+@app.post("/operacao/{slot_id}/parar", response_class=HTMLResponse)
+def operacao_parar(request: Request, slot_id: str):
+    slot = _slot_or_404(slot_id)
+    live_control.stop(slot.id)
     return TEMPLATES.TemplateResponse(request, "partials/operacao_body.html", _operacao_ctx())
+
+
+@app.post("/operacao/{slot_id}/caixa", response_class=HTMLResponse)
+async def operacao_caixa(request: Request, slot_id: str):
+    """LEDGER MANUAL de caixa deste robô — a fonte de verdade do capital que
+    ele pode usar.
+
+    Substituiu, em 2026-08-21, os dois caminhos anteriores: o sync automático
+    do saldo da corretora (`LiveRuntime.reconcile_broker_cash`, removido) e o
+    override manual único (`POST /operacao/saldo-observado`, removido). Os
+    dois pressupunham UM robô e UM saldo. Dois motivos derrubaram isso:
+
+    1. Achado ao vivo (2026-08-21): o saldo que o terminal MetaTrader 5
+       reporta NÃO acompanha o da Rico — um depósito real não aparecia nem em
+       `account_info()` nem em `history_deals_get()`, com o terminal
+       conectado e `trade_allowed=True`.
+    2. Com dois robôs, "o saldo da corretora" não responde à pergunta que
+       importa ("quanto ESTE robô pode usar?"). Cada slot tem a sua linha em
+       `live_accounts`, e cada robô só mexe no seu número.
+
+    Define um saldo ABSOLUTO (não soma um valor), o que o torna naturalmente
+    idempotente contra duplo-clique/F5/retry: reenviar o mesmo valor já
+    convergido cai dentro da tolerância de `live_store.reconcile_cash` e não
+    grava nada de novo, sem precisar de nenhuma guarda de dedup em memória.
+
+    `tolerance=0.005` (não o default `1.0`): num caixa de R$ 50 o default
+    engoliria uma correção de R$ 0,50 em silêncio — 1% do capital do robô.
+
+    Sem broker/`LiveRuntime` aqui de propósito — é contabilidade pura; não há
+    decisão de estratégia envolvida."""
+    slot = _slot_or_404(slot_id)
+    form = await request.form()
+    from journal import live_store
+
+    erro = None
+    caixa_msg = None
+    try:
+        valor = float(str(form.get("caixa", "")).replace(",", "."))
+    except ValueError:
+        valor = None
+    if valor is None or valor < 0:
+        erro = "Informe o caixa destinado a este robô (maior ou igual a zero)."
+    else:
+        try:
+            with live_store.live_journal() as conn:
+                conta = live_store.load_account(conn, slot.id)
+                if conta is None:
+                    # Conta ainda não existe: cria só a linha CONTÁBIL, com o
+                    # caixa informado. Nada sobe, nada opera — mas o número
+                    # digitado tem de sobreviver ao F5, senão o piso de R$50
+                    # nunca é alcançável antes de iniciar.
+                    #
+                    # `investment_robot=""` de propósito: quem escolhe o robô é
+                    # "Iniciar operação" (ranking automático no swing, catálogo
+                    # do slot no day trade). Gravar um robô aqui faria informar
+                    # o caixa decidir, de lado, qual robô opera o dinheiro.
+                    conta = live_store.ensure_account(
+                        conn, name=slot.id, mode="mt5", initial_capital=valor,
+                        investment_robot="", withdrawal_robot="",
+                    )
+                diff, aplicado = live_store.reconcile_cash(
+                    conn, conta, valor, clock.session_date(), origin="manual_ledger",
+                    note=(f"caixa destinado ao robô do slot '{slot.id}', informado "
+                          "manualmente pelo dono"),
+                    tolerance=0.005,
+                )
+                if aplicado:
+                    live_store.log_event(
+                        conn, conta.id, "info" if diff > 0 else "warn", "operacao",
+                        f"caixa do slot '{slot.id}' definido manualmente: "
+                        f"{conta.cash - diff:.2f} -> {conta.cash:.2f} "
+                        f"(diferença R$ {diff:.2f}) -- ledger manual, não veio do MT5.",
+                        {"diferenca": diff, "slot": slot.id},
+                    )
+                    caixa_msg = (f"Caixa de '{slot.label}' atualizado para R$ {valor:.2f} "
+                                 f"(diferença R$ {diff:+.2f}).")
+                else:
+                    caixa_msg = "O valor informado já é o caixa atual — nada para atualizar."
+        except (live_store.LegacyPaperAccountError, live_store.LegacyManualAccountError) as e:
+            erro = str(e)
+
+    ctx = _operacao_ctx(erro=erro, caixa_msg=caixa_msg)
+    return TEMPLATES.TemplateResponse(request, "partials/operacao_body.html", ctx)
 
 
 @app.post("/operacao/credenciais", response_class=HTMLResponse)
@@ -810,15 +986,20 @@ def api_runs():
 # ============ OPERAÇÃO · HISTÓRICO =======================================
 
 @app.get("/operacao/historico", response_class=HTMLResponse)
-def operacao_historico(request: Request):
-    """Retrospecto da conta de operação: curva de patrimônio + toda intenção
-    já decidida + saques já executados. Só leitura, mesma disciplina de
-    `/operacao` — nunca cria a conta."""
+def operacao_historico(request: Request, slot: str = live_service.DEFAULT_SLOT):
+    """Retrospecto da conta de operação de UM slot: curva de patrimônio +
+    toda intenção já decidida + saques já executados. Só leitura, mesma
+    disciplina de `/operacao` — nunca cria a conta.
+
+    `?slot=` porque o histórico é por conta e cada slot tem a sua; sem o
+    parâmetro cai no primeiro slot do catálogo (day trade)."""
+    from core.config import ordered_slots
     from journal import live_store
 
+    escolhido = _slot_or_404(slot)
     try:
         with live_store.live_journal() as conn:
-            account = live_store.load_account(conn, live_service.ACCOUNT_NAME)
+            account = live_store.load_account(conn, escolhido.id)
             if account is None:
                 ctx = {"existe": False}
             else:
@@ -839,4 +1020,6 @@ def operacao_historico(request: Request):
         # cru — este endpoint só lê, não tem template com banner de erro
         # próprio, então devolve texto simples em vez de estourar.
         return PlainTextResponse(str(e), status_code=200)
+    ctx["slot"] = escolhido
+    ctx["slots"] = ordered_slots()
     return TEMPLATES.TemplateResponse(request, "historico.html", ctx)

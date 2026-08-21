@@ -1160,6 +1160,11 @@
 }
 .ops-badge.warn .dot { background: var(--accent-amber); }
 .ops-badge.warn strong { color: var(--accent-amber); }
+/* `err` existe separado de `warn` porque a diferença é operacional, não de
+   grau: âmbar é "olhe isto", vermelho é "o robô parou". Um relógio de
+   servidor que não confere cai no segundo caso. */
+.ops-badge.err .dot { background: var(--accent-red); }
+.ops-badge.err strong { color: var(--accent-red); }
 
 /* Camadas de dinheiro do overlay de saque — reaproveita `.capital-cards` do
    resultado de simulação, com dois acentos novos: "safe" (caixa fora do
@@ -1221,7 +1226,22 @@
   font-family: var(--font-serif);
 }
 
-.ops-empty { min-height: 40vh; }
+/* `.empty` global reserva 60vh — desenhado para ser a pagina inteira. Dentro
+   de um cartao de slot isso viraria um vazio de meia tela POR ROBO, com dois
+   cartoes na pagina; aqui o estado vazio e' so uma nota, nao um destino. */
+.ops-slot .ops-empty {
+  min-height: 0;
+  border-top: 1px solid var(--grid);
+  padding: var(--s-5) 0 var(--s-2);
+}
+.ops-slot .ops-empty h3 {
+  font-family: var(--font-serif);
+  font-weight: 400;
+  font-size: var(--fs-h3);
+  color: var(--fg-strong);
+  margin: 0 0 var(--s-2);
+}
+.ops-slot .ops-empty .dek { margin: 0; max-width: 62ch; }
 .ops-empty code { display: inline-block; margin-top: var(--s-4); }
 
 /* ============ OPERAÇÃO · HISTÓRICO ========================================
@@ -1422,6 +1442,25 @@
 .ops-control button:hover { background: var(--fg-strong); }
 .ops-control button.btn-stop { background: var(--accent-red); color: var(--bg); }
 .ops-control button.btn-stop:hover { background: var(--fg-strong); }
+/* Um botao desabilitado que PARECE clicavel e' uma mentira de interface: o
+   piso de caixa (R$50) e a falta de credencial MT5 desabilitam "Iniciar", e
+   isso tem de ser visivel antes do clique, nao depois. Faltava porque
+   `:disabled` so estava definido em `.ops-start-form`, e o botao mudou de
+   container quando o painel passou a ter um cartao por slot. */
+.ops-control button:disabled {
+  background: var(--grid);
+  color: var(--fg-muted);
+  cursor: not-allowed;
+}
+.ops-control button:disabled:hover { background: var(--grid); }
+/* O form de controle carrega o botao e, na conta nova de swing, o select
+   "Robo" -- os dois na mesma linha, alinhados pela base. */
+.ops-control form {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--s-4);
+  flex-wrap: wrap;
+}
 
 .ops-alert {
   border: 1px solid var(--accent-red);
@@ -1631,43 +1670,143 @@
   }
 }
 
-/* ============ OPERAÇÃO · REGISTRAR APORTE ==================================
-   Fallback manual do depósito (ver `live.runtime.reconcile_broker_cash` para
-   o caminho automático via MT5) — crédito imediato ao caixa, um clique só.
-   Reusa a paleta/tipografia de `.ops-creds-form`; layout mais simples (um
-   campo + botão lado a lado) por ser uma ação única, não um formulário de
-   configuração com várias seções. */
+/* ============ OPERAÇÃO · SALDO OBSERVADO (OVERRIDE MANUAL) =================
+   Fallback manual AUDITADO do caixa (ver `live.runtime.reconcile_broker_cash`
+   para o caminho automático via MT5, e `dashboard/app.py::
+   operacao_saldo_observado` para este) — define o caixa pro valor informado,
+   um clique só. Reusa a paleta/tipografia de `.ops-creds-form`; layout mais
+   simples (um campo + botão lado a lado) por ser uma ação única, não um
+   formulário de configuração com várias seções. */
 
-.ops-deposit {
+/* ---------- Operacao: cartao por SLOT (2026-08-21) --------------------
+   O painel deixou de ter um robo e passou a ter dois (`core.config.SLOTS`),
+   cada um com o seu caixa. Cada slot e' um cartao fechado: cabecalho, ledger
+   de caixa (fora do polling HTMX, senao o campo em digitacao seria apagado
+   a cada refresh de fundo) e o painel operacional dentro.
+   Substituiu `.ops-deposit*`, que era o form unico de "saldo observado". */
+.ops-slot {
+  position: relative;
+  /* `--bg`, NAO `--bg-elevated`: tudo que mora dentro do cartao
+     (`.ops-badge`, `.capital-card`) usa o fundo elevado e desapareceria
+     contra ele. Hierarquia aqui e regua de 1px + escala de tipo, nunca caixa
+     dentro de caixa. */
+  background: var(--bg);
   border: 1px solid var(--grid-strong);
-  background: var(--bg-elevated);
-  padding: var(--s-4) var(--s-5);
-  margin-bottom: var(--s-6);
+  padding: var(--s-5);
+  margin-bottom: var(--s-7);
 }
-.ops-deposit h3 {
+/* Filete de topo: ambar no slot 01 (a primeira opcao operavel), neutro nos
+   demais. Mesmo vocabulario do `.capital-card::before`. */
+.ops-slot::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 0; right: 0; height: 2px;
+  background: var(--grid-strong);
+}
+.ops-slot.is-primary::before { background: var(--accent-amber); }
+
+.ops-slot-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-5);
+  padding-bottom: var(--s-4);
+  border-bottom: 1px solid var(--grid);
+  margin-bottom: var(--s-4);
+}
+.ops-slot-head > div { flex: 1; min-width: 0; }
+.ops-slot-ord {
   font-family: var(--font-mono);
-  font-size: var(--fs-body);
+  font-size: var(--fs-h2);
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  color: var(--fg-faint);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+.ops-slot.is-primary .ops-slot-ord { color: var(--accent-amber); }
+.ops-slot-head h2 {
+  font-family: var(--font-mono);
+  font-size: var(--fs-h3);
   font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.14em;
   color: var(--fg-strong);
-  margin: 0 0 var(--s-3);
+  margin: 0 0 var(--s-2);
 }
-.ops-deposit .dek { margin-bottom: var(--s-4); }
-.ops-deposit-form {
+.ops-slot-head .dek { margin: 0; max-width: 68ch; }
+
+/* Faixa de modo de execucao. Existe porque "nenhuma ordem esta sendo
+   enviada" e a informacao mais consequente do painel — uma etiqueta entre
+   cinco nao da conta. Regua ambar a esquerda, prosa em serifa: e um aviso
+   editorial, nao um dado. */
+.ops-mode-strip {
+  border-left: 2px solid var(--accent-amber);
+  background: var(--bg-elevated);
+  padding: var(--s-3) var(--s-4);
+  margin: 0 0 var(--s-5);
+  font-family: var(--font-serif);
+  font-size: var(--fs-body-lg);
+  line-height: var(--lh-body);
+  color: var(--fg-muted);
+  max-width: 78ch;
+}
+.ops-mode-strip .k {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: var(--fs-metadata);
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--accent-amber);
+  margin-bottom: var(--s-1);
+}
+
+.ops-cash {
   display: flex;
   align-items: flex-end;
-  gap: var(--s-4);
+  justify-content: space-between;
+  gap: var(--s-5);
   flex-wrap: wrap;
+  border-top: 1px solid var(--grid);
+  border-bottom: 1px solid var(--grid);
+  padding: var(--s-4) 0;
+  margin-bottom: var(--s-5);
 }
-.ops-deposit-form label { display: flex; flex-direction: column; gap: var(--s-2); }
-.ops-deposit-form label .k {
+.ops-cash-now { display: flex; flex-direction: column; gap: var(--s-1); }
+.ops-cash-now .k {
   font-size: var(--fs-metadata);
   color: var(--fg-muted);
   text-transform: uppercase;
   letter-spacing: 0.14em;
 }
-.ops-deposit-form input[type="number"] {
+.ops-cash-now .v {
+  font-family: var(--font-mono);
+  font-size: var(--fs-h2);
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  color: var(--fg-strong);
+  font-variant-numeric: tabular-nums;
+}
+.ops-cash-now .sub { font-size: var(--fs-metadata); color: var(--fg-muted); }
+/* Abaixo do piso o robo simplesmente nao opera — isso e' um estado
+   bloqueante, nao uma nota de rodape. */
+.ops-cash-now .sub.is-blocked { color: var(--accent-red); }
+
+.ops-cash-form {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--s-4);
+  flex-wrap: wrap;
+}
+.ops-cash-form label { display: flex; flex-direction: column; gap: var(--s-2); }
+.ops-cash-form label .k {
+  font-size: var(--fs-metadata);
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+}
+.ops-cash-form input[type="number"] {
   background: var(--bg);
   color: var(--fg-strong);
   font-family: var(--font-mono);
@@ -1675,10 +1814,10 @@
   border: 1px solid var(--grid-strong);
   border-radius: 0;
   padding: var(--s-3);
-  min-width: 200px;
+  min-width: 180px;
 }
-.ops-deposit-form input:focus { outline: none; border-color: var(--accent-amber); }
-.ops-deposit-form button {
+.ops-cash-form input:focus { outline: none; border-color: var(--accent-amber); }
+.ops-cash-form button {
   background: var(--accent-amber);
   color: var(--bg);
   border: none;
@@ -1692,4 +1831,24 @@
   cursor: pointer;
   transition: background 120ms linear;
 }
-.ops-deposit-form button:hover { background: var(--fg-strong); }
+.ops-cash-form button:hover { background: var(--fg-strong); }
+
+/* Select "Robo" dentro da barra de controle do slot (form de conta nova de
+   swing) -- inline, nao um bloco proprio: e' um campo so, ao lado do botao. */
+.ops-inline-field { display: flex; flex-direction: column; gap: var(--s-2); }
+.ops-inline-field .k {
+  font-size: var(--fs-metadata);
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+}
+.ops-inline-field select {
+  background: var(--bg);
+  color: var(--fg-strong);
+  font-family: var(--font-mono);
+  font-size: var(--fs-body);
+  border: 1px solid var(--grid-strong);
+  border-radius: 0;
+  padding: var(--s-3);
+}
+.ops-inline-field select:focus { outline: none; border-color: var(--accent-amber); }

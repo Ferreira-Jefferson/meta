@@ -551,3 +551,182 @@ def test_detect_shares_per_lot_usa_symbol_map_na_consulta(fake_mt5):
     broker = MT5Broker(symbol_map={"WEGE3.SA": "WEGE3F"})
 
     assert broker.detect_shares_per_lot(["WEGE3.SA"]) == pytest.approx(1.0)
+
+
+# ---------- detect_fractional_symbol_map (mercado fracionario, sufixo F) --
+
+def test_detect_fractional_symbol_map_usa_sufixo_f_quando_existe(fake_mt5):
+    """Ticker com simbolo `*F` no terminal (mercado fracionario, ex. Rico)
+    mapeia para ele -- e nao para o simbolo de lote padrao."""
+    mod, calls = fake_mt5(initialize_ok=True)
+    existentes = {"WEGE3F", "BRAP4F"}
+    mod.symbol_info = lambda symbol: (
+        types.SimpleNamespace() if symbol in existentes else None
+    )
+    broker = MT5Broker()
+
+    assert broker.detect_fractional_symbol_map(["WEGE3.SA", "BRAP4.SA"]) == {
+        "WEGE3.SA": "WEGE3F", "BRAP4.SA": "BRAP4F",
+    }
+
+
+def test_detect_fractional_symbol_map_sem_sufixo_f_cai_no_simbolo_padrao(fake_mt5):
+    """Ticker SEM simbolo fracionario no terminal mapeia para o simbolo de
+    lote padrao -- mesmo comportamento de hoje pra ele, um mapa parcial nao
+    faz o mapa inteiro falhar (diferente de `detect_shares_per_lot`, que
+    exige um valor unico entre todos os tickers)."""
+    mod, calls = fake_mt5(initialize_ok=True)
+    mod.symbol_info = lambda symbol: None  # nenhum *F existe no terminal
+    broker = MT5Broker()
+
+    assert broker.detect_fractional_symbol_map(["WEGE3.SA", "EMAE4.SA"]) == {
+        "WEGE3.SA": "WEGE3", "EMAE4.SA": "EMAE4",
+    }
+
+
+def test_detect_fractional_symbol_map_mistura_com_e_sem_fracionario(fake_mt5):
+    """Um pool largo de tickers (ex. universo por liquidez) pode ter alguns
+    com mercado fracionario e outros sem -- o mapa cobre cada um
+    independentemente, sem exigir uniformidade."""
+    mod, calls = fake_mt5(initialize_ok=True)
+    existentes = {"WEGE3F"}
+    mod.symbol_info = lambda symbol: (
+        types.SimpleNamespace() if symbol in existentes else None
+    )
+    broker = MT5Broker()
+
+    assert broker.detect_fractional_symbol_map(["WEGE3.SA", "CSMG3.SA"]) == {
+        "WEGE3.SA": "WEGE3F", "CSMG3.SA": "CSMG3",
+    }
+
+
+def test_detect_fractional_symbol_map_respeita_symbol_map_customizado_na_base(fake_mt5):
+    """Se o broker ja tem um `symbol_map` customizado (ex. corretora que
+    cadastra o simbolo com outro nome), a deteccao fracionaria parte desse
+    nome customizado como base -- nao do default `.SA` removido."""
+    mod, calls = fake_mt5(initialize_ok=True)
+    existentes = {"WEGEX_F"}  # base customizada "WEGEX" + sufixo "F"
+    mod.symbol_info = lambda symbol: (
+        types.SimpleNamespace() if symbol in existentes else None
+    )
+    broker = MT5Broker(symbol_map={"WEGE3.SA": "WEGEX_"})
+
+    assert broker.detect_fractional_symbol_map(["WEGE3.SA"]) == {"WEGE3.SA": "WEGEX_F"}
+
+
+def test_detect_fractional_symbol_map_falha_de_conexao_devolve_none_sem_excecao(fake_mt5):
+    fake_mt5(initialize_ok=False, last_error=(10004, "terminal nao encontrado"))
+    broker = MT5Broker()
+
+    assert broker.detect_fractional_symbol_map(["WEGE3.SA"]) is None
+
+
+# ---------- fractional_map: escolha dinamica lote padrao (gratis) x fracionario (paga) --
+
+def _lote_padrao_info():
+    return types.SimpleNamespace(volume_min=100.0, volume_max=1e7, volume_step=100.0,
+                                  point=0.01, trade_contract_size=1.0)
+
+
+def _fracionario_info():
+    return types.SimpleNamespace(volume_min=1.0, volume_max=1e7, volume_step=1.0,
+                                  point=0.01, trade_contract_size=1.0)
+
+
+def test_place_prefere_lote_padrao_gratuito_quando_quantidade_alcanca_o_minimo(fake_mt5):
+    """Quantidade que fecha lote padrao (>=100 acoes) usa o simbolo BASE (lote
+    padrao, GRATUITO na Rico, 2026-08-21) mesmo com fracionario disponivel
+    pra esse ticker -- fracionario custa R$1,90/ordem, so vale a pena quando
+    o lote padrao nao fecha."""
+    infos = {"WEGE3": _lote_padrao_info(), "WEGE3F": _fracionario_info()}
+    mod, calls = fake_mt5(tick=_tick(),
+                          order_send_result=_order_send_result(retcode=106, volume=100.0),
+                          history_deals=[])
+    mod.symbol_info = lambda symbol: infos.get(symbol)
+
+    broker = MT5Broker(fractional_map={"WEGE3.SA": "WEGE3F"})
+    broker.place(Order(ticker="WEGE3.SA", side=OrderSide.BUY, quantity=150))
+
+    assert calls["order_send"][0]["symbol"] == "WEGE3"
+    assert calls["order_send"][0]["volume"] == pytest.approx(100.0)  # arredondado pro lote
+
+
+def test_place_usa_fracionario_quando_lote_padrao_nao_fecha(fake_mt5):
+    """Quantidade abaixo do minimo do lote padrao (100), mas o ticker TEM
+    fracionario no mapa -- usa o fracionario (paga R$1,90) em vez de
+    rejeitar a ordem."""
+    infos = {"WEGE3": _lote_padrao_info(), "WEGE3F": _fracionario_info()}
+    mod, calls = fake_mt5(tick=_tick(),
+                          order_send_result=_order_send_result(retcode=106, volume=3.0),
+                          history_deals=[])
+    mod.symbol_info = lambda symbol: infos.get(symbol)
+
+    broker = MT5Broker(fractional_map={"WEGE3.SA": "WEGE3F"})
+    broker.place(Order(ticker="WEGE3.SA", side=OrderSide.BUY, quantity=3))
+
+    assert calls["order_send"][0]["symbol"] == "WEGE3F"
+    assert calls["order_send"][0]["volume"] == pytest.approx(3.0)
+
+
+def test_place_sem_fracionario_no_mapa_e_quantidade_abaixo_do_lote_rejeita_com_motivo_claro(fake_mt5):
+    """Ticker que NAO esta em `fractional_map` (ex.: BOVA11, sem versao
+    fracionaria na Rico) e quantidade que nao fecha lote padrao -- rejeita
+    com um motivo que deixa claro que fracionario nem era opcao, em vez de
+    um "volume 0" generico que pareceria um bug de arredondamento."""
+    mod, calls = fake_mt5(symbol_info=_lote_padrao_info(), tick=_tick())
+
+    broker = MT5Broker()  # sem fractional_map
+    result = broker.place(Order(ticker="BOVA11.SA", side=OrderSide.BUY, quantity=3))
+
+    assert result.status == OrderStatus.REJECTED
+    assert calls["order_send"] == []
+    assert "sem mercado fracionario disponivel" in result.note
+
+
+def test_place_fracionario_no_mapa_mas_tambem_nao_aceita_o_volume_rejeita_com_motivo_claro(fake_mt5):
+    """Mesmo com o ticker no `fractional_map`, se o simbolo fracionario
+    TAMBEM nao aceitar a quantidade pedida, o motivo da rejeicao diz isso
+    explicitamente -- nao trata "sem fracionario" e "fracionario tambem
+    recusou" como a mesma coisa."""
+    infos = {"WEGE3": _lote_padrao_info(), "WEGE3F": types.SimpleNamespace(
+        volume_min=10.0, volume_max=1e7, volume_step=10.0, point=0.01, trade_contract_size=1.0)}
+    mod, calls = fake_mt5(tick=_tick())
+    mod.symbol_info = lambda symbol: infos.get(symbol)
+
+    broker = MT5Broker(fractional_map={"WEGE3.SA": "WEGE3F"})
+    result = broker.place(Order(ticker="WEGE3.SA", side=OrderSide.BUY, quantity=3))
+
+    assert result.status == OrderStatus.REJECTED
+    assert calls["order_send"] == []
+    assert "tambem nao aceitou o volume" in result.note
+
+
+def test_place_note_de_sucesso_menciona_o_simbolo_usado(fake_mt5):
+    """Diagnostico ao vivo: a nota de uma ordem preenchida diz QUAL simbolo
+    foi usado -- essencial pra saber se uma entrada saiu pelo lote padrao
+    (gratis) ou pelo fracionario (pago) sem precisar abrir o terminal."""
+    infos = {"WEGE3": _lote_padrao_info(), "WEGE3F": _fracionario_info()}
+    mod, calls = fake_mt5(tick=_tick(bid=49.9, ask=50.1),
+                          order_send_result=_order_send_result(retcode=106, price=50.1, volume=3.0),
+                          history_deals=[])
+    mod.symbol_info = lambda symbol: infos.get(symbol)
+
+    broker = MT5Broker(fractional_map={"WEGE3.SA": "WEGE3F"})
+    result = broker.place(Order(ticker="WEGE3.SA", side=OrderSide.BUY, quantity=3))
+
+    assert "WEGE3F" in result.note
+
+
+def test_place_fractional_map_nao_interfere_quando_quantidade_ja_fecha_lote_sem_mapa(fake_mt5):
+    """Regressao: sem `fractional_map` nenhum (default `MT5Broker()`),
+    quantidade que fecha lote padrao continua indo pelo simbolo base, exatamente
+    como antes desta funcionalidade existir."""
+    mod, calls = fake_mt5(symbol_info=_lote_padrao_info(), tick=_tick(),
+                          order_send_result=_order_send_result(retcode=106, volume=100.0),
+                          history_deals=[])
+
+    broker = MT5Broker()
+    broker.place(Order(ticker="WEGE3.SA", side=OrderSide.BUY, quantity=150))
+
+    assert calls["order_send"][0]["symbol"] == "WEGE3"
+    assert calls["order_send"][0]["volume"] == pytest.approx(100.0)

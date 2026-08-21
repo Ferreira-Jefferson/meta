@@ -54,22 +54,22 @@
 <section class="capital-cards stagger">
   <div class="capital-card">
     <span class="k">Caixa</span>
-    <span class="v num">R$ {{ "{:,.0f}".format(s.caixa).replace(",", ".") }}</span>
+    <span class="v num">R$ {{ s.caixa | num_br }}</span>
     <span class="sub">Livre, não alocado</span>
   </div>
   <div class="capital-card">
     <span class="k">Carteira</span>
-    <span class="v num">R$ {{ "{:,.0f}".format(s.carteira).replace(",", ".") }}</span>
+    <span class="v num">R$ {{ s.carteira | num_br }}</span>
     <span class="sub">Caixa + posições a mercado</span>
   </div>
   <div class="capital-card safe">
     <span class="k">Caixa externo</span>
-    <span class="v num">R$ {{ "{:,.0f}".format(s.caixa_externo).replace(",", ".") }}</span>
+    <span class="v num">R$ {{ s.caixa_externo | num_br }}</span>
     <span class="sub">Sacado, fora do risco</span>
   </div>
   <div class="capital-card headline">
     <span class="k">Patrimônio</span>
-    <span class="v num">R$ {{ "{:,.0f}".format(s.patrimonio).replace(",", ".") }}</span>
+    <span class="v num">R$ {{ s.patrimonio | num_br }}</span>
     <span class="sub">Carteira + caixa externo</span>
   </div>
 </section>
@@ -77,12 +77,12 @@
 <section class="metrics-grid stagger">
   <div class="metric">
     <span class="k">Investido a mercado</span>
-    <span class="v num">R$ {{ "{:,.0f}".format(s.investido).replace(",", ".") }}</span>
+    <span class="v num">R$ {{ s.investido | num_br }}</span>
     <span class="sub">{{ s.posicoes | length }} posiç{{ "ão" if s.posicoes | length == 1 else "ões" }} aberta{{ "" if s.posicoes | length == 1 else "s" }}</span>
   </div>
   <div class="metric">
     <span class="k">Sacado (histórico)</span>
-    <span class="v num">R$ {{ "{:,.0f}".format(s.sacado_total).replace(",", ".") }}</span>
+    <span class="v num">R$ {{ s.sacado_total | num_br }}</span>
     <span class="sub">Desde o início da conta</span>
   </div>
   <div class="metric">
@@ -118,7 +118,7 @@
         <td class="right num">R$ {{ "%.2f"|format(p.entrada) }}</td>
         <td class="right num">{% if p.stop %}R$ {{ "%.2f"|format(p.stop) }}{% else %}<span class="dim">—</span>{% endif %}</td>
         <td class="right num dim">{{ p.barras }}</td>
-        <td class="right num">R$ {{ "{:,.0f}".format(p.valor).replace(",", ".") }}</td>
+        <td class="right num">R$ {{ p.valor | num_br }}</td>
       </tr>
       {% else %}
       <tr><td colspan="6" class="ops-table-empty">Robô fora do mercado — nenhuma posição aberta.</td></tr>
@@ -152,7 +152,7 @@
         <td>{{ i.tipo }}</td>
         <td class="ticker">{{ i.ticker.replace(".SA", "") if i.ticker else "—" }}</td>
         <td class="dim">{{ i.motivo or "—" }}</td>
-        <td class="right num">{% if i.valor %}R$ {{ "{:,.0f}".format(i.valor).replace(",", ".") }}{% else %}<span class="dim">—</span>{% endif %}</td>
+        <td class="right num">{% if i.valor %}R$ {{ i.valor | num_br }}{% else %}<span class="dim">—</span>{% endif %}</td>
         <td class="right num">{{ i.executa_em }}</td>
       </tr>
       {% else %}

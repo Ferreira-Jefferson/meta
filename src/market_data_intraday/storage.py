@@ -17,9 +17,11 @@ from core.config import INTRADAY_DATA_DIR
 
 
 def _parquet_path(symbol: str, data_dir: Path = INTRADAY_DATA_DIR) -> Path:
-    """Sanitiza chars que simbolos de futuro usam e que nao sao seguros em
-    nome de arquivo (`$`, `@`) — `market_data.download.parquet_path` so
-    trata `^`/`.`, insuficiente aqui (ex.: `WIN@` -> `WIN_A_`)."""
+    """Sanitiza chars que nao sao seguros em nome de arquivo (`$`, `@` —
+    usados por series continuas de futuro no MT5, ex.: `WIN@`) —
+    `market_data.download.parquet_path` so trata `^`/`.`, insuficiente aqui.
+    Nao ha futuro em operacao hoje, mas a funcao continua generica: qualquer
+    simbolo pode ser pedido a este modulo."""
     safe = symbol.replace("$", "_D_").replace("@", "_A_").replace(".", "_")
     return data_dir / f"{safe}.parquet"
 

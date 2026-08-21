@@ -41,6 +41,7 @@ from journal.live_store import (
     record_order,
     record_withdrawal,
     recent_events,
+    reconcile_cash,
     save_account,
     set_intent_status,
     stale_intents,
@@ -512,6 +513,48 @@ def test_record_deposit(db_path):
             "SELECT * FROM live_deposits WHERE account_id = ? ORDER BY id", (account.id,)
         ).fetchall()
         assert rows2[1]["note"] == ""
+
+
+def test_reconcile_cash_aplica_quando_diferenca_passa_da_tolerancia(db_path):
+    with live_journal(db_path) as conn:
+        account = _account(conn)  # cash inicial 10_000.0
+
+        diff, aplicado = reconcile_cash(
+            conn, account, target_balance=10_500.0, day=date(2026, 8, 21),
+            origin="manual_override", note="saldo observado na Rico",
+        )
+        assert aplicado is True
+        assert diff == pytest.approx(500.0)
+        assert account.cash == pytest.approx(10_500.0)  # mutação in-place
+
+        reloaded = load_account(conn, "conta_teste")
+        assert reloaded.cash == pytest.approx(10_500.0)  # persistido
+
+        rows = conn.execute(
+            "SELECT * FROM live_deposits WHERE account_id = ?", (account.id,)
+        ).fetchall()
+        assert len(rows) == 1
+        assert rows[0]["origin"] == "manual_override"
+        assert rows[0]["amount"] == pytest.approx(500.0)
+        assert rows[0]["note"] == "saldo observado na Rico"
+
+
+def test_reconcile_cash_dentro_da_tolerancia_nao_muda_nada(db_path):
+    with live_journal(db_path) as conn:
+        account = _account(conn)  # cash inicial 10_000.0
+
+        diff, aplicado = reconcile_cash(
+            conn, account, target_balance=10_000.40, day=date(2026, 8, 21),
+            origin="manual_override",
+        )
+        assert aplicado is False
+        assert diff == pytest.approx(0.40)
+        assert account.cash == pytest.approx(10_000.0)  # não mutou
+
+        rows = conn.execute(
+            "SELECT * FROM live_deposits WHERE account_id = ?", (account.id,)
+        ).fetchall()
+        assert rows == []  # nenhuma auditoria gravada quando não aplica
 
 
 # ---------------------------------------------------------------------------

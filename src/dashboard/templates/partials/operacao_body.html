@@ -1,14 +1,83 @@
-{% set s = status %}
+{% macro slot_card(bloco, creds_status, poll_seconds) %}
+{% set slot = bloco.slot %}
+{% set sombra = slot.is_intraday %}
+{# Um cartão por slot. A hierarquia é feita com RÉGUA (1px) e escala de tipo,
+   nunca com caixa dentro de caixa: o cartão fica no `--bg` da página de
+   propósito, porque tudo que mora dentro dele (`.ops-badge`,
+   `.capital-card`) usa `--bg-elevated` e desapareceria contra um fundo
+   elevado. #}
+<section class="ops-slot stagger{% if slot.order == 0 %} is-primary{% endif %}">
+  <header class="ops-slot-head">
+    {# O ordinal existe para a ORDEM ser legível como decisão, não como
+       acidente de layout: day trade é 01 por ser a primeira opção operável
+       no capital atual, não por ser melhor. #}
+    <span class="ops-slot-ord">{{ "%02d"|format(slot.order + 1) }}</span>
+    <div>
+      {# Nome de slot em mono/caixa alta (é rótulo de sistema); os títulos dos
+         painéis de dentro ficam em serifa (são prosa). O contraste é
+         deliberado. #}
+      <h2>{{ slot.label }}</h2>
+      <p class="dek">{{ slot.dek }}</p>
+    </div>
+  </header>
+
+  {% if sombra %}
+  {# A informação mais importante da tela não pode ser só uma etiqueta entre
+     cinco: em modo sombra NADA vai para a corretora, e quem olha o painel
+     precisa saber disso antes de olhar qualquer número. #}
+  <p class="ops-mode-strip">
+    <span class="k">Modo sombra</span>
+    Nenhuma ordem é enviada à corretora. O robô decide, registra tudo e mede
+    o que ainda não foi medido — se a ordem-limite de fato preencheria no
+    nível tocado. O caixa não é debitado.
+  </p>
+  {% endif %}
+
+  {# Form de caixa FORA do nó com polling (ver operacao_slot_live.html): um
+     <input> sendo digitado seria apagado pelo refresh de fundo. #}
+  <div class="ops-cash">
+    <div class="ops-cash-now">
+      <span class="k">Caixa deste robô</span>
+      <span class="v num">R$ {{ bloco.caixa_ledger | num_br }}</span>
+      <span class="sub{% if not bloco.caixa_ok %} is-blocked{% endif %}">
+        {% if bloco.caixa_ok %}
+          Acima do mínimo de R$ {{ "%.2f"|format(slot.min_cash_brl) }}
+        {% else %}
+          Abaixo do mínimo de R$ {{ "%.2f"|format(slot.min_cash_brl) }} — não opera
+        {% endif %}
+      </span>
+    </div>
+    <form class="ops-cash-form" hx-post="/operacao/{{ slot.id }}/caixa"
+          hx-target="#ops-body" hx-swap="outerHTML">
+      <label><span class="k">Definir caixa (R$)</span>
+        <input type="number" name="caixa" step="0.01" min="0"
+               value="{{ "%.2f"|format(bloco.caixa_ledger) }}" required />
+      </label>
+      <button type="submit">Atualizar caixa</button>
+    </form>
+  </div>
+
+  {% with slot = slot, status = bloco.status, proc = bloco.proc,
+          config_anterior = bloco.config_anterior, caixa_ok = bloco.caixa_ok,
+          top3 = bloco.top3, creds_status = creds_status, poll_seconds = poll_seconds %}
+    {% include "partials/operacao_slot_live.html" %}
+  {% endwith %}
+</section>
+{% endmacro %}
+
 <div id="ops-body">
-{# Só a partir daqui (partials/operacao_live_panel.html) tem polling
-   automático -- credenciais e o form de conta nova ficam FORA do
-   `hx-trigger="every Ns"` de propósito: um <details> aberto (ou o form
-   de "Opções avançadas") era fechado pelo próprio refresh de fundo antes
-   de qualquer troca de aba, porque `outerHTML` recria o nó e o servidor
-   sempre renderiza fechado. Ver operacao_live_panel.html. #}
+{# Só os nós de `partials/operacao_slot_live.html` (um por slot) têm polling
+   automático -- credenciais e o form de caixa ficam FORA do
+   `hx-trigger="every Ns"` de propósito: um <details> aberto era fechado pelo
+   próprio refresh de fundo antes de qualquer troca de aba (o servidor sempre
+   renderiza fechado e `outerHTML` recria o nó do zero), e um campo de caixa
+   em digitação seria apagado no meio. #}
 
 {% if erro %}
 <div class="ops-alert stagger">{{ erro }}</div>
+{% endif %}
+{% if caixa_msg %}
+<div class="ops-alert ops-alert-ok stagger">{{ caixa_msg }}</div>
 {% endif %}
 
 <section class="ops-credentials stagger">
@@ -16,8 +85,8 @@
     <summary>Acesso e credenciais</summary>
     <p class="dek">
       Login da corretora e canais de alerta — ficam salvos só neste
-      computador (nunca em texto puro na linha de comando) e são passados ao
-      robô quando ele sobe como processo. Campos de senha/token nunca
+      computador (nunca em texto puro na linha de comando) e são passados aos
+      robôs quando eles sobem como processo. Campos de senha/token nunca
       reaparecem aqui: deixe em branco para manter o que já está salvo.
     </p>
     {% if creds_msg %}<div class="ops-alert ops-alert-ok">{{ creds_msg }}</div>{% endif %}
@@ -90,7 +159,7 @@
           Sem login/senha/servidor, o robô só consegue enviar ordens se um
           humano deixar o terminal MT5 aberto e logado nesta máquina; com eles
           salvos aqui, o próprio robô faz o login ao conectar. "Ações por
-          lote" não é mais campo aqui: o sistema descobre isso sozinho,
+          lote" não é campo aqui: o sistema descobre isso sozinho,
           consultando o terminal MT5 a cada clique em "Iniciar operação".
         </p>
         <div class="row">
@@ -115,67 +184,10 @@
   </details>
 </section>
 
-{% if not s.existe %}
-
-{% if not top3 %}
-
-<div class="ops-alert stagger">
-  O ranking automático ainda não tem nenhum robô qualificado para operar —
-  aguarde o próximo recálculo (a cada 6h) e recarregue a página.
-</div>
-
-{% else %}
-
-<section class="ops-start-form-wrap stagger">
-  <form class="ops-start-form" hx-post="/operacao/iniciar" hx-target="#ops-body" hx-swap="outerHTML"
-        hx-disabled-elt="find button[type=submit]">
-    <div class="row row-launch">
-      <label>
-        <span class="k">Modo</span>
-        <input type="hidden" name="mode" value="mt5" />
-        <span class="ops-mode-fixed">MT5 — dinheiro real</span>
-      </label>
-      <label>
-        <span class="k">Robô</span>
-        {# Top-3 do ranking automático, janela FULL (`journal.reader.
-           top_strategies_by_final_capital`, ver `_operacao_ctx`) -- nunca
-           uma lista fixa/hardcoded. So vale pra CONTA NOVA: uma conta ja
-           existente sempre reusa `investment_robot` gravado na criacao,
-           nunca troca de robo sozinha so porque o ranking mudou depois
-           (decisao do dono, 2026-08-19). #}
-        <select name="robo" required>
-          {% for cand in top3 %}
-          <option value="{{ cand.strategy_name }}">
-            {{ cand.strategy_name }} — R$ {{ "{:,.0f}".format(cand.final_capital).replace(",", ".") }}
-          </option>
-          {% endfor %}
-        </select>
-      </label>
-      <button type="submit"{% if not creds_status.mt5 %} disabled{% endif %}>▶ Iniciar operação</button>
-    </div>
-    {% if not creds_status.mt5 %}
-    <p class="ops-start-hint">
-      Preencha login, senha e servidor do MetaTrader 5 em "Acesso e
-      credenciais" para habilitar o início da operação.
-    </p>
-    {% endif %}
-  </form>
-</section>
-
-{% endif %}
-
-<div class="empty ops-empty">
-  <h1>Nenhuma conta de operação ainda</h1>
-  <p class="dek">
-    Ao clicar em iniciar o sistema lê o saldo disponível na sua conta
-    MetaTrader 5, usa isso como capital inicial, e passa a decidir e
-    executar sozinho via MetaTrader 5, a cada pregão.
-  </p>
-</div>
-
-{% else %}
-
-{% include "partials/operacao_live_panel.html" %}
-
-{% endif %}
+{# Ordem dos cartões vem de `core.config.ordered_slots()` — day trade em
+   cima, por ser a primeira opção operável no capital atual, não por ser
+   melhor (decisão do dono, 2026-08-21). #}
+{% for bloco in slots %}
+  {{ slot_card(bloco, creds_status, poll_seconds) }}
+{% endfor %}
 </div>

@@ -122,8 +122,16 @@ def test_fim_de_semana_nao_e_pregao() -> None:
 
 # ---------- phase ---------------------------------------------------------
 
-# 2026-08-17 e segunda-feira, dia de pregao normal (sem feriado por perto)
+# 2026-08-17 e segunda-feira, dia de pregao normal (sem feriado por perto), e
+# cai DENTRO do horario de verao dos EUA (que em 2026 vai de 08/03 a 01/11) —
+# regime em que o pregao a vista da B3 fecha 1h mais cedo. Ver
+# `core.b3_session` para a medicao em barras M1 reais.
 _NORMAL_DAY = date(2026, 8, 17)
+
+# 2026-01-19, segunda-feira comum FORA do horario de verao americano: mesmo
+# pregao, fronteiras de fechamento 1h depois. As duas parametrizacoes juntas
+# sao o teste de verdade — uma so nao distinguiria "certo" de "1h errado".
+_US_STANDARD_DAY = date(2026, 1, 19)
 
 
 @pytest.mark.parametrize(
@@ -133,20 +141,54 @@ _NORMAL_DAY = date(2026, 8, 17)
         ((9, 44), SessionPhase.CLOSED),         # 1 min antes do limiar
         ((9, 45), SessionPhase.PRE_OPEN),       # leilao comeca a formar
         ((9, 59), SessionPhase.PRE_OPEN),
-        ((10, 0), SessionPhase.OPEN),           # abertura do continuo
+        ((10, 0), SessionPhase.OPEN),           # abertura do continuo (nao desloca)
         ((13, 30), SessionPhase.OPEN),          # meio do pregao
-        ((17, 54), SessionPhase.OPEN),
-        ((17, 55), SessionPhase.CLOSING_AUCTION),  # leilao de fechamento
-        ((17, 59), SessionPhase.CLOSING_AUCTION),
-        ((18, 0), SessionPhase.AFTER_HOURS),
-        ((18, 29), SessionPhase.AFTER_HOURS),
-        ((18, 30), SessionPhase.POST_CLOSE),
+        ((16, 54), SessionPhase.OPEN),          # ultima barra M1 medida
+        ((16, 55), SessionPhase.CLOSING_AUCTION),
+        ((16, 59), SessionPhase.CLOSING_AUCTION),
+        ((17, 0), SessionPhase.AFTER_HOURS),
+        ((17, 29), SessionPhase.AFTER_HOURS),
+        ((17, 30), SessionPhase.POST_CLOSE),
+        # o horario que era o fechamento no codigo antigo ja e' POST_CLOSE:
+        # e' exatamente o erro de 1h que este teste existe para travar.
+        ((17, 55), SessionPhase.POST_CLOSE),
         ((23, 0), SessionPhase.POST_CLOSE),
     ],
 )
-def test_phase_dia_normal(hhmm: tuple[int, int], expected: SessionPhase) -> None:
+def test_phase_dia_normal_sob_horario_de_verao_dos_eua(
+    hhmm: tuple[int, int], expected: SessionPhase
+) -> None:
     now = datetime.combine(_NORMAL_DAY, time(*hhmm))
     assert phase(now) == expected
+
+
+@pytest.mark.parametrize(
+    "hhmm, expected",
+    [
+        ((9, 45), SessionPhase.PRE_OPEN),
+        ((10, 0), SessionPhase.OPEN),           # abertura identica nos dois regimes
+        ((16, 55), SessionPhase.OPEN),          # aqui ainda negocia
+        ((17, 54), SessionPhase.OPEN),
+        ((17, 55), SessionPhase.CLOSING_AUCTION),
+        ((18, 0), SessionPhase.AFTER_HOURS),
+        ((18, 30), SessionPhase.POST_CLOSE),
+    ],
+)
+def test_phase_dia_normal_fora_do_horario_de_verao_dos_eua(
+    hhmm: tuple[int, int], expected: SessionPhase
+) -> None:
+    now = datetime.combine(_US_STANDARD_DAY, time(*hhmm))
+    assert phase(now) == expected
+
+
+def test_fechamento_desloca_exatamente_na_virada_do_dst_americano() -> None:
+    """As datas vem da medicao em barras M1 de PETR4 (ver `core.b3_session`):
+    sexta 06/03/2026 fechou 17:54 e segunda 09/03 fechou 16:54, com o horario
+    de verao dos EUA comecando no domingo 08/03."""
+    sexta_antes = datetime.combine(date(2026, 3, 6), time(17, 30))
+    segunda_depois = datetime.combine(date(2026, 3, 9), time(17, 30))
+    assert phase(sexta_antes) == SessionPhase.OPEN
+    assert phase(segunda_depois) == SessionPhase.POST_CLOSE
 
 
 def test_phase_meio_pregao_antes_das_13_ainda_fechado() -> None:
@@ -182,9 +224,12 @@ def test_in_active_window_uma_hora_antes_da_abertura() -> None:
 
 
 def test_in_active_window_uma_hora_depois_do_leilao_de_fechamento() -> None:
-    # leilao de fechamento termina 18:00 (ver test_phase_dia_normal) -> +1h = 19:00
-    assert in_active_window(datetime.combine(_NORMAL_DAY, time(19, 0))) is True
-    assert in_active_window(datetime.combine(_NORMAL_DAY, time(19, 1))) is False
+    # sob horario de verao dos EUA o leilao termina 17:00 -> +1h de folga = 18:00
+    assert in_active_window(datetime.combine(_NORMAL_DAY, time(18, 0))) is True
+    assert in_active_window(datetime.combine(_NORMAL_DAY, time(18, 1))) is False
+    # fora dele, a mesma folga cai 1h depois
+    assert in_active_window(datetime.combine(_US_STANDARD_DAY, time(19, 0))) is True
+    assert in_active_window(datetime.combine(_US_STANDARD_DAY, time(19, 1))) is False
 
 
 def test_in_active_window_meio_do_pregao_e_true() -> None:

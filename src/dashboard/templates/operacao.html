@@ -8,20 +8,24 @@
     <div class="kicker">Mercado real</div>
     <h1>Operação</h1>
     <p class="dek">
-      O robô de investimento e o robô de saque acoplados ao mercado — a mesma
-      decisão validada em backtest, agora aplicada dia a dia. O botão
-      "Iniciar" sobe o robô como processo próprio; a partir daí, ele decide e
-      envia ordem sozinho, a cada pregão.
+      Dois robôs, dois caixas, dois processos — a mesma decisão validada em
+      backtest, agora aplicada ao mercado. Cada um só enxerga o caixa que
+      você destinou a ele; o botão "Iniciar" sobe aquele robô como processo
+      próprio, e a partir daí ele decide sozinho.
     </p>
   </div>
-  {% if status.existe %}
   <aside>
-    <div>Conta · {{ status.conta }}</div>
-    <div>Pregão de referência · <span class="num">{{ status.pregao }}</span></div>
-    <div>Fase · {{ status.fase }}</div>
-    <div><a href="/operacao/historico">Ver histórico completo →</a></div>
+    {% for bloco in slots %}
+    <div>
+      {{ bloco.slot.label }} ·
+      {% if bloco.status.existe %}
+        <a href="/operacao/historico?slot={{ bloco.slot.id }}">histórico →</a>
+      {% else %}
+        <span class="dim">sem conta ainda</span>
+      {% endif %}
+    </div>
+    {% endfor %}
   </aside>
-  {% endif %}
 </section>
 
 {% include "partials/operacao_body.html" %}

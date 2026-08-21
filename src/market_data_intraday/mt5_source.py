@@ -17,18 +17,17 @@ one no `maxbars` do terminal, nao documentado pelo pacote.
 
 ATENCAO, mesmo aviso de fuso ja documentado em `live/feed.py::MT5Feed`: o
 campo `time` que `copy_rates_*` devolve e o RELOGIO DO SERVIDOR do terminal,
-NAO UTC. Medido contra o WIN@ salvo em 2026-08-20 (barra `_bars_to_df` sem
-correcao): o ultimo horario de cada pregao ficava ~18:24, que bate com o
-FECHAMENTO REAL do WIN em horario de Brasilia (nao em UTC, que seria por
-volta de 21:24) — ou seja, o campo cru E hora local do servidor, so
-rotulada como UTC sem nenhuma correcao. `server_utc_offset_hours` default
-3.0 reusa o MESMO offset ja medido para cotacao ao vivo nesta corretora
-(`tests/test_live_feed.py::test_mt5feed_autocalibra_offset_utc_menos_3_
-com_ticks_reais_da_clear`, Clear, 2026-08-20) — nao e recalibrado aqui a
-cada fetch (nao ha tick vivo fresco disponivel na maioria das vezes que
-se busca HISTORICO, diferente de cotacao ao vivo): passe um valor
-diferente explicitamente se a corretora/terminal mudar, ou se o offset
-migrar (troca de servidor, mudanca de fuso).
+NAO UTC — e' a hora de parede do servidor, so rotulada como epoch UTC sem
+nenhuma correcao. Qual fuso e' esse esta MEDIDO e declarado em
+`core.b3_session.MT5_SERVER_TIMEZONE` (hora de Brasilia, conferida de tres
+formas independentes em 2024-01..2026-08); a conversao aqui e' feita pelo
+FUSO e nao por um escalar, porque um escalar ficaria errado metade do ano se
+o fuso do servidor passasse a ter horario de verao — e essa e' a familia de
+bug que ja suprimiu 100% dos stops intradiarios em producao uma vez.
+
+`server_utc_offset_hours` continua existindo como ESCAPE: passe um numero
+explicito se voce mediu um offset diferente (troca de corretora/servidor) e
+quer travar nele. `None` (default) = converte pelo fuso declarado.
 """
 from __future__ import annotations
 
@@ -38,13 +37,15 @@ from typing import Callable, Optional
 
 import pandas as pd
 
+from core.b3_session import MT5_SERVER_TIMEZONE, server_utc_offset_hours
+
 
 MAX_BARS_PER_REQUEST = 99999
 
-# Offset servidor<->UTC (em horas, somado ao `time` cru) — ver aviso de fuso
-# na docstring do modulo. Mesmo valor ja medido para `live.feed.MT5Feed`
-# contra o terminal da Clear.
-DEFAULT_SERVER_UTC_OFFSET_HOURS = 3.0
+#: Offset servidor<->UTC em horas, para quem precisa de um ESCALAR (o painel
+#: reporta este numero, e `live/bar_feed.py` o usa em log). Derivado do fuso
+#: declarado, nunca digitado a mao — ver docstring do modulo.
+DEFAULT_SERVER_UTC_OFFSET_HOURS = server_utc_offset_hours()
 
 
 @dataclass(frozen=True)
@@ -80,10 +81,29 @@ def _report_error(on_error: Optional[Callable[[str, Exception], None]], key: str
         on_error(key, exc)
 
 
-def _bars_to_df(rates, server_utc_offset_hours: float) -> pd.DataFrame:
+def _bars_to_df(rates, server_utc_offset_hours: Optional[float]) -> pd.DataFrame:
+    """Index em UTC de verdade, a partir da hora de parede do servidor.
+
+    `server_utc_offset_hours=None` (o caminho normal) converte pelo FUSO
+    declarado em `core.b3_session`; um numero explicito soma esse offset e
+    ignora o fuso (escape para offset medido a mao — ver docstring do modulo).
+    """
     df = pd.DataFrame(rates)
-    df["time"] = pd.to_datetime(df["time"], unit="s", utc=True) + pd.Timedelta(hours=server_utc_offset_hours)
-    df = df.set_index("time").sort_index()
+    # O campo cru NAO e' epoch UTC: e' a hora de parede do servidor. Por isso
+    # decodificamos como naive primeiro e so depois dizemos em que fuso ela
+    # esta — inverter isso e' o proprio bug de fuso.
+    parede = pd.to_datetime(df["time"], unit="s")
+    if server_utc_offset_hours is None:
+        # `NaT` nas horas ambigua/inexistente de uma virada de horario de
+        # verao: o Brasil nao tem desde 2019, e quando tinha a virada era a
+        # meia-noite — com o mercado fechado. Descartar essas barras e' honesto;
+        # rotula-las com a hora errada nao seria.
+        utc = parede.dt.tz_localize(MT5_SERVER_TIMEZONE, ambiguous="NaT",
+                                    nonexistent="NaT").dt.tz_convert("UTC")
+    else:
+        utc = parede.dt.tz_localize("UTC") + pd.Timedelta(hours=server_utc_offset_hours)
+    df["time"] = utc
+    df = df.dropna(subset=["time"]).set_index("time").sort_index()
     df.index.name = "time"
     return df
 
@@ -93,7 +113,7 @@ def fetch_m1_range(
     start: datetime,
     end: datetime,
     on_error: Optional[Callable[[str, Exception], None]] = None,
-    server_utc_offset_hours: float = DEFAULT_SERVER_UTC_OFFSET_HOURS,
+    server_utc_offset_hours: Optional[float] = None,
     **connect_kwargs,
 ) -> pd.DataFrame:
     """M1 de `symbol` entre `start` e `end`. DataFrame vazio (nunca excecao)
@@ -127,7 +147,7 @@ def fetch_m1_recent(
     symbol: str,
     count: int = MAX_BARS_PER_REQUEST,
     on_error: Optional[Callable[[str, Exception], None]] = None,
-    server_utc_offset_hours: float = DEFAULT_SERVER_UTC_OFFSET_HOURS,
+    server_utc_offset_hours: Optional[float] = None,
     **connect_kwargs,
 ) -> pd.DataFrame:
     """As `count` barras M1 mais recentes de `symbol` (limitado a
@@ -161,7 +181,7 @@ def fetch_m1_recent(
 def fetch_m1_full_history(
     symbol: str,
     on_error: Optional[Callable[[str, Exception], None]] = None,
-    server_utc_offset_hours: float = DEFAULT_SERVER_UTC_OFFSET_HOURS,
+    server_utc_offset_hours: Optional[float] = None,
     **connect_kwargs,
 ) -> pd.DataFrame:
     """Pagina `copy_rates_from_pos` com `start_pos` crescente ate um lote

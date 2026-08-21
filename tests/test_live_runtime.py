@@ -659,8 +659,10 @@ def _runtime_com_recomendacao(tmp_path, data_dir, amount: float = 5_000.0, capit
 def test_recomendacao_de_saque_nunca_debita_caixa_sozinha(tmp_path, universe):
     """Regra do dono (2026-08-19): a recomendacao de saque e so notificacao
     -- nao existe mais nenhum caminho (CLI, dashboard, ou automatico) que
-    debite `account.cash` por causa dela. O caixa so muda quando a
-    corretora de verdade refletir um saque, via `reconcile_broker_cash`."""
+    debite `account.cash` por causa dela. O caixa so muda quando o dono
+    informar o novo valor no painel (ledger manual, ver
+    `dashboard/app.py::operacao_caixa`) ou quando uma ordem de fato
+    executar."""
     data_dir, _days = universe
     rt, intent, _days_run = _runtime_com_recomendacao(tmp_path, data_dir, amount=5_000.0, capital=10_000.0)
 
@@ -1085,145 +1087,24 @@ def test_fill_parcial_notifica_como_parcial_com_quantidade_restante(tmp_path, un
     assert str(restante) in parciais[0][2], "quantidade restante (leaves_qty) deveria aparecer na notificacao"
 
 
-# ---------- deposito externo (aporte) ---------------------------------------
+# ---------- ledger manual de caixa: nao ha sync com a corretora ------------
 
-class _FakeCashBroker(Broker):
-    """Broker minimo, so para exercitar `reconcile_broker_cash` — `place`/
-    `poll` nunca sao chamados nestes testes (nenhum deles executa ordem)."""
-
-    name = "fakecash"
-    mode = "mt5"
-
-    def __init__(self, cash: Optional[float]) -> None:
-        self._cash = cash
-
-    def place(self, order):
-        raise NotImplementedError
-
-    def poll(self, order):
-        raise NotImplementedError
-
-    def cash_balance(self) -> Optional[float]:
-        return self._cash
-
-
-def _cash_runtime(tmp_path, data_dir, broker, capital=10_000.0) -> LiveRuntime:
-    return LiveRuntime(
-        account_name="teste", strategy=ScriptedStrategy({}), policy=FloorSkim(pct=0.5, floor=1e12),
-        feed=ReplayFeed(), broker=broker, config=BacktestConfig(initial_capital=capital, lot_size=1),
-        tickers=(TICKER,), db_path=tmp_path / "live.sqlite", data_dir=data_dir,
-    )
-
-
-def test_reconcile_broker_cash_sincroniza_para_cima_registra_deposito_e_avisa_info(tmp_path, universe):
-    """Regra do dono (2026-08-19): sem ledger paralelo, `account.cash` vira
-    sempre um snapshot do saldo real -- diferenca POSITIVA (saldo real 500
-    acima do esperado, ex.: aporte direto na corretora) SINCRONIZA
-    `account.cash` pra cima, grava a auditoria em `live_deposits`
-    (`origin="mt5_auto_sync"`) e loga `info` (nao acorda ninguem, e a
-    operacao normal esperada). Chamar de novo com o MESMO saldo real (ja
-    sincronizado) e idempotente: sem novo depósito, sem novo evento de
-    diferenca."""
+def test_run_once_no_pre_open_nao_mexe_no_caixa(tmp_path, universe):
+    """`reconcile_broker_cash` foi REMOVIDO em 2026-08-21 (ver a secao "ledger
+    manual de caixa" em `live/runtime.py`): o saldo do terminal MT5 nao
+    acompanha o da Rico, e com dois robos cada um tem o SEU caixa. O caixa
+    passou a ser o numero que o dono informa no painel, e `run_once` no
+    PRE_OPEN nao pode sobrescreve-lo por baixo dele -- nem para cima, nem
+    para baixo, nem gravando auditoria fantasma."""
     data_dir, days = universe
-    broker = _FakeCashBroker(10_500.0)
-    rt = _cash_runtime(tmp_path, data_dir, broker)
-    rt.ensure_account()
-
-    report = rt.reconcile_broker_cash(now=datetime(2026, 8, 18, 9, 0))
-    assert report.action == "reconcile_cash"
-    assert report.detail["diferenca"] == pytest.approx(500.0)
-
-    with store.live_journal(rt.db_path) as conn:
-        acc = store.load_account(conn, "teste")
-        rows = conn.execute(
-            "SELECT * FROM live_deposits WHERE account_id = ?", (acc.id,)
-        ).fetchall()
-        eventos = store.recent_events(conn, acc.id)
-    assert acc.cash == pytest.approx(10_500.0)  # sincronizado pra cima
-    assert len(rows) == 1
-    assert rows[0]["origin"] == "mt5_auto_sync"
-    assert rows[0]["amount"] == pytest.approx(500.0)
-    assert any(e["level"] == "info" for e in eventos)
-
-    report2 = rt.reconcile_broker_cash(now=datetime(2026, 8, 18, 9, 1))
-    assert report2.action == "reconcile_cash"
-    assert report2.detail["diferenca"] == pytest.approx(0.0, abs=0.01)  # ja convergiu
-
-    with store.live_journal(rt.db_path) as conn:
-        acc2 = store.load_account(conn, "teste")
-        rows2 = conn.execute(
-            "SELECT * FROM live_deposits WHERE account_id = ?", (acc2.id,)
-        ).fetchall()
-    assert acc2.cash == pytest.approx(10_500.0)
-    assert len(rows2) == 1  # nenhum depósito novo gravado
-
-
-def test_reconcile_broker_cash_sem_saldo_externo_mantem_ultimo_valor_e_avisa(tmp_path, universe):
-    """`PaperBroker` nao sobrescreve `cash_balance` -> herda o `None` do
-    default de `Broker`: mantem o ultimo `account.cash` conhecido (nunca
-    zera, nunca trava o robo), mas agora AVISA `warn` -- sem essa fonte, o
-    robo pode estar decidindo com um caixa desatualizado, o dono precisa
-    saber."""
-    data_dir, days = universe
+    d0 = days[0]
     feed = ReplayFeed()
     rt = LiveRuntime(
         account_name="teste", strategy=ScriptedStrategy({}), policy=FloorSkim(pct=0.5, floor=1e12),
-        feed=feed, broker=PaperBroker(feed), config=BacktestConfig(initial_capital=10_000.0, lot_size=1),
+        feed=feed, broker=PaperBroker(feed),
+        config=BacktestConfig(initial_capital=10_000.0, lot_size=1),
         tickers=(TICKER,), db_path=tmp_path / "live.sqlite", data_dir=data_dir,
     )
-    rt.ensure_account()
-
-    report = rt.reconcile_broker_cash()
-    assert report.action == "reconcile_cash_skip"
-
-    with store.live_journal(rt.db_path) as conn:
-        acc = store.load_account(conn, "teste")
-        rows = conn.execute(
-            "SELECT * FROM live_deposits WHERE account_id = ?", (acc.id,)
-        ).fetchall()
-        eventos = store.recent_events(conn, acc.id)
-    assert acc.cash == pytest.approx(10_000.0)
-    assert rows == []
-    assert any(e["level"] == "warn" for e in eventos)
-
-
-def test_reconcile_broker_cash_encolhimento_sincroniza_para_baixo_e_avisa_warn(tmp_path, universe):
-    """Saldo real ABAIXO do esperado (ex.: saque feito direto na corretora,
-    ou uma taxa/ajuste) -- sincroniza `account.cash` pra baixo do mesmo
-    jeito que um aumento, grava a mesma auditoria, mas loga `warn` (o
-    sistema nao sabe distinguir saque legitimo de erro, entao sempre pede
-    pro dono conferir o extrato)."""
-    data_dir, days = universe
-    broker = _FakeCashBroker(9_950.0)  # 50 a menos que o esperado
-    rt = _cash_runtime(tmp_path, data_dir, broker)
-    rt.ensure_account()
-
-    report = rt.reconcile_broker_cash()
-    assert report.action == "reconcile_cash"
-    assert report.detail["diferenca"] == pytest.approx(-50.0)
-
-    with store.live_journal(rt.db_path) as conn:
-        acc = store.load_account(conn, "teste")
-        rows = conn.execute(
-            "SELECT * FROM live_deposits WHERE account_id = ?", (acc.id,)
-        ).fetchall()
-        eventos = store.recent_events(conn, acc.id)
-    assert acc.cash == pytest.approx(9_950.0)  # sincronizado pra baixo
-    assert len(rows) == 1
-    assert rows[0]["origin"] == "mt5_auto_sync"
-    assert rows[0]["amount"] == pytest.approx(-50.0)
-    assert any(e["level"] == "warn" for e in eventos)
-
-
-def test_run_once_aciona_reconcile_broker_cash_no_pre_open(tmp_path, universe):
-    """`run_once` chamado dentro do PRE_OPEN de um dia de pregao invoca
-    `reconcile_broker_cash` — o unico jeito da divergencia de caixa ser
-    detectada sem alguem rodar o passo na mao. `acc.cash` reflete o saldo
-    real sincronizado, pronto para a proxima decisao de alocacao usar."""
-    data_dir, days = universe
-    d0 = days[0]
-    broker = _FakeCashBroker(10_300.0)
-    rt = _cash_runtime(tmp_path, data_dir, broker)
     rt.ensure_account()
     rt.sync_data = lambda: None  # sem rede no teste, so por precaucao
 
@@ -1232,14 +1113,16 @@ def test_run_once_aciona_reconcile_broker_cash_no_pre_open(tmp_path, universe):
     assert clock.phase(pre_open_now) == SessionPhase.PRE_OPEN  # premissa do teste
 
     passos = rt.run_once(now=pre_open_now)
-    assert any(
-        p.action == "reconcile_cash" and p.detail.get("diferenca") == pytest.approx(300.0)
-        for p in passos
-    )
 
+    assert [p.action for p in passos] == ["idle"]
+    assert not hasattr(rt, "reconcile_broker_cash")
     with store.live_journal(rt.db_path) as conn:
         acc = store.load_account(conn, "teste")
-    assert acc.cash == pytest.approx(10_300.0)  # sincronizado pra cima
+        rows = conn.execute(
+            "SELECT * FROM live_deposits WHERE account_id = ?", (acc.id,)
+        ).fetchall()
+    assert acc.cash == pytest.approx(10_000.0)
+    assert rows == []
 
 
 # ---------- FEAT-003: Strategy.state()/restore() e lista branca ------------

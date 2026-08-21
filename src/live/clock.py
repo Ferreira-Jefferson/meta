@@ -18,15 +18,21 @@ Regra 6 do AGENTS.md tambem vale aqui: nenhuma regra de DECISAO de trade
 mora neste arquivo. `phase()` e `session_date()` sao puramente sobre TEMPO —
 nunca sobre se um sinal deve ou nao ser executado.
 
-Horarios de pregao — AVISO
----------------------------
-As constantes de horario abaixo sao os padroes do mercado de acoes a vista
-(o "pregao normal" da B3, fora leilao especial). Elas NAO sao garantia
-perene: a B3 desloca o proprio horario (tipicamente em 1h) quando o horario
-de verao dos EUA entra ou sai — porque parte da liquidez arbitra contra
-mercados americanos —, e a janela de after-market ja mudou de duracao mais
-de uma vez nos ultimos anos. Este codigo nao finge certeza sobre isso:
-confira sempre em b3.com.br/pt_br/solucoes/plataformas/puma-trading-system/
+Horarios de pregao — de onde vem
+---------------------------------
+Este modulo responde QUE DIA (feriado, meio pregao, pregao anterior); a HORA
+DO DIA vem toda de `core.b3_session`, que e' o dono unico desses numeros
+porque o backtest intradiario e a conversao de fuso do MT5 precisam
+exatamente dos mesmos (ver a docstring de la, com a medicao).
+
+O ponto que essa separacao conserta: o fim do pregao de ACOES da B3 NAO e'
+uma constante. Ele anda 1h para tras quando o horario de verao dos EUA entra
+(16:55 em vez de 17:55, em hora de Brasilia) porque parte da liquidez
+arbitra contra Nova York. Este arquivo declarava 17:55 fixo e portanto ficava
+uma hora errado por ~8 meses do ano — medido em barras M1 reais, ver
+`core.b3_session`. A abertura, essa sim, e' fixa em 10:00 nos dois regimes.
+
+Confira sempre em b3.com.br/pt_br/solucoes/plataformas/puma-trading-system/
 para-participantes-e-traders/horario-de-negociacao/ antes de operar dinheiro
 real com base nestes numeros.
 """
@@ -34,27 +40,17 @@ from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta
 from functools import lru_cache
-from zoneinfo import ZoneInfo
 
+from core.b3_session import (  # noqa: F401 (reexport: API historica deste modulo)
+    OPEN,
+    OPEN_HALF_DAY,
+    PRE_OPEN_LEAD as _PRE_OPEN_LEAD,
+    SAO_PAULO,
+    after_hours_end,
+    closing_auction_end,
+    continuous_end,
+)
 from core.live_models import SessionPhase
-
-# ---------- fuso -------------------------------------------------------
-
-SAO_PAULO: ZoneInfo = ZoneInfo("America/Sao_Paulo")
-
-# ---------- horarios do pregao (ver aviso no docstring do modulo) ------
-
-PRE_OPEN: time = time(9, 45)          # leilao de abertura comeca a formar
-OPEN: time = time(10, 0)              # abertura do continuo, dia normal
-OPEN_HALF_DAY: time = time(13, 0)     # abertura do continuo, quarta de cinzas
-CONTINUOUS_END: time = time(17, 55)   # fim da negociacao continua
-CLOSING_AUCTION_END: time = time(18, 0)   # fim do leilao de fechamento
-AFTER_HOURS_END: time = time(18, 30)      # fim do after-market
-
-# tempo entre o inicio do leilao de abertura e a abertura do continuo —
-# usado para deslocar o inicio do pre-open no dia de meio pregao (12:45 em
-# vez de 09:45), ja que a B3 nao muda a duracao do leilao, so o horario dele.
-_PRE_OPEN_LEAD: timedelta = timedelta(minutes=15)
 
 # ---------- feriados ----------------------------------------------------
 
@@ -191,6 +187,9 @@ def phase(now: datetime | None = None) -> SessionPhase:
     - Depois do after-market, ainda em dia de pregao -> `POST_CLOSE`
       (pregao encerrado, mas o dia-calendario ainda e o do pregao — ver
       `session_date` para o motivo disso importar).
+    - As tres fronteiras de FECHAMENTO andam 1h para tras sob horario de
+      verao dos EUA (ver `core.b3_session`). Nao ha um horario de fechamento
+      "do dia normal" — ha o do regime em que `now` cai.
     """
     now = _normalize(now)
     d = now.date()
@@ -199,9 +198,9 @@ def phase(now: datetime | None = None) -> SessionPhase:
 
     open_dt = datetime.combine(d, session_open(d), tzinfo=SAO_PAULO)
     pre_open_dt = open_dt - _PRE_OPEN_LEAD
-    continuous_end_dt = datetime.combine(d, CONTINUOUS_END, tzinfo=SAO_PAULO)
-    closing_auction_end_dt = datetime.combine(d, CLOSING_AUCTION_END, tzinfo=SAO_PAULO)
-    after_hours_end_dt = datetime.combine(d, AFTER_HOURS_END, tzinfo=SAO_PAULO)
+    continuous_end_dt = datetime.combine(d, continuous_end(d), tzinfo=SAO_PAULO)
+    closing_auction_end_dt = datetime.combine(d, closing_auction_end(d), tzinfo=SAO_PAULO)
+    after_hours_end_dt = datetime.combine(d, after_hours_end(d), tzinfo=SAO_PAULO)
 
     if now < pre_open_dt:
         return SessionPhase.CLOSED
@@ -225,7 +224,7 @@ def _active_window(d: date) -> tuple[datetime, datetime]:
     atualizacao, polling do dashboard) para saber quando vale a pena rodar —
     nao tem nenhum uso em decisao de trade (isso continua sendo so `phase()`)."""
     start = datetime.combine(d, session_open(d), tzinfo=SAO_PAULO) - _ACTIVE_WINDOW_PAD
-    end = datetime.combine(d, CLOSING_AUCTION_END, tzinfo=SAO_PAULO) + _ACTIVE_WINDOW_PAD
+    end = datetime.combine(d, closing_auction_end(d), tzinfo=SAO_PAULO) + _ACTIVE_WINDOW_PAD
     return start, end
 
 

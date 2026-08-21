@@ -5,7 +5,7 @@ servidor MT5 rola para frente, entao acumular localmente e a unica forma
 de nao perder o dado de hoje mais adiante.
 
 Uso:
-    python scripts/daytrade/collect_m1_daily.py [--symbol WIN@]
+    python scripts/daytrade/collect_m1_daily.py --symbol PMAM3
 """
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ from market_data_intraday.storage import load_m1, merge_m1  # noqa: E402
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--symbol", default="WIN@")
+    parser.add_argument("--symbol", required=True)
     args = parser.parse_args()
 
     erros: list[tuple[str, Exception]] = []

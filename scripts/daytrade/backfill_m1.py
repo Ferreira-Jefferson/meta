@@ -5,7 +5,7 @@ que nao for salvo agora se perde depois. Rodar isto uma vez ao comecar a
 trabalhar em day trade, e sempre que quiser garantir que nada foi perdido.
 
 Uso:
-    python scripts/daytrade/backfill_m1.py [--symbol WIN@]
+    python scripts/daytrade/backfill_m1.py --symbol PMAM3
 """
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from market_data_intraday.storage import merge_m1  # noqa: E402
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--symbol", default="WIN@")
+    parser.add_argument("--symbol", required=True)
     args = parser.parse_args()
 
     erros: list[tuple[str, Exception]] = []

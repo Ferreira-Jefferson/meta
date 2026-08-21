@@ -72,6 +72,37 @@ class Enter:
 
 
 @dataclass
+class EnterLimit:
+    """Acao: deixar uma ordem-limite PENDENTE (nao executa na proxima
+    abertura como `Enter` — fica esperando, barra a barra, ate o preco
+    tocar `limit_price` ou `ttl_bars` expirar). Existe para modelar quem
+    FORNECE liquidez (maker) em vez de quem CONSOME (taker via `Enter`,
+    que sempre paga `slippage_ticks` na abertura da barra seguinte):
+    varias hipoteses (`grid_bidirecional_ticks`, reversao a media) definem
+    o sinal como "o preco tocou o nivel X" — perseguir esse toque com uma
+    ordem a mercado paga o spread; uma ordem-limite JA POSICIONADA em X
+    captura o toque exatamente no nivel, sem o slippage adverso.
+
+    Preenchida pelo motor no PRIMEIRO toque de `bar.low <= limit_price`
+    (compra) ou `bar.high >= limit_price` (venda) em qualquer barra
+    seguinte a esta decisao — nunca na propria barra que a gerou (mesma
+    disciplina anti-look-ahead das outras acoes). Uma nova `EnterLimit`
+    devolvida pelo robo enquanto uma ja esta pendente SUBSTITUI a
+    anterior (mesmo espirito de `Enter`/`Exit` sobrescreverem `pending`).
+    `ttl_bars=None` = espera indefinidamente (até o fim da sessao, que
+    cancela qualquer ordem pendente no flatten forcado)."""
+
+    side: Side
+    limit_price: float
+    initial_stop: float | None = None
+    initial_target: float | None = None
+    quantity: int | None = None
+    ttl_bars: int | None = None
+    metadata: dict | None = None
+    reason: str = ""
+
+
+@dataclass
 class Exit:
     """Acao: fechar posicao a mercado por decisao do robo (nao stop, nao
     target, nao flatten forcado — esses tres o motor decide por conta
@@ -98,7 +129,7 @@ class AdjustTarget:
     new_target: float
 
 
-IntradayAction = Union[Enter, Exit, AdjustStop, AdjustTarget]
+IntradayAction = Union[Enter, EnterLimit, Exit, AdjustStop, AdjustTarget]
 
 
 class IntradayStrategy(ABC):
@@ -106,15 +137,22 @@ class IntradayStrategy(ABC):
 
     name: str
     version: str
-    # Serie continua MT5 que este robo negocia. Verificado empiricamente
-    # (2026-08-20, terminal da Clear, `scripts/daytrade/
-    # verify_continuous_symbol.py`) que `WIN@` e `WIN$` sao BYTE-IDENTICOS
-    # em toda a profundidade disponivel (~9 meses, atravessando 4+
-    # rolagens de contrato) — nenhuma das duas familias aplica ajuste
-    # sintetico neste terminal. `WIN@` fica como default por convencao
-    # (nao ha diferenca real a escolher aqui); revalidar com o script se o
-    # terminal/corretora mudar.
-    symbol: str = "WIN@"
+    # Simbolo MT5 que este robo negocia. SEM default, de proposito e no mesmo
+    # espirito de `name`/`version`: um default herdado aqui e' um robo
+    # operando o ativo errado em silencio, e o custo/tick/horario de cada
+    # instrumento e' diferente (ver `backtest/intraday/profiles.py`). Quem
+    # implementa um robo declara o que ele negocia.
+    symbol: str
+
+    # A saida por ALVO deste robo e' uma ordem-limite parada no nivel (maker,
+    # sem slippage) ou uma ordem a mercado? E' decisao da ESTRATEGIA — ela
+    # sabe se pendura a saida de lucro como limite —, e mora aqui porque era
+    # passada a mao por cada chamador: `scripts/run_live.py` mandava `True` e o
+    # CLI de backtest ficava no default `False`, ou seja, o robo ao vivo e o
+    # robo validado tinham modelo de custo DIFERENTE. No campeao isso vale a
+    # diferenca entre -R$288 e +R$621 no mesmo periodo. Ver
+    # `IntradayBacktestConfig.target_fills_as_maker` para como o motor precifica.
+    target_fills_as_maker: bool = False
 
     def initialize(self, bars: pd.DataFrame) -> None:
         """Pre-calcula indicadores sobre TODO o historico do backtest.
@@ -134,3 +172,47 @@ class IntradayStrategy(ABC):
         session_pnl_brl: float,
     ) -> list[IntradayAction]:
         """Decisao para esta barra. Devolve acoes declarativas ao motor."""
+
+
+def warm_start_calibration(
+    strategy: IntradayStrategy, session_date, seed_bars: list[Bar]
+) -> Enter | EnterLimit | None:
+    """Calibra `strategy` para um pregao JA EM ANDAMENTO, a partir de barras
+    REAIS ja passadas (buscadas do historico, ex.: via MT5), sem depender
+    de qual barra o robo recebeu primeiro ao vivo.
+
+    Existe porque varios robos (ex.: `GridReloadMakerPct`) descobrem seu
+    proprio `open_price`/nivel de calibracao na PRIMEIRA barra que virem
+    (`on_bar`) — se o processo ao vivo so comecar a receber barra as 15h,
+    ele calibraria com o preco das 15h em vez do preco de abertura real,
+    deslocando o robo do nivel certo o dia todo. Chamar esta funcao 1x ao
+    iniciar/reconectar em QUALQUER horario do pregao, alimentando as
+    barras reais desde a abertura, ANTES de comecar a alimentar barras ao
+    vivo (essas sim executam de verdade).
+
+    `position=None` e `session_pnl_brl=0.0` em toda chamada porque nao
+    houve execucao real ainda — esta funcao so calibra estado interno
+    (ex.: `open_price`, espacamento do dia), nunca fabrica trade nem
+    afeta P&L: com `position` sempre `None`, o robo nunca ve um fill de
+    verdade, entao contas que dependeriam disso (ex.: `long_fills`)
+    permanecem zeradas, corretamente — nenhum trade real aconteceu ainda
+    hoje.
+
+    Devolve a ULTIMA ordem ainda pendente/em pe (`Enter` ou `EnterLimit`)
+    ao fim do replay — a decisao "como entrar" que o robo tomou com a
+    calibracao certa, ainda valida (nada mudou desde). Passar para
+    `run_intraday_backtest(..., resume_same_session=True, seed_pending=...)`
+    para essa ordem comecar a ser vigiada de verdade a partir da PRIMEIRA
+    barra ao vivo, em vez de descartada — descartar jogaria fora uma
+    decisao genuina; `None` se o robo nao tem nenhuma ordem em pe no fim
+    do replay (ou a ultima acao foi `Exit`, que so faz sentido com
+    posicao real aberta, inexistente aqui)."""
+    strategy.on_session_start(session_date)
+    pending: Enter | EnterLimit | None = None
+    for bar in seed_bars:
+        for action in strategy.on_bar(bar.ts, bar, None, 0.0):
+            if isinstance(action, (Enter, EnterLimit)):
+                pending = action
+            elif isinstance(action, Exit):
+                pending = None
+    return pending

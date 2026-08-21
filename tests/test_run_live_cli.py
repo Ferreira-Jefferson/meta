@@ -52,7 +52,12 @@ def _args(**overrides) -> argparse.Namespace:
     base = dict(
         feed="yfinance", mode="mt5", capital=1_000.0, strategy="portfolio_dip2_hw40",
         floor=None, notify_min_level="warn", daily_loss_limit=None, monthly_loss_limit=None,
-        mt5_magic=20260817, mt5_shares_per_lot=None, mt5_symbol_map=None,
+        mt5_shares_per_lot=None, mt5_symbol_map=None,
+        mt5_fractional_map=None,
+        # `--slot` nao tem default (ver docstring de `run_live.py`): estes
+        # testes cobrem o slot DIARIO, o unico que `build()` monta sem
+        # precisar de terminal MT5 aberto.
+        slot="swing", execution_mode="shadow",
     )
     base.update(overrides)
     return argparse.Namespace(**base)
@@ -91,6 +96,19 @@ def test_build_mt5_com_shares_per_lot_zero_ou_negativo_levanta_valueerror(cli, i
 def test_build_mt5_com_shares_per_lot_monta_mt5_broker(cli, isolated_db):
     rt = cli.build(_args(mode="mt5", mt5_shares_per_lot=1.0))
     assert rt.broker.mode == "mt5"
+
+
+def test_build_mt5_repassa_fractional_map_para_o_broker(cli, isolated_db):
+    """`--mt5-fractional-map` (JSON) precisa chegar ao `MT5Broker` -- e o
+    mapa que ele usa pra decidir, a cada ordem, entre lote padrao (gratis na
+    Rico) e fracionario (paga por ordem), ver docstring de
+    `live/broker_mt5.py`."""
+    import json as json_mod
+
+    mapa = {"WEGE3.SA": "WEGE3F"}
+    rt = cli.build(_args(mode="mt5", mt5_shares_per_lot=1.0,
+                          mt5_fractional_map=json_mod.dumps(mapa)))
+    assert rt.broker._fractional_map == mapa
 
 
 # ---------- disjuntor SEMPRE ativo, nao e escolha de quem opera (2026-08-19) -
@@ -210,7 +228,7 @@ class _FakeRuntimeValueError:
         self.notifier = _FakeNotifier()
 
     def run_once(self):
-        raise ValueError("conta 'principal' esta em modo 'mt5', broker instanciado e 'mt5-mas-errado'")
+        raise ValueError("conta 'swing' esta em modo 'mt5', broker instanciado e 'mt5-mas-errado'")
 
 
 def test_cmd_loop_valueerror_de_conta_broker_divergente_e_fatal(cli, isolated_db, monkeypatch):
@@ -273,3 +291,75 @@ def test_cmd_loop_outros_erros_continuam_com_retry(cli, isolated_db, monkeypatch
     assert fake_rt.notifier.calls  # notificou o erro generico, mas nao fatal
     level, _source, message = fake_rt.notifier.calls[0]
     assert "RuntimeError" in message
+
+# ---------- slots: despacho por cadencia (2026-08-21) ---------------------
+
+def test_build_sem_slot_levanta_valueerror(cli, isolated_db):
+    """`--slot` nao tem default de proposito, mesmo precedente de
+    `--strategy`: um fallback silencioso aqui operaria dinheiro real na vaga
+    errada."""
+    with pytest.raises(ValueError, match="slot"):
+        cli.build(_args(slot=None, mt5_shares_per_lot=1.0))
+
+
+def test_build_slot_desconhecido_levanta_valueerror(cli, isolated_db):
+    with pytest.raises(ValueError, match="slot"):
+        cli.build(_args(slot="vaga-que-nao-existe", mt5_shares_per_lot=1.0))
+
+
+def test_build_slot_diario_usa_o_slot_como_nome_da_conta(cli, isolated_db):
+    """A conta "principal" deixou de existir: o nome da conta E o id do slot,
+    porque e isso que da a cada robo um caixa proprio."""
+    rt = cli.build(_args(mt5_shares_per_lot=1.0))
+    assert rt.account_name == "swing"
+
+
+def test_build_slot_diario_usa_o_magic_do_slot(cli, isolated_db):
+    """Conta NETTING: `magic` distinto por slot e o unico jeito de distinguir
+    as ordens de um robo das do outro. Deixou de ser flag digitavel."""
+    from core.config import slot_by_id
+
+    rt = cli.build(_args(mt5_shares_per_lot=1.0))
+    assert rt.broker._magic == slot_by_id("swing").magic
+
+
+def test_daytrade_strategy_resolve_gremah_fora_do_registry_de_swing(cli):
+    """`IntradayStrategy` NAO herda de `Strategy` (de proposito), entao
+    `strategy.registry.get_strategy("gremah")` levantaria `KeyError`. O CLI
+    tem um resolvedor proprio para a familia intradiaria."""
+    from strategy.registry import get_strategy
+
+    with pytest.raises(KeyError):
+        get_strategy("gremah")
+
+    robo = cli._daytrade_strategy("gremah")
+    assert robo.name == "gremah"
+
+
+def test_daytrade_strategy_desconhecida_levanta_valueerror(cli):
+    with pytest.raises(ValueError, match="day trade"):
+        cli._daytrade_strategy("robo-intradiario-que-nao-existe")
+
+
+def test_cmd_decide_recusa_slot_intradiario(cli, isolated_db, monkeypatch):
+    """Nao ha "fecho do pregao" a forcar num robo que decide barra a barra.
+    Recusar explicitamente e melhor que um `AttributeError` cru vindo de um
+    runtime que nao tem o metodo."""
+    chamado: list = []
+    monkeypatch.setattr(cli, "build", lambda args: chamado.append(args))
+
+    with pytest.raises(SystemExit):
+        cli.cmd_decide(_args(slot="daytrade", strategy="gremah"))
+
+    assert chamado == []  # nem tentou montar o runtime
+
+
+def test_cmd_execute_e_unfreeze_tambem_recusam_slot_intradiario(cli, isolated_db, monkeypatch):
+    chamado: list = []
+    monkeypatch.setattr(cli, "build", lambda args: chamado.append(args))
+
+    for fn in (cli.cmd_execute, cli.cmd_unfreeze, cli.cmd_reconcile):
+        with pytest.raises(SystemExit):
+            fn(_args(slot="daytrade", strategy="gremah"))
+
+    assert chamado == []

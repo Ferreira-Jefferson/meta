@@ -28,9 +28,10 @@ backtest que a validou:
     3. saidas (rotacao, defensiva)
     4. recomendacao de saque por evento de liquidez, se alguma venda
        creditou caixa hoje — so registra + notifica, nunca executa
-    5. entradas, dimensionadas pelo caixa (saque NUNCA e debitado aqui —
-       recomendacao de saque e so notificacao, o dono saca direto na
-       corretora se quiser; ver `reconcile_broker_cash`)
+    5. entradas, dimensionadas pelo caixa do LEDGER MANUAL da conta (saque
+       NUNCA e debitado aqui — recomendacao de saque e so notificacao, o dono
+       saca direto na corretora se quiser; ver a secao "ledger manual de
+       caixa" mais abaixo neste arquivo)
 
   DURANTE o pregao (`intraday_tick`)
     stop: no backtest dispara quando `low[D] <= stop`, porque o engine ve a
@@ -118,14 +119,6 @@ DEFAULT_MAX_QUOTE_AGE = 300.0
 # Casa com `MARKET_REFRESH_SECONDS` do dashboard (`dashboard/app.py`) — mesma
 # fonte, mesma cadencia razoavel, dois consumidores independentes.
 DEFAULT_SYNC_INTERVAL_SECONDS = 60 * 60.0
-
-# Diferenca minima (R$) entre o saldo real da corretora e `AccountState.cash`
-# para valer como deposito/discrepancia (ver `reconcile_broker_cash`). Um
-# real de folga e o suficiente para nunca reagir a ruido de centavos (juros
-# de um dia, arredondamento de corretagem) sem deixar passar nenhum aporte
-# de verdade — aportes reais sao, na pratica, sempre ordens de grandeza
-# maiores que isso.
-_DEPOSIT_TOLERANCE = 1.0
 
 
 @dataclass
@@ -1303,91 +1296,29 @@ class LiveRuntime:
             store.save_account(conn, account)
         return StepReport("reconcile", detail={"aplicadas": aplicadas})
 
-    # ---------- deposito externo (aporte) -----------------------------------
-
-    def reconcile_broker_cash(self, now: Optional[datetime] = None) -> StepReport:
-        """Sincroniza `AccountState.cash` com o saldo real da corretora
-        (`Broker.cash_balance()`) uma vez por dia, antes da abertura, NAS
-        DUAS DIREÇÕES.
-
-        Regra do dono (2026-08-19): sem capital digitado, sem botão manual
-        de aporte/saque (removidos — ver `git log` desta mudança) — o robô
-        detecta capital novo sozinho e aloca na próxima decisão; um saque
-        feito pelo dono direto na corretora não exige nenhuma ação nossa.
-        Como consequência, `account.cash` deixa de ser um ledger
-        independente e vira sempre um SNAPSHOT do que a corretora diz que
-        existe de caixa livre — não há mais nenhum outro código que
-        credite/debite esse campo fora daqui e da execução de ordens
-        (`_buy`/venda), então sincronizar sempre é seguro por definição: só
-        existe UM livro-caixa agora.
-
-        Antes desta mudança, esta função era um DETECTOR PURO (nunca
-        creditava/debitava, só avisava) — porque uma versão ainda mais
-        antiga (commit `c0ef1e7`) creditava diferenças positivas automática
-        e incondicionalmente, o que inflava o patrimônio quando um saque de
-        verdade acontecia na corretora fora do conhecimento do sistema (ver
-        `confirm_withdrawal`, removido). Essa classe de bug dependia de
-        DOIS livros-caixa que podiam divergir (o ledger interno, mutado só
-        por transações que o sistema conhecia, e o saldo real). Sem um
-        segundo livro paralelo, não existe mais "para onde divergir errado"
-        — encolher também é uma sincronização legítima agora, não mais um
-        sinal a ignorar.
-
-        So age quando a corretora sabe responder isso: `cash_balance()`
-        default e `None` (sem conta real para comparar) — mantém o último
-        `account.cash` conhecido e avisa, nunca zera nem trava o robô.
-        """
-        real_balance = self.broker.cash_balance()
-        now = now or datetime.now(timezone.utc)
-        with store.live_journal(self.db_path) as conn:
-            account = self._load_account(conn)
-            if account is None:
-                return StepReport("reconcile_cash_skip", detail={"motivo": "conta inexistente"})
-
-            if real_balance is None:
-                self._log(conn, account.id, "warn", "runtime",
-                                "não foi possível ler o saldo da corretora na sincronização "
-                                f"diária -- mantendo o último caixa conhecido (R$ {account.cash:.2f}); "
-                                "confirme que o terminal MT5 está aberto e logado.",
-                                {})
-                return StepReport("reconcile_cash_skip", detail={"motivo": "corretora sem saldo externo"})
-
-            diff = real_balance - account.cash
-            if abs(diff) <= _DEPOSIT_TOLERANCE:
-                return StepReport("reconcile_cash", detail={"diferenca": round(diff, 2)})
-
-            anterior = account.cash
-            account.cash = real_balance
-            store.save_account(conn, account)
-            store.record_deposit(conn, account.id, now.date(), round(diff, 2),
-                                  origin="mt5_auto_sync",
-                                  note=f"caixa anterior {anterior:.2f} -> real {real_balance:.2f}")
-
-            if diff > 0:
-                # Capital novo (aporte externo do dono, direto na
-                # corretora): info, não precisa acordar ninguém -- é a
-                # operação normal esperada por este design; a próxima
-                # decisão de fecho (`close_and_decide`) já aloca sozinha,
-                # já que o robô atual usa size_hint=1.0 (100% do caixa) na
-                # entrada.
-                self._log(conn, account.id, "info", "runtime",
-                                f"capital novo detectado na corretora: +R$ {diff:.2f} "
-                                f"(caixa {anterior:.2f} -> {real_balance:.2f}) -- será "
-                                "considerado na próxima decisão de alocação.",
-                                {"diferenca": round(diff, 2)})
-            else:
-                # Saldo encolheu: pode ser um saque que o dono fez direto
-                # na corretora (esperado, não é erro) ou uma taxa/ajuste
-                # inesperado -- não dá para distinguir os dois casos
-                # daqui, então avisa sempre para o dono revisar o extrato
-                # se a causa não for óbvia.
-                self._log(conn, account.id, "warn", "runtime",
-                                f"caixa da corretora encolheu: R$ {diff:.2f} "
-                                f"(caixa {anterior:.2f} -> {real_balance:.2f}) -- confirme "
-                                "se foi um saque seu direto na corretora ou revise o extrato.",
-                                {"diferenca": round(diff, 2)})
-
-            return StepReport("reconcile_cash", detail={"diferenca": round(diff, 2)})
+    # ---------- ledger manual de caixa (nao ha sync com a corretora) --------
+    #
+    # `reconcile_broker_cash()` foi REMOVIDO em 2026-08-21. Ele sincronizava
+    # `AccountState.cash` com `Broker.cash_balance()` uma vez por dia, antes
+    # da abertura, nas duas direcoes -- a regra "sem capital digitado" de
+    # 2026-08-19. Dois motivos derrubaram isso:
+    #
+    #   1. Achado ao vivo (2026-08-21): o saldo que o terminal MetaTrader 5
+    #      reporta NAO acompanha o da Rico. Um deposito real nao aparecia nem
+    #      em `account_info()` nem em `history_deals_get()`, com o terminal
+    #      conectado e `trade_allowed=True`. Um snapshot atrasado passou a
+    #      poder SOBRESCREVER o numero certo.
+    #   2. A conta deixou de ser uma. Com dois robos (ver `core.config.SLOTS`)
+    #      cada um tem a sua linha em `live_accounts` e o seu caixa, e "o
+    #      saldo da corretora" nao responde mais a pergunta que importa
+    #      ("quanto ESTE robo pode usar?") -- sincronizar as duas contas com o
+    #      mesmo saldo total daria dois livros-caixa errados em vez de um.
+    #
+    # A fonte de verdade do caixa passou a ser o LEDGER MANUAL: o numero que
+    # o dono informa em `dashboard/app.py::operacao_caixa`, gravado em
+    # `live_accounts.cash` com `origin="manual_ledger"` em `live_deposits`.
+    # `live/` continua nunca decidindo caixa por conta propria -- so debita e
+    # credita o que a execucao de ordem de fato movimentou.
 
     # ---------- intra-dia --------------------------------------------------
 
@@ -1534,8 +1465,12 @@ class LiveRuntime:
                     self._last_sync_at = now
                 passos.append(self.close_and_decide(hoje))
         elif fase == SessionPhase.PRE_OPEN:
-            if clock.is_trading_day(hoje):
-                passos.append(self.reconcile_broker_cash(now))
+            # Nada a fazer no leilao de abertura desde 2026-08-21: era aqui
+            # que rodava a sincronizacao diaria de caixa com a corretora,
+            # removida junto de `reconcile_broker_cash` (ver a secao "ledger
+            # manual de caixa"). O caixa agora e o numero que o dono informa
+            # no painel, e ninguem o sobrescreve por baixo dele.
+            passos.append(StepReport("idle", clock.session_date(now), phase=fase))
         else:
             passos.append(StepReport("idle", clock.session_date(now), phase=fase))
         return passos

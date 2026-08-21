@@ -42,11 +42,119 @@ BENCHMARK: str = "^BVSP"
 HISTORY_START: str = "2010-01-01"
 
 
+# ---------------------------------------------------------------------------
+# Slots de operação ao vivo
+# ---------------------------------------------------------------------------
+# Até 2026-08-21 o painel `/operacao` operava UM robô só: um PID, um log, uma
+# conta chamada "principal" fixada em `scripts/run_live.py`. O dono do capital
+# passou a querer dois robôs simultâneos — um de day trade (`gremah`, PMAM3,
+# decide barra a barra) e um de swing (`liqflop`, carteira B3, decide 1x por
+# pregão) — cada um com o SEU caixa, para que "quanto tenho disponível" seja
+# uma pergunta com resposta por robô, não uma disputa pelo saldo da corretora.
+#
+# Um slot é DADO, não lógica: qual conta, que tipo de cadência, que robô, que
+# símbolo, que `magic`. Quem age em cima disso é `dashboard/live_control.py`
+# (sobe/derruba processo) e `scripts/run_live.py` (monta o runtime certo).
+#
+# `id` É o nome da conta em `live_accounts.name` — de propósito: um slot sem
+# conta própria não teria caixa próprio, e caixa próprio é o pedido inteiro.
+# A conta "principal" deixa de existir (ver `scripts/migrate_live_slots.py`).
+
+
+@dataclass(frozen=True)
+class Slot:
+    """Uma vaga de operação ao vivo. Um processo, uma conta, um caixa."""
+
+    id: str            # == `live_accounts.name`
+    kind: str          # "daily" (decide no fecho) | "intraday" (barra a barra)
+    robot_key: str     # robô declarado deste slot
+    label: str
+    dek: str           # uma linha explicando o slot no painel
+    order: int         # posição no painel (0 = em cima)
+    symbol: str | None  # símbolo único que este slot negocia (None = universo do robô)
+    magic: int         # identificador das ordens deste slot no MT5
+    min_cash_brl: float = 50.0
+
+    @property
+    def is_intraday(self) -> bool:
+        return self.kind == "intraday"
+
+
+# Ordem do painel decidida pelo dono (2026-08-21): day trade em CIMA, e não
+# por ser melhor — é a primeira opção operável, porque o capital atual não
+# alcança o swing (ver `capital_real_100_mes`/`liquid_focus_promoted` na
+# memória do projeto). `magic` distinto por slot e símbolos disjuntos são
+# obrigatórios, não estética: a conta da Rico é NETTING (`margin_mode=0`,
+# verificado no terminal real em 2026-08-21), então dois robôs no MESMO
+# símbolo virariam UMA posição só na corretora e os dois livros-caixa
+# passariam a mentir. `live_control.start()` checa isso.
+SLOTS: tuple[Slot, ...] = (
+    Slot(
+        id="daytrade",
+        kind="intraday",
+        robot_key="gremah",
+        label="Day trade — PMAM3",
+        dek=("Grade de ordens-limite recarregada dentro do pregão, sem posição "
+             "overnight. Primeira opção porque cabe no capital atual."),
+        order=0,
+        symbol="PMAM3",
+        magic=20260821,
+    ),
+    Slot(
+        id="swing",
+        kind="daily",
+        robot_key="liqflop",
+        label="Swing — carteira B3",
+        dek=("Uma posição por vez, rotação mensal por liquidez, decide no "
+             "fechamento do pregão. Precisa de capital maior para a taxa fixa "
+             "não comer o retorno."),
+        order=1,
+        symbol=None,
+        magic=20260817,  # o mesmo de antes: a conta swing herda o histórico do CLI antigo
+    ),
+)
+
+
+def ordered_slots() -> tuple[Slot, ...]:
+    """`SLOTS` na ordem de exibição do painel."""
+    return tuple(sorted(SLOTS, key=lambda s: s.order))
+
+
+def slot_by_id(slot_id: str) -> Slot:
+    """Slot pelo id, ou `KeyError` — nunca um default silencioso: um id
+    desconhecido chegando de uma URL/argv significa form adulterado ou
+    catálogo mudado, e escolher um slot por chute operaria dinheiro real na
+    vaga errada."""
+    for slot in SLOTS:
+        if slot.id == slot_id:
+            return slot
+    raise KeyError(
+        f"slot desconhecido: {slot_id!r} — conhecidos: "
+        f"{', '.join(s.id for s in SLOTS)}"
+    )
+
+
 @dataclass(frozen=True)
 class CostModel:
     brokerage_pct: float = 0.0003
     exchange_fees_pct: float = 0.0003
     slippage_pct: float = 0.0015
+    # Corretagem FIXA por perna (compra OU venda) que não fecha lote padrão —
+    # na Rico via MT5 (2026-08-21), lote padrão (>= `fractional_lot_shares`
+    # ações) é GRATUITO e o mercado fracionário cobra R$1,90/ordem, fixo, não
+    # percentual (ver `live/broker_mt5.py::MT5Broker._resolve_execution`, que
+    # decide isso ao vivo com a MESMA regra — quantidade da perna vs
+    # `fractional_lot_shares`). Default `0.0` = comportamento histórico de
+    # TODO o diário (custo só em %) — mudar o default aqui reescreveria o
+    # significado de 16 anos de runs gravadas, mesmo motivo do default de
+    # `cash_yield_path=None` (ver `backtest/costs.py::cash_yield_series`).
+    fractional_fixed_fee: float = 0.0
+    # Quantidade mínima de ações (nessa perna) que fecha lote padrão — abaixo
+    # disso, `fees_for_leg` cobra `fractional_fixed_fee` além do percentual.
+    # Convenção real da B3 (100 ações), independente de `BacktestConfig.
+    # lot_size` (que é granularidade de SIZING, não limiar de corretagem —
+    # a run oficial de ranking usa `lot_size=1`, ver `dashboard/scheduler.py`).
+    fractional_lot_shares: int = 100
 
     @property
     def per_side_pct(self) -> float:

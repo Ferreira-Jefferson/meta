@@ -11,16 +11,19 @@ from datetime import time
 import pandas as pd
 import pytest
 
-from backtest.intraday.costs import FuturesCostModel
+from backtest.intraday.costs import IntradayCostModel
 from backtest.intraday.engine import IntradayBacktestConfig, run_intraday_backtest
 from backtest.metrics import trade_stats
 from core.models import IntradayExitReason
-from strategy.daytrade.base import Enter, Exit, IntradayStrategy
+from strategy.daytrade.base import Enter, EnterLimit, Exit, IntradayStrategy
 
 
 class _StubIntradayStrategy(IntradayStrategy):
     name = "stub_intraday"
     version = "0.1"
+    # `IntradayStrategy.symbol` nao tem mais default (era `"WIN@"`), porque um
+    # default herdado ali e' um robo operando o ativo errado em silencio.
+    symbol = "STUB3"
 
     def __init__(self, actions_by_ts: dict[pd.Timestamp, list] | None = None):
         self.actions_by_ts = actions_by_ts or {}
@@ -38,7 +41,7 @@ def _mk_bars(session_date: str, rows: list[tuple[float, float, float, float]],
 
 
 def _config(**overrides) -> IntradayBacktestConfig:
-    costs = FuturesCostModel(point_value_brl=1.0, tick_size=1.0, fee_round_trip_brl=0.0, slippage_ticks=0.0)
+    costs = IntradayCostModel(point_value_brl=1.0, tick_size=1.0, fee_round_trip_brl=0.0, slippage_ticks=0.0)
     defaults = dict(costs=costs, initial_capital=10_000.0, default_quantity=1, session_end_time=time(23, 59))
     defaults.update(overrides)
     return IntradayBacktestConfig(**defaults)
@@ -247,3 +250,116 @@ def test_metrics_reaproveita_trade_stats_sem_modificacao():
     assert result.metrics["win_rate"] == pytest.approx(expected["win_rate"])
     assert result.metrics["profit_factor"] == pytest.approx(expected["profit_factor"])
     assert result.metrics["n_trades"] == 2
+
+
+# ------------------------------------------------------------- EnterLimit (maker)
+
+def test_target_fills_as_maker_ignora_slippage_so_no_target_nao_no_stop():
+    bars = _mk_bars("2026-01-05", [
+        (100, 101, 99, 100),   # idx0: decide Enter(target=110)
+        (100, 101, 99, 100),   # idx1: executa no open=100 (+2 slippage -> entrada em 102)
+        (100, 111, 99, 100),   # idx2: high=111 toca target=110
+        (100, 101, 99, 100),   # idx3: decide Enter(stop=95)
+        (100, 101, 99, 100),   # idx4: executa no open=100 (+2 slippage -> entrada em 102)
+        (100, 101, 90, 92),    # idx5: low=90 toca stop=95
+        (92, 93, 91, 92),
+    ])
+    strat = _StubIntradayStrategy({
+        bars.index[0]: [Enter(side="long", initial_target=110.0)],
+        bars.index[3]: [Enter(side="long", initial_stop=95.0)],
+    })
+    costs = IntradayCostModel(point_value_brl=1.0, tick_size=1.0, fee_round_trip_brl=0.0, slippage_ticks=2.0)
+    config = _config(costs=costs, target_fills_as_maker=True)
+    result = run_intraday_backtest(bars, strat, config)
+
+    assert len(result.trades) == 2
+    target_trade = result.trades[0]
+    assert target_trade.entry_price == pytest.approx(102.0)  # entrada paga slippage normalmente
+    assert target_trade.exit_reason == IntradayExitReason.TARGET
+    assert target_trade.exit_price == pytest.approx(110.0)  # sem slippage no target (maker)
+
+    stop_trade = result.trades[1]
+    assert stop_trade.exit_reason == IntradayExitReason.STOP
+    assert stop_trade.exit_price == pytest.approx(93.0)  # stop=95, MENOS 2 ticks de slippage (taker)
+
+
+def test_enter_limit_preenche_no_toque_ao_preco_exato_sem_slippage():
+    bars = _mk_bars("2026-01-05", [
+        (100, 101, 99, 100),   # 09:00: decide EnterLimit em 97 (nao toca aqui, decisao no close)
+        (100, 101, 99, 100),   # 09:01: high/low nao toca 97
+        (98, 99, 96, 97),      # 09:02: low=96 <= 97 -> preenche EXATAMENTE em 97 (nao no open=98)
+        (97, 98, 96, 97),      # 09:03: decide Exit
+        (100, 101, 99, 100),   # 09:04: Exit executa no open=100
+    ])
+    strat = _StubIntradayStrategy({
+        bars.index[0]: [EnterLimit(side="long", limit_price=97.0)],
+        bars.index[3]: [Exit()],
+    })
+    # slippage_ticks=5 (bem alto) para provar que o preenchimento por limite NAO paga slippage
+    # (se pagasse, o entry_price nao seria exatamente 97.0).
+    config = _config(costs=IntradayCostModel(point_value_brl=1.0, tick_size=1.0, fee_round_trip_brl=0.0, slippage_ticks=5.0))
+    result = run_intraday_backtest(bars, strat, config)
+
+    assert len(result.trades) == 1
+    trade = result.trades[0]
+    assert trade.entry_ts == bars.index[2]
+    assert trade.entry_price == pytest.approx(97.0)  # preco exato do limite, sem slippage
+
+
+def test_enter_limit_persiste_por_varias_barras_ate_tocar():
+    bars = _mk_bars("2026-01-05", [
+        (100, 101, 99, 100),   # decide EnterLimit em 90
+        (100, 101, 99, 100),   # nao toca
+        (100, 101, 99, 100),   # nao toca
+        (95, 96, 89, 90),      # low=89 <= 90 -> preenche aqui, na 4a barra depois da decisao
+        (90, 91, 89, 90),
+        (90, 91, 89, 90),
+    ])
+    strat = _StubIntradayStrategy({
+        bars.index[0]: [EnterLimit(side="long", limit_price=90.0)],
+        bars.index[3]: [Exit()],
+    })
+    result = run_intraday_backtest(bars, strat, _config())
+
+    assert len(result.trades) == 1
+    trade = result.trades[0]
+    assert trade.entry_ts == bars.index[3]
+    assert trade.entry_price == pytest.approx(90.0)  # preco exato do limite, nao o open=95
+
+
+def test_enter_limit_expira_por_ttl_e_nunca_preenche():
+    bars = _mk_bars("2026-01-05", [
+        (100, 101, 99, 100),   # decide EnterLimit em 90, ttl_bars=2
+        (100, 101, 99, 100),   # 1a barra de espera
+        (100, 101, 99, 100),   # 2a barra de espera -> expira aqui, nao preenche
+        (85, 86, 84, 85),      # mesmo tocando 90 (e muito menos) depois, ordem ja expirou
+    ])
+    strat = _StubIntradayStrategy({
+        bars.index[0]: [EnterLimit(side="long", limit_price=90.0, ttl_bars=2)],
+    })
+    result = run_intraday_backtest(bars, strat, _config())
+
+    assert len(result.trades) == 0
+    assert result.equity_curve.iloc[-1] == pytest.approx(result.equity_curve.iloc[0])  # nunca abriu posicao
+
+
+def test_enter_a_mercado_substitui_ordem_limite_pendente():
+    bars = _mk_bars("2026-01-05", [
+        (100, 101, 99, 100),   # decide EnterLimit em 90 (long)
+        (100, 101, 99, 100),   # decide Enter a mercado -- deve CANCELAR o limite pendente
+        (102, 103, 101, 102),  # Enter a mercado executa aqui no open=102; decide Exit
+        (95, 96, 89, 95),      # Exit executa no open=95; low=89 tocaria o limite de 90 SE ele
+                                # ainda estivesse pendente -- nao deve abrir uma 2a posicao
+        (95, 96, 94, 95),
+    ])
+    strat = _StubIntradayStrategy({
+        bars.index[0]: [EnterLimit(side="long", limit_price=90.0)],
+        bars.index[1]: [Enter(side="long")],
+        bars.index[2]: [Exit()],
+    })
+    result = run_intraday_backtest(bars, strat, _config())
+
+    assert len(result.trades) == 1  # so a entrada a mercado -- o limite cancelado NAO reabriu em 90
+    trade = result.trades[0]
+    assert trade.entry_price == pytest.approx(102.0)
+    assert trade.exit_price == pytest.approx(95.0)

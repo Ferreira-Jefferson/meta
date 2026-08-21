@@ -630,7 +630,9 @@ def dash(tmp_path, monkeypatch):
     db_path = tmp_path / "live_journal.sqlite"
     monkeypatch.setattr(store.live_journal.__wrapped__, "__defaults__", (db_path,))
     monkeypatch.setattr(live_runtime, "DB_PATH", db_path)
-    return TestClient(dashboard_app.app), db_path, live_service.ACCOUNT_NAME
+    # O historico e por SLOT desde 2026-08-21 (`?slot=`); estes testes usam o
+    # slot de swing, o unico com intencao/saque no diario.
+    return TestClient(dashboard_app.app), db_path, live_service.slot_by_id("swing").id
 
 
 def test_historico_mostra_frase_codigo_e_contexto(dash):
@@ -646,7 +648,7 @@ def test_historico_mostra_frase_codigo_e_contexto(dash):
         store.record_intent_snapshot(conn, iid, "entry", "WEGE3.SA",
                                      _snap(close=48.74))
 
-    html = client.get("/operacao/historico").text
+    html = client.get("/operacao/historico?slot=swing").text
 
     # frase legivel para ler rapido...
     assert "assumiu o lugar da posição anterior" in html
@@ -673,7 +675,7 @@ def test_historico_nao_oferece_por_que_sem_racional_gravado(dash):
                                    withdrawal_robot="official_policy")
         store.record_intent(conn, acc.id, _intent(ticker="BRAP4.SA"))
 
-    html = client.get("/operacao/historico").text
+    html = client.get("/operacao/historico?slot=swing").text
     assert "BRAP4" in html
     # `ctx-toggle` sozinho nao serve: a string tambem aparece no JS do toggle,
     # que a pagina sempre carrega. O que nao pode existir e o BOTAO.
@@ -684,5 +686,5 @@ def test_historico_nao_oferece_por_que_sem_racional_gravado(dash):
 def test_historico_sem_conta_continua_respondendo(dash):
     """A pagina nunca cria conta — regra do endpoint. So nao pode quebrar."""
     client, _, _ = dash
-    r = client.get("/operacao/historico")
+    r = client.get("/operacao/historico?slot=swing")
     assert r.status_code == 200

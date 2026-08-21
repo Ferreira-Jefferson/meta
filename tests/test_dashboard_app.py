@@ -57,24 +57,32 @@ def client():
     return TestClient(dashboard_app.app)
 
 
-def _create_account(db_path) -> int:
-    with live_store.live_journal(db_path) as conn:
-        acc = live_store.ensure_account(
-            conn, name=live_service.ACCOUNT_NAME, mode="mt5",
-            initial_capital=1_000.0, investment_robot="portfolio_dip2_hw40",
-            withdrawal_robot="official_policy",
-        )
-        return acc.id
+# Slot de SWING -- e' onde vivem as regras de robo/ranking/disjuntor que este
+# arquivo cobre. O slot de day trade (`daytrade`) tem robo declarado no
+# catalogo e nao passa pelo ranking (ver `tests/test_operacao_slots.py`).
+SWING = "swing"
 
 
-def _create_mt5_account(db_path, capital: float = 50_000.0) -> int:
+def _create_mt5_account(db_path, capital: float = 50_000.0, slot: str = SWING) -> int:
     with live_store.live_journal(db_path) as conn:
         acc = live_store.ensure_account(
-            conn, name=live_service.ACCOUNT_NAME, mode="mt5",
+            conn, name=slot, mode="mt5",
             initial_capital=capital, investment_robot="portfolio_dip2_hw40",
             withdrawal_robot="official_policy",
         )
         return acc.id
+
+
+def _state_v2(tmp_path, monkeypatch, slot: str, config: dict):
+    """Escreve o arquivo de estado de processo no formato v2 (um bloco por
+    slot, ver `dashboard/live_control`) e aponta o modulo para ele."""
+    state_path = tmp_path / "live_process.json"
+    state_path.write_text(json.dumps({
+        "version": 2,
+        "slots": {slot: {"pid": None, "started_at": None, "config": config}},
+    }), encoding="utf-8")
+    monkeypatch.setattr(live_control, "_STATE_PATH", state_path)
+    return state_path
 
 
 # Schema MINIMO no vocabulario ANTIGO (so o suficiente para
@@ -102,116 +110,164 @@ CREATE TABLE live_accounts (
 
 def test_get_status_usa_capital_real_da_conta_atraves_de_build_runtime(isolated_journal, monkeypatch):
     """Correcao do plan-reviewer (secao 4): a prova atravessa `get_status()`
-    de ponta a ponta (nao chama `_build_runtime` a mao com o capital certo),
-    senao um `get_status()` que continuasse mandando `DEFAULT_CAPITAL`
+    de ponta a ponta (nao chama `_build_daily_runtime` a mao com o capital
+    certo), senao um `get_status()` que continuasse mandando `DEFAULT_CAPITAL`
     passaria despercebido."""
     db_path = isolated_journal
-    with live_store.live_journal(db_path) as conn:
-        live_store.ensure_account(
-            conn, name=live_service.ACCOUNT_NAME, mode="mt5",
-            initial_capital=50_000.0, investment_robot="portfolio_dip2_hw40",
-            withdrawal_robot="official_policy",
-        )
+    _create_mt5_account(db_path, capital=50_000.0)
 
     captured: dict = {}
-    original = live_service._build_runtime
+    original = live_service._build_daily_runtime
 
-    def _spy(mode, capital, robot):
-        rt = original(mode, capital, robot)
+    def _spy(slot, mode, capital, robot):
+        rt = original(slot, mode, capital, robot)
         captured["rt"] = rt
         return rt
 
-    monkeypatch.setattr(live_service, "_build_runtime", _spy)
+    monkeypatch.setattr(live_service, "_build_daily_runtime", _spy)
 
-    live_service.get_status()
+    live_service.get_status(SWING)
 
     rt = captured["rt"]
     assert rt.config.initial_capital == pytest.approx(50_000.0)
     assert rt.withdrawal.policy.floor == pytest.approx(50_000.0 * OFFICIAL_FLOOR_MULTIPLE)
+    # A conta do slot E o slot -- nao existe mais conta "principal".
+    assert rt.account_name == SWING
 
 
 def test_get_status_disjuntor_nao_nulo_quando_ha_config_salva(isolated_journal, tmp_path, monkeypatch):
     db_path = isolated_journal
-    with live_store.live_journal(db_path) as conn:
-        live_store.ensure_account(
-            conn, name=live_service.ACCOUNT_NAME, mode="mt5",
-            initial_capital=1_000.0, investment_robot="portfolio_dip2_hw40",
-            withdrawal_robot="official_policy",
-        )
+    _create_mt5_account(db_path, capital=1_000.0)
+    _state_v2(tmp_path, monkeypatch, SWING, {
+        "mode": "mt5", "capital": 1_000.0, "slot": SWING,
+        "daily_loss_limit": 0.05, "monthly_loss_limit": None,
+        "notify_min_level": "warn", "mt5_shares_per_lot": None,
+    })
 
-    state_path = tmp_path / "live_process.json"
-    state_path.write_text(json.dumps({
-        "pid": None, "started_at": None,
-        "config": {
-            "mode": "mt5", "capital": 1_000.0, "floor": None,
-            "daily_loss_limit": 0.05, "monthly_loss_limit": None,
-            "notify_min_level": "warn", "mt5_shares_per_lot": None,
-        },
-    }), encoding="utf-8")
-    monkeypatch.setattr(live_control, "_STATE_PATH", state_path)
-
-    status = live_service.get_status()
+    status = live_service.get_status(SWING)
     assert status["disjuntor"] is not None
 
+
+def test_get_status_de_um_slot_nao_ve_a_conta_do_outro(isolated_journal):
+    """Cada slot e' uma conta, e a conta e' o caixa: o painel de um robo nunca
+    pode mostrar o caixa do outro. Com a conta de swing criada e a de day
+    trade ainda nao, o day trade tem de reportar `existe: False`."""
+    _create_mt5_account(isolated_journal, capital=1_000.0, slot=SWING)
+
+    assert live_service.get_status(SWING)["existe"] is True
+    assert live_service.get_status("daytrade")["existe"] is False
+
+
+# ---------- iniciar: acoes por lote detectada, robo do ranking (swing) ------
 
 def test_operacao_iniciar_sem_shares_per_lot_detectavel_pede_campo_sem_iniciar(
     isolated_journal, client, monkeypatch,
 ):
-    """Regra do dono (2026-08-20): 'ações por lote' não é mais campo digitado
-    em lugar nenhum -- vem de `live_control.detect_shares_per_lot()`
-    (consulta o symbol_info do terminal MT5 conectado). Banco isolado VAZIO
-    (a rota só lê o form quando não há conta ainda) e detecção retornando
+    """Regra do dono (2026-08-20): 'acoes por lote' nao e campo digitado em
+    lugar nenhum -- vem de `live_control.detect_shares_per_lot(slot)`
+    (consulta o symbol_info do terminal MT5 conectado). Deteccao retornando
     `None` (terminal fechado/deslogado): tem de bloquear com erro claro em
     vez de subir o processo sem valor."""
     called: list = []
     monkeypatch.setattr(live_control, "start", lambda cfg: called.append(cfg))
-    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda: None)
+    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot: None)
 
-    resp = client.post("/operacao/iniciar", data={})
+    resp = client.post(f"/operacao/{SWING}/iniciar", data={})
 
     assert resp.status_code == 200
     assert "lote" in resp.text.lower()
     assert called == []
 
 
-def test_operacao_iniciar_primeira_vez_usa_saldo_da_corretora_como_capital(
+def test_operacao_iniciar_primeira_vez_usa_caixa_do_ledger_como_capital(
     isolated_journal, client, monkeypatch,
 ):
-    """Regra do dono (2026-08-19): capital nunca e digitado -- na primeira
-    criacao de conta, `operacao_iniciar` consulta
-    `live_control.detect_broker_capital()` (saldo real da corretora) e usa
-    isso como capital, mesmo sem nenhum campo `capital` no form."""
+    """O capital de uma conta NOVA e o caixa que o dono destinou a ESTE robo
+    no ledger manual -- nunca lido da corretora.
+
+    `detect_broker_capital()` foi removida em 2026-08-21: achado ao vivo de
+    que o saldo do terminal MT5 nao acompanha o da Rico, e com dois robos
+    disputando a mesma conta um numero atrasado viraria dois livros-caixa
+    errados."""
     captured: list = []
     monkeypatch.setattr(live_control, "start", lambda cfg: captured.append(cfg))
-    monkeypatch.setattr(live_control, "detect_broker_capital", lambda: 7_530.0)
-    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda: 1.0)
+    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot: 1.0)
+    monkeypatch.setattr(live_control, "detect_fractional_symbol_map", lambda slot: None)
     monkeypatch.setattr(dashboard_app.reader, "top_strategies_by_final_capital",
-                         lambda **kw: [{"strategy_name": "portfolio_dip2_hw40", "final_capital": 5_000.0}])
+                        lambda **kw: [{"strategy_name": "portfolio_dip2_hw40", "final_capital": 5_000.0}])
 
-    resp = client.post("/operacao/iniciar", data={"robo": "portfolio_dip2_hw40"})
+    # ledger manual primeiro: sem isso, o piso de R$50 bloqueia (testado abaixo)
+    client.post(f"/operacao/{SWING}/caixa", data={"caixa": "7530.00"})
+    resp = client.post(f"/operacao/{SWING}/iniciar", data={"robo": "portfolio_dip2_hw40"})
 
     assert resp.status_code == 200
     assert len(captured) == 1
     assert captured[0].capital == pytest.approx(7_530.0)
     assert captured[0].strategy == "portfolio_dip2_hw40"
+    assert captured[0].slot == SWING
+
+
+def test_operacao_iniciar_sem_caixa_no_ledger_bloqueia_com_piso_claro(
+    isolated_journal, client, monkeypatch,
+):
+    """Piso de operacao (decisao do dono, 2026-08-21): abaixo de R$50 no
+    ledger daquele robo, ele nao inicia -- e a mensagem diz o numero, em vez
+    de so desabilitar o botao."""
+    called: list = []
+    monkeypatch.setattr(live_control, "start", lambda cfg: called.append(cfg))
+    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot: 1.0)
+    monkeypatch.setattr(live_control, "detect_fractional_symbol_map", lambda slot: None)
+    monkeypatch.setattr(dashboard_app.reader, "top_strategies_by_final_capital",
+                        lambda **kw: [{"strategy_name": "portfolio_dip2_hw40", "final_capital": 5_000.0}])
+
+    client.post(f"/operacao/{SWING}/caixa", data={"caixa": "40.00"})
+    resp = client.post(f"/operacao/{SWING}/iniciar", data={"robo": "portfolio_dip2_hw40"})
+
+    assert resp.status_code == 200
+    assert "50" in resp.text
+    assert called == []
+
+
+def test_operacao_iniciar_usa_mapa_fracionario_detectado_no_config(
+    isolated_journal, client, monkeypatch,
+):
+    """Mercado fracionario (sufixo `*F`, ex. Rico): o mapa detectado via
+    `live_control.detect_fractional_symbol_map()` chega ate `ProcessConfig`
+    -- sem isso, ordens abaixo do lote padrao (tipicamente 100 acoes) seriam
+    sempre rejeitadas pelo MT5, inviabilizando operar com capital pequeno."""
+    captured: list = []
+    monkeypatch.setattr(live_control, "start", lambda cfg: captured.append(cfg))
+    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot: 1.0)
+    monkeypatch.setattr(live_control, "detect_fractional_symbol_map",
+                        lambda slot: {"WEGE3.SA": "WEGE3F"})
+    monkeypatch.setattr(dashboard_app.reader, "top_strategies_by_final_capital",
+                        lambda **kw: [{"strategy_name": "portfolio_dip2_hw40", "final_capital": 5_000.0}])
+
+    client.post(f"/operacao/{SWING}/caixa", data={"caixa": "100.00"})
+    resp = client.post(f"/operacao/{SWING}/iniciar", data={"robo": "portfolio_dip2_hw40"})
+
+    assert resp.status_code == 200
+    assert len(captured) == 1
+    assert captured[0].mt5_fractional_map == {"WEGE3.SA": "WEGE3F"}
 
 
 def test_operacao_iniciar_ignora_piso_e_disjuntor_arbitrarios_do_form(
     isolated_journal, client, monkeypatch,
 ):
-    """Regra do dono (2026-08-19): piso de saque e disjuntor de risco não são
-    parâmetro que quem opera deva digitar -- o robô já sabe o valor certo
-    (testado em backtest). `ProcessConfig` não tem mais esses campos, então
-    mesmo um form malicioso/desatualizado enviando `floor`/`daily_loss_limit`/
-    `monthly_loss_limit` não pode influenciar o robô."""
+    """Regra do dono (2026-08-19): piso de saque e disjuntor de risco nao sao
+    parametro que quem opera deva digitar -- o robo ja sabe o valor certo
+    (testado em backtest). `ProcessConfig` nao tem esses campos, entao mesmo
+    um form malicioso/desatualizado enviando `floor`/`daily_loss_limit`/
+    `monthly_loss_limit` nao pode influenciar o robo."""
     captured: list = []
     monkeypatch.setattr(live_control, "start", lambda cfg: captured.append(cfg))
-    monkeypatch.setattr(live_control, "detect_broker_capital", lambda: 7_530.0)
-    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda: 1.0)
+    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot: 1.0)
+    monkeypatch.setattr(live_control, "detect_fractional_symbol_map", lambda slot: None)
     monkeypatch.setattr(dashboard_app.reader, "top_strategies_by_final_capital",
-                         lambda **kw: [{"strategy_name": "portfolio_dip2_hw40", "final_capital": 5_000.0}])
+                        lambda **kw: [{"strategy_name": "portfolio_dip2_hw40", "final_capital": 5_000.0}])
 
-    resp = client.post("/operacao/iniciar", data={
+    client.post(f"/operacao/{SWING}/caixa", data={"caixa": "7530.00"})
+    resp = client.post(f"/operacao/{SWING}/iniciar", data={
         "robo": "portfolio_dip2_hw40",
         "floor": "1", "daily_loss_limit": "99", "monthly_loss_limit": "99",
     })
@@ -223,44 +279,22 @@ def test_operacao_iniciar_ignora_piso_e_disjuntor_arbitrarios_do_form(
     assert not hasattr(captured[0], "monthly_loss_limit")
 
 
-def test_operacao_iniciar_primeira_vez_sem_saldo_da_corretora_bloqueia_com_erro_claro(
-    isolated_journal, client, monkeypatch,
-):
-    """Se a corretora nao responder (terminal fechado/deslogado, credenciais
-    ausentes), a criacao da conta e bloqueada com uma mensagem clara --
-    nunca cai num capital default inventado."""
-    called: list = []
-    monkeypatch.setattr(live_control, "start", lambda cfg: called.append(cfg))
-    monkeypatch.setattr(live_control, "detect_broker_capital", lambda: None)
-    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda: 1.0)
-    monkeypatch.setattr(dashboard_app.reader, "top_strategies_by_final_capital",
-                         lambda **kw: [{"strategy_name": "portfolio_dip2_hw40", "final_capital": 5_000.0}])
-
-    resp = client.post("/operacao/iniciar", data={"robo": "portfolio_dip2_hw40"})
-
-    assert resp.status_code == 200
-    assert "MetaTrader 5" in resp.text
-    assert called == []
-
-
-# ---------- ações por lote é detectado sozinho, não é campo (2026-08-20) ----
-
 def test_operacao_iniciar_retoma_conta_mt5_existente_usa_shares_per_lot_detectado(
     isolated_journal, client, monkeypatch,
 ):
-    """'Ações por lote' é parâmetro do terminal MT5 do usuário, detectado
-    sozinho via `live_control.detect_shares_per_lot()` (symbol_info do
-    terminal MT5 conectado) -- POST /operacao/iniciar sobre uma conta mt5 JÁ
-    EXISTENTE (robô parado) chega em `live_control.start` com o valor
-    detectado, sem nenhum campo digitado em lugar nenhum."""
+    """'Acoes por lote' e parametro do terminal MT5 do usuario, detectado
+    sozinho via `live_control.detect_shares_per_lot()` -- POST iniciar sobre
+    uma conta mt5 JA EXISTENTE (robo parado) chega em `live_control.start`
+    com o valor detectado, sem nenhum campo digitado em lugar nenhum."""
     db_path = isolated_journal
     _create_mt5_account(db_path)
-    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda: 3.5)
+    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot: 3.5)
+    monkeypatch.setattr(live_control, "detect_fractional_symbol_map", lambda slot: None)
 
     captured: list = []
     monkeypatch.setattr(live_control, "start", lambda cfg: captured.append(cfg))
 
-    resp = client.post("/operacao/iniciar", data={})
+    resp = client.post(f"/operacao/{SWING}/iniciar", data={})
 
     assert resp.status_code == 200
     assert len(captured) == 1
@@ -272,56 +306,53 @@ def test_operacao_iniciar_retoma_conta_mt5_existente_usa_shares_per_lot_detectad
 def test_operacao_iniciar_mt5_shares_per_lot_zero_detectado_pede_campo_sem_iniciar(
     isolated_journal, client, monkeypatch,
 ):
-    """Item 2 da correção pós-code-review (hipótese-agente): `0`/negativo tem
+    """Item 2 da correcao pos-code-review (hipotese-agente): `0`/negativo tem
     de ser recusado igual a `None` -- um valor assim causaria
     `ZeroDivisionError` em `MT5Broker._to_volume` na hora de mandar ordem
-    real (`volume = quantity / shares_per_lot`). Continua valendo agora que
-    o valor vem de `detect_shares_per_lot()`, não de um campo salvo."""
+    real (`volume = quantity / shares_per_lot`)."""
     called: list = []
     monkeypatch.setattr(live_control, "start", lambda cfg: called.append(cfg))
-    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda: 0.0)
+    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot: 0.0)
 
-    resp = client.post("/operacao/iniciar", data={})
+    resp = client.post(f"/operacao/{SWING}/iniciar", data={})
 
     assert resp.status_code == 200
     assert "lote" in resp.text.lower()
     assert called == []
 
 
-# ---------- robô vem do top-3 do ranking, não é campo livre (2026-08-19) ----
+# ---------- robo vem do top-3 do ranking, nao e campo livre (2026-08-19) ----
 
 def test_operacao_iniciar_robo_fora_do_top3_bloqueia_sem_iniciar(
     isolated_journal, client, monkeypatch,
 ):
-    """O robô de uma conta NOVA só pode ser um dos top-3 do ranking automático
-    (janela FULL) -- um form adulterado/desatualizado mandando uma chave que
-    não está mais no ranking não pode colar (mesmo espírito de floor/
-    disjuntor: quem opera não escolhe um valor arbitrário fora do que foi
-    validado)."""
+    """O robo de uma conta NOVA de swing so pode ser um dos top-3 do ranking
+    automatico (janela FULL) -- um form adulterado/desatualizado mandando uma
+    chave que nao esta mais no ranking nao pode colar."""
     called: list = []
     monkeypatch.setattr(live_control, "start", lambda cfg: called.append(cfg))
-    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda: 1.0)
+    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot: 1.0)
     monkeypatch.setattr(dashboard_app.reader, "top_strategies_by_final_capital",
-                         lambda **kw: [{"strategy_name": "portfolio_dip2_hw40", "final_capital": 5_000.0}])
+                        lambda **kw: [{"strategy_name": "portfolio_dip2_hw40", "final_capital": 5_000.0}])
 
-    resp = client.post("/operacao/iniciar", data={"robo": "robo-fora-do-ranking"})
+    resp = client.post(f"/operacao/{SWING}/iniciar", data={"robo": "robo-fora-do-ranking"})
 
     assert resp.status_code == 200
-    assert "robô" in resp.text.lower() or "lista" in resp.text.lower()
+    assert "lista" in resp.text.lower()
     assert called == []
 
 
 def test_operacao_iniciar_sem_ranking_ainda_bloqueia_com_erro_claro(
     isolated_journal, client, monkeypatch,
 ):
-    """Ranking automático ainda não rodou (top-3 vazio) -- bloqueia com
+    """Ranking automatico ainda nao rodou (top-3 vazio) -- bloqueia com
     mensagem clara em vez de deixar escolher qualquer coisa ou estourar."""
     called: list = []
     monkeypatch.setattr(live_control, "start", lambda cfg: called.append(cfg))
-    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda: 1.0)
+    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot: 1.0)
     monkeypatch.setattr(dashboard_app.reader, "top_strategies_by_final_capital", lambda **kw: [])
 
-    resp = client.post("/operacao/iniciar", data={"robo": "portfolio_dip2_hw40"})
+    resp = client.post(f"/operacao/{SWING}/iniciar", data={"robo": "portfolio_dip2_hw40"})
 
     assert resp.status_code == 200
     assert "ranking" in resp.text.lower()
@@ -331,41 +362,50 @@ def test_operacao_iniciar_sem_ranking_ainda_bloqueia_com_erro_claro(
 def test_operacao_iniciar_conta_existente_ignora_robo_do_form_usa_investment_robot(
     isolated_journal, client, monkeypatch,
 ):
-    """Achado de segurança: uma conta JÁ EXISTENTE nunca pode trocar de robô
-    através do form de retomada, mesmo que o ranking tenha mudado desde a
-    criação -- `LiveRuntime._restore_robot_state` descarta silenciosamente o
-    estado acumulado (`bars_held`, pyramids etc.) quando o robô muda, e um
-    robô diferente rodando sobre dinheiro real sem ninguém decidir isso
-    explicitamente seria um incidente. `operacao_iniciar` tem de usar sempre
-    `conta.investment_robot`, nunca o `robo` que porventura vier no form."""
+    """Achado de seguranca: uma conta JA EXISTENTE nunca pode trocar de robo
+    atraves do form de retomada, mesmo que o ranking tenha mudado desde a
+    criacao -- `LiveRuntime._restore_robot_state` descarta silenciosamente o
+    estado acumulado (`bars_held`, pyramids etc.) quando o robo muda, e um
+    robo diferente rodando sobre dinheiro real sem ninguem decidir isso
+    explicitamente seria um incidente."""
     db_path = isolated_journal
-    _create_mt5_account(db_path)  # investment_robot="portfolio_dip2_hw40" (ver _create_mt5_account)
-    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda: 1.0)
-    # Ranking mudou depois da criação -- top-3 atual nem contém o robô da conta.
+    _create_mt5_account(db_path)  # investment_robot="portfolio_dip2_hw40"
+    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot: 1.0)
+    monkeypatch.setattr(live_control, "detect_fractional_symbol_map", lambda slot: None)
+    # Ranking mudou depois da criacao -- top-3 atual nem contem o robo da conta.
     monkeypatch.setattr(dashboard_app.reader, "top_strategies_by_final_capital",
-                         lambda **kw: [{"strategy_name": "um-robo-novo-que-nao-e-o-da-conta", "final_capital": 9_000.0}])
+                        lambda **kw: [{"strategy_name": "um-robo-novo", "final_capital": 9_000.0}])
 
     captured: list = []
     monkeypatch.setattr(live_control, "start", lambda cfg: captured.append(cfg))
 
-    resp = client.post("/operacao/iniciar", data={"robo": "um-robo-novo-que-nao-e-o-da-conta"})
+    resp = client.post(f"/operacao/{SWING}/iniciar", data={"robo": "um-robo-novo"})
 
     assert resp.status_code == 200
     assert len(captured) == 1
     assert captured[0].strategy == "portfolio_dip2_hw40"
 
 
-# ---------- LegacyPaperAccountError não pode virar 500 cru (item 5) ---------
+def test_operacao_slot_desconhecido_devolve_404(isolated_journal, client):
+    """Um slot que nao esta no catalogo nunca pode ser operado por chute --
+    `core.config.slot_by_id` nao tem default silencioso, e a rota traduz isso
+    em 404 em vez de 500."""
+    assert client.post("/operacao/nao-existe/iniciar", data={}).status_code == 404
+    assert client.post("/operacao/nao-existe/caixa", data={"caixa": "10"}).status_code == 404
+    assert client.get("/operacao/nao-existe/fragment").status_code == 404
+
+
+# ---------- LegacyPaperAccountError nao pode virar 500 cru (item 5) ---------
 
 def test_operacao_com_conta_legada_paper_devolve_pagina_com_mensagem_sem_500(
     isolated_journal, client,
 ):
-    """Item 5 da correção pós-code-review (hipótese-agente):
-    `LegacyPaperAccountError` é um `RuntimeError` levantado dentro de
+    """Item 5 da correcao pos-code-review (hipotese-agente):
+    `LegacyPaperAccountError` e um `RuntimeError` levantado dentro de
     `_connect`/`live_journal`, chamado ANTES de qualquer try/except nos
-    handlers de `/operacao` -- sem tratamento específico, uma conta legada
+    handlers de `/operacao` -- sem tratamento especifico, uma conta legada
     `mode='paper'` no banco fazia GET /operacao estourar 500 cru. Agora
-    devolve a página normal (200) com a mensagem clara no banner de erro."""
+    devolve a pagina normal (200) com a mensagem clara no banner de erro."""
     import sqlite3
 
     conn = sqlite3.connect(isolated_journal)
@@ -373,7 +413,7 @@ def test_operacao_com_conta_legada_paper_devolve_pagina_com_mensagem_sem_500(
         conn.executescript(_LEGACY_DDL_MIN)
         conn.execute(
             "INSERT INTO live_accounts (name, mode, initial_capital, cash) "
-            "VALUES ('principal', 'paper', 1000.0, 1000.0)"
+            "VALUES ('swing', 'paper', 1000.0, 1000.0)"
         )
         conn.commit()
     finally:
@@ -382,5 +422,171 @@ def test_operacao_com_conta_legada_paper_devolve_pagina_com_mensagem_sem_500(
     resp = client.get("/operacao")
 
     assert resp.status_code == 200
-    assert "principal" in resp.text
     assert "simula" in resp.text.lower() or "paper" in resp.text.lower()
+
+
+# ---------- ledger manual de caixa, por robo (2026-08-21) ------------------
+
+def test_operacao_caixa_sem_conta_cria_a_linha_contabil_com_o_valor(isolated_journal, client):
+    """Sem conta ainda, informar o caixa CRIA a linha contabil daquele slot com
+    o valor -- nao bloqueia. Sem isso o piso de R$50 seria inalcancavel: o
+    numero digitado tinha de sobreviver ao F5 para o botao "Iniciar" poder
+    habilitar."""
+    resp = client.post(f"/operacao/{SWING}/caixa", data={"caixa": "500"})
+
+    assert resp.status_code == 200
+    with live_store.live_journal(isolated_journal) as conn:
+        conta = live_store.load_account(conn, SWING)
+    assert conta is not None
+    assert conta.cash == pytest.approx(500.0)
+
+
+def test_operacao_caixa_aplica_diferenca_e_audita(isolated_journal, client):
+    """O caixa informado vira o novo `account.cash` DAQUELE slot, com uma
+    linha de auditoria em `live_deposits` (`origin="manual_ledger"`)."""
+    db_path = isolated_journal
+    _create_mt5_account(db_path, capital=1_000.0)  # cash inicial = 1_000.0
+
+    resp = client.post(f"/operacao/{SWING}/caixa", data={"caixa": "1500.00"})
+
+    assert resp.status_code == 200
+    assert "atualizado" in resp.text.lower()
+
+    with live_store.live_journal(db_path) as conn:
+        conta = live_store.load_account(conn, SWING)
+        rows = conn.execute(
+            "SELECT * FROM live_deposits WHERE account_id = ?", (conta.id,)
+        ).fetchall()
+    assert conta.cash == pytest.approx(1_500.0)
+    assert len(rows) == 1
+    assert rows[0]["origin"] == "manual_ledger"
+    assert rows[0]["amount"] == pytest.approx(500.0)
+
+
+def test_operacao_caixa_reenviar_o_mesmo_valor_nao_grava_nada(isolated_journal, client):
+    """Reenviar um valor ja convergido (double-click/F5) nao pode gerar
+    deposito duplicado -- a idempotencia vem de mandar um valor ABSOLUTO, nao
+    de uma guarda de dedup em memoria."""
+    db_path = isolated_journal
+    _create_mt5_account(db_path, capital=1_000.0)
+
+    resp = client.post(f"/operacao/{SWING}/caixa", data={"caixa": "1000.00"})
+
+    assert resp.status_code == 200
+    with live_store.live_journal(db_path) as conn:
+        conta = live_store.load_account(conn, SWING)
+        rows = conn.execute(
+            "SELECT * FROM live_deposits WHERE account_id = ?", (conta.id,)
+        ).fetchall()
+    assert conta.cash == pytest.approx(1_000.0)
+    assert rows == []
+
+
+def test_operacao_caixa_tolerancia_fina_nao_engole_meio_real(isolated_journal, client):
+    """`reconcile_cash` tem `tolerance=1.0` por default -- num caixa de R$50
+    (o piso deste painel) isso engoliria uma correcao de R$0,50 em silencio,
+    1% do capital do robo. A rota passa `tolerance=0.005`."""
+    db_path = isolated_journal
+    _create_mt5_account(db_path, capital=50.0)
+
+    resp = client.post(f"/operacao/{SWING}/caixa", data={"caixa": "50.50"})
+
+    assert resp.status_code == 200
+    with live_store.live_journal(db_path) as conn:
+        conta = live_store.load_account(conn, SWING)
+    assert conta.cash == pytest.approx(50.50)
+
+
+def test_operacao_caixa_de_um_slot_nao_mexe_no_outro(isolated_journal, client):
+    """O pedido inteiro: cada robo so manipula o SEU caixa. Definir o caixa do
+    day trade nao pode tocar o do swing."""
+    _create_mt5_account(isolated_journal, capital=1_000.0, slot=SWING)
+
+    client.post("/operacao/daytrade/caixa", data={"caixa": "80"})
+
+    with live_store.live_journal(isolated_journal) as conn:
+        assert live_store.load_account(conn, SWING).cash == pytest.approx(1_000.0)
+        assert live_store.load_account(conn, "daytrade").cash == pytest.approx(80.0)
+
+
+def test_operacao_caixa_valor_negativo_bloqueia(isolated_journal, client):
+    db_path = isolated_journal
+    _create_mt5_account(db_path, capital=1_000.0)
+
+    resp = client.post(f"/operacao/{SWING}/caixa", data={"caixa": "-5"})
+
+    assert resp.status_code == 200
+    assert "caixa" in resp.text.lower()
+
+    with live_store.live_journal(db_path) as conn:
+        conta = live_store.load_account(conn, SWING)
+    assert conta.cash == pytest.approx(1_000.0)  # nao mexeu
+
+# ---------- ordem e independencia dos cartoes (pedido do dono, 2026-08-21) --
+
+def test_operacao_mostra_os_dois_cartoes_com_day_trade_em_cima(isolated_journal, client):
+    """Pedido explicito do dono: as duas estrategias como opcoes de topo, day
+    trade EM CIMA -- "nao por ser melhor, mas por ser a primeira opcao, ainda
+    nao temos capital para operar com a liqflop"."""
+    html = client.get("/operacao").text
+
+    i_day = html.index("Day trade")
+    i_swing = html.index("Swing")
+    assert i_day < i_swing
+    # cada cartao tem o SEU form de caixa e o SEU botao de iniciar
+    for slot in ("daytrade", "swing"):
+        assert f"/operacao/{slot}/caixa" in html
+        assert f"/operacao/{slot}/iniciar" in html
+        assert f"/operacao/{slot}/fragment" in html
+
+
+def test_operacao_nunca_resolve_o_robo_de_day_trade_pelo_registry_de_swing(
+    isolated_journal, client, monkeypatch,
+):
+    """Armadilha real: `IntradayStrategy` NAO herda de `Strategy` (de
+    proposito -- um robo intradiario de um papel nao compete no mesmo podio
+    que um robo diario de carteira). `get_strategy("gremah")` levantaria
+    `KeyError` e viraria um 500 em `/operacao` so por existir um cartao de day
+    trade na tela. O despacho tem de ser por `slot.kind` ANTES de tocar no
+    registry."""
+    from strategy import registry
+
+    chamado: list = []
+    original = registry.get_strategy
+
+    def _spy(chave):
+        chamado.append(chave)
+        return original(chave)
+
+    monkeypatch.setattr(dashboard_app.live_service, "get_strategy", _spy)
+    _create_mt5_account(isolated_journal, capital=1_000.0, slot="daytrade")
+
+    resp = client.get("/operacao")
+
+    assert resp.status_code == 200
+    assert "gremah" not in chamado
+
+
+def test_fragmento_de_um_slot_nao_renderiza_o_outro(isolated_journal, client):
+    """Um poll por slot: o refresh de fundo de um robo nao pode recriar o DOM
+    do outro (nem reabrir/fechar nada do outro cartao)."""
+    html = client.get("/operacao/daytrade/fragment").text
+
+    assert 'id="ops-slot-live-daytrade"' in html
+    assert "ops-slot-live-swing" not in html
+    # credencial e caixa ficam FORA do no com polling
+    assert "Acesso e credenciais" not in html
+    assert "/operacao/daytrade/caixa" not in html
+
+
+def test_botao_iniciar_desabilitado_sem_caixa_no_ledger(isolated_journal, client, monkeypatch):
+    """O piso de R$50 tambem aparece na tela: botao desabilitado + a dica que
+    diz o numero. (O servidor recusa de qualquer forma -- ver
+    `tests/test_live_control.py`.)"""
+    monkeypatch.setattr(live_control, "credential_status",
+                        lambda: {"telegram": False, "smtp": False, "mt5": True})
+
+    html = client.get("/operacao/daytrade/fragment").text
+
+    assert "disabled" in html
+    assert "50" in html

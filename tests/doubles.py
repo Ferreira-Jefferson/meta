@@ -76,7 +76,7 @@ class PaperBroker(Broker):
         side = "buy" if order.side == OrderSide.BUY else "sell"
         fill_price = apply_slippage(price, side, self._costs)
         gross = fill_price * order.quantity
-        fees = fees_for_leg(gross, self._costs)
+        fees = fees_for_leg(gross, self._costs, order.quantity)
 
         order.status = OrderStatus.FILLED
         order.filled_qty = order.quantity

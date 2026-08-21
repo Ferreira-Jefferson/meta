@@ -152,14 +152,19 @@ class Intent:
     id: Optional[int] = None
     payload: dict = field(default_factory=dict)
 
+    #: Marcador de CADENCIA no `payload` de uma intencao intradiaria. Ver
+    #: `is_immediate` — e' o que distingue "mesmo dia porque a cadencia do robo
+    #: e' de minutos" de "mesmo dia por bug de look-ahead".
+    INTRADAY_CADENCE = "intraday"
+
     @property
     def is_immediate(self) -> bool:
         """Intencoes que NAO esperam o dia seguinte.
 
-        Tres excecoes legitimas a regra do D+1: `ADJUST_STOP` nao movimenta
+        Quatro excecoes legitimas a regra do D+1: `ADJUST_STOP` nao movimenta
         dinheiro (o engine tambem aplica na hora); o stop intra-dia dispara na
         propria barra — no backtest quando `low[D] <= stop`, ao vivo quando o
-        preco negociado toca o stop; e uma recomendacao de `WITHDRAW` por
+        preco negociado toca o stop; uma recomendacao de `WITHDRAW` por
         evento de liquidez (`execute_on == decided_on`), que nasce na mesma
         barra em que o robo de investimento acabou de vender — paridade com
         `WithdrawalRobot.on_liquidity` (`live/robots.py`), que ja antecipa a
@@ -168,11 +173,24 @@ class Intent:
         look-ahead de verdade: a recomendacao nao executa nada sozinha, so
         notifica um humano — quem move dinheiro de fato e o dono, sacando
         direto na corretora, se e quando quiser.
+
+        A quarta (2026-08-21) e' a CADENCIA INTRADIARIA
+        (`payload["cadence"] == "intraday"`, ver `INTRADAY_CADENCE`): um robo
+        de day trade decide no fechamento da barra `t` e executa na barra
+        `t+1` do MESMO pregao, dezenas de vezes por dia (ver
+        `live/intraday_runtime.py`). Para ele, `execute_on == decided_on` e' a
+        verdade — nao um bug. A disciplina anti-look-ahead nao desaparece,
+        muda de UNIDADE: quem a garante e' `IntradaySessionMachine`, que
+        executa toda acao na ABERTURA da barra seguinte e nunca na barra que a
+        gerou. O marcador vive no `payload` (nao numa coluna nova) porque
+        `payload` ja e' persistido como JSON e uma coluna exigiria migration
+        para uma informacao que so a leitura desta propriedade consome.
         """
         return (
             self.kind == IntentKind.ADJUST_STOP
             or self.reason == "stop"
             or (self.kind == IntentKind.WITHDRAW and self.execute_on == self.decided_on)
+            or (self.payload or {}).get("cadence") == self.INTRADAY_CADENCE
         )
 
 

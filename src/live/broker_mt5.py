@@ -42,7 +42,14 @@ numero universal:
      terminal MT5 pode ter cadastrado o simbolo com outro nome (com ou sem
      sufixo, com um prefixo de corretora, etc). `symbol_for(ticker)` aplica o
      override de `symbol_map` quando existe; por padrao so remove o sufixo
-     `.SA`.
+     `.SA`. `fractional_map` e um mapa SEPARADO (ticker -> simbolo do mercado
+     FRACIONARIO, sufixo `"F"` na B3), so para tickers que realmente tem essa
+     versao no terminal (ver `detect_fractional_symbol_map`) — `_resolve_
+     execution` decide, a cada ORDEM, qual dos dois usar: lote padrao
+     primeiro (na Rico e GRATUITO, 2026-08-21), fracionario (custa
+     R$1,90/ordem na Rico) so quando a quantidade pedida nao fecha o lote
+     padrao minimo. Sem valor universal tambem: outra corretora pode nao ter
+     fracionario, ou cobrar diferente — confirmar sempre no terminal real.
   3. `filling_type` — o modo de preenchimento (`ORDER_FILLING_IOC` etc) que a
      corretora aceita para o simbolo varia por corretora/conta. Resolvido
      para `mt5.ORDER_FILLING_IOC` (o mais permissivo/comum) apenas no momento
@@ -90,6 +97,7 @@ class MT5Broker(Broker):
         deviation: int = 20,
         filling_type: Optional[int] = None,
         symbol_map: Optional[dict[str, str]] = None,
+        fractional_map: Optional[dict[str, str]] = None,
         login: Optional[int] = None,
         password: Optional[str] = None,
         server: Optional[str] = None,
@@ -103,6 +111,18 @@ class MT5Broker(Broker):
         self._deviation = deviation
         self._filling_type = filling_type
         self._symbol_map = dict(symbol_map) if symbol_map else {}
+        # Mapa ticker -> simbolo do mercado FRACIONARIO (sufixo `"F"` na B3),
+        # SO PARA quem realmente tem essa versao no terminal (ver
+        # `_resolve_execution`) -- diferente de `symbol_map`, que resolve o
+        # simbolo de LOTE PADRAO. Os dois convivem: `_resolve_execution`
+        # decide, a cada ordem, qual dos dois usar, com base na quantidade
+        # pedida (lote padrao primeiro quando a quantidade alcanca o
+        # `volume_min` dele -- na Rico isso e GRATUITO contra R$1,90/ordem no
+        # fracionario, 2026-08-21 -- fracionario so como alternativa para
+        # quantidade que nao fecha lote padrao). Populado por quem monta o
+        # broker (`dashboard/live_control.py::detect_fractional_symbol_map`),
+        # nunca digitado pelo usuario.
+        self._fractional_map = dict(fractional_map) if fractional_map else {}
         # Credenciais de LOGIN na corretora (opcionais): sem elas, `connect()`
         # so anexa a um terminal MT5 que um humano ja abriu e logou na mesma
         # maquina. Com elas, `mt5.initialize()` faz o login sozinho — preciso
@@ -233,29 +253,69 @@ class MT5Broker(Broker):
             order.note = f"erro inesperado na traducao para MT5: {exc}"
             return order
 
+    def _resolve_execution(self, mt5, order: Order):
+        """Decide qual simbolo/volume usar para esta ordem: lote padrao
+        (GRATUITO na Rico, 2026-08-21) quando a quantidade pedida alcanca o
+        `volume_min` dele, senao o mercado FRACIONARIO (`_fractional_map`,
+        custa R$1,90/ordem na Rico) quando existir para este ticker e a
+        quantidade fechar volume la.
+
+        Tenta lote padrao PRIMEIRO: se a quantidade pedida nao fecha o lote
+        minimo (`_resolve_volume` devolve 0), cai pro fracionario sozinho —
+        sem exigir que quem chama saiba de antemao qual dos dois vale. Uma
+        quantidade que nao fecha NEM lote padrao NEM fracionario (ou fica
+        abaixo do minimo dos dois, ou o ticker nao tem fracionario no
+        terminal) devolve `None` -- `_send` traduz isso em `REJECTED` com um
+        motivo que distingue "sem fracionario disponivel" de "fracionario
+        tambem nao aceitou o volume", em vez de um so "volume 0" generico.
+
+        Devolve `(symbol, info, volume)` ou `None`."""
+        base_symbol = self.symbol_for(order.ticker)
+        mt5.symbol_select(base_symbol, True)
+        base_info = mt5.symbol_info(base_symbol)
+
+        if base_info is not None:
+            base_volume = self._resolve_volume(order.quantity, base_info)
+            if base_volume > 0:
+                return base_symbol, base_info, base_volume
+
+        frac_symbol = self._fractional_map.get(order.ticker)
+        if frac_symbol is not None:
+            mt5.symbol_select(frac_symbol, True)
+            frac_info = mt5.symbol_info(frac_symbol)
+            if frac_info is not None:
+                frac_volume = self._resolve_volume(order.quantity, frac_info)
+                if frac_volume > 0:
+                    return frac_symbol, frac_info, frac_volume
+
+        return None
+
     def _send(self, mt5, order: Order) -> Order:
-        symbol = self.symbol_for(order.ticker)
-        mt5.symbol_select(symbol, True)
-
-        info = mt5.symbol_info(symbol)
-        if info is None:
-            order.status = OrderStatus.REJECTED
-            order.note = f"simbolo {symbol} nao encontrado no terminal MT5"
-            return order
-
-        volume = self._resolve_volume(order.quantity, info)
-        if volume <= 0:
+        base_symbol = self.symbol_for(order.ticker)
+        resolved = self._resolve_execution(mt5, order)
+        if resolved is None:
+            base_info = mt5.symbol_info(base_symbol)
+            if base_info is None:
+                order.status = OrderStatus.REJECTED
+                order.note = f"simbolo {base_symbol} nao encontrado no terminal MT5"
+                return order
+            frac_symbol = self._fractional_map.get(order.ticker)
+            motivo_fracionario = (
+                "sem mercado fracionario disponivel para este papel" if frac_symbol is None
+                else f"o mercado fracionario ({frac_symbol}) tambem nao aceitou o volume"
+            )
             order.status = OrderStatus.REJECTED
             order.note = (
                 f"quantidade {order.quantity} acoes (shares_per_lot="
                 f"{self._shares_per_lot}) resulta em volume 0 apos "
-                f"arredondar para o volume_step de {symbol} "
-                f"({getattr(info, 'volume_step', '?')}) — abaixo do lote "
-                f"minimo ({getattr(info, 'volume_min', '?')}); ordem nao "
-                f"enviada ao MT5"
+                f"arredondar para o volume_step de {base_symbol} "
+                f"({getattr(base_info, 'volume_step', '?')}) — abaixo do lote "
+                f"minimo ({getattr(base_info, 'volume_min', '?')}), e {motivo_fracionario}; "
+                f"ordem nao enviada ao MT5"
             )
             return order
 
+        symbol, info, volume = resolved
         tick = mt5.symbol_info_tick(symbol)
         if tick is None:
             order.status = OrderStatus.REJECTED
@@ -314,7 +374,7 @@ class MT5Broker(Broker):
         order.broker_ref = str(getattr(result, "order", None) or "")
         order.fees = self._resolve_fees(mt5, result)
         order.note = (
-            f"fill @ {order.avg_price:.4f} via MT5 "
+            f"fill @ {order.avg_price:.4f} via MT5 em {symbol} "
             f"(deal={getattr(result, 'deal', None)}, "
             f"comment={getattr(result, 'comment', '')})"
         )
@@ -354,8 +414,16 @@ class MT5Broker(Broker):
         return True
 
     def cash_balance(self) -> Optional[float]:
-        """Saldo real de caixa reportado pelo terminal, para o runtime
-        detectar deposito externo (ver `live.runtime.reconcile_broker_cash`).
+        """Saldo real de caixa reportado pelo terminal.
+
+        NAO e' mais a fonte de verdade do caixa da conta (era, ate
+        2026-08-21, via `LiveRuntime.reconcile_broker_cash` — removido): o
+        terminal atrasa em relacao ao saldo real da Rico, e com dois robos
+        dividindo a mesma conta um numero atrasado viraria dois livros-caixa
+        errados. Hoje o caixa de cada robo e' um ledger manual (ver
+        `dashboard/app.py::operacao_caixa`) e este metodo fica como
+        instrumento de DIAGNOSTICO/conferencia, nunca de sincronizacao
+        automatica.
 
         Usa `balance`, NUNCA `equity`: numa conta de acoes a vista (nao
         CFD/margem), `balance` e o caixa REALIZADO (depositos, saques,
@@ -367,8 +435,8 @@ class MT5Broker(Broker):
 
         Mesmo padrao de erro do resto do arquivo: falha de conexao, pacote
         ausente ou resposta inesperada viram `None`, nunca uma excecao solta
-        — quem chama (`reconcile_broker_cash`) trata `None` como "esta
-        corretora nao tem saldo externo para comparar agora", nao como erro.
+        — quem chama trata `None` como "esta corretora nao tem saldo externo
+        para comparar agora", nao como erro.
         """
         try:
             import MetaTrader5 as mt5  # lazy: ver docstring do modulo
@@ -417,5 +485,43 @@ class MT5Broker(Broker):
             if len(sizes) != 1:
                 return None
             return sizes.pop()
+        except Exception:
+            return None
+
+    def detect_fractional_symbol_map(self, tickers) -> Optional[dict[str, str]]:
+        """Descobre, para cada ticker, se o terminal MT5 tem o simbolo do
+        MERCADO FRACIONARIO (convencao B3 via MT5: sufixo `"F"` — ex.
+        `"WEGE3F"`) alem do de lote padrao (`"WEGE3"`, `volume_min`
+        tipicamente 100 acoes). Sem essa deteccao, `symbol_for()` sempre
+        resolve para o simbolo de lote padrao (ver docstring do modulo) e
+        qualquer ordem abaixo do lote minimo vira `OrderStatus.REJECTED` em
+        `_resolve_volume` — o que torna operar com capital pequeno (poucas
+        centenas de reais) inviavel mesmo quando a corretora aceita
+        fracionario.
+
+        Mesmo padrao de `detect_shares_per_lot()` (consulta o terminal em vez
+        de pedir pro usuario conferir na mao), mas SEM exigir um valor unico
+        entre os tickers: o mapa e por ticker, e um ticker sem simbolo
+        fracionario simplesmente mapeia para o simbolo de lote padrao (mesmo
+        comportamento de hoje para ele) — nunca faz o mapa inteiro falhar por
+        causa de UM ticker sem versao fracionaria.
+
+        Devolve `None` so se a conexao falhar (mesmo padrao de erro do resto
+        da classe) — nunca deixa faltar uma entrada no mapa devolvido."""
+        try:
+            import MetaTrader5 as mt5  # lazy: ver docstring do modulo
+        except Exception:
+            return None
+        try:
+            if not self.connect():
+                return None
+            result: dict[str, str] = {}
+            for ticker in tickers:
+                base = self.symbol_for(ticker)
+                fractional = base + "F"
+                mt5.symbol_select(fractional, True)
+                info = mt5.symbol_info(fractional)
+                result[ticker] = fractional if info is not None else base
+            return result
         except Exception:
             return None

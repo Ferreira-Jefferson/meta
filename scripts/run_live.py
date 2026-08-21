@@ -1,14 +1,40 @@
 """Linha de comando da operacao ao vivo.
 
-    python scripts/run_live.py init --capital 50000 --mode mt5 \
-        --strategy portfolio_dip2_hw40 --mt5-shares-per-lot 1
-    python scripts/run_live.py status
-    python scripts/run_live.py step                 # um passo do supervisor
-    python scripts/run_live.py decide               # forca o fecho do pregao
-    python scripts/run_live.py execute              # forca a execucao do dia
-    python scripts/run_live.py reconcile            # aplica fills confirmados ao caixa/posicao
-    python scripts/run_live.py unfreeze             # destrava o disjuntor de risco manualmente
-    python scripts/run_live.py loop --seconds 5
+    python scripts/run_live.py --slot swing init --capital 50000 --mode mt5 \
+        --strategy liqflop --mt5-shares-per-lot 1
+    python scripts/run_live.py --slot swing status
+    python scripts/run_live.py --slot swing step    # um passo do supervisor
+    python scripts/run_live.py --slot swing decide  # forca o fecho do pregao
+    python scripts/run_live.py --slot swing execute # forca a execucao do dia
+    python scripts/run_live.py --slot swing reconcile  # aplica fills confirmados ao caixa/posicao
+    python scripts/run_live.py --slot swing unfreeze   # destrava o disjuntor manualmente
+    python scripts/run_live.py --slot swing loop --seconds 60
+
+    python scripts/run_live.py --slot daytrade --strategy gremah \
+        --mt5-shares-per-lot 1 loop --seconds 5
+
+Slots (--slot) — obrigatorio, sem default
+------------------------------------------
+Cada slot e' UMA vaga de operacao: uma conta, um caixa, um processo, um robo
+(ver `core.config.SLOTS`). `daytrade` roda um `IntradayStrategy` via
+`live/intraday_runtime.py` (decide barra a barra, nunca carrega posicao
+overnight); `swing` roda um `Strategy` diario via `live/runtime.py` (decide
+1x por pregao, executa no pregao seguinte). Sem default de proposito, mesmo
+precedente de `--strategy`: um fallback silencioso aqui operaria dinheiro
+real na vaga errada.
+
+`decide`/`execute`/`unfreeze` sao subcomandos do ciclo DIARIO e recusam um
+slot intradiario explicitamente — nao ha "fecho do pregao" a forcar num robo
+que decide a cada minuto.
+
+Modo de execucao (--execution-mode)
+------------------------------------
+`shadow` (default) journaliza tudo — intencao, ordem, fill, resultado — mas
+NUNCA chama a corretora, e nao debita o caixa. `live` envia ordem de verdade.
+Hoje so o slot de day trade honra esta flag (o de swing sempre envia): ela
+existe porque a premissa central do robo de day trade (ordem-limite preenche
+quando o preco toca o nivel, sem pagar o spread) nunca foi medida contra o
+mercado real — ver `live/intraday_runtime.py`.
 
 `loop` so da passo dentro da janela de pregao B3 +/-1h (ver `live.clock.
 in_active_window`) — fora dela (noite, fim de semana, feriado) fica
@@ -52,14 +78,22 @@ Modo de corretora
   mt5     `MT5Broker` — fala com um terminal MetaTrader 5 JA ABERTO E LOGADO na
           MESMA maquina (pacote pip `MetaTrader5`, so funciona em Windows).
           O robo decide E executa sozinho, sem confirmacao humana em nenhum
-          momento. ATENCAO: este adaptador nao foi validado contra um terminal
-          MT5 real (sem ambiente disponivel para isso) — ver o aviso extenso
-          no topo de `live/broker_mt5.py`. Teste primeiro com o MENOR lote
-          possivel, em horario de pregao, observando o terminal ao vivo, antes
-          de confiar nisto operando sem supervisao. `--mt5-shares-per-lot`/
-          `--mt5-magic`/`--mt5-symbol-map` precisam ser conferidos contra o
-          `symbol_info` do SEU terminal (a relacao acao/lote e o nome do
-          simbolo variam por corretora — nao ha valor universal).
+          momento. ATENCAO: validado em 2026-08-21 contra o terminal real da
+          Rico (conexao, symbol_info, resolucao de volume e `order_check` —
+          validacao SEM executar ordem real, ver memoria de sessao) — mas
+          nenhum `order_send` de verdade foi enviado ainda. Teste primeiro
+          com o MENOR lote possivel, em horario de pregao, observando o
+          terminal ao vivo, antes de confiar nisto operando sem supervisao.
+          `--mt5-shares-per-lot`/`--mt5-symbol-map` precisam ser conferidos
+          contra o `symbol_info` do SEU terminal (a relacao acao/lote e o nome
+          do simbolo variam por corretora — nao ha valor universal). O
+          `magic` das ordens NAO e' flag: vem do slot (`core.config.Slot.
+          magic`), porque a conta e' NETTING e e' o unico jeito de distinguir
+          as ordens de um robo das do outro — deixar isso digitavel permitiria
+          dois robos carimbarem igual. `--mt5-fractional-map` e diferente: so os tickers com
+          mercado fracionario de fato, pro broker escolher lote padrao
+          (GRATUITO na Rico) ou fracionario (paga por ordem) sozinho a cada
+          entrada, conforme a quantidade pedida.
 
 Alertas externos (opcionais, por variavel de ambiente — nunca em texto puro
 na linha de comando, que fica visivel no historico do shell e na lista de
@@ -138,7 +172,7 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from backtest.withdrawal import FloorSkim, official_policy
-from core.config import WATCHLIST, BacktestConfig
+from core.config import SLOTS, WATCHLIST, BacktestConfig, slot_by_id
 from live.feed import MT5Feed, YFinanceFeed
 from live.notify import (
     CompositeNotifier,
@@ -150,8 +184,6 @@ from live.notify import (
 from live.riskguard import CircuitBreaker
 from live.runtime import LiveRuntime
 from strategy.registry import get_strategy
-
-ACCOUNT = "principal"
 
 
 def _build_notifier(min_level: str) -> object:
@@ -202,7 +234,118 @@ def _build_risk_guard(daily_limit: float | None, monthly_limit: float | None) ->
     return CircuitBreaker(**kwargs)
 
 
-def build(args) -> LiveRuntime:
+def _resolve_slot(args):
+    """Slot pedido, ou erro. Sem default (ver docstring do modulo)."""
+    if not getattr(args, "slot", None):
+        raise ValueError(
+            "--slot é obrigatório — não há vaga padrão. Use 'daytrade' "
+            "(day trade, barra a barra) ou 'swing' (diário). Ver "
+            "core.config.SLOTS."
+        )
+    try:
+        return slot_by_id(args.slot)
+    except KeyError as e:
+        raise ValueError(str(e)) from e
+
+
+def _daytrade_strategy(key: str):
+    """Resolve um robo de DAY TRADE por chave.
+
+    Registry proprio (nao `strategy.registry`) porque `IntradayStrategy` NAO
+    herda de `Strategy` de proposito — ver `strategy/daytrade/base.py`. Um
+    `get_strategy("gremah")` levantaria `KeyError`: o scan de
+    `discover_strategies` exige `issubclass(obj, Strategy)` e nem varre o
+    pacote `daytrade`. Isto e' o oposto de um acidente: um robo intradiario de
+    UM papel nao pode competir no mesmo podio que um robo diario de carteira
+    (capital, risco e instrumento incomparaveis)."""
+    from strategy.daytrade.lab.gremah import Gremah
+
+    robos = {Gremah.name: Gremah}
+    if key not in robos:
+        raise ValueError(
+            f"robô de day trade desconhecido: {key!r} — disponíveis: "
+            f"{', '.join(sorted(robos))}"
+        )
+    return robos[key]()
+
+
+def build_intraday(args):
+    """Monta o `IntradayLiveRuntime` do slot de day trade."""
+    from backtest.intraday.profiles import PROFILES, config_for
+    from live.bar_feed import MT5BarFeed
+    from live.intraday_runtime import IntradayLiveRuntime
+    from market_data_intraday.mt5_source import symbol_economics
+
+    slot = _resolve_slot(args)
+    strategy_obj = _daytrade_strategy(args.strategy or slot.robot_key)
+    if args.mode != "mt5":
+        raise ValueError(f"--mode inválido ou ausente: {args.mode!r} — use 'mt5'.")
+    if args.mt5_shares_per_lot is None or args.mt5_shares_per_lot <= 0:
+        raise ValueError(
+            "--mt5-shares-per-lot é obrigatório no modo mt5 — confira o "
+            "symbol_info do SEU terminal MT5 antes de operar."
+        )
+    if slot.symbol not in PROFILES:
+        raise ValueError(
+            f"símbolo {slot.symbol!r} do slot {slot.id!r} não tem perfil econômico "
+            f"declarado em backtest.intraday.profiles.PROFILES — sem custo, corte de "
+            "flatten e lote de referência não há como operar honestamente."
+        )
+    profile = PROFILES[slot.symbol]
+
+    from live.broker_mt5 import MT5Broker  # import tardio: so quando de fato usado
+
+    credenciais = _mt5_credentials()
+    fractional_map = json.loads(args.mt5_fractional_map) if args.mt5_fractional_map else None
+    broker = MT5Broker(magic=slot.magic, shares_per_lot=args.mt5_shares_per_lot,
+                       fractional_map=fractional_map, **credenciais)
+
+    # A economia do contrato vem do TERMINAL (tick size/value reais), nunca
+    # hardcoded — mesma filosofia de `MT5Feed` autocalibrar o fuso.
+    econ = symbol_economics(slot.symbol, **credenciais)
+    if econ is None:
+        raise ValueError(
+            f"não consegui ler symbol_economics de {slot.symbol!r} no terminal MT5 — "
+            "confirme que o terminal está aberto e logado, e que o símbolo está "
+            "visível no Market Watch."
+        )
+
+    # O fuso do servidor MT5 e' DECLARADO e medido (`core.b3_session`), nao
+    # inferido — a inferencia antiga adotou +4.0h onde o certo era +3.0h, e no
+    # day trade um offset errado troca a fase do robo e o minuto do flatten em
+    # silencio. O `MT5Feed` entra aqui como CONFERENTE do relogio, contra o
+    # papel liquido de referencia: se ele acusar, o runtime nao opera (ver
+    # `IntradayLiveRuntime`), em vez de reescrever o offset por conta propria.
+    clock_feed = MT5Feed(**credenciais)
+    bar_feed = MT5BarFeed(slot.symbol, **credenciais)
+    return IntradayLiveRuntime(
+        slot=slot,
+        strategy=strategy_obj,
+        # `target_fills_as_maker` vem da ESTRATEGIA, nao deste chamador: era
+        # `True` aqui e `False` no CLI de backtest, ou seja, o robo que opera e
+        # o robo validado tinham modelo de custo diferente.
+        config=config_for(profile, trade_tick_value=econ.trade_tick_value,
+                          trade_tick_size=econ.trade_tick_size,
+                          target_fills_as_maker=strategy_obj.target_fills_as_maker),
+        bar_feed=bar_feed,
+        broker=broker,
+        notifier=_build_notifier(args.notify_min_level),
+        execution_mode=args.execution_mode,
+        initial_capital=args.capital,
+        clock_feed=clock_feed,
+    )
+
+
+def build(args):
+    """Runtime do slot pedido — `IntradayLiveRuntime` ou `LiveRuntime`."""
+    slot = _resolve_slot(args)
+    if slot.is_intraday:
+        return build_intraday(args)
+    return build_daily(args)
+
+
+def build_daily(args) -> LiveRuntime:
+    slot = _resolve_slot(args)
     # Sem robo default (regra do dono, 2026-08-19): quem cria a conta escolhe
     # a chave explicitamente -- nao ha estrategia hardcoded que sirva de
     # fallback silencioso, ver docstring do modulo, secao "Robo de
@@ -227,8 +370,10 @@ def build(args) -> LiveRuntime:
             )
         from live.broker_mt5 import MT5Broker  # import tardio: so quando de fato usado
         symbol_map = json.loads(args.mt5_symbol_map) if args.mt5_symbol_map else None
-        broker = MT5Broker(magic=args.mt5_magic, shares_per_lot=args.mt5_shares_per_lot,
-                           symbol_map=symbol_map, **_mt5_credentials())
+        fractional_map = json.loads(args.mt5_fractional_map) if args.mt5_fractional_map else None
+        broker = MT5Broker(magic=slot.magic, shares_per_lot=args.mt5_shares_per_lot,
+                           symbol_map=symbol_map, fractional_map=fractional_map,
+                           **_mt5_credentials())
     else:
         raise ValueError(
             f"--mode inválido ou ausente: {args.mode!r} — use 'mt5' "
@@ -253,7 +398,7 @@ def build(args) -> LiveRuntime:
     policy = (FloorSkim(floor=args.floor) if args.floor is not None
               else official_policy(initial_capital=args.capital))
     return LiveRuntime(
-        account_name=ACCOUNT,
+        account_name=slot.id,
         strategy=strategy_obj,
         policy=policy,
         feed=feed,
@@ -280,13 +425,39 @@ def _universe_of(strategy_obj) -> tuple[str, ...]:
     return tuple(getattr(strategy_obj, "universe_tickers", None) or WATCHLIST)
 
 
+def _require_daily(args, subcomando: str):
+    """Recusa um subcomando do ciclo DIARIO num slot intradiario.
+
+    `decide`/`execute`/`unfreeze` sao sobre "fechar o pregao e decidir para o
+    seguinte" e sobre o disjuntor de risco diario — nada disso existe num robo
+    que decide a cada barra e nunca carrega posicao overnight. Recusar
+    explicitamente e' melhor que um `AttributeError` cru vindo de um runtime
+    que nao tem o metodo."""
+    slot = _resolve_slot(args)
+    if slot.is_intraday:
+        print(f"'{subcomando}' não se aplica ao slot {slot.id!r} (day trade): não há "
+              "fecho de pregão a forçar nem disjuntor diário num robô que decide "
+              "barra a barra. Use 'step'/'loop'/'status'.")
+        sys.exit(1)
+    return slot
+
+
 def cmd_init(args) -> None:
     rt = build(args)
     acc = rt.ensure_account()
     print(f"conta '{acc.name}' pronta — modo {acc.mode}, capital R$ {acc.initial_capital:,.2f}"
           .replace(",", "."))
     print(f"  robo de investimento: {acc.investment_robot}")
-    print(f"  robo de saque:        {acc.withdrawal_robot}")
+    print(f"  robo de saque:        {acc.withdrawal_robot or '(nenhum — day trade não tem overlay de saque)'}")
+    if getattr(rt, "execution_mode", None) is not None:
+        print(f"  modo de execucao:     {rt.execution_mode}"
+              + (" (journaliza, NAO envia ordem)" if rt.execution_mode == "shadow" else ""))
+    if _resolve_slot(args).is_intraday:
+        if isinstance(rt.notifier, NullNotifier):
+            print("  alerta externo:       nenhum configurado (so diario/dashboard)")
+        else:
+            print("  alerta externo:       ativo (Telegram e/ou e-mail)")
+        return
     if args.floor is None:
         print(f"  piso do saque:        R$ {55 * args.capital:,.2f} (55x o aporte)"
               .replace(",", "."))
@@ -311,12 +482,14 @@ def cmd_step(args) -> None:
 
 
 def cmd_decide(args) -> None:
+    _require_daily(args, "decide")
     rt = build(args)
     from live import clock
     print(rt.close_and_decide(clock.session_date()))
 
 
 def cmd_execute(args) -> None:
+    _require_daily(args, "execute")
     rt = build(args)
     from live import clock
     from core.live_models import SessionPhase
@@ -332,11 +505,13 @@ def cmd_execute(args) -> None:
 
 
 def cmd_reconcile(args) -> None:
+    _require_daily(args, "reconcile")
     rt = build(args)
     print(rt.reconcile_pending_fills())
 
 
 def cmd_unfreeze(args) -> None:
+    _require_daily(args, "unfreeze")
     rt = build(args)
     if rt.risk_guard is None:
         print("nenhum disjuntor configurado nesta chamada (--daily-loss-limit/--monthly-loss-limit "
@@ -349,10 +524,14 @@ def cmd_unfreeze(args) -> None:
 def cmd_loop(args) -> None:
     from live import clock
 
+    slot = _resolve_slot(args)
     rt = build(args)
-    print(f"supervisor ativo — passo a cada {args.seconds}s, so na janela de "
-          f"pregao B3 +/-1h (fora dela, dorme ate a janela abrir de novo; "
+    print(f"supervisor do slot '{slot.id}' ativo — passo a cada {args.seconds}s, so na "
+          f"janela de pregao B3 +/-1h (fora dela, dorme ate a janela abrir de novo; "
           f"sem passo nenhum a noite ou no fim de semana). Ctrl+C para parar.")
+    if getattr(rt, "execution_mode", None) == "shadow":
+        print("MODO SOMBRA: tudo e' journalizado, NENHUMA ordem vai para a corretora.",
+              flush=True)
     while True:
         try:
             espera = clock.seconds_until_active_window()
@@ -392,6 +571,12 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--mode", default="mt5", choices=("mt5",))
+    p.add_argument("--slot", default=None, choices=tuple(s.id for s in SLOTS),
+                   help="vaga de operacao (core.config.SLOTS) -- obrigatorio, sem "
+                        "default (ver docstring, secao 'Slots')")
+    p.add_argument("--execution-mode", default="shadow", choices=("shadow", "live"),
+                   help="'shadow' journaliza sem enviar ordem (default); 'live' envia "
+                        "de verdade. So o slot de day trade honra esta flag hoje")
     p.add_argument("--capital", type=float, default=1_000.0)
     p.add_argument("--strategy", default=None,
                    help="chave do robo (strategy.registry.list_strategies()) -- "
@@ -407,12 +592,18 @@ def main() -> None:
                    help="ex.: 0.05 = congela entrada nova se o patrimonio cair 5%% no dia")
     p.add_argument("--monthly-loss-limit", type=float, default=None,
                    help="ex.: 0.15 = mesma ideia, base mensal — precisa de 'unfreeze' manual")
-    p.add_argument("--mt5-magic", type=int, default=20260817)
     p.add_argument("--mt5-shares-per-lot", type=float, default=None,
                    help="obrigatorio no modo mt5 — confira em symbol_info do SEU "
                         "terminal MT5 antes de operar, nao ha valor universal")
     p.add_argument("--mt5-symbol-map", default=None,
-                   help='JSON, ex.: \'{"WEGE3.SA": "WEGE3F"}\'')
+                   help='JSON, ex.: \'{"WEGE3.SA": "WEGE3F"}\' -- override do nome de '
+                        'simbolo cadastrado na corretora (feed E broker); nao confundir '
+                        'com --mt5-fractional-map')
+    p.add_argument("--mt5-fractional-map", default=None,
+                   help='JSON, ex.: \'{"WEGE3.SA": "WEGE3F"}\' -- SO os tickers com '
+                        'simbolo de mercado fracionario no terminal (broker escolhe, a '
+                        'cada ordem, lote padrao ou fracionario conforme a quantidade '
+                        'pedida — ver docstring de live/broker_mt5.py)')
     sub = p.add_subparsers(dest="cmd", required=True)
 
     for nome, fn in (("init", cmd_init), ("status", cmd_status), ("step", cmd_step),
