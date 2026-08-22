@@ -36,7 +36,6 @@ comporta como puro modo rolante nesse caso). Ver
 campeao de day trade PMAM3 para o historico completo da investigacao."""
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 from datetime import time
 
@@ -76,26 +75,63 @@ class _SymbolCalibration:
 # nenhum robo do podio foi re-simulado com ela. Ver a memoria
 # `rico_fractional_fee_2026_08_21`.
 #
-# OOS reconfirmado 2026-08-22 (trecho reservado 2026-06-13..2026-08-21,
-# capital = `capital_minimo_brl` do preco no inicio do OOS): as 3 calibracoes
-# seguem positivas fora da amostra que as gerou --
-#   PMAM3: 319 trades, wr 83,1%, lucro +R$177,79, pf 2,75, MaxDD -12,91%
-#   CSAN3: 627 trades, wr 98,2%, lucro +R$347,48, pf 4,22, MaxDD -4,13%
-#   KLBN4: 671 trades, wr 98,7%, lucro +R$425,02, pf 12,15, MaxDD -1,57%
+# ---------------------------------------------------------------------------
+# A TABELA (10 simbolos, medidos 2026-08-21/22)
+# ---------------------------------------------------------------------------
+# Como cada linha foi obtida, sem excecao:
+#   1. Varredura ampla do universo inteiro (140 papeis com M1 salvo) no default
+#      global antigo (0,42%/20x), so' para achar candidatos.
+#   2. REGIME DE PRECO: para cada candidato, a data mais antiga a partir da
+#      qual o fechamento diario nunca mais saiu de [0,5x, 2x] do preco de hoje.
+#      So' esse trecho conta. Sem isso a medicao mente: `profit_pct` vira TICKS
+#      (`_ticks_from_pct`), entao o mesmo percentual e' outro alvo em outro
+#      preco -- calibrar a CSAN3 com dado de quando ela valia R$7,62 produziria
+#      o par certo para um papel que nao existe mais.
+#   3. Varredura fina de alvo x stop DENTRO do regime, so' ate o corte
+#      `backtest.intraday.profiles.OOS_CUTOFF` (2026-06-13).
+#   4. UMA passada no trecho reservado, ja com o par escolhido. Positivo no IS
+#      e negativo no OOS = descartado, sem segunda tentativa (foi o que
+#      aconteceu com CMIN3, BBDC3, EQTL3 e EUCA4 -- os quatro tinham IS bom).
 #
-# lucro IS medido vs. o antigo default global (0.42%/20x), mesma janela:
-#   PMAM3: +R$759,08 vs +R$609,04 (+24,6%)
-#   CSAN3: +R$751,82 vs +R$129,54 (+480%)
-#   KLBN4: +R$1.226,35 vs +R$146,75 (+736%)
+#   simbolo  alvo/stop     trades OOS  wr OOS     lucro OOS     pf OOS  MaxDD OOS
+#   PMAM3    0,32% / 10x          319   83,1%      +R$177,79      2,75    -21,59%
+#   KLBN4    0,21% /  5x          671   98,7%      +R$425,02     12,15     -0,81%
+#   CSAN3    0,21% / 20x          627   98,2%      +R$347,48      4,22     -2,16%
+#   DASA3    0,21% / 10x          857   93,5%      +R$278,94      1,77     -4,24%
+#   PCAR3    0,21% / 10x          894   92,4%      +R$249,89      1,59     -4,55%
+#   CLSC4    0,42% / 10x           14   64,3%      +R$215,21      1,56     -0,99%
+#   KLBN3    0,21% /  5x          395   95,9%      +R$198,43      3,63     -1,48%
+#   GRND3    0,21% /  5x          334   97,3%      +R$189,70      5,59     -1,54%
+#   LPSB3    0,42% / 20x          171   94,2%      +R$139,51      4,83     -2,42%
+#   BMGB4    0,21% / 20x          316   97,5%      +R$137,72      2,86     -2,11%
 #
-# Um simbolo novo exige a MESMA medicao antes de entrar aqui -- ver
+# O que NAO esta provado, e precisa ser dito junto com os numeros acima:
+#   - CLSC4 tem 14 trades no OOS (131 no IS). Passou nos dois trechos, mas 14
+#     trades nao demonstram edge -- e ela exige R$30.390 em caixa (lote de
+#     R$15.195), fora da realidade do dono hoje.
+#   - PMAM3 e' a unica cujo par foi escolhido com dado que o corte anterior
+#     dela (2025-12-01) mantinha reservado -- ver `OOS_CUTOFF` em
+#     `backtest/intraday/profiles.py` para o porque da troca e o custo dela.
+#   - MaxDD aqui e' medido sobre `capital_minimo_brl` (o piso), o capital mais
+#     agressivo possivel. Quem operar com folga maior ve MaxDD percentual menor.
+#
+# Um simbolo novo exige os MESMOS 4 passos antes de entrar aqui -- ver
 # `Gremah.__init__`, que FALHA ALTO (`ValueError`) para qualquer simbolo
-# ausente desta tabela em vez de herdar a calibracao de outro papel (jah
-# provado que profit_pct/stop_multiplier nao transferem entre precos).
+# ausente desta tabela em vez de herdar a calibracao de outro papel. Duas
+# evidencias de que herdar seria errado: o par 0,21%/5x da KLBN4 rende
+# +R$425 nela e o mesmo par foi REPROVADO na CMIN3; e nao ha um so par que
+# apareca em todas as 10 linhas.
 _CALIBRATION_BY_SYMBOL: dict[str, _SymbolCalibration] = {
     "PMAM3": _SymbolCalibration(profit_pct=0.0032, stop_multiplier=10.0),
-    "CSAN3": _SymbolCalibration(profit_pct=0.0021, stop_multiplier=20.0),
     "KLBN4": _SymbolCalibration(profit_pct=0.0021, stop_multiplier=5.0),
+    "CSAN3": _SymbolCalibration(profit_pct=0.0021, stop_multiplier=20.0),
+    "DASA3": _SymbolCalibration(profit_pct=0.0021, stop_multiplier=10.0),
+    "PCAR3": _SymbolCalibration(profit_pct=0.0021, stop_multiplier=10.0),
+    "CLSC4": _SymbolCalibration(profit_pct=0.0042, stop_multiplier=10.0),
+    "KLBN3": _SymbolCalibration(profit_pct=0.0021, stop_multiplier=5.0),
+    "GRND3": _SymbolCalibration(profit_pct=0.0021, stop_multiplier=5.0),
+    "LPSB3": _SymbolCalibration(profit_pct=0.0042, stop_multiplier=20.0),
+    "BMGB4": _SymbolCalibration(profit_pct=0.0021, stop_multiplier=20.0),
 }
 
 
@@ -110,9 +146,9 @@ class SymbolSetup:
     ativo só — e mostrar esse número solto anunciava "o robô usa 0,32%" quando
     0,32% é a calibração da PMAM3 e não vale para os outros dois.
 
-    `capital_minimo_brl` fica de fora de propósito: ele depende do preço de
-    hoje, e buscar preço não é assunto de `strategy/` (AGENTS.md #1) — quem
-    exibe busca o preço e chama a função.
+    O capital mínimo fica de fora de propósito: ele depende do preço de HOJE,
+    e buscar preço não é assunto de `strategy/` (AGENTS.md #1) — quem exibe
+    busca o preço e chama `strategy.daytrade.base.capital_minimo_brl`.
     """
 
     symbol: str
@@ -123,32 +159,15 @@ class SymbolSetup:
 def calibrated_setups() -> tuple[SymbolSetup, ...]:
     """Os ativos que este robô pode operar hoje, na ordem em que foram medidos.
 
-    São TRÊS, cada um com alvo e stop próprios: `profit_pct`/`stop_multiplier`
-    não transferem entre símbolos (medido 2026-08-21), e é por isso que
-    `Gremah.__init__` falha alto num símbolo ausente em vez de herdar a
-    calibração de outro papel.
+    Cada um com alvo e stop PRÓPRIOS: `profit_pct`/`stop_multiplier` não
+    transferem entre símbolos (medido 2026-08-21, reconfirmado em 10 papéis
+    2026-08-22), e é por isso que `Gremah.__init__` falha alto num símbolo
+    ausente em vez de herdar a calibração de outro papel.
     """
     return tuple(
         SymbolSetup(symbol=s, profit_pct=c.profit_pct, stop_multiplier=c.stop_multiplier)
         for s, c in _CALIBRATION_BY_SYMBOL.items()
     )
-
-
-def capital_minimo_brl(preco_atual: float) -> float:
-    """Capital minimo para operar um simbolo SEM ordem fracionaria: custo de
-    1 lote padrao (100 acoes, corretagem zero na Rico) arredondado PARA CIMA
-    ao proximo multiplo de R$50 (pedido explicito do usuario 2026-08-21).
-
-    A folga de seguranca NAO e' um valor somado a parte -- e' a propria
-    distancia ate o multiplo de 50 (ex.: PMAM3 a R$0,14 -> lote de R$14,00
-    -> R$50,00; CSAN3 a R$3,64 -> lote de R$364,00 -> R$400,00).
-
-    Uso pretendido, AINDA NAO conectado a nada: o saldo em caixa da conta
-    deveria ser conferido contra este numero antes de deixar um slot de day
-    trade comecar a operar um dado simbolo -- essa checagem mora no
-    dashboard/selecao de conta (fora do escopo deste modulo), nao aqui."""
-    custo_lote = preco_atual * 100
-    return math.ceil(custo_lote / 50.0) * 50.0
 
 
 @dataclass
@@ -171,19 +190,31 @@ class Gremah(IntradayStrategy):
     """Ancora fixa na abertura ate' `fixed_anchor_until`; ancora rolante
     (preco atual, recalculada a cada recarga) depois disso.
 
-    ESCOPO: desenhada para operar acoes ABAIXO de R$4 (conservador,
-    2026-08-21). Achado do MESMO dia (sessao de pesquisa completa, ver
-    `_CALIBRATION_BY_SYMBOL` acima): um `profit_pct`/`stop_multiplier`
-    GLOBAL nao transfere bem entre simbolos em faixas de preco diferentes
-    -- por isso `profit_pct=None`/`stop_multiplier=None` (os defaults do
-    construtor) nao sao mais um numero fixo, e' um LOOKUP por `symbol` na
-    tabela de calibracao. PMAM3, CSAN3 e KLBN4 tem numeros confirmados IS
-    e OOS (reconfirmado 2026-08-22); qualquer outro simbolo faz
-    `Gremah.__init__` levantar `ValueError` em vez de herdar a calibracao
-    de outro papel -- medir antes de operar, nao presumir. Acima de ~R$6-7
-    o alvo (mesmo calibrado) tende a ficar pequeno demais frente ao piso de
-    1 tick (`_ticks_from_pct`) -- ainda nao medido, nao usar `symbol=` com
-    uma acao mais cara sem recalibrar."""
+    ESCOPO: acoes da B3 com calibracao PROPRIA medida, em qualquer faixa de
+    preco. A lista vive em `_CALIBRATION_BY_SYMBOL` (acima, com a evidencia de
+    cada linha); `Gremah.__init__` levanta `ValueError` para qualquer simbolo
+    fora dela em vez de herdar a calibracao de outro papel.
+
+    Ate 2026-08-21 esta docstring dizia "desenhada para operar acoes ABAIXO de
+    R$4". Era uma conclusao APRESSADA e foi DERRUBADA em 2026-08-22 por
+    medicao: varrendo os 140 papeis com dado M1 e calibrando cada candidato no
+    seu proprio regime de preco, apareceram positivos confirmados em IS e OOS
+    a R$5,08 (BMGB4) e a R$151,95 (CLSC4). O preco baixo nunca foi a causa --
+    era coincidencia de que os tres primeiros papeis testados eram baratos.
+
+    O que a medicao MOSTROU ser a causa real: `profit_pct` vira TICKS
+    (`_ticks_from_pct`, com piso de 1 tick), entao o mesmo percentual e um
+    alvo diferente em cada preco. O default global antigo (0,42%) calhava de
+    saturar no piso de 1 tick em papel barato -- funcionava por acidente
+    aritmetico, nao por desenho. Papel caro precisa de percentual proprio, e
+    com ele funciona igual. Ou seja: a exigencia nunca foi "preco baixo", e
+    sim "alvo calibrado para ESTE preco", que e' o que a tabela guarda.
+
+    O que o preco alto realmente muda e' o CAPITAL, nao o edge: o lote de 100
+    acoes custa 100x o preco, e o piso para operar e o dobro disso
+    (`strategy.daytrade.base.capital_minimo_brl`). CLSC4 exige R$30.390 em
+    caixa; PMAM3, R$28. Essa e a restricao que separa os papeis para o dono do
+    capital hoje -- nao a mecanica do robo."""
 
     name = "gremah"
     version = "0.1"

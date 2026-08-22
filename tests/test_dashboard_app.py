@@ -682,15 +682,21 @@ def test_ficha_mostra_o_valor_EFETIVO_do_parametro_nao_o_default_da_base(client)
 
 def test_ficha_de_day_trade_mostra_TODOS_os_ativos_calibrados(client):
     """Erro reportado pelo dono (2026-08-22): a ficha do `gremah` citava UM
-    ativo quando ele aceita tres, "cada um com seus parametros e capital
+    ativo quando ele aceita varios, "cada um com seus parametros e capital
     minimo". A causa era o registry instanciar o robo com os defaults (PMAM3) e
-    a pagina tratar `robo.symbol` como "o ativo do robo"."""
+    a pagina tratar `robo.symbol` como "o ativo do robo".
+
+    A contagem sai da TABELA, nao de um numero escrito aqui: ela cresceu de 3
+    para 10 no mesmo dia (2026-08-22), e um literal so' faria este teste
+    quebrar a cada papel novo sem apontar defeito nenhum."""
+    from strategy.daytrade.lab.gremah import _CALIBRATION_BY_SYMBOL
+
     html = client.get("/strategies/gremah").text
 
-    for symbol in ("PMAM3", "CSAN3", "KLBN4"):
+    for symbol in _CALIBRATION_BY_SYMBOL:
         assert symbol in html, f"ativo calibrado ausente da ficha: {symbol}"
-    # o fato do topo conta TRES, nao nomeia um
-    assert "3 calibrados" in html
+    # o fato do topo CONTA os ativos, nao nomeia um
+    assert f"{len(_CALIBRATION_BY_SYMBOL)} calibrados" in html
 
 
 def test_ficha_de_day_trade_mostra_capital_minimo_POR_ativo(client):
@@ -703,15 +709,18 @@ def test_ficha_de_day_trade_mostra_capital_minimo_POR_ativo(client):
 
     porto = {a.symbol: a for a in robot_view.detail("gremah").assets}
 
-    assert len(porto) == 3
+    from strategy.daytrade.lab.gremah import _CALIBRATION_BY_SYMBOL
+
+    assert set(porto) == set(_CALIBRATION_BY_SYMBOL)
     # preco vem do parquet local; sem dado salvo o caixa minimo e' None (a
     # pagina mostra a falta) -- entao a comparacao so vale com os dois presentes
     if porto["PMAM3"].min_capital and porto["CSAN3"].min_capital:
         assert porto["PMAM3"].min_capital < porto["CSAN3"].min_capital
-        # multiplo de R$50, arredondado PARA CIMA (ver `capital_minimo_brl`)
+        # piso = DOBRO do lote (regra do dono 2026-08-22, ver
+        # `strategy.daytrade.base.capital_minimo_brl`) -- nao mais arredondar
+        # pro proximo multiplo de R$50, que dava folga desigual por preco.
         for a in porto.values():
-            assert a.min_capital % 50 == 0
-            assert a.min_capital >= a.lot_cost
+            assert a.min_capital == pytest.approx(a.lot_cost * 2)
 
 
 def test_ficha_nao_anuncia_calibracao_de_UM_ativo_como_se_fosse_do_robo(client):

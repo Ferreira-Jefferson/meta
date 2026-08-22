@@ -216,3 +216,40 @@ def warm_start_calibration(
             elif isinstance(action, Exit):
                 pending = None
     return pending
+
+
+#: Lote padrao de acao na B3 -- a menor quantidade negociavel SEM recorrer ao
+#: mercado fracionario. Day trade nao usa fracionario: cada ordem la custa
+#: R$1,90 fixos na corretora (confirmado pelo dono 2026-08-22), proibitivo num
+#: robo de giro alto que faz centenas de round-trips por mes.
+LOTE_PADRAO_B3 = 100
+
+#: Quantas vezes o custo de 1 lote a conta precisa ter em caixa para o robo
+#: poder operar aquele simbolo (regra do dono, 2026-08-22). O "dobro" nao e'
+#: margem estetica: o robo alterna long/short (`Gremah` inverte de lado a cada
+#: fechamento) e o preco se move entre montar e desmontar -- 1x o lote deixaria
+#: a conta sem folga nenhuma para a proxima entrada, e qualquer oscilacao
+#: normal ja impediria o robo de recarregar.
+CAPITAL_MINIMO_EM_LOTES = 2.0
+
+
+def capital_minimo_brl(preco_atual: float, shares_per_lot: int = LOTE_PADRAO_B3) -> float:
+    """Caixa minimo para um robo de day trade poder operar este simbolo.
+
+    `preco_atual x lote x 2` (ver `CAPITAL_MINIMO_EM_LOTES`). Ex.: PMAM3 a
+    R$0,14 -> lote de R$14,00 -> minimo R$28,00.
+
+    Depende do PRECO, logo muda todo dia: quem opera tem de reavaliar uma vez
+    por pregao, no simbolo que vai operar, e nao operar se o caixa nao cobrir
+    (`live/intraday_runtime.py::_check_capital` faz isso ao vivo; a ficha do
+    robo mostra o numero de hoje via `dashboard/robot_view.py`). Um numero
+    congelado ficaria errado sozinho -- CSAN3 saiu de R$7,62 para R$3,64 em
+    11 meses, quase metade do minimo.
+
+    Mora aqui, e nao em `live/`, por causa da regra 6 do AGENTS.md: `live/`
+    aplica regra declarada, nunca inventa a propria. Substituiu (2026-08-22) a
+    regra anterior de arredondar o custo do lote para cima ao proximo multiplo
+    de R$50, que embutia a folga no arredondamento e por isso dava folga
+    ridiculamente desigual conforme o preco (PMAM3 R$14 -> R$50, 3,6x; CSAN3
+    R$364 -> R$400, 1,1x)."""
+    return preco_atual * shares_per_lot * CAPITAL_MINIMO_EM_LOTES

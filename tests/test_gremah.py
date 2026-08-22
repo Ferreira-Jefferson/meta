@@ -11,7 +11,7 @@ import pandas as pd
 import pytest
 
 from strategy.daytrade.base import Bar
-from strategy.daytrade.lab.gremah import _CALIBRATION_BY_SYMBOL, Gremah, capital_minimo_brl
+from strategy.daytrade.lab.gremah import _CALIBRATION_BY_SYMBOL, Gremah
 
 
 def _strat(**kwargs) -> Gremah:
@@ -166,18 +166,3 @@ def test_simbolo_desconhecido_com_apenas_um_override_ainda_falha():
     # nenhum stop_multiplier "default" implicito.
     with pytest.raises(ValueError, match="ATIVO_INEXISTENTE"):
         Gremah(symbol="ATIVO_INEXISTENTE", profit_pct=0.005)
-
-
-# ---------- capital minimo (lote padrao, sem fracionario) -----------------
-
-def test_capital_minimo_brl_arredonda_pra_cima_ao_proximo_multiplo_de_50():
-    """A folga NAO e' um valor somado a parte -- e' a distancia ate o
-    proximo multiplo de R$50 acima do custo do lote (pedido explicito do
-    usuario 2026-08-21). PMAM3 (R$0,14): lote de R$14 -> R$50."""
-    assert capital_minimo_brl(0.14) == pytest.approx(50.0)  # lote 14.00 -> 50
-    assert capital_minimo_brl(3.64) == pytest.approx(400.0)  # lote 364.00 -> 400
-    assert capital_minimo_brl(3.66) == pytest.approx(400.0)  # lote 366.00 -> 400
-
-
-def test_capital_minimo_brl_lote_exato_multiplo_de_50_nao_sobe_pro_proximo():
-    assert capital_minimo_brl(0.50) == pytest.approx(50.0)  # lote 50.00 -> 50 (ja e multiplo)

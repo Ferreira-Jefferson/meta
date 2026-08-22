@@ -919,3 +919,131 @@ def test_conta_de_day_trade_nao_tem_robo_de_saque(tmp_path, pregao_aberto):
         acc = store.load_account(conn, SLOT.id)
     assert acc.withdrawal_robot == ""
     assert acc.investment_robot == "gremah"
+
+
+# ---------- caixa minimo do dia (2x o lote, reavaliado a cada pregao) -------
+
+def _set_cash(rt, valor: float) -> None:
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        acc.cash = valor
+        store.save_account(conn, acc)
+
+
+def test_caixa_abaixo_do_minimo_do_dia_nao_opera(tmp_path, pregao_aberto):
+    """Regra do dono (2026-08-22): o piso e' 2x o custo do lote NO PRECO DE
+    HOJE, e o robo tem de saber sozinho que nao cabe. Com `default_quantity=1`
+    a R$10,00, o minimo e' R$20,00 -- R$10,00 em caixa nao pode operar."""
+    barras = [
+        _bar("13:00", 10.00, 10.00, 10.00, 10.00),
+        _bar("13:01", 10.00, 10.00, 9.79, 9.85),
+    ]
+    rt, _feed = _runtime(tmp_path, barras)
+    _set_cash(rt, 10.00)
+
+    passos = rt.run_once(now=_agora("13:02:30"))
+
+    skip = [p for p in passos if p.action == "daytrade_skip"]
+    assert skip, f"deveria recusar por caixa; passos={[p.action for p in passos]}"
+    assert skip[0].detail["motivo"] == "caixa abaixo do minimo"
+    # e nao operou de verdade: nenhuma posicao, nenhum trade
+    assert rt.machine.position is None
+    assert rt._snapshot.trades == 0
+
+
+def test_caixa_suficiente_opera_normalmente(tmp_path, pregao_aberto):
+    """Contraprova do teste acima -- mesmo roteiro, so' o caixa muda."""
+    barras = [
+        _bar("13:00", 10.00, 10.00, 10.00, 10.00),
+        _bar("13:01", 10.00, 10.00, 9.79, 9.85),
+    ]
+    rt, _feed = _runtime(tmp_path, barras)
+    _set_cash(rt, 20.00)  # exatamente o minimo: 1 acao a R$10 x 2
+
+    passos = rt.run_once(now=_agora("13:02:30"))
+
+    assert not any(p.action == "daytrade_skip" for p in passos)
+
+
+def test_minimo_do_dia_sai_do_preco_e_da_quantidade_reais(tmp_path, pregao_aberto):
+    """O piso nao e' um numero fixo em lugar nenhum: sai de
+    `capital_minimo_brl(preco_de_hoje, quantidade_do_robo)`. Um papel que
+    dobrou de preco exige o dobro de caixa no mesmo robo."""
+    barras = [
+        _bar("13:00", 40.00, 40.00, 40.00, 40.00),  # semente (warm start)
+        _bar("13:01", 40.00, 40.00, 39.90, 40.00),  # a consumida: e o close DELA que vale
+    ]
+    rt, _feed = _runtime(tmp_path, barras)
+    _set_cash(rt, 10.00)
+
+    rt.run_once(now=_agora("13:02:30"))
+
+    # 1 acao (default_quantity do harness) a R$40,00 -> lote R$40 -> piso R$80.
+    # O preco vem do close da ULTIMA barra fechada -- o mais recente que existe.
+    assert rt._capital_minimo_hoje == pytest.approx(80.0)
+    assert "80.00" in rt._capital_alarm
+
+
+def test_caixa_e_conferido_uma_vez_por_pregao_nao_a_cada_barra(tmp_path, pregao_aberto):
+    """O numero so muda de pregao para pregao. Reavaliar a cada barra
+    encheria `live_events` com o mesmo alarme centenas de vezes por dia e
+    enterraria os eventos que exigem acao."""
+    barras = [
+        _bar("13:00", 10.00, 10.00, 10.00, 10.00),
+        _bar("13:01", 10.00, 10.00, 9.79, 9.85),
+        _bar("13:02", 9.85, 9.90, 9.80, 9.88),
+    ]
+    rt, feed = _runtime(tmp_path, barras)
+    _set_cash(rt, 10.00)
+
+    rt.run_once(now=_agora("13:02:30"))
+    rt.run_once(now=_agora("13:03:30"))
+    rt.run_once(now=_agora("13:04:30"))
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        eventos = store.recent_events(conn, acc.id, limit=50)
+    alarmes = [e for e in eventos if "nao cobre o minimo" in str(e)]
+    assert len(alarmes) == 1, f"alarme de caixa repetido {len(alarmes)}x no diario"
+
+
+def test_sem_caixa_mas_com_posicao_aberta_ainda_roda_para_poder_fechar(tmp_path, pregao_aberto):
+    """Um robo sem caixa ainda precisa conseguir FECHAR o que ja esta na rua.
+    Travar aqui deixaria a posicao orfa ate o flatten -- mesmo principio do
+    piso de R$50 no `live_control.start()`, que tambem so barra a PARTIDA."""
+    barras = [
+        _bar("13:00", 10.00, 10.00, 10.00, 10.00),  # semente: arma o grid
+        _bar("13:01", 10.00, 10.00, 9.79, 9.85),    # toca o nivel long (9.80): ABRE
+        # alvo fica em 9.90 -- os candles seguintes NAO podem alcanca-lo, senao
+        # a posicao fecha e o cenario deste teste deixa de existir.
+        _bar("13:02", 9.85, 9.88, 9.82, 9.86),
+        _bar("13:03", 9.86, 9.88, 9.83, 9.87),      # sobra para o 2o run_once
+    ]
+    rt, _feed = _runtime(tmp_path, barras)
+    rt.run_once(now=_agora("13:02:30"))
+    assert rt.machine.position is not None, "cenario invalido: nao abriu posicao"
+
+    # o caixa despenca e o piso e' reavaliado (novo pregao / novo processo)
+    _set_cash(rt, 0.01)
+    rt._capital_checked_for = None
+
+    passos = rt.run_once(now=_agora("13:03:30"))
+
+    assert not any(p.action == "daytrade_skip" for p in passos), (
+        "com posicao aberta o robo tem de continuar rodando para conseguir sair"
+    )
+
+
+def test_status_mostra_o_minimo_do_dia_e_o_alarme(tmp_path, pregao_aberto):
+    barras = [
+        _bar("13:00", 10.00, 10.00, 10.00, 10.00),  # semente
+        _bar("13:01", 10.00, 10.00, 9.95, 10.00),
+    ]
+    rt, _feed = _runtime(tmp_path, barras)
+    _set_cash(rt, 5.00)
+    rt.run_once(now=_agora("13:02:30"))
+
+    dt = rt.status()["daytrade"]
+
+    assert dt["capital_minimo_hoje"] == pytest.approx(20.0)
+    assert "nao cobre o minimo" in dt["capital_alarme"]

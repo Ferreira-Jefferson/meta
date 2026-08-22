@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from backtest.intraday.costs import (
-    PMAM3_EXCHANGE_FEE_PCT_PER_LEG,
+    B3_EQUITY_EXCHANGE_FEE_PCT_PER_LEG,
     IntradayCostModel,
     apply_intraday_slippage,
     fees_round_trip_brl,
@@ -54,14 +54,14 @@ def test_fees_round_trip_taxa_de_bolsa_percentual_por_perna():
     assert fees == pytest.approx(0.21)
 
 
-def test_taxa_pmam3_e_2x_a_taxa_real_pesquisada():
+def test_taxa_de_acao_e_2x_a_taxa_real_pesquisada():
     from backtest.intraday.costs import B3_DAY_TRADE_FEE_PCT_PER_LEG
-    assert PMAM3_EXCHANGE_FEE_PCT_PER_LEG == pytest.approx(B3_DAY_TRADE_FEE_PCT_PER_LEG * 2.0)
+    assert B3_EQUITY_EXCHANGE_FEE_PCT_PER_LEG == pytest.approx(B3_DAY_TRADE_FEE_PCT_PER_LEG * 2.0)
 
 
 def test_from_symbol_info_repassa_taxa_de_bolsa():
     model = IntradayCostModel.from_symbol_info(
         trade_tick_value=0.01, trade_tick_size=0.01, fee_round_trip_brl=0.0,
-        exchange_fee_pct_per_leg=PMAM3_EXCHANGE_FEE_PCT_PER_LEG,
+        exchange_fee_pct_per_leg=B3_EQUITY_EXCHANGE_FEE_PCT_PER_LEG,
     )
-    assert model.exchange_fee_pct_per_leg == pytest.approx(PMAM3_EXCHANGE_FEE_PCT_PER_LEG)
+    assert model.exchange_fee_pct_per_leg == pytest.approx(B3_EQUITY_EXCHANGE_FEE_PCT_PER_LEG)

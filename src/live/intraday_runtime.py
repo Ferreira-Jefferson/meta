@@ -81,7 +81,12 @@ from live.bar_feed import MT5BarFeed
 from live.intraday_execution import MT5IntradayExecution
 from live.notify import NullNotifier
 from live.runtime import StepReport
-from strategy.daytrade.base import Bar, EnterLimit, warm_start_calibration
+from strategy.daytrade.base import (
+    Bar,
+    EnterLimit,
+    capital_minimo_brl,
+    warm_start_calibration,
+)
 
 #: Acima disto, um buraco de barras nao e' "o processo demorou um pouco" — e'
 #: o processo tendo ficado fora do ar. Reprocessar 200 barras de uma vez faria
@@ -201,6 +206,13 @@ class IntradayLiveRuntime:
         # real. Sem este campo, um restart continuaria a sessao com a maquina
         # certa e o robo descalibrado, em silencio.
         self._calibrated_for: Optional[date] = None
+        # Conferencia de caixa, 1x por pregao (ver `_check_capital`). O minimo
+        # depende do PRECO do dia, entao nao da' para decidir isto uma vez e
+        # esquecer -- e tambem nao vale reavaliar a cada barra, porque o
+        # numero so muda de pregao para pregao.
+        self._capital_checked_for: Optional[date] = None
+        self._capital_alarm: Optional[str] = None
+        self._capital_minimo_hoje: Optional[float] = None
 
     # ---------- log + alerta (mesma regra do lado diario) -----------------
 
@@ -379,6 +391,21 @@ class IntradayLiveRuntime:
                 return passos + [StepReport("daytrade_espera", hoje, phase=fase,
                                             detail={"ultima_barra": str(self._snapshot.last_bar_ts)})]
 
+            # Caixa suficiente para o lote de hoje? So aqui, e nao antes, porque
+            # o minimo depende do PRECO e a primeira barra fechada e' a primeira
+            # coisa que da esse preco de forma confiavel.
+            alarme_capital = self._check_capital(conn, account, hoje, barras[-1].close)
+            if alarme_capital is not None and self.machine.position is None:
+                # Sem posicao aberta: nao comeca. Avanca `last_bar_ts` de
+                # proposito -- ficar sem consumir faria o proximo passo ver o
+                # mesmo lote de barras crescendo ate disparar `MAX_GAP_BARS` e
+                # reportar um "buraco" que nunca existiu.
+                self._snapshot.last_bar_ts = barras[-1].ts
+                self._persist(conn, account)
+                return passos + [StepReport("daytrade_skip", hoje, phase=fase,
+                                            detail={"motivo": "caixa abaixo do minimo",
+                                                    "alarme": alarme_capital})]
+
             if len(barras) > MAX_GAP_BARS:
                 passos.append(self._handle_gap(conn, account, hoje, barras))
             else:
@@ -415,6 +442,55 @@ class IntradayLiveRuntime:
             self._log(conn, account.id, "error",
                       f"nao vou operar: {alarme}", {"pregao": session.isoformat()})
         return alarme
+
+    def _check_capital(
+        self, conn, account: AccountState, session: date, preco: float
+    ) -> Optional[str]:
+        """O caixa deste slot cobre o lote de hoje? Devolve o motivo, ou
+        `None` se cobre.
+
+        O minimo e' `strategy.daytrade.base.capital_minimo_brl` — 2x o custo de
+        1 lote no preco de HOJE. Nao e' regra inventada aqui (AGENTS.md #6
+        proibiria): `live/` so consulta a funcao que a familia intradiaria
+        declara, a MESMA que a ficha do robo exibe e que dimensionou o capital
+        de todo backtest da tabela de calibracao.
+
+        Uma vez por PREGAO, nao a cada barra: o numero so muda quando o preco
+        de referencia do dia muda, e reavaliar a cada minuto sujaria o diario
+        com o mesmo evento centenas de vezes. Mas tambem nao da' para decidir
+        uma vez e congelar — CSAN3 saiu de R$7,62 para R$3,64 em 11 meses
+        (minimo de R$1.524 para R$728), e PMAM3 caiu 90%: um piso congelado
+        estaria errado nos dois sentidos, ora barrando um robo que cabe, ora
+        liberando um que nao cabe mais.
+
+        Quem chama decide o que fazer com o alarme. A politica em `run_once`
+        e': sem posicao aberta, nao comeca o pregao; COM posicao aberta (o
+        processo subiu no meio do dia e restaurou o snapshot), deixa rodar --
+        um robo sem caixa ainda precisa conseguir FECHAR o que ja esta na rua,
+        e travar aqui deixaria a posicao orfa ate o flatten."""
+        if self._capital_checked_for == session:
+            return self._capital_alarm
+
+        minimo = capital_minimo_brl(preco, self.config.default_quantity)
+        self._capital_checked_for = session
+        self._capital_minimo_hoje = minimo
+
+        if account.cash >= minimo:
+            self._capital_alarm = None
+            return None
+
+        self._capital_alarm = (
+            f"caixa de R$ {account.cash:.2f} nao cobre o minimo de R$ {minimo:.2f} "
+            f"para operar {self.strategy.symbol} hoje ({self.config.default_quantity} "
+            f"acoes a R$ {preco:.4f} = R$ {preco * self.config.default_quantity:.2f} "
+            f"por lote, e o piso e' o dobro do lote)"
+        )
+        self._log(conn, account.id, "error",
+                  f"nao vou operar: {self._capital_alarm}",
+                  {"pregao": session.isoformat(), "caixa": round(account.cash, 2),
+                   "minimo": round(minimo, 2), "preco": preco,
+                   "quantidade": self.config.default_quantity})
+        return self._capital_alarm
 
     def _handle_gap(self, conn, account: AccountState, session: date, barras: list[Bar]) -> StepReport:
         """Buraco grande: o processo ficou fora do ar. Nao reprocessa (isso
@@ -748,5 +824,11 @@ class IntradayLiveRuntime:
                 ).isoformat(),
                 "relogio_alarme": (self.clock_feed.server_clock_alarm
                                    if self.clock_feed is not None else None),
+                # Piso de caixa DE HOJE (ver `_check_capital`). `None` = ainda
+                # nao conferido neste pregao (processo recem-subido, ou fora do
+                # horario) -- nao e' "sem piso".
+                "capital_minimo_hoje": (round(self._capital_minimo_hoje, 2)
+                                        if self._capital_minimo_hoje is not None else None),
+                "capital_alarme": self._capital_alarm,
             },
         }

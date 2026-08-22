@@ -13,6 +13,13 @@ Cada simbolo tem seu proprio perfil porque a economia de um instrumento nao
 se transfere para outro: mesmo ponto de preco significa coisas diferentes,
 mesmo lote significa coisas diferentes, e o horario de fechamento pode nem
 seguir o mesmo calendario.
+
+Hoje todos os perfis sao ACAO da B3 em lote padrao, e por isso quase tudo
+neles e' identico — o que varia de verdade e' so o SPLIT (ate onde a pesquisa
+podia olhar). Dai `_equity_profile()`: a parte comum fica escrita UMA vez, e
+cada entrada da tabela declara so o que e' dela. Um instrumento com economia
+propria (futuro, BDR, ETF) nao usa a fabrica — monta `SymbolProfile` na mao,
+com o motivo escrito junto.
 """
 from __future__ import annotations
 
@@ -21,9 +28,7 @@ from datetime import time
 from typing import Literal
 
 from backtest.intraday.costs import (
-    CSAN3_EXCHANGE_FEE_PCT_PER_LEG,
-    KLBN4_EXCHANGE_FEE_PCT_PER_LEG,
-    PMAM3_EXCHANGE_FEE_PCT_PER_LEG,
+    B3_EQUITY_EXCHANGE_FEE_PCT_PER_LEG,
     IntradayCostModel,
 )
 from backtest.intraday.machine import IntradayBacktestConfig
@@ -46,87 +51,100 @@ class SymbolProfile:
     session_end_policy: Literal["fixed", "b3_equities"] = "b3_equities"
 
 
+#: Corte IS/OOS de TODA a familia de acoes calibrada em 2026-08-22. Declarado
+#: ANTES da varredura de parametros: a varredura fina so enxergou o trecho
+#: anterior a esta data, e o trecho posterior foi rodado UMA vez, ja com o par
+#: escolhido, so para confirmar. Simbolo que ficou positivo no IS e negativo
+#: no OOS foi DESCARTADO (aconteceu com CMIN3, BBDC3, EQTL3 e EUCA4) -- e' o
+#: unico motivo de este corte existir.
+#:
+#: Substitui, para a PMAM3, o corte anterior de 2025-12-01 (declarado
+#: 2026-08-21). Nao foi conveniencia: o preco da PMAM3 caiu de ~R$2,55 para
+#: R$0,14, e o regime de preco em que ela opera HOJE (ver `regime_start`
+#: abaixo) comeca em 2025-12-16 -- inteiramente DEPOIS do corte velho, que
+#: portanto nao separava mais nada de util. Custo honesto dessa troca,
+#: registrado para nao se perder: a calibracao da PMAM3 (0,32%/10x) foi
+#: escolhida com dado que o corte de 2025-12-01 mantinha reservado, entao ela
+#: tem menos independencia IS/OOS que as outras nove.
+OOS_CUTOFF = "2026-06-13"
+
+_FEE_NOTE = (
+    "lote padrao (100 acoes): corretagem zero na Rico; taxa de bolsa em "
+    "exchange_fee_pct_per_leg (2x a taxa real, margem de seguranca permanente). "
+    "O mercado FRACIONARIO cobra R$1,90 fixos por ordem (confirmado pelo dono "
+    "2026-08-22) e por isso day trade nunca opera nele -- ver "
+    "`live/broker_mt5.py` e `scripts/run_live.py::build_intraday`, que nem "
+    "recebem mapa fracionario no slot intradiario."
+)
+
+
+def _equity_profile(regime_start: str, oos_note: str) -> SymbolProfile:
+    """Perfil de uma ACAO da B3 operada em lote padrao pela familia gremah.
+
+    `regime_start`: primeiro dia do REGIME DE PRECO atual do papel — a data
+    mais antiga a partir da qual o fechamento diario nunca mais saiu da faixa
+    [0,5x, 2x] do preco de hoje. A calibracao so foi medida dai para frente,
+    porque `profit_pct` vira TICKS (`Gremah._ticks_from_pct`) e portanto o
+    mesmo percentual significa coisas diferentes em precos diferentes: medir
+    CSAN3 desde 2021, quando ela valia o dobro, calibraria para um papel que
+    nao existe mais.
+
+    `session_end_time` e' preenchido so porque o dataclass exige um valor —
+    `session_end_policy="b3_equities"` o IGNORA e tira o corte de flatten do
+    calendario (`core.b3_session`), que anda 1h com o horario de verao dos
+    EUA. O valor aqui e' o antigo corte fixo (19:54 UTC), que era so a moda de
+    UM dos dois regimes de DST nas barras salvas.
+    """
+    return SymbolProfile(
+        frozen_cutoff=OOS_CUTOFF,
+        frozen_note=(
+            f"regime de preco atual desde {regime_start}; IS {regime_start}..{OOS_CUTOFF} "
+            f"(unico trecho que a varredura de parametros enxergou), OOS "
+            f"{OOS_CUTOFF}..2026-08-21 confirmado positivo em 2026-08-22 ({oos_note}). "
+            f"Capital do teste = `strategy.daytrade.base.capital_minimo_brl` no preco atual."
+        ),
+        fee_round_trip_brl=0.0,
+        fee_note=_FEE_NOTE,
+        exchange_fee_pct_per_leg=B3_EQUITY_EXCHANGE_FEE_PCT_PER_LEG,
+        session_end_time=time(19, 54),
+        session_end_policy="b3_equities",
+        default_quantity=100,  # 1 lote padrao
+    )
+
+
+#: Ordem = lucro OOS decrescente dentro de cada grupo, PMAM3 primeiro por ser
+#: o papel original da familia. Toda entrada aqui tem calibracao propria em
+#: `strategy.daytrade.lab.gremah._CALIBRATION_BY_SYMBOL` — as duas tabelas
+#: precisam andar juntas, e `tests/test_intraday_profiles.py` falha se
+#: divergirem (um simbolo calibrado sem perfil nao consegue operar ao vivo:
+#: `scripts/run_live.py::build_intraday` o recusa).
 PROFILES: dict[str, SymbolProfile] = {
-    "PMAM3": SymbolProfile(
-        frozen_cutoff="2025-12-01",
-        frozen_note=(
-            "corte declarado 2026-08-21 antes de testar qualquer hipotese nesta acao; "
-            "profundidade real 2023-04-11..2026-08-20 (~3,4 anos); "
-            "~2,6 anos IS (2023-04-11..2025-11-30), ~8,7 meses OOS travado"
-        ),
-        # Lote PADRAO (100 acoes, nao fracionario): corretagem confirmada
-        # R$0 em multiplas fontes pesquisadas 2026-08-21.
-        #
-        # CORRECAO 2026-08-22 (dono do capital, direto): a frase que estava
-        # aqui afirmava que a Rico zera corretagem "tanto lote padrao quanto
-        # fracionario" e que o R$1,90 seria uma leitura superada. ERRADO -- o
-        # FRACIONARIO COBRA a taxa. R$0 vale so' para LOTE PADRAO, que e' o
-        # unico regime deste perfil (day trade aqui e' sempre lote inteiro),
-        # entao `fee_round_trip_brl=0.0` abaixo continua correto. Quem opera
-        # fracionario (a familia de swing, capital pequeno) paga R$1,90 fixos
-        # por ordem -- ver `strategy/lab/fee_capacity/hip_01_concentracao.py`,
-        # cujo desenho inteiro existe por causa dessa taxa, e
-        # `core/config.py::CostModel.fractional_fixed_fee`.
-        #
-        # A taxa de BOLSA (B3, emolumentos+
-        # liquidacao day trade) NAO e' zero: ~0,025% do notional por perna,
-        # pesquisada 2026-08-21. Por pedido explicito do usuario, toda
-        # compra/venda desta acao assume 2x essa taxa real como margem de
-        # seguranca, de forma PERMANENTE (nao um ajuste de sensibilidade
-        # pontual) -- ver `PMAM3_EXCHANGE_FEE_PCT_PER_LEG` em
-        # `backtest/intraday/costs.py`.
-        fee_round_trip_brl=0.0,
-        fee_note="lote padrao (100 acoes): corretagem zero; taxa de bolsa em exchange_fee_pct_per_leg (2x a taxa real)",
-        exchange_fee_pct_per_leg=PMAM3_EXCHANGE_FEE_PCT_PER_LEG,
-        # `session_end_policy="b3_equities"` abaixo ignora este campo — quem
-        # decide o corte e' o calendario (`core.b3_session`), nao um horario
-        # fixo. Preenchido so porque o dataclass exige um valor: e' o antigo
-        # corte fixo (19:54 UTC), que na verdade era so a moda de UM dos dois
-        # regimes de horario de verao americano nas barras salvas — o outro
-        # regime (20:54 UTC) foi tratado por anos como "cluster minoritario",
-        # quando era o proprio calendario aparecendo no dado.
-        session_end_time=time(19, 54),
-        session_end_policy="b3_equities",
-        default_quantity=100,  # 1 lote padrao
-    ),
-    "CSAN3": SymbolProfile(
-        frozen_cutoff="2026-06-13",
-        frozen_note=(
-            "corte declarado 2026-08-21 antes de medir o OOS da calibracao propria "
-            "(profit_pct=0,21%/stop_multiplier=20x, ver "
-            "`strategy.daytrade.lab.gremah._CALIBRATION_BY_SYMBOL`); "
-            "profundidade real 2025-09-16..2026-08-21 (~11,2 meses); "
-            "IS 2025-09-16..2026-06-13 (~9 meses), OOS 2026-06-13..2026-08-21 "
-            "reconfirmado positivo 2026-08-22 (627 trades, wr 98,2%, pf 4,22, "
-            "MaxDD -4,13%, capital R$350 = lote de R$343-350 arredondado)"
-        ),
-        fee_round_trip_brl=0.0,
-        fee_note="lote padrao (100 acoes): corretagem zero; taxa de bolsa em exchange_fee_pct_per_leg (2x a taxa real)",
-        exchange_fee_pct_per_leg=CSAN3_EXCHANGE_FEE_PCT_PER_LEG,
-        session_end_time=time(19, 54),
-        session_end_policy="b3_equities",
-        default_quantity=100,  # 1 lote padrao
-    ),
-    "KLBN4": SymbolProfile(
-        frozen_cutoff="2026-06-13",
-        frozen_note=(
-            "corte declarado 2026-08-21 antes de medir o OOS da calibracao propria "
-            "(profit_pct=0,21%/stop_multiplier=5x, ver "
-            "`strategy.daytrade.lab.gremah._CALIBRATION_BY_SYMBOL`); "
-            "profundidade real 2025-09-02..2026-08-21 (~11,6 meses); "
-            "IS 2025-09-16..2026-06-13 (~9 meses, mesma janela comum honesta do "
-            "grupo -- ver `feedback_honest_period_comparison` na memoria do "
-            "projeto), OOS 2026-06-13..2026-08-21 reconfirmado positivo "
-            "2026-08-22 (671 trades, wr 98,7%, pf 12,15, MaxDD -1,57%, "
-            "capital R$350 = lote de R$342-350 arredondado)"
-        ),
-        fee_round_trip_brl=0.0,
-        fee_note="lote padrao (100 acoes): corretagem zero; taxa de bolsa em exchange_fee_pct_per_leg (2x a taxa real)",
-        exchange_fee_pct_per_leg=KLBN4_EXCHANGE_FEE_PCT_PER_LEG,
-        session_end_time=time(19, 54),
-        session_end_policy="b3_equities",
-        default_quantity=100,  # 1 lote padrao
-    ),
+    "PMAM3": _equity_profile(
+        "2025-12-16", "319 trades, wr 83,1%, +R$177,79, pf 2,75, MaxDD -21,59%"),
+    "KLBN4": _equity_profile(
+        "2025-09-02", "671 trades, wr 98,7%, +R$425,02, pf 12,15, MaxDD -0,81%"),
+    "CSAN3": _equity_profile(
+        "2025-09-22", "627 trades, wr 98,2%, +R$347,48, pf 4,22, MaxDD -2,16%"),
+    "DASA3": _equity_profile(
+        "2025-09-11", "857 trades, wr 93,5%, +R$278,94, pf 1,77, MaxDD -4,24%"),
+    "PCAR3": _equity_profile(
+        "2025-08-21", "894 trades, wr 92,4%, +R$249,89, pf 1,59, MaxDD -4,55%"),
+    # AMOSTRA FINA, e a acao mais cara da tabela por MUITO: R$151,95 -> lote de
+    # R$15.195 -> minimo de R$30.390 em caixa. So 131 trades no IS e 14 no OOS
+    # (as outras fazem centenas a milhares) porque o alvo de 0,42% num papel
+    # caro e' muito maior em reais e o preco raramente percorre isso num dia.
+    # Passou nos dois trechos, entao esta aqui; mas 14 trades nao provam edge,
+    # e o capital exigido esta fora da realidade do dono hoje.
+    "CLSC4": _equity_profile(
+        "2025-05-12", "14 trades, wr 64,3%, +R$215,21, pf 1,56, MaxDD -0,99%"),
+    "KLBN3": _equity_profile(
+        "2025-03-10", "395 trades, wr 95,9%, +R$198,43, pf 3,63, MaxDD -1,48%"),
+    "GRND3": _equity_profile(
+        "2025-09-05", "334 trades, wr 97,3%, +R$189,70, pf 5,59, MaxDD -1,54%"),
+    "LPSB3": _equity_profile(
+        "2022-12-20", "171 trades, wr 94,2%, +R$139,51, pf 4,83, MaxDD -2,42%"),
+    "BMGB4": _equity_profile(
+        "2025-06-04", "316 trades, wr 97,5%, +R$137,72, pf 2,86, MaxDD -2,11%"),
 }
 
 

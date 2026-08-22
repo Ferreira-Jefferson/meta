@@ -33,20 +33,19 @@ B3_DAY_TRADE_FEE_PCT_PER_LEG = 0.00025
 # Margem de seguranca pedida explicitamente pelo usuario (2026-08-21): toda
 # compra/venda ja assume o pagamento de 2x a taxa real de bolsa, por
 # padrao -- nao como um ajuste posterior de sensibilidade, e sim a premissa
-# de custo registrada no modelo. Ver `PMAM3_EXCHANGE_FEE_PCT_PER_LEG` abaixo
-# para o uso concreto no dia a dia; o campo do dataclass continua com default
+# de custo registrada no modelo. O campo do dataclass continua com default
 # 0.0 porque um instrumento com tarifario proprio (futuro, por exemplo) nao
 # pode herdar em silencio a tarifa de acao — quem sabe declara no perfil.
-PMAM3_EXCHANGE_FEE_PCT_PER_LEG = B3_DAY_TRADE_FEE_PCT_PER_LEG * 2.0
-
-# Mesma tarifa de bolsa (a taxa e' do MERCADO -- B3 day trade em acoes --, nao
-# do papel), mesma margem de seguranca de 2x. Constante SEPARADA por simbolo
-# de proposito (nao um alias generico "EQUITY_FEE"): a regra deste modulo e'
-# cada perfil declarar explicitamente o custo que usa, nunca herdar em
-# silencio o de outro papel (ver comentario acima) -- mesmo quando o valor
-# numerico e' identico hoje.
-CSAN3_EXCHANGE_FEE_PCT_PER_LEG = B3_DAY_TRADE_FEE_PCT_PER_LEG * 2.0
-KLBN4_EXCHANGE_FEE_PCT_PER_LEG = B3_DAY_TRADE_FEE_PCT_PER_LEG * 2.0
+#
+# UMA constante para todas as acoes, nao uma por papel: a taxa e' do MERCADO
+# (B3, day trade em acao), nao do simbolo. Em 2026-08-21 isto existia como
+# `PMAM3_EXCHANGE_FEE_PCT_PER_LEG` e ganhou irmas identicas por CSAN3/KLBN4,
+# na ideia de que "cada perfil declara o proprio custo". Com a tabela indo a
+# 10 simbolos (2026-08-22) essa ideia virou 10 linhas com o MESMO numero --
+# duplicacao que nao protege de nada e esconde que o valor e' um so. Um papel
+# que um dia tiver tarifario proprio ganha a constante dele naquele dia, com o
+# motivo escrito junto.
+B3_EQUITY_EXCHANGE_FEE_PCT_PER_LEG = B3_DAY_TRADE_FEE_PCT_PER_LEG * 2.0
 
 
 @dataclass(frozen=True)
@@ -59,7 +58,7 @@ class IntradayCostModel:
     # PERNA (cobrada na entrada E na saida, cada uma sobre o preco
     # efetivamente executado daquela perna). Default 0.0 preserva
     # comportamento antigo -- quem monta o modelo para acoes day trade deve
-    # passar `PMAM3_EXCHANGE_FEE_PCT_PER_LEG` (ou equivalente) explicitamente.
+    # passar `B3_EQUITY_EXCHANGE_FEE_PCT_PER_LEG` explicitamente.
     exchange_fee_pct_per_leg: float = 0.0
 
     @classmethod

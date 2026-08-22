@@ -193,7 +193,10 @@ def _daytrade_assets(cls, robo) -> tuple[RobotAsset, ...]:
 
 
 def _asset(symbol, profit_pct, stop_multiplier, preco, data) -> RobotAsset:
-    from strategy.daytrade.lab.gremah import capital_minimo_brl
+    # Mora em `daytrade.base` (contrato da família), não na gremah: a regra
+    # "2x o lote" vale para qualquer robô intradiário sem fracionário, e
+    # `live/intraday_runtime.py` consulta a MESMA função — ver AGENTS.md #6.
+    from strategy.daytrade.base import capital_minimo_brl
 
     lote = preco * 100 if preco is not None else None
     return RobotAsset(
