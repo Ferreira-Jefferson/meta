@@ -186,35 +186,45 @@
       </p>
     </article>
     {% endfor %}
-  </div>
 
-  {% if robot.params %}
-  <article class="doc-block params-block">
-    <h3>Parâmetros</h3>
-    {# Antes: "Valores EFETIVOS deste robô, lidos do objeto — não os defaults
-       da classe-base, que a família reescreve por herança." Isso explicava
-       como o SISTEMA lê o número, não o que o número significa para quem
-       opera. #}
-    <p class="dek">Os números que ele usa hoje. Mudar qualquer um deles muda o robô — o histórico medido acima vale para estes valores, não para outros.</p>
-    <table class="params-table">
-      <thead><tr><th>Nome</th><th class="right">Valor</th><th>O que é</th></tr></thead>
-      <tbody>
-        {% for nome, valor, nota, descricao in robot.params %}
-        <tr>
-          <td class="pname">{{ nome }}</td>
-          {# `nota` é o qualificador secundário do valor (hoje, o UTC de um
-             horário mostrado em hora de Brasília). Corpo menor e apagado: é
-             para conferência, não é o número que se lê primeiro. #}
-          <td class="right num">
-            {{ valor }}{% if nota %} <span class="dim asset-when">{{ nota }}</span>{% endif %}
-          </td>
-          <td class="dim">{{ descricao or "—" }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </article>
-  {% endif %}
+    {#  Parâmetros é a ÚLTIMA LINHA da mesma grade de especificação, não um
+        bloco solto embaixo dela. Fora da grade, o rótulo ocupava a largura
+        inteira e o texto de apoio ficava ilhado num quinto da tela, com um
+        vazio enorme à direita. Dentro, ele herda o mesmo trilho de 220px das
+        regras acima e a tabela alinha com as listas — a seção "Regras" passa a
+        ler como uma lista só. Por causa do grid de 2 colunas, tudo que não é o
+        `h3` precisa ir num ÚNICO filho (a `div` abaixo), senão a tabela cairia
+        numa terceira coluna que não existe. #}
+    {% if robot.params %}
+    <article class="doc-block params-block">
+      <h3>Parâmetros</h3>
+      <div>
+        {# Antes: "Valores EFETIVOS deste robô, lidos do objeto — não os
+           defaults da classe-base, que a família reescreve por herança." Isso
+           explicava como o SISTEMA lê o número, não o que o número significa
+           para quem opera. #}
+        <p class="dek">Os números que ele usa hoje. Mudar qualquer um deles muda o robô — o histórico medido acima vale para estes valores, não para outros.</p>
+        <table class="params-table">
+          <thead><tr><th>Nome</th><th class="right">Valor</th><th>O que é</th></tr></thead>
+          <tbody>
+            {% for nome, valor, nota, descricao in robot.params %}
+            <tr>
+              <td class="pname">{{ nome }}</td>
+              {# `nota` é o qualificador secundário do valor (hoje, a hora de
+                 Brasília ao lado do UTC). Corpo menor e apagado: é tradução,
+                 não é o número que o robô usa. #}
+              <td class="right num">
+                {{ valor }}{% if nota %} <span class="dim asset-when">{{ nota }}</span>{% endif %}
+              </td>
+              <td class="dim">{{ descricao or "—" }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </article>
+    {% endif %}
+  </div>
 </section>
 
 {% if robot.can_simulate %}

@@ -1249,10 +1249,15 @@
   color: var(--fg-faint);
 }
 
-.params-block { border-top: 1px solid var(--grid); padding-top: var(--s-5); }
+/* Dentro de `.doc-spec` o bloco já ganha o trilho de 220px, o padding e a
+   régua de baixo — não repetir borda nem padding próprios aqui, senão a linha
+   de Parâmetros fica com o dobro do respiro das linhas de regra acima. */
 .params-block .dek {
   margin: 0 0 var(--s-4);
-  max-width: 72ch;
+  /* SEM `max-width` de propósito: este texto é legenda da tabela que vem
+     logo abaixo, e a coluna de conteúdo já é o limite dele. Com 72ch ele
+     parava em ~560px dentro de uma coluna de ~1060px e sobrava um vazio que
+     fazia a seção parecer quebrada. */
 }
 /* `.assets-table` (ativos do robô, um por linha) compartilha a folha com
    `.params-table` de propósito: as duas são "nome à esquerda, números à
