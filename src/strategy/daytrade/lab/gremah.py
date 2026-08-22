@@ -376,8 +376,6 @@ class Gremah(IntradayStrategy):
         "max_trades_per_side": "Teto de preenchimentos por lado, por sessão.",
         "session_stop_pct_capital": "Percentual do caixa mínimo do dia que define a "
                                     "perda-limite diária.",
-        "session_stop_brl": "Perda-limite diária fixa em reais, em vez do percentual acima. "
-                            "Vazio (padrão) = usa session_stop_pct_capital.",
         "quantity": "Ações por ordem. Vazio = 1 lote inteiro (100 ações), do perfil do ativo.",
         # Exibido em hora de Brasília com o UTC ao lado (`param_utc_time`), então
         # a descrição não precisa mais carregar a conversão.
@@ -410,7 +408,6 @@ class Gremah(IntradayStrategy):
         stop_multiplier: float | None = None,
         max_trades_per_side: int = 15,
         session_stop_pct_capital: float = SESSION_STOP_FRACAO_PADRAO,
-        session_stop_brl: float | None = None,
         quantity: int | None = None,
         fixed_anchor_until: time = time(14, 0),
         rolling_reanchor_after_bars: int = 30,
@@ -443,10 +440,8 @@ class Gremah(IntradayStrategy):
         self.stop_multiplier = stop_multiplier
         self.max_trades_per_side = max_trades_per_side
         # Perda-limite do dia = session_stop_pct_capital x capital_minimo_brl,
-        # recalculada na abertura da sessao (ver on_bar). `session_stop_brl`,
-        # se passado, sobrepoe e fixa reais para sempre, ignorando o percentual.
+        # recalculada na abertura da sessao (ver on_bar).
         self.session_stop_pct_capital = abs(session_stop_pct_capital)
-        self.session_stop_brl = None if session_stop_brl is None else abs(session_stop_brl)
         self.quantity = quantity
         self.fixed_anchor_until = fixed_anchor_until
         # uma ordem ROLANTE parada esperando por muitas barras acumula o
@@ -524,10 +519,7 @@ class Gremah(IntradayStrategy):
         # primeira barra) se isto morasse la' dentro.
         if not state.session_stop_armed:
             state.session_stop_armed = True
-            state.session_stop_brl_hoje = (
-                self.session_stop_brl if self.session_stop_brl is not None
-                else capital_minimo_brl(bar.open) * self.session_stop_pct_capital
-            )
+            state.session_stop_brl_hoje = capital_minimo_brl(bar.open) * self.session_stop_pct_capital
 
         if is_fixed_phase and state.open_price is None:
             state.open_price = bar.open

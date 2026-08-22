@@ -300,9 +300,9 @@ class IntradayLiveRuntime:
         restart no meio do pregao, porque o estado interno do robo nao e'
         persistido (ver `_calibrated_for`). Quando ha snapshot restaurado do
         MESMO pregao, o P&L da sessao e o flag de flatten sao devolvidos por
-        cima do reset: o stop agregado de sessao do robo (`session_stop_brl`)
-        le esse numero, e zera-lo num restart daria ao robo uma folga de
-        risco que ele nao tem."""
+        cima do reset: o stop agregado de sessao do robo (`session_stop_pct_capital`,
+        em `strategy.daytrade.lab.gremah.Gremah`) le esse numero, e zera-lo
+        num restart daria ao robo uma folga de risco que ele nao tem."""
         restaurada = self._snapshot.session == session and bool(self._snapshot.machine)
         pnl_antes, flat_antes = self.machine.session_pnl, self.machine.flattened
 
