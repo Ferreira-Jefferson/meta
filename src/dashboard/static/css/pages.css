@@ -2201,3 +2201,209 @@
   padding: var(--s-3);
 }
 .ops-inline-field select:focus { outline: none; border-color: var(--accent-amber); }
+
+/* ---------------------------------------------------------------------------
+   Painel /operacao: N robos de day trade (2026-08-22)
+   ---------------------------------------------------------------------------
+   Ate aqui o painel tinha dois cartoes fixos. O dono passou a abrir quantos
+   robos de day trade quiser (um por ativo), entao entram tres pecas novas: o
+   botao de remover no cabecalho do cartao, a caixa de avisos dos robos, e o
+   formulario de robo novo com a lista de ativos. Mesmo vocabulario do resto
+   da pagina — cantos vivos, regua de 1px, mono para dado e serifa para prosa;
+   nenhuma direcao estetica nova (AGENTS.md, "Estetica do frontend"). */
+
+/* Remover robo: acao destrutiva, entao NAO ganha o ambar dos botoes de acao
+   primaria — fica em texto apagado com regua, e so acende no hover. */
+.ops-slot-remove { flex-shrink: 0; align-self: flex-start; }
+.ops-slot-remove button {
+  background: none;
+  border: 1px solid var(--grid);
+  border-radius: 0;
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-metadata);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  padding: var(--s-2) var(--s-3);
+  cursor: pointer;
+  transition: color 120ms linear, border-color 120ms linear;
+}
+.ops-slot-remove button:hover {
+  color: var(--accent-red);
+  border-color: var(--accent-red);
+}
+
+/* Avisos dos robos. E' a unica parte da pagina que pede ACAO do dono, entao
+   ganha o filete ambar a esquerda (mesmo vocabulario de `.ops-mode-strip`) em
+   vez de virar mais um cartao. */
+.ops-signals {
+  border-left: 2px solid var(--accent-amber);
+  background: var(--bg-elevated);
+  padding: var(--s-4) var(--s-5);
+  margin-bottom: var(--s-7);
+}
+.ops-signals > header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s-4);
+  margin-bottom: var(--s-2);
+}
+.ops-signals h2 {
+  font-family: var(--font-mono);
+  font-size: var(--fs-h3);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--fg-strong);
+  margin: 0;
+}
+.ops-signals-count {
+  font-family: var(--font-mono);
+  font-size: var(--fs-metadata);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--accent-amber);
+}
+.ops-signals .dek { margin: 0 0 var(--s-4); max-width: 78ch; }
+
+.ops-signal-list { list-style: none; margin: 0; padding: 0; }
+.ops-signal {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-3);
+  padding: var(--s-3) 0;
+  border-top: 1px solid var(--grid);
+}
+.ops-signal-text { flex: 1; min-width: 0; }
+.ops-signal-text p { margin: 0; font-family: var(--font-serif); color: var(--fg); }
+.ops-signal-text strong { font-family: var(--font-mono); color: var(--fg-strong); }
+.ops-signal-text .sub {
+  font-family: var(--font-mono);
+  font-size: var(--fs-metadata);
+  color: var(--fg-muted);
+  margin-top: var(--s-1);
+}
+.ops-signal-dot {
+  width: 7px; height: 7px;
+  margin-top: 0.45em;
+  background: var(--accent-amber);
+  flex-shrink: 0;
+}
+/* Aviso ja resolvido continua na lista (o historico importa: mostra quando o
+   robo pediu e quando o dono atendeu), mas apagado e sem acao. */
+.ops-signal.is-done { opacity: 0.5; }
+.ops-signal.is-done .ops-signal-dot { background: var(--fg-faint); }
+.ops-signal form button {
+  background: none;
+  border: 1px solid var(--grid-strong);
+  border-radius: 0;
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-metadata);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  padding: var(--s-2) var(--s-3);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 120ms linear, border-color 120ms linear;
+}
+.ops-signal form button:hover { color: var(--accent-green); border-color: var(--accent-green); }
+
+/* Formulario de robo novo. */
+.ops-new-robot {
+  border: 1px solid var(--grid-strong);
+  background: var(--bg);
+  padding: var(--s-5);
+  margin-bottom: var(--s-7);
+}
+.ops-new-robot > header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s-4);
+  padding-bottom: var(--s-3);
+  border-bottom: 1px solid var(--grid);
+  margin-bottom: var(--s-3);
+}
+.ops-new-robot h2 {
+  font-family: var(--font-mono);
+  font-size: var(--fs-h3);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--fg-strong);
+  margin: 0;
+}
+.ops-new-robot-count {
+  font-family: var(--font-mono);
+  font-size: var(--fs-metadata);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--fg-muted);
+}
+.ops-new-robot .dek { margin: 0 0 var(--s-5); max-width: 78ch; }
+.ops-new-robot-form {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--s-4);
+  flex-wrap: wrap;
+  margin-bottom: var(--s-4);
+}
+.ops-new-robot-form .ops-asset-field select { min-width: 320px; }
+.ops-new-robot-form select:disabled { color: var(--fg-muted); cursor: not-allowed; }
+.ops-new-robot-form button {
+  background: var(--accent-amber);
+  color: var(--bg);
+  border: none;
+  border-radius: 0;
+  padding: var(--s-3) var(--s-5);
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-size: var(--fs-body);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  cursor: pointer;
+  transition: background 120ms linear;
+}
+.ops-new-robot-form button:hover { background: var(--fg-strong); }
+
+/* Lista de ativos: a mesma informacao do <select>, legivel de relance. O
+   <select> nao consegue mostrar cor por opcao de forma confiavel entre
+   navegadores, e o ponto verde e' o pedido central — entao ele vive aqui. */
+.ops-asset-legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--grid);
+}
+.ops-asset {
+  display: grid;
+  grid-template-columns: 12px 8ch 12ch 1fr;
+  align-items: baseline;
+  gap: var(--s-3);
+  padding: var(--s-2) 0;
+  border-bottom: 1px solid var(--grid);
+  font-family: var(--font-mono);
+  font-size: var(--fs-metadata);
+  color: var(--fg-muted);
+}
+.ops-asset-sym { color: var(--fg-strong); letter-spacing: 0.08em; }
+.ops-asset-min { font-variant-numeric: tabular-nums; text-align: right; }
+.ops-asset.is-used .ops-asset-sym { color: var(--fg-muted); }
+/* O ponto: cheio e verde = ha robo OPERANDO neste ativo; anel = robo criado
+   mas parado (o ativo continua reservado, o caixa dele esta la); vazio =
+   livre. Tres estados, nao dois, porque "parado" nao libera o ativo. */
+.ops-asset-dot {
+  width: 7px; height: 7px;
+  border: 1px solid var(--grid-strong);
+  align-self: center;
+}
+.ops-asset-dot.is-running { background: var(--accent-green); border-color: var(--accent-green); }
+.ops-asset-dot.is-idle { border-color: var(--accent-green); }
+
+@media (max-width: 720px) {
+  .ops-asset { grid-template-columns: 12px 1fr auto; }
+  .ops-asset-state { grid-column: 2 / -1; }
+  .ops-new-robot-form .ops-asset-field select { min-width: 0; width: 100%; }
+}

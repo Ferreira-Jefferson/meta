@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -81,16 +82,38 @@ class Slot:
     order: int         # posição no painel (0 = em cima)
     magic: int         # identificador das ordens deste slot no MT5
     min_cash_brl: float = 50.0
+    # Ativo que este slot negocia. Vazio no swing (o robô diário escolhe dentro
+    # do universo dele); preenchido no day trade, onde o slot É o par
+    # robô+ativo — ver `daytrade_slot()`.
+    symbol: str = ""
 
     @property
     def is_intraday(self) -> bool:
         return self.kind == "intraday"
 
+    @property
+    def is_dynamic(self) -> bool:
+        """`True` se este slot foi criado pelo dono no painel (day trade), e
+        não declarado em `SLOTS`. Slot dinâmico pode ser REMOVIDO; slot
+        estático, não."""
+        return self.id.startswith(DAYTRADE_SLOT_PREFIX + "-")
 
+
+# SÓ O SWING É ESTÁTICO (2026-08-22). Até esta data havia também um slot
+# `daytrade` fixo aqui, um robô num ativo só. O dono pediu para abrir QUANTOS
+# robôs de day trade quiser, um por ativo, cada um com processo/conta/caixa
+# próprios — o que um catálogo escrito no código não consegue expressar: o
+# conjunto muda em tempo de execução, por clique. Day trade virou slot
+# DINÂMICO, derivado das contas com `symbol` no banco (ver `daytrade_slot` e
+# `dashboard.slots`). O swing continua aqui porque é genuinamente único: um
+# robô diário que escolhe os papéis dentro do próprio universo, não um par
+# robô+ativo.
+#
 # Ordem do painel decidida pelo dono (2026-08-21): day trade em CIMA, e não
 # por ser melhor — é a primeira opção operável, porque o capital atual não
 # alcança o swing (ver `capital_real_100_mes`/`liquid_focus_promoted` na
-# memória do projeto). `magic` distinto por slot é obrigatório, não estética:
+# memória do projeto). Por isso o swing declara `order=1` e todo slot de day
+# trade nasce com `order=0`. `magic` distinto por slot é obrigatório, não estética:
 # a conta da Rico é NETTING (`margin_mode=0`, verificado no terminal real em
 # 2026-08-21), então dois robôs no MESMO símbolo virariam UMA posição só na
 # corretora e os dois livros-caixa passariam a mentir.
@@ -98,16 +121,6 @@ class Slot:
 # (pelo robô ESCOLHIDO, não por um símbolo fixo aqui — ver
 # `_assert_slots_disjuntos`).
 SLOTS: tuple[Slot, ...] = (
-    Slot(
-        id="daytrade",
-        kind="intraday",
-        robot_key="gremah",
-        label="Day trade",
-        dek=("Grade de ordens-limite recarregada dentro do pregão, sem posição "
-             "overnight. Primeira opção porque cabe no capital atual."),
-        order=0,
-        magic=20260821,
-    ),
     Slot(
         id="swing",
         kind="daily",
@@ -122,22 +135,105 @@ SLOTS: tuple[Slot, ...] = (
 )
 
 
+#: Prefixo do id de todo slot de day trade criado pelo dono no painel. O id
+#: inteiro é `dt-<robô>-<ativo>` (ex.: `dt-gremah-pmam3`) e CARREGA a
+#: identidade do slot: dá para reconstruir o `Slot` a partir do id, sem
+#: consultar banco nenhum. Isso é o que permite `scripts/run_live.py --slot
+#: dt-gremah-pmam3` funcionar como processo isolado, sem depender do
+#: dashboard estar de pé nem de um catálogo compartilhado em memória.
+DAYTRADE_SLOT_PREFIX = "dt"
+
+#: Base do `magic` dos slots dinâmicos. `magic` distingue as ordens de cada
+#: robô dentro do MESMO terminal MT5, e precisa ser estável entre reinícios
+#: (senão o robô perde de vista as próprias ordens ao voltar) e distinto entre
+#: slots (senão dois robôs leem as ordens um do outro como suas). Derivar de
+#: `crc32(id)` dá as duas coisas de graça: mesmo id -> mesmo número, ids
+#: diferentes -> números praticamente sempre diferentes. "Praticamente" não
+#: basta para dinheiro real, então `live_control._assert_slots_disjuntos`
+#: confere a unicidade de fato antes de qualquer robô subir.
+_DAYTRADE_MAGIC_BASE = 862_000_000
+_DAYTRADE_MAGIC_SPAN = 1_000_000
+
+
+def daytrade_magic(slot_id: str) -> int:
+    """`magic` determinístico deste slot — ver `_DAYTRADE_MAGIC_BASE`."""
+    return _DAYTRADE_MAGIC_BASE + (zlib.crc32(slot_id.encode("utf-8")) % _DAYTRADE_MAGIC_SPAN)
+
+
+def daytrade_slot_id(robot_key: str, symbol: str) -> str:
+    """`dt-<robô>-<ativo>`, minúsculo. Recusa (`ValueError`) robô ou ativo com
+    hífen: o hífen é o separador, e um valor que o contenha tornaria o id
+    ambíguo para `slot_by_id` desmontar de volta."""
+    robot_key = (robot_key or "").strip().lower()
+    symbol = (symbol or "").strip().upper()
+    if not robot_key or not symbol:
+        raise ValueError(f"slot de day trade exige robô e ativo (recebi {robot_key!r}/{symbol!r})")
+    if "-" in robot_key or "-" in symbol:
+        raise ValueError(
+            f"robô/ativo não podem conter '-' ({robot_key!r}/{symbol!r}) — "
+            "é o separador do id do slot."
+        )
+    return f"{DAYTRADE_SLOT_PREFIX}-{robot_key}-{symbol.lower()}"
+
+
+def daytrade_slot(robot_key: str, symbol: str, order: int = 0) -> Slot:
+    """Monta o `Slot` de um robô de day trade rodando `symbol`.
+
+    Função PURA (sem banco, sem I/O): é chamada tanto pelo painel, que sabe
+    quais contas existem, quanto por `slot_by_id`, que só tem a string do id.
+    Quem descobre que contas existem é a camada de orquestração
+    (`dashboard.slots`), nunca `core/`.
+
+    `min_cash_brl` fica no default genérico de propósito — o piso REAL do day
+    trade é `capital_minimo_brl` do ativo no preço de HOJE, que depende de
+    buscar preço e portanto não pode ser resolvido aqui (`core/` não faz I/O).
+    Quem resolve é `dashboard.live_control.min_cash_for`.
+    """
+    robot_key = robot_key.strip().lower()
+    symbol = symbol.strip().upper()
+    slot_id = daytrade_slot_id(robot_key, symbol)
+    return Slot(
+        id=slot_id,
+        kind="intraday",
+        robot_key=robot_key,
+        label=f"{robot_key} — {symbol}",
+        dek=("Grade de ordens-limite recarregada dentro do pregão, sem posição "
+             "overnight. Processo, conta e caixa próprios deste ativo."),
+        order=order,
+        magic=daytrade_magic(slot_id),
+        symbol=symbol,
+    )
+
+
 def ordered_slots() -> tuple[Slot, ...]:
-    """`SLOTS` na ordem de exibição do painel."""
+    """Os slots ESTÁTICOS (`SLOTS`) na ordem de exibição.
+
+    Não inclui os slots de day trade: eles são criados pelo dono no painel e
+    vivem no banco (`live_accounts` com `symbol` preenchido) — quem os lista é
+    `dashboard.slots.all_slots()`, que é orquestração e pode tocar em
+    `journal/`. `core/` não importa feature nenhuma (regra 1 do AGENTS.md).
+    """
     return tuple(sorted(SLOTS, key=lambda s: s.order))
 
 
 def slot_by_id(slot_id: str) -> Slot:
-    """Slot pelo id, ou `KeyError` — nunca um default silencioso: um id
-    desconhecido chegando de uma URL/argv significa form adulterado ou
-    catálogo mudado, e escolher um slot por chute operaria dinheiro real na
-    vaga errada."""
+    """Slot pelo id — estático (`SLOTS`) ou dinâmico (`dt-<robô>-<ativo>`,
+    reconstruído do próprio id). `KeyError` se não for nem um nem outro:
+    nunca um default silencioso, porque um id desconhecido chegando de uma
+    URL/argv significa form adulterado ou catálogo mudado, e escolher um slot
+    por chute operaria dinheiro real na vaga errada."""
     for slot in SLOTS:
         if slot.id == slot_id:
             return slot
+    partes = (slot_id or "").split("-")
+    if len(partes) == 3 and partes[0] == DAYTRADE_SLOT_PREFIX:
+        _, robot_key, symbol = partes
+        if robot_key and symbol:
+            return daytrade_slot(robot_key, symbol)
     raise KeyError(
-        f"slot desconhecido: {slot_id!r} — conhecidos: "
-        f"{', '.join(s.id for s in SLOTS)}"
+        f"slot desconhecido: {slot_id!r} — estáticos: "
+        f"{', '.join(s.id for s in SLOTS)}; dinâmicos seguem o formato "
+        f"'{DAYTRADE_SLOT_PREFIX}-<robô>-<ativo>'."
     )
 
 

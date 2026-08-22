@@ -354,7 +354,7 @@ def test_cmd_decide_recusa_slot_intradiario(cli, isolated_db, monkeypatch):
     monkeypatch.setattr(cli, "build", lambda args: chamado.append(args))
 
     with pytest.raises(SystemExit):
-        cli.cmd_decide(_args(slot="daytrade", strategy="gremah"))
+        cli.cmd_decide(_args(slot="dt-gremah-pmam3", strategy="gremah"))
 
     assert chamado == []  # nem tentou montar o runtime
 
@@ -365,6 +365,6 @@ def test_cmd_execute_e_unfreeze_tambem_recusam_slot_intradiario(cli, isolated_db
 
     for fn in (cli.cmd_execute, cli.cmd_unfreeze, cli.cmd_reconcile):
         with pytest.raises(SystemExit):
-            fn(_args(slot="daytrade", strategy="gremah"))
+            fn(_args(slot="dt-gremah-pmam3", strategy="gremah"))
 
     assert chamado == []

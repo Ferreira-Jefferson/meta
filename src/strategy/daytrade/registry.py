@@ -67,9 +67,19 @@ def list_daytrade_robots() -> list[DaytradeRobotInfo]:
     return infos
 
 
-def get_daytrade_robot(key: str) -> IntradayStrategy:
+def get_daytrade_robot(key: str, symbol: str | None = None) -> IntradayStrategy:
     """Resolve um robô de day trade por chave, com os PARÂMETROS DEFAULT da
     classe — quem precisa de parâmetros diferentes instancia direto.
+
+    `symbol` escolhe o ativo. `None` usa o default da classe. Passar um ativo
+    que o robô não aceita é erro DELE, não daqui: `Gremah.__init__` levanta
+    `ValueError` para símbolo sem calibração própria, em vez de herdar a
+    calibração de outro papel — é esse comportamento que impede o painel de
+    ligar um robô num ativo nunca medido.
+
+    Este parâmetro entrou em 2026-08-22, quando o painel passou a abrir N
+    robôs de day trade (um por ativo): até então "o robô" e "o ativo" eram a
+    mesma escolha, porque o registry só sabia instanciar com o default.
 
     `KeyError` (nunca um default silencioso) se a chave não existir: um id
     desconhecido chegando de form/CLI é catálogo desatualizado ou form
@@ -80,4 +90,29 @@ def get_daytrade_robot(key: str) -> IntradayStrategy:
             f"robô de day trade desconhecido: {key!r} — disponíveis: "
             f"{', '.join(sorted(_ROBOTS))}"
         )
-    return _ROBOTS[key]()
+    cls = _ROBOTS[key]
+    return cls() if symbol is None else cls(symbol=symbol)
+
+
+def symbols_for_robot(key: str) -> tuple[str, ...]:
+    """Ativos que este robô aceita operar, na ordem em que ele os declara.
+
+    Sai de `calibrated_setups()` na CLASSE quando ela oferece esse método (é o
+    caso da `gremah`: cada ativo tem alvo/stop medidos separadamente, e a
+    ordem é lucro OOS decrescente). Um robô de ativo único simplesmente não
+    define o método, e aqui ele vira a tupla de um elemento com o símbolo
+    default — o painel não precisa saber qual dos dois casos é.
+
+    Ordenar por capital mínimo é do CHAMADOR, não daqui: depende do preço de
+    hoje, e `strategy/` não busca preço (regra 1 do AGENTS.md).
+    """
+    if key not in _ROBOTS:
+        raise KeyError(
+            f"robô de day trade desconhecido: {key!r} — disponíveis: "
+            f"{', '.join(sorted(_ROBOTS))}"
+        )
+    cls = _ROBOTS[key]
+    setups = getattr(cls, "calibrated_setups", None)
+    if callable(setups):
+        return tuple(s.symbol for s in setups())
+    return (cls().symbol,)

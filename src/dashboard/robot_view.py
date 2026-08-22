@@ -170,17 +170,15 @@ def _ultimo_preco_cached(key: tuple[str, float, int]) -> tuple[float | None, str
     symbol, mtime, _ = key
     if not mtime:
         return (None, "")
-    from market_data_intraday.storage import load_m1
+    # A leitura em si mora em `market_data_intraday.storage.last_close` — o
+    # processo de cada robô ao vivo precisa do MESMO número (ver a docstring
+    # de lá). Aqui fica só o cache por mtime, que é do painel: a ficha é
+    # repintada a cada poll e reler o parquet toda vez seria custo puro.
+    # `last_close` já devolve `(None, "")` em parquet corrompido, então a
+    # página nunca vira 500 por causa de um arquivo ilegível.
+    from market_data_intraday.storage import last_close
 
-    try:
-        df = load_m1(symbol)
-        if df.empty or "close" not in df.columns:
-            return (None, "")
-        return (float(df["close"].iloc[-1]), str(df.index[-1].date()))
-    except Exception:
-        # A ficha é uma página de leitura: parquet corrompido/ilegível vira
-        # "sem preço" na tela, nunca um 500 que esconde o resto do robô.
-        return (None, "")
+    return last_close(symbol)
 
 
 def _ultimo_preco(symbol: str) -> tuple[float | None, str]:

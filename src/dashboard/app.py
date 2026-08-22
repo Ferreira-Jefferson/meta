@@ -17,6 +17,7 @@ from fastapi.responses import (
     JSONResponse,
     PlainTextResponse,
     RedirectResponse,
+    Response,
     StreamingResponse,
 )
 from fastapi.staticfiles import StaticFiles
@@ -514,27 +515,19 @@ def _robot_options(slot, bloco: dict) -> list[dict]:
     """Opções do select "Robô" do form de conta NOVA deste slot — vazio se a
     conta já existe (o robô dela já está fixado, ver `operacao_iniciar`).
 
-    Day trade: TODO robô registrado em `strategy.daytrade.registry` — não é
-    um ranking recalculado, é o catálogo de robôs implementados, então nunca
-    fica vazio. O rótulo mostra o SÍMBOLO que cada robô opera (propriedade do
-    robô, não do slot, desde 2026-08-21) — informação que o dono precisa para
-    escolher, já que dois robôs registrados podem negociar ativos diferentes.
+    Só o SWING usa isto hoje: TOP-3 do ranking automático (janela FULL) —
+    pódio recalculado a cada 6h, PODE ficar vazio (ver `operacao_iniciar`).
+    Restringir a consulta a este caso (conta nova) não é micro-otimização:
+    sem isso, cada cartão de day trade dispararia uma consulta ao banco de
+    BACKTESTS (`journal.reader`, arquivo separado do live) a cada poll de
+    20s, por um número que ele nem mostra.
 
-    Swing: TOP-3 do ranking automático (janela FULL) — pódio recalculado a
-    cada 6h, PODE ficar vazio (ver `operacao_iniciar`). Restringir a consulta
-    a este caso (conta nova) não é micro-otimização: sem isso, o cartão de
-    day trade dispararia uma consulta ao banco de BACKTESTS
-    (`journal.reader`, arquivo separado do live) a cada poll de 20s, por um
-    número que ele nem mostra."""
-    if bloco["status"].get("existe"):
+    Day trade não passa mais por aqui: desde 2026-08-22 a escolha do robô e
+    do ativo acontece ANTES da conta existir, no formulário "novo robô" (ver
+    `_novo_robo_ctx`) — quando o cartão aparece, o par robô+ativo dele já
+    está decidido e é o próprio id do slot."""
+    if bloco["status"].get("existe") or slot.is_intraday:
         return []
-    if slot.is_intraday:
-        from strategy.daytrade.registry import list_daytrade_robots
-
-        return [
-            {"value": r.key, "label": f"{r.key} — {r.symbol}"}
-            for r in list_daytrade_robots()
-        ]
     top3 = reader.top_strategies_by_final_capital(
         top_n=3, run_kind="champion_full", only=candidate_keys())
     # Sem o capital final na label: a POSIÇÃO na lista (ordenada pelo
@@ -543,19 +536,87 @@ def _robot_options(slot, bloco: dict) -> list[dict]:
     return [{"value": c["strategy_name"], "label": c["strategy_name"]} for c in top3]
 
 
+def _novo_robo_ctx(conn) -> dict:
+    """O formulário "novo robô de day trade": que robôs existem e, para cada
+    um, que ativos ele aceita — ordenados por CAPITAL MÍNIMO (o mais barato
+    primeiro), com a marca de quem já está alocado.
+
+    A ordem é por capital mínimo porque é a primeira pergunta de quem escolhe
+    ("qual cabe no que eu tenho?"), e não a ordem de medição do robô. Ativo
+    sem preço salvo vai para o fim: sem preço não dá para dizer quanto exige,
+    e fingir R$0 o colocaria em primeiro lugar — o pior lugar possível para
+    uma informação ausente.
+
+    `em_uso` é o que o painel desenha como bolinha verde/anel. Vem das CONTAS
+    (`dashboard.slots.symbols_in_use`), não dos processos vivos: um robô
+    parado continua dono do ativo dele, porque o caixa está lá.
+    """
+    from dashboard import slots as slots_mod
+    from dashboard.robot_view import _ultimo_preco
+    from strategy.daytrade.base import capital_minimo_brl
+    from strategy.daytrade.registry import list_daytrade_robots, symbols_for_robot
+
+    em_uso = slots_mod.symbols_in_use(conn)
+    rodando = live_control.status_all(list(em_uso.values()))
+    robos = []
+    for info in list_daytrade_robots():
+        ativos = []
+        for symbol in symbols_for_robot(info.key):
+            preco, data = _ultimo_preco(symbol)
+            minimo = capital_minimo_brl(preco) if preco else None
+            slot_id = em_uso.get(symbol)
+            ativos.append({
+                "symbol": symbol,
+                "preco": preco,
+                "preco_data": data,
+                "minimo": minimo,
+                "em_uso": slot_id is not None,
+                "slot_id": slot_id,
+                "rodando": bool(slot_id and rodando.get(slot_id)),
+            })
+        ativos.sort(key=lambda a: (a["minimo"] is None, a["minimo"] or 0.0))
+        robos.append({"key": info.key, "label": info.key,
+                      "description": info.description, "ativos": ativos})
+    return {"robos": robos, "livres": sum(
+        1 for r in robos for a in r["ativos"] if not a["em_uso"])}
+
+
 def _operacao_ctx(**extra) -> dict:
     """Contexto comum a toda rota que renderiza `operacao.html`/
-    `operacao_body.html`: um bloco por SLOT (`core.config.SLOTS`, em ordem de
-    exibição — day trade em cima) mais o que é global (credenciais, poll)."""
+    `operacao_body.html`: um bloco por slot existente (day trade em cima),
+    o formulário de robô novo, os avisos de capital, e o que é global
+    (credenciais, poll)."""
     from core.config import ordered_slots
+    from dashboard import slots as slots_mod
+    from journal import live_store
 
-    slots = [_slot_ctx(s) for s in ordered_slots()]
+    # Uma conexão só para as três leituras que dependem do banco. O `try`
+    # existe porque `live_journal()` roda `ensure_tables`, que RECUSA um banco
+    # com conta legada (`mode='paper'`/`'manual'`) — e essa recusa chegava aqui
+    # antes de `_slot_ctx`, que já sabia degradar, ter chance de rodar: a
+    # página inteira virava 500 justamente quando o dono precisa dela para ler
+    # a mensagem que explica como consertar o banco.
+    try:
+        with live_store.live_journal() as conn:
+            todos = slots_mod.all_slots(conn)
+            novo_robo = _novo_robo_ctx(conn)
+            avisos = live_store.capital_signals(conn)
+    except (live_store.LegacyPaperAccountError, live_store.LegacyManualAccountError) as e:
+        extra.setdefault("erro", str(e))
+        todos = list(ordered_slots())
+        novo_robo = {"robos": [], "livres": 0}
+        avisos = []
+
+    slots = [_slot_ctx(s) for s in todos]
     for bloco in slots:
         if bloco["erro_slot"]:
             extra.setdefault("erro", bloco["erro_slot"])
         bloco["robot_options"] = _robot_options(bloco["slot"], bloco)
     return {
         "slots": slots,
+        "novo_robo": novo_robo,
+        "avisos": avisos,
+        "avisos_pendentes": sum(1 for a in avisos if not a["acknowledged_at"]),
         "creds": live_control.display_credentials(),
         "creds_status": live_control.credential_status(),
         "poll_seconds": _operacao_poll_seconds(),
@@ -570,6 +631,50 @@ def _slot_or_404(slot_id: str):
         return slot_by_id(slot_id)
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+def _recarrega_a_pagina() -> Response:
+    """Resposta vazia que manda o HTMX recarregar a página inteira.
+
+    Corpo nenhum: `HX-Refresh` dispara `location.reload()` e o que viesse
+    junto seria descartado. Instância NOVA a cada chamada (e não uma
+    constante de módulo) porque um `Response` é mutável — middleware que
+    grave header ou cookie nele vazaria para as requisições seguintes.
+    """
+    return Response(status_code=200, headers={"HX-Refresh": "true"})
+
+
+def _slot_sumiu(slot_id: str) -> bool:
+    """A aba está pedindo um cartão de um robô que não existe mais?
+
+    Passou a acontecer quando os slots viraram removíveis (2026-08-22), e por
+    dois caminhos: o dono clica "Remover" numa janela com outra aberta, ou a
+    conta some do banco por fora. Antes disso a lista de slots era fixa e o
+    caso não existia.
+
+    Sem tratamento o polling degrada de dois jeitos ruins, ambos silenciosos:
+    id que nem parseia (um `daytrade` de antes desta versão) 404 a cada 20s
+    para sempre, e id dinâmico cuja conta foi apagada continua respondendo 200
+    com um cartão vazio. Nos dois o cartão CONGELA exibindo o último estado —
+    inclusive "operando" — de um robô que não existe. Um painel que mente
+    sobre dinheiro é pior que um painel que recarrega.
+
+    Erro ao consultar (banco travado, conta legada) responde `False` de
+    propósito: segue o caminho normal, que sabe degradar num banner. Mandar
+    recarregar aqui arriscaria um laço de reload contra um banco doente.
+    """
+    from core.config import slot_by_id
+
+    try:
+        slot_by_id(slot_id)
+    except KeyError:
+        return True
+    try:
+        from dashboard.slots import all_slots
+
+        return slot_id not in {s.id for s in all_slots()}
+    except Exception:
+        return False
 
 
 @app.get("/operacao", response_class=HTMLResponse)
@@ -594,6 +699,8 @@ def operacao_fragment(request: Request, slot_id: str):
 
     Um poll por slot (não um poll global): cada cartão troca só o seu nó,
     então o refresh de um robô não recria o DOM do outro."""
+    if _slot_sumiu(slot_id):
+        return _recarrega_a_pagina()
     slot = _slot_or_404(slot_id)
     bloco = _slot_ctx(slot)
     ctx = {
@@ -648,17 +755,22 @@ async def operacao_iniciar(request: Request, slot_id: str):
         # 2026-08-19: "nada automático").
         strategy_key = conta.investment_robot
     elif slot.is_intraday:
-        # Primeira conta de day trade: o robô vem do catálogo de robôs
-        # registrados (`strategy.daytrade.registry`) -- nunca uma chave
-        # arbitrária, mesmo espírito do TOP-3 do swing abaixo. Diferente do
-        # TOP-3, este catálogo nunca fica vazio (não é um ranking recalculado
-        # por hora, é uma lista de robôs implementados).
+        # Day trade: o robô é o do PRÓPRIO SLOT — o cartão só existe porque o
+        # dono escolheu robô+ativo em "novo robô", e essa escolha É o id
+        # (`dt-<robô>-<ativo>`). O form não tem voz aqui, nem precisa: trocar
+        # o robô de um cartão significaria trocar o ativo dele junto, o que é
+        # outro cartão. Este ramo só roda se a conta perdeu o
+        # `investment_robot` (linha criada à mão, migração antiga) — o slot
+        # sabe reconstruí-lo.
         from strategy.daytrade.registry import list_daytrade_robots
 
         valid_keys = {r.key for r in list_daytrade_robots()}
-        strategy_key = form.get("robo") or slot.robot_key
+        strategy_key = slot.robot_key
         if strategy_key not in valid_keys:
-            erro = "Escolha um robô da lista antes de iniciar."
+            erro = (
+                f"o robô '{slot.robot_key}' do slot '{slot.id}' não está no "
+                "catálogo de day trade — remova este robô e crie outro."
+            )
     else:
         # Primeira conta de swing: o robô vem do TOP-3 do ranking automático
         # (janela FULL) mostrado no form -- nunca uma chave arbitrária, mesmo
@@ -791,6 +903,101 @@ async def operacao_iniciar(request: Request, slot_id: str):
     return TEMPLATES.TemplateResponse(request, "partials/operacao_body.html", ctx)
 
 
+@app.post("/operacao/daytrade/novo", response_class=HTMLResponse)
+async def operacao_novo_robo(request: Request):
+    """Cria um cartão de robô de day trade: um par robô+ativo, com conta,
+    caixa e processo próprios.
+
+    Só cria a LINHA da conta (caixa zero, nada rodando). Informar o caixa e
+    clicar "Iniciar operação" continuam sendo dois passos separados e
+    explícitos — abrir o cartão não pode ser o mesmo gesto que começar a
+    operar dinheiro.
+
+    Recusa um ativo que já tem robô. A checagem é aqui, e não só no
+    `disabled` do `<select>`: a conta da Rico é NETTING, dois robôs no mesmo
+    papel virariam UMA posição na corretora e os dois caixas passariam a
+    mentir — e um `disabled` no HTML não cobre POST repetido nem fragmento
+    velho.
+    """
+    from core.config import daytrade_slot
+    from dashboard import slots as slots_mod
+    from journal import live_store
+    from strategy.daytrade.registry import get_daytrade_robot
+
+    form = await request.form()
+    robot_key = (form.get("robot") or "").strip()
+    symbol = (form.get("symbol") or "").strip().upper()
+    erro = None
+    if not robot_key or not symbol:
+        erro = "Escolha o robô e o ativo."
+    else:
+        try:
+            # O ROBÔ é quem valida o ativo: `Gremah.__init__` levanta
+            # `ValueError` para símbolo sem calibração própria em vez de
+            # herdar a de outro papel. Instanciar aqui é o que impede o painel
+            # de criar um cartão que nunca conseguiria subir.
+            get_daytrade_robot(robot_key, symbol=symbol)
+            slot = daytrade_slot(robot_key, symbol)
+            with live_store.live_journal() as conn:
+                em_uso = slots_mod.symbols_in_use(conn)
+                if symbol in em_uso:
+                    raise ValueError(
+                        f"{symbol} já é operado pelo robô '{em_uso[symbol]}'. "
+                        "A conta da corretora é NETTING: dois robôs no mesmo "
+                        "papel viram uma posição só e os dois caixas passam a "
+                        "mentir. Remova o robô existente antes."
+                    )
+                live_store.ensure_account(
+                    conn, name=slot.id, mode="mt5", initial_capital=0.0,
+                    investment_robot=robot_key, withdrawal_robot="", symbol=symbol,
+                )
+        except (KeyError, ValueError, RuntimeError) as e:
+            erro = str(e)
+
+    ctx = _operacao_ctx(erro=erro)
+    return TEMPLATES.TemplateResponse(request, "partials/operacao_body.html", ctx)
+
+
+@app.post("/operacao/{slot_id}/remover", response_class=HTMLResponse)
+async def operacao_remover_robo(request: Request, slot_id: str):
+    """Remove um robô de day trade e libera o ativo dele.
+
+    Recusa se o processo estiver rodando (pare antes — remover a conta não
+    mata o processo, que continuaria operando contra uma conta inexistente),
+    e `live_store.delete_account` recusa de novo se houver posição aberta ou
+    caixa. Slot estático (swing) não é removível: ele não foi criado aqui.
+    """
+    slot = _slot_or_404(slot_id)
+    from journal import live_store
+
+    erro = None
+    if not slot.is_dynamic:
+        erro = f"O slot '{slot.label}' é fixo — só robôs de day trade criados aqui podem ser removidos."
+    elif live_control.status(slot.id) is not None:
+        erro = f"O robô '{slot.label}' está rodando — pare a operação antes de remover."
+    else:
+        try:
+            with live_store.live_journal() as conn:
+                live_store.delete_account(conn, slot.id)
+        except ValueError as e:
+            erro = str(e)
+
+    ctx = _operacao_ctx(erro=erro)
+    return TEMPLATES.TemplateResponse(request, "partials/operacao_body.html", ctx)
+
+
+@app.post("/operacao/avisos/{signal_id}/feito", response_class=HTMLResponse)
+async def operacao_aviso_feito(request: Request, signal_id: int):
+    """Marca um aviso de capital como resolvido. Idempotente: um POST repetido
+    (F5, duplo clique) não é erro — `acknowledge_capital_signal` já devolve
+    `False` sem mexer em nada."""
+    from journal import live_store
+
+    with live_store.live_journal() as conn:
+        live_store.acknowledge_capital_signal(conn, signal_id)
+    return TEMPLATES.TemplateResponse(request, "partials/operacao_body.html", _operacao_ctx())
+
+
 @app.post("/operacao/{slot_id}/parar", response_class=HTMLResponse)
 def operacao_parar(request: Request, slot_id: str):
     slot = _slot_or_404(slot_id)
@@ -852,9 +1059,19 @@ async def operacao_caixa(request: Request, slot_id: str):
                     # "Iniciar operação" (ranking automático no swing, catálogo
                     # do slot no day trade). Gravar um robô aqui faria informar
                     # o caixa decidir, de lado, qual robô opera o dinheiro.
+                    #
+                    # Day trade é a EXCEÇÃO e grava robô+ativo: neles a conta
+                    # não é "uma linha de caixa à espera de um robô", é a
+                    # própria existência do cartão (`dashboard.slots` lista os
+                    # slots pelas contas COM `symbol`). Criar sem isso faria o
+                    # cartão sumir da tela no F5 seguinte. E não há escolha
+                    # sendo feita de lado aqui: robô e ativo já foram
+                    # decididos em "novo robô" e estão no id do slot.
                     conta = live_store.ensure_account(
                         conn, name=slot.id, mode="mt5", initial_capital=valor,
-                        investment_robot="", withdrawal_robot="",
+                        investment_robot=slot.robot_key if slot.is_dynamic else "",
+                        withdrawal_robot="",
+                        symbol=slot.symbol if slot.is_dynamic else "",
                     )
                 diff, aplicado = live_store.reconcile_cash(
                     conn, conta, valor, clock.session_date(), origin="manual_ledger",

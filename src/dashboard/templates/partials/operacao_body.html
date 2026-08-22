@@ -1,4 +1,4 @@
-{% macro slot_card(bloco, creds_status, poll_seconds) %}
+{% macro slot_card(bloco, creds_status, poll_seconds, ordinal, primary) %}
 {% set slot = bloco.slot %}
 {% set sombra = slot.is_intraday %}
 {# Um cartão por slot. A hierarquia é feita com RÉGUA (1px) e escala de tipo,
@@ -6,12 +6,14 @@
    propósito, porque tudo que mora dentro dele (`.ops-badge`,
    `.capital-card`) usa `--bg-elevated` e desapareceria contra um fundo
    elevado. #}
-<section class="ops-slot stagger{% if slot.order == 0 %} is-primary{% endif %}">
+<section class="ops-slot stagger{% if primary %} is-primary{% endif %}">
   <header class="ops-slot-head">
     {# O ordinal existe para a ORDEM ser legível como decisão, não como
-       acidente de layout: day trade é 01 por ser a primeira opção operável
-       no capital atual, não por ser melhor. #}
-    <span class="ops-slot-ord">{{ "%02d"|format(slot.order + 1) }}</span>
+       acidente de layout: day trade vem primeiro por ser a opção operável no
+       capital atual, não por ser melhor. Vem do laço (e não de `slot.order`,
+       que hoje é 0 para TODO robô de day trade) desde que o painel passou a
+       abrir N robôs — senão todos os cartões se chamariam "01". #}
+    <span class="ops-slot-ord">{{ "%02d"|format(ordinal) }}</span>
     <div>
       {# Nome de slot em mono/caixa alta (é rótulo de sistema); os títulos dos
          painéis de dentro ficam em serifa (são prosa). O contraste é
@@ -19,6 +21,17 @@
       <h2>{{ slot.label }}</h2>
       <p class="dek">{{ slot.dek }}</p>
     </div>
+    {% if slot.is_dynamic %}
+    {# Só robô criado aqui pode ser removido. O botão fica no cabeçalho, em
+       tom apagado e com confirmação: é destrutivo, mas é a única saída para
+       liberar o ativo — e o servidor recusa de novo se houver processo
+       rodando, posição aberta ou caixa. #}
+    <form class="ops-slot-remove" hx-post="/operacao/{{ slot.id }}/remover"
+          hx-target="#ops-body" hx-swap="outerHTML"
+          hx-confirm="Remover o robô {{ slot.label }}? O ativo {{ slot.symbol }} volta a ficar livre.">
+      <button type="submit" title="Remover este robô e liberar {{ slot.symbol }}">Remover</button>
+    </form>
+    {% endif %}
   </header>
 
   {% if sombra %}
@@ -85,12 +98,120 @@
 <div class="ops-alert ops-alert-ok stagger">{{ caixa_msg }}</div>
 {% endif %}
 
-{# Ordem dos cartões vem de `core.config.ordered_slots()` — day trade em
-   cima, por ser a primeira opção operável no capital atual, não por ser
-   melhor (decisão do dono, 2026-08-21). #}
+{# AVISOS DOS ROBÔS. Vêm antes dos cartões porque são a única coisa da página
+   que pede uma AÇÃO do dono; o resto é estado. Um robô em operação grava aqui
+   quando junta caixa que banque um robô novo em outro ativo — uma vez por
+   ativo, nunca repetindo (a deduplicação é do banco, ver
+   `live_capital_signals`). #}
+{% if avisos %}
+<section class="ops-signals stagger">
+  <header>
+    <h2>Avisos dos robôs</h2>
+    {% if avisos_pendentes %}
+    <span class="ops-signals-count">{{ avisos_pendentes }} pendente{{ "s" if avisos_pendentes > 1 }}</span>
+    {% endif %}
+  </header>
+  <p class="dek">
+    Um robô em operação avisa quando o caixa dele já cobre o mínimo de um
+    ativo que ainda não roda — descontado o que você já aportou nos outros
+    robôs. É só um aviso: quem abre o robô é você, no formulário abaixo.
+  </p>
+  <ul class="ops-signal-list">
+    {% for aviso in avisos %}
+    <li class="ops-signal{% if aviso.acknowledged_at %} is-done{% endif %}">
+      <span class="ops-signal-dot" aria-hidden="true"></span>
+      <div class="ops-signal-text">
+        <p>
+          <strong>{{ aviso.account_name }}</strong> tem caixa para abrir
+          <strong>{{ aviso.robot }}</strong> em <strong>{{ aviso.suggested_symbol }}</strong>.
+        </p>
+        <p class="sub num">
+          Caixa R$ {{ aviso.cash_brl | num_br }} · {{ aviso.suggested_symbol }} exige
+          R$ {{ aviso.required_brl | num_br }} · {{ aviso.ts }}
+          {% if aviso.acknowledged_at %} · feito em {{ aviso.acknowledged_at }}{% endif %}
+        </p>
+      </div>
+      {% if not aviso.acknowledged_at %}
+      <form hx-post="/operacao/avisos/{{ aviso.id }}/feito"
+            hx-target="#ops-body" hx-swap="outerHTML">
+        <button type="submit">Marcar como feito</button>
+      </form>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+{# Ordem dos cartões: day trade primeiro (na ordem em que foram criados),
+   swing por último — a primeira opção operável no capital atual vem em cima,
+   não por ser melhor (decisão do dono, 2026-08-21). #}
 {% for bloco in slots %}
-  {{ slot_card(bloco, creds_status, poll_seconds) }}
+  {{ slot_card(bloco, creds_status, poll_seconds, loop.index, loop.first) }}
 {% endfor %}
+
+{# NOVO ROBÔ DE DAY TRADE. Fica depois dos cartões de propósito: a página é
+   sobre o que está operando; adicionar é uma ação, e ação vem depois do
+   estado. Um <form> por robô, cada um com o select dos ativos DELE — em vez
+   de um select de robô que precisaria de JS para repintar o de ativos. #}
+<section class="ops-new-robot stagger">
+  <header>
+    <h2>Novo robô de day trade</h2>
+    <span class="ops-new-robot-count">{{ novo_robo.livres }} ativo{{ "s" if novo_robo.livres != 1 }} livre{{ "s" if novo_robo.livres != 1 }}</span>
+  </header>
+  <p class="dek">
+    Cada robô roda em processo, conta e caixa próprios — se um travar, os
+    outros continuam. Os ativos aparecem do mais barato ao mais caro pelo
+    caixa mínimo que exigem hoje; o ponto verde marca os que já têm robô.
+  </p>
+  {% for robo in novo_robo.robos %}
+  <form class="ops-new-robot-form" hx-post="/operacao/daytrade/novo"
+        hx-target="#ops-body" hx-swap="outerHTML">
+    <input type="hidden" name="robot" value="{{ robo.key }}" />
+    <div class="ops-inline-field">
+      <span class="k">Robô</span>
+      {# Um <select> de um item só, e não um rótulo: mantém a forma do
+         formulário estável para quando houver um segundo robô de day trade
+         registrado, e deixa explícito que a escolha existe. #}
+      <select name="robot_label" disabled>
+        <option>{{ robo.label }}</option>
+      </select>
+    </div>
+    <div class="ops-inline-field ops-asset-field">
+      <span class="k">Ativo</span>
+      <select name="symbol" required>
+        <option value="" disabled selected>escolha o ativo…</option>
+        {% for ativo in robo.ativos %}
+        <option value="{{ ativo.symbol }}"{% if ativo.em_uso %} disabled{% endif %}>
+          {{ "●" if ativo.rodando else ("○" if ativo.em_uso else "　") }}
+          {{ ativo.symbol }} —
+          {% if ativo.minimo %}mín. R$ {{ ativo.minimo | num_br }}{% else %}sem preço salvo{% endif %}
+          {%- if ativo.em_uso %} (em uso){% endif %}
+        </option>
+        {% endfor %}
+      </select>
+    </div>
+    <button type="submit">Criar robô</button>
+  </form>
+  <ul class="ops-asset-legend">
+    {% for ativo in robo.ativos %}
+    <li class="ops-asset{% if ativo.em_uso %} is-used{% endif %}">
+      <span class="ops-asset-dot{% if ativo.rodando %} is-running{% elif ativo.em_uso %} is-idle{% endif %}"
+            aria-hidden="true"></span>
+      <span class="ops-asset-sym">{{ ativo.symbol }}</span>
+      <span class="ops-asset-min num">
+        {% if ativo.minimo %}R$ {{ ativo.minimo | num_br }}{% else %}—{% endif %}
+      </span>
+      <span class="ops-asset-state">
+        {% if ativo.rodando %}operando
+        {% elif ativo.em_uso %}robô criado, parado
+        {% else %}livre{% endif %}
+      </span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endfor %}
+</section>
 
 {# CONFIGURAÇÃO DEPOIS DA OPERAÇÃO. Este bloco abria a página até
    2026-08-21: quem chegava no painel para ver os robôs encontrava primeiro

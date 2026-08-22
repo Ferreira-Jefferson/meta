@@ -171,6 +171,11 @@ CREATE TABLE IF NOT EXISTS live_accounts (
     cash               REAL    NOT NULL,
     investment_robot   TEXT    NOT NULL DEFAULT '',
     withdrawal_robot   TEXT    NOT NULL DEFAULT '',
+    -- Ativo que ESTA conta negocia. Vazio no swing (o robô diário escolhe
+    -- dentro do universo dele); obrigatório no day trade, onde a conta É o par
+    -- robô+ativo — desde 2026-08-22 o painel abre quantas contas de day trade
+    -- o dono quiser, uma por ativo. Ver `AccountState.symbol`.
+    symbol             TEXT    NOT NULL DEFAULT '',
     withdrawn_total    REAL    NOT NULL DEFAULT 0,
     external_cash      REAL    NOT NULL DEFAULT 0,
     -- Estado com memória da política de saque (fila do mínimo, mês já pago,
@@ -381,3 +386,37 @@ CREATE TABLE IF NOT EXISTS live_events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_live_events_ts ON live_events(ts);
+
+-- Aviso de CAPITAL DISPONÍVEL: um robô de day trade em operação diz que já
+-- juntou caixa suficiente para o dono abrir um robô novo num ativo que ainda
+-- não roda. É um AVISO, nunca uma ação — quem abre o robô é o dono, no painel.
+--
+-- Tabela separada de `live_events` por duas coisas que evento de log não tem:
+--
+--   1. DEDUPLICAÇÃO. `UNIQUE(account_id, suggested_symbol)` é o que faz o robô
+--      avisar UMA vez por ativo, e não a cada barra/pregão em que a condição
+--      continua verdadeira (seriam centenas de mensagens iguais por dia). O
+--      robô grava com `INSERT ... ON CONFLICT DO NOTHING` e não precisa saber
+--      se já avisou — o banco decide.
+--   2. ESTADO DE LEITURA. `acknowledged_at` é o "marcar como feito" do painel.
+--      Um evento de log é imutável por natureza; este aviso tem ciclo de vida.
+--
+-- `suggested_symbol` NÃO tem FK para conta nenhuma de propósito: o ativo
+-- sugerido é, por definição, um que ainda não tem conta.
+CREATE TABLE IF NOT EXISTS live_capital_signals (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id         INTEGER NOT NULL REFERENCES live_accounts(id) ON DELETE CASCADE,
+    ts                 TEXT    NOT NULL DEFAULT (datetime('now')),
+    robot              TEXT    NOT NULL,
+    suggested_symbol   TEXT    NOT NULL,
+    -- Quanto a conta que avisou tinha em caixa, e quanto o ativo sugerido
+    -- exige, NO MOMENTO do aviso. Guardados porque o preço muda todo dia: sem
+    -- eles, um aviso de duas semanas atrás não teria como ser conferido.
+    cash_brl           REAL    NOT NULL,
+    required_brl       REAL    NOT NULL,
+    acknowledged_at    TEXT,
+    UNIQUE (account_id, suggested_symbol)
+);
+
+CREATE INDEX IF NOT EXISTS idx_live_capital_signals_ack
+    ON live_capital_signals(acknowledged_at);

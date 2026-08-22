@@ -168,6 +168,18 @@ class MigrationIncomplete(RuntimeError):
         super().__init__(f"migração incompleta — divergência em: {resumo}")
 
 
+def _shared_columns(dest_conn, table: str) -> list[str]:
+    """Colunas que existem NOS DOIS lados desta tabela, na ordem do destino.
+
+    A origem esta anexada como `src_ro` (ver `migrate`), entao as duas leituras
+    saem da mesma conexao. Indice posicional (coluna 1 = `name`) porque esta
+    conexao nao usa `row_factory = sqlite3.Row`.
+    """
+    destino = [row[1] for row in dest_conn.execute(f"PRAGMA table_info({table})")]
+    origem = {row[1] for row in dest_conn.execute(f"PRAGMA src_ro.table_info({table})")}
+    return [c for c in destino if c in origem]
+
+
 def migrate(source: Path = DB_PATH, dest: Path = LIVE_DB_PATH, force: bool = False) -> dict[str, int]:
     """Copia as linhas das tabelas `live_*` de `source` para `dest`.
 
@@ -259,13 +271,27 @@ def migrate(source: Path = DB_PATH, dest: Path = LIVE_DB_PATH, force: bool = Fal
                         "migração) antes de rodar de novo."
                     )
 
+            # Colunas COMUNS a origem e destino, por tabela. `SELECT *` cru
+            # quebrava (`table has N columns but M values were supplied`)
+            # assim que o destino ganhava uma coluna que a origem nao tem —
+            # aconteceu em 2026-08-22 com `live_accounts.symbol`. Migrar de um
+            # banco mais VELHO para o schema atual e' o caso normal deste
+            # script, entao ele tem de nomear as colunas em vez de contar com
+            # os dois lados serem identicos. Coluna que so existe no destino
+            # fica no DEFAULT dela; coluna que so existe na origem nao e'
+            # copiada (nao ha para onde) e aparece na checagem de divergencia
+            # logo abaixo.
+            comuns = {t: _shared_columns(dest_conn, t) for t in existing}
+
             result: dict[str, int] = {}
             dest_conn.execute("BEGIN")
             try:
                 for table in existing:
+                    cols = ", ".join(f'"{c}"' for c in comuns[table])
                     before = dest_conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
                     dest_conn.execute(
-                        f"INSERT OR IGNORE INTO {table} SELECT * FROM src_ro.{table}"
+                        f"INSERT OR IGNORE INTO {table} ({cols}) "
+                        f"SELECT {cols} FROM src_ro.{table}"
                     )
                     after = dest_conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
                     result[table] = after - before
@@ -287,9 +313,15 @@ def migrate(source: Path = DB_PATH, dest: Path = LIVE_DB_PATH, force: bool = Fal
             # CHECK/UNIQUE/NOT NULL ou por colisão de id.
             mismatches: list[tuple[str, int]] = []
             for table in existing:
+                # Comparacao nas colunas COMUNS, pelo mesmo motivo do INSERT
+                # acima: `SELECT *` dos dois lados com aridades diferentes nem
+                # roda, e comparar uma coluna que a origem nao tem acusaria
+                # divergencia em toda linha.
+                cols = ", ".join(f'"{c}"' for c in comuns[table])
                 not_landed = dest_conn.execute(
                     f"SELECT COUNT(*) FROM "
-                    f"(SELECT * FROM src_ro.{table} EXCEPT SELECT * FROM {table})"
+                    f"(SELECT {cols} FROM src_ro.{table} "
+                    f"EXCEPT SELECT {cols} FROM {table})"
                 ).fetchone()[0]
                 if not_landed:
                     mismatches.append((table, not_landed))

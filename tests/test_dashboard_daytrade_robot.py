@@ -18,7 +18,11 @@ from dashboard import app as dashboard_app
 from dashboard import live_control, live_service
 from journal import live_store
 
-DAYTRADE = "daytrade"
+# Slot de day trade DINAMICO desde 2026-08-22: o id carrega robo+ativo
+# (`dt-<robo>-<ativo>`) e o painel abre quantos o dono quiser. Nao existe
+# mais um slot fixo chamado "daytrade" em `core.config.SLOTS`.
+SYMBOL = "PMAM3"
+DAYTRADE = "dt-gremah-pmam3"
 
 
 @pytest.fixture
@@ -52,7 +56,7 @@ def _create_daytrade_account(db_path, capital: float = 100.0, investment_robot: 
         acc = live_store.ensure_account(
             conn, name=DAYTRADE, mode="mt5",
             initial_capital=capital, investment_robot=investment_robot,
-            withdrawal_robot="",
+            withdrawal_robot="", symbol=SYMBOL,
         )
         return acc.id
 
@@ -258,29 +262,69 @@ def test_operacao_iniciar_daytrade_valor_invalido_no_form_cai_no_shadow(
     assert captured[0].execution_mode == "shadow"
 
 
-def test_operacao_iniciar_daytrade_robo_fora_do_registry_bloqueia_sem_iniciar(
-    isolated_journal, client, monkeypatch,
-):
-    """Mesmo espírito da checagem já existente do lado swing: um form
-    adulterado/desatualizado mandando uma chave que não está no catálogo de
-    day trade não pode colar."""
-    called: list = []
-    monkeypatch.setattr(live_control, "start", lambda cfg: called.append(cfg))
-    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot, robot_key=None: 1.0)
-
-    client.post(f"/operacao/{DAYTRADE}/caixa", data={"caixa": "100.00"})
-    resp = client.post(f"/operacao/{DAYTRADE}/iniciar", data={"robo": "robo-fora-do-catalogo"})
+def test_novo_robo_fora_do_registry_nao_cria_conta(isolated_journal, client):
+    """Mesmo espírito da checagem do lado swing: um form adulterado mandando
+    uma chave que não está no catálogo de day trade não pode colar. A checagem
+    mudou de lugar em 2026-08-22 — o robô passou a ser escolhido ao CRIAR o
+    cartão, não ao iniciar (o cartão já nasce com robô+ativo no id)."""
+    resp = client.post("/operacao/daytrade/novo",
+                       data={"robot": "robo_fora_do_catalogo", "symbol": "PMAM3"})
 
     assert resp.status_code == 200
-    assert "lista" in resp.text.lower()
-    assert called == []
+    assert "desconhecido" in resp.text.lower()
+    with live_store.live_journal(isolated_journal) as conn:
+        assert live_store.accounts_with_symbol(conn) == []
+
+
+def test_novo_robo_com_ativo_sem_calibracao_nao_cria_conta(isolated_journal, client):
+    """Quem valida o ativo é o ROBÔ: `Gremah.__init__` levanta `ValueError`
+    para símbolo sem calibração própria em vez de herdar a de outro papel. O
+    painel não pode criar um cartão que nunca conseguiria subir."""
+    resp = client.post("/operacao/daytrade/novo",
+                       data={"robot": "gremah", "symbol": "PETR4"})
+
+    assert resp.status_code == 200
+    assert "calibracao" in resp.text.lower() or "calibração" in resp.text.lower()
+    with live_store.live_journal(isolated_journal) as conn:
+        assert live_store.accounts_with_symbol(conn) == []
+
+
+def test_novo_robo_recusa_ativo_ja_em_uso(isolated_journal, client):
+    """Conta NETTING: dois robôs no mesmo papel viram uma posição só na
+    corretora e os dois caixas passam a mentir. O `disabled` do `<select>` não
+    cobre POST repetido nem fragmento velho — a recusa é do servidor."""
+    _create_daytrade_account(isolated_journal)
+
+    resp = client.post("/operacao/daytrade/novo",
+                       data={"robot": "gremah", "symbol": SYMBOL})
+
+    assert resp.status_code == 200
+    assert "NETTING" in resp.text
+    with live_store.live_journal(isolated_journal) as conn:
+        assert len(live_store.accounts_with_symbol(conn)) == 1
+
+
+def test_novo_robo_cria_a_conta_com_robo_e_ativo(isolated_journal, client):
+    """O caminho feliz: cria a LINHA da conta (caixa zero, nada rodando) com
+    robô e ativo gravados — é a conta que faz o cartão existir."""
+    resp = client.post("/operacao/daytrade/novo",
+                       data={"robot": "gremah", "symbol": "KLBN4"})
+
+    assert resp.status_code == 200
+    with live_store.live_journal(isolated_journal) as conn:
+        contas = live_store.accounts_with_symbol(conn)
+        assert [(c.name, c.investment_robot, c.symbol, c.cash) for c in contas] == [
+            ("dt-gremah-klbn4", "gremah", "KLBN4", 0.0)
+        ]
 
 
 def test_operacao_iniciar_daytrade_conta_existente_ignora_robo_do_form(
     isolated_journal, client, monkeypatch,
 ):
     """Mesma regra do lado swing (2026-08-19): uma conta JÁ EM OPERAÇÃO nunca
-    troca de robô através do form de retomada."""
+    troca de robô através do form de retomada. No day trade isso é ainda mais
+    forte desde 2026-08-22 — trocar o robô do cartão significaria trocar o
+    ativo junto, o que é outro cartão."""
     db_path = isolated_journal
     _create_daytrade_account(db_path, investment_robot="gremah")
     monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot, robot_key=None: 1.0)
@@ -312,16 +356,32 @@ def test_operacao_conta_existente_com_robo_desconhecido_degrada_sem_500(
 
 # ---------- HTML renderizado: select + badge de ativo ----------------------
 
-def test_fragmento_daytrade_sem_conta_mostra_select_com_simbolo_do_robo(
+def test_painel_mostra_o_form_de_robo_novo_com_ativos_por_capital_minimo(
     isolated_journal, client,
 ):
-    """O select "Robô" do slot de day trade não pode ficar escondido (era o
-    caso antes desta correção): tem de aparecer, com o rótulo mostrando o
-    SÍMBOLO de cada robô registrado."""
-    html = client.get(f"/operacao/{DAYTRADE}/fragment").text
+    """A escolha de robô+ativo saiu do cartão e virou o formulário "novo
+    robô" (2026-08-22). Ele lista os ativos que o robô aceita, do mais barato
+    ao mais caro pelo caixa mínimo de hoje — a primeira pergunta de quem
+    escolhe é "qual cabe no que eu tenho?"."""
+    html = client.get("/operacao").text
 
-    assert '<select name="robo"' in html
-    assert "gremah — PMAM3" in html
+    assert 'hx-post="/operacao/daytrade/novo"' in html
+    assert '<select name="symbol"' in html
+    assert "gremah" in html
+    # Todos os ativos calibrados aparecem como opção, não só o default.
+    for symbol in ("PMAM3", "KLBN4", "CSAN3"):
+        assert symbol in html
+
+
+def test_ativo_ja_usado_aparece_marcado_e_desabilitado(isolated_journal, client):
+    """A bolinha verde do pedido: um ativo que já tem robô não pode ser
+    escolhido de novo, e o estado dele fica visível na lista."""
+    _create_daytrade_account(isolated_journal)
+
+    html = client.get("/operacao").text
+
+    assert f'value="{SYMBOL}" disabled' in html
+    assert "robô criado, parado" in html
 
 
 def test_fragmento_daytrade_com_conta_mostra_badge_de_ativo(

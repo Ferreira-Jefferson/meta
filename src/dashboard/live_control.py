@@ -237,14 +237,46 @@ def _tail_log(slot: str, max_chars: int = 2_000) -> str:
 def _pid_alive(pid: int) -> bool:
     """Windows não tem um `os.kill(pid, 0)` confiável para checar
     vivacidade — consulta o `tasklist` do próprio sistema."""
+    return pid in _pids_alive([pid])
+
+
+def _pids_alive(pids) -> set[int]:
+    """Subconjunto de `pids` que ainda está de pé — UMA chamada de `tasklist`
+    para todos.
+
+    Era um `tasklist` POR pid. Com o slot fixo isso eram 2 subprocessos a cada
+    poll de 20s; desde 2026-08-22 o dono abre quantos robôs de day trade
+    quiser, e 10 robôs seriam 10 subprocessos a cada 20s numa página que só
+    mostra status — custo puro, e num Windows carregado o `tasklist` chega a
+    demorar. Um filtro `/FI` por PID não aceita lista, então pedimos a tabela
+    toda em CSV e cruzamos aqui.
+    """
+    pids = {int(p) for p in pids if p is not None}
+    if not pids:
+        return set()
     try:
         out = subprocess.run(
-            ["tasklist", "/FI", f"PID eq {pid}", "/NH"],
-            capture_output=True, text=True, timeout=5,
+            ["tasklist", "/FO", "CSV", "/NH"],
+            capture_output=True, text=True, timeout=10,
         )
     except (OSError, subprocess.SubprocessError):
-        return False
-    return str(pid) in out.stdout
+        # Sem resposta do sistema, a leitura honesta é "não sei" — e "não sei"
+        # tem de ser tratado como MORTO, nunca como vivo: um processo dado
+        # como vivo por engano faz o painel mostrar "rodando" para sempre e o
+        # botão "Parar" não ter o que matar.
+        return set()
+    vivos: set[int] = set()
+    for linha in out.stdout.splitlines():
+        campos = [c.strip('"') for c in linha.split('","')]
+        if len(campos) < 2:
+            continue
+        try:
+            pid = int(campos[1])
+        except ValueError:
+            continue
+        if pid in pids:
+            vivos.add(pid)
+    return vivos
 
 
 def status(slot: str) -> Optional[dict]:
@@ -263,13 +295,34 @@ def status(slot: str) -> Optional[dict]:
     return state
 
 
-def status_all() -> dict[str, Optional[dict]]:
-    """`{slot_id: status(slot_id)}` para TODO slot do catálogo — o painel
-    precisa dos dois cartões de uma vez, e chamar `status()` em laço no
-    template esconderia o custo do `tasklist` por slot."""
-    from core.config import SLOTS
+def status_all(slot_ids=None) -> dict[str, Optional[dict]]:
+    """`{slot_id: estado ou None}` para os slots pedidos (default: todos os que
+    existem hoje, incluindo os de day trade criados pelo dono).
 
-    return {slot.id: status(slot.id) for slot in SLOTS}
+    Faz UMA varredura de processos para o conjunto inteiro (`_pids_alive`), em
+    vez de um `tasklist` por slot: o painel repinta a cada 20s e a lista de
+    slots agora é aberta. Autocorrige do mesmo jeito que `status()` — PID
+    morto vira "parado" no arquivo de estado, preservando a `config`.
+    """
+    if slot_ids is None:
+        from dashboard.slots import all_slots
+
+        slot_ids = [slot.id for slot in all_slots()]
+    estados = {sid: _read_state(sid) for sid in slot_ids}
+    vivos = _pids_alive(
+        est["pid"] for est in estados.values() if est and est.get("pid") is not None
+    )
+    resultado: dict[str, Optional[dict]] = {}
+    for sid, est in estados.items():
+        if est is None or est.get("pid") is None:
+            resultado[sid] = None
+            continue
+        if est["pid"] not in vivos:
+            _write_state(sid, {**est, "pid": None, "started_at": None})
+            resultado[sid] = None
+            continue
+        resultado[sid] = est
+    return resultado
 
 
 def last_config(slot: str) -> Optional[dict]:
@@ -351,18 +404,21 @@ def universe_for_slot(slot_id: str, robot_key: Optional[str] = None) -> tuple[st
     uma conta já existente cujo robô real está gravado nela, não no
     catálogo — ver chamadores).
 
-    Slot `intraday` resolve pelo registry PRÓPRIO de day trade
-    (`strategy.daytrade.registry`) — não passa pelo registry de swing, que
-    nem conhece robôs de day trade (`IntradayStrategy` não herda de
-    `Strategy`, ver `strategy/daytrade/base.py`). O ativo é propriedade do
-    ROBÔ (`robo.symbol`), não do slot — `core.config.Slot` não declara
-    símbolo desde 2026-08-21. Slot `daily` usa o universo do próprio robô via
-    o MESMO `_universe_of()` de `run_live.py::build()`."""
+    Slot `intraday` NEGOCIA UM ATIVO SÓ, e ele vem do próprio slot
+    (`dt-<robô>-<ativo>`, desde 2026-08-22 — antes vinha do robô resolvido no
+    registry, o que impedia dois `gremah` em papéis diferentes). Um slot
+    intradiário sem símbolo (formato antigo) cai no default do robô, resolvido
+    pelo registry PRÓPRIO de day trade (`strategy.daytrade.registry`) — que
+    não passa pelo registry de swing, o qual nem conhece robôs de day trade
+    (`IntradayStrategy` não herda de `Strategy`). Slot `daily` usa o universo
+    do próprio robô via o MESMO `_universe_of()` de `run_live.py::build()`."""
     from core.config import WATCHLIST, slot_by_id
 
     slot = slot_by_id(slot_id)
     key = robot_key or slot.robot_key
     if slot.is_intraday:
+        if slot.symbol:
+            return (slot.symbol,)
         from strategy.daytrade.registry import get_daytrade_robot
 
         try:
@@ -512,21 +568,24 @@ def _assert_slots_disjuntos(slot, robot_key: str) -> None:
     (`universe_for_slot`). O outro lado da comparação usa o robô JÁ GRAVADO
     na conta do outro slot, se existir (nunca o default do catálogo, que
     pode não ser o que a conta de fato opera) — ver `universe_for_slot`."""
-    from core.config import SLOTS
+    from dashboard.slots import all_slots
     from journal import live_store
 
     meu_universo = set(universe_for_slot(slot.id, robot_key))
-    for outro in SLOTS:
-        if outro.id == slot.id:
-            continue
+    with live_store.live_journal() as conn:
+        outros = [s for s in all_slots(conn) if s.id != slot.id]
+        contas = {s.id: live_store.load_account(conn, s.id) for s in outros}
+    for outro in outros:
         if outro.magic == slot.magic:
             raise RuntimeError(
-                f"slots {slot.id!r} e {outro.id!r} declaram o mesmo `magic` "
+                f"slots {slot.id!r} e {outro.id!r} têm o mesmo `magic` "
                 f"({slot.magic}) — as ordens dos dois robôs ficariam "
-                "indistinguíveis na corretora. Corrija `core.config.SLOTS`."
+                "indistinguíveis na corretora. Nos slots de day trade o "
+                "`magic` vem de `core.config.daytrade_magic` (crc32 do id); "
+                "uma colisão aqui é rara mas possível, e a saída é renomear "
+                "um dos slots (outro robô ou outro ativo)."
             )
-        with live_store.live_journal() as conn:
-            conta_outro = live_store.load_account(conn, outro.id)
+        conta_outro = contas.get(outro.id)
         outro_robot_key = (conta_outro.investment_robot if conta_outro else None) or outro.robot_key
         colisao = meu_universo & set(universe_for_slot(outro.id, outro_robot_key))
         if colisao:
@@ -556,26 +615,29 @@ def available_cash(slot_id: str) -> Optional[float]:
     return None if conta is None else round(conta.cash, 2)
 
 
-def _intraday_capital_minimo(robot_key: str) -> Optional[float]:
-    """Piso de caixa para operar HOJE o robô `robot_key` — `capital_minimo_brl`
-    (`strategy.daytrade.base`) do símbolo dele, no último preço salvo
-    localmente. `None` se o robô não existir no catálogo, o símbolo não tiver
-    perfil (`backtest.intraday.profiles.PROFILES`) ou não houver preço salvo
-    ainda (parquet ausente) — quem chama decide o degrade, nunca bloqueia por
-    falta de dado que não é culpa do dono."""
+def _intraday_capital_minimo(robot_key: str, symbol: Optional[str] = None) -> Optional[float]:
+    """Piso de caixa para operar HOJE — `capital_minimo_brl`
+    (`strategy.daytrade.base`) de `symbol`, no último preço salvo localmente.
+    `symbol` omitido usa o ativo default do robô.
+
+    `None` se o robô não existir no catálogo, o símbolo não tiver perfil
+    (`backtest.intraday.profiles.PROFILES`) ou não houver preço salvo ainda
+    (parquet ausente) — quem chama decide o degrade, nunca bloqueia por falta
+    de dado que não é culpa do dono."""
     from backtest.intraday.profiles import PROFILES
     from dashboard.robot_view import _ultimo_preco
     from strategy.daytrade.base import capital_minimo_brl
     from strategy.daytrade.registry import get_daytrade_robot
 
-    try:
-        robo = get_daytrade_robot(robot_key)
-    except KeyError:
-        return None
-    perfil = PROFILES.get(robo.symbol)
+    if not symbol:
+        try:
+            symbol = get_daytrade_robot(robot_key).symbol
+        except KeyError:
+            return None
+    perfil = PROFILES.get(symbol)
     if perfil is None:
         return None
-    preco, _data = _ultimo_preco(robo.symbol)
+    preco, _data = _ultimo_preco(symbol)
     if preco is None:
         return None
     return capital_minimo_brl(preco, perfil.default_quantity)
@@ -600,7 +662,7 @@ def min_cash_for(slot, robot_key: Optional[str] = None) -> float:
     ROBÔ escolhido em vez de um número cego ao símbolo."""
     if not slot.is_intraday:
         return slot.min_cash_brl
-    minimo = _intraday_capital_minimo(robot_key or slot.robot_key)
+    minimo = _intraday_capital_minimo(robot_key or slot.robot_key, slot.symbol or None)
     return slot.min_cash_brl if minimo is None else minimo
 
 

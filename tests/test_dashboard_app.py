@@ -62,20 +62,28 @@ def client():
 # PROPRIO de day trade (`strategy.daytrade.registry`, sempre disponivel, sem
 # ranking recalculado por hora) -- ver `tests/test_dashboard_daytrade_robot.py`.
 SWING = "swing"
+# Slot de day trade DINAMICO (`dt-<robo>-<ativo>`) -- desde 2026-08-22 nao ha
+# mais um slot fixo "daytrade": o dono abre quantos quiser, um por ativo.
+DAYTRADE = "dt-gremah-pmam3"
+DAYTRADE_SYMBOL = "PMAM3"
 
 
 def _create_mt5_account(
     db_path, capital: float = 50_000.0, slot: str = SWING, investment_robot: str | None = None,
 ) -> int:
     # Default por slot: "portfolio_dip2_hw40" (swing) nao existe no registry
-    # de day trade -- uma conta do slot "daytrade" com esse robo levantaria
+    # de day trade -- uma conta de day trade com esse robo levantaria
     # `KeyError` ao montar o painel (ver `strategy.daytrade.registry`).
-    robo = investment_robot or ("gremah" if slot == "daytrade" else "portfolio_dip2_hw40")
+    eh_daytrade = slot.startswith("dt-")
+    robo = investment_robot or ("gremah" if eh_daytrade else "portfolio_dip2_hw40")
     with live_store.live_journal(db_path) as conn:
         acc = live_store.ensure_account(
             conn, name=slot, mode="mt5",
             initial_capital=capital, investment_robot=robo,
             withdrawal_robot="official_policy",
+            # O ativo E' parte da identidade da conta de day trade: sem ele a
+            # conta nao vira slot e o cartao nao aparece no painel.
+            symbol=DAYTRADE_SYMBOL if eh_daytrade else "",
         )
         return acc.id
 
@@ -162,7 +170,7 @@ def test_get_status_de_um_slot_nao_ve_a_conta_do_outro(isolated_journal):
     _create_mt5_account(isolated_journal, capital=1_000.0, slot=SWING)
 
     assert live_service.get_status(SWING)["existe"] is True
-    assert live_service.get_status("daytrade")["existe"] is False
+    assert live_service.get_status(DAYTRADE)["existe"] is False
 
 
 # ---------- iniciar: acoes por lote detectada, robo do ranking (swing) ------
@@ -418,10 +426,16 @@ def test_operacao_iniciar_conta_existente_ignora_robo_do_form_usa_investment_rob
 def test_operacao_slot_desconhecido_devolve_404(isolated_journal, client):
     """Um slot que nao esta no catalogo nunca pode ser operado por chute --
     `core.config.slot_by_id` nao tem default silencioso, e a rota traduz isso
-    em 404 em vez de 500."""
+    em 404 em vez de 500.
+
+    Vale para tudo que AGE (iniciar, parar, caixa, remover). O fragmento e' a
+    excecao deliberada e fica no teste ao lado: ele nao age, so' desenha, e o
+    unico cliente dele e' o polling do HTMX -- para o qual um slot inexistente
+    significa "esta aba esta velha", nao "voce digitou errado". O servidor nao
+    tem como distinguir um id chutado de um id que existia ate ontem."""
     assert client.post("/operacao/nao-existe/iniciar", data={}).status_code == 404
     assert client.post("/operacao/nao-existe/caixa", data={"caixa": "10"}).status_code == 404
-    assert client.get("/operacao/nao-existe/fragment").status_code == 404
+    assert client.post("/operacao/nao-existe/remover", data={}).status_code == 404
 
 
 # ---------- LegacyPaperAccountError nao pode virar 500 cru (item 5) ---------
@@ -531,11 +545,11 @@ def test_operacao_caixa_de_um_slot_nao_mexe_no_outro(isolated_journal, client):
     day trade nao pode tocar o do swing."""
     _create_mt5_account(isolated_journal, capital=1_000.0, slot=SWING)
 
-    client.post("/operacao/daytrade/caixa", data={"caixa": "80"})
+    client.post(f"/operacao/{DAYTRADE}/caixa", data={"caixa": "80"})
 
     with live_store.live_journal(isolated_journal) as conn:
         assert live_store.load_account(conn, SWING).cash == pytest.approx(1_000.0)
-        assert live_store.load_account(conn, "daytrade").cash == pytest.approx(80.0)
+        assert live_store.load_account(conn, DAYTRADE).cash == pytest.approx(80.0)
 
 
 def test_operacao_caixa_valor_negativo_bloqueia(isolated_journal, client):
@@ -553,20 +567,36 @@ def test_operacao_caixa_valor_negativo_bloqueia(isolated_journal, client):
 
 # ---------- ordem e independencia dos cartoes (pedido do dono, 2026-08-21) --
 
-def test_operacao_mostra_os_dois_cartoes_com_day_trade_em_cima(isolated_journal, client):
+def test_operacao_mostra_os_cartoes_com_day_trade_em_cima(isolated_journal, client):
     """Pedido explicito do dono: as duas estrategias como opcoes de topo, day
     trade EM CIMA -- "nao por ser melhor, mas por ser a primeira opcao, ainda
-    nao temos capital para operar com a liqflop"."""
+    nao temos capital para operar com a liqflop". Desde 2026-08-22 o cartao de
+    day trade so existe depois de o dono criar o robo."""
+    _create_mt5_account(isolated_journal, capital=100.0, slot=DAYTRADE)
+
     html = client.get("/operacao").text
 
-    i_day = html.index("Day trade")
-    i_swing = html.index("Swing")
-    assert i_day < i_swing
+    # Compara os NOS dos cartoes, nao a palavra "Swing" solta: ela tambem
+    # aparece no menu de navegacao, muito antes de qualquer cartao.
+    assert (html.index(f'id="ops-slot-live-{DAYTRADE}"')
+            < html.index(f'id="ops-slot-live-{SWING}"'))
     # cada cartao tem o SEU form de caixa e o SEU botao de iniciar
-    for slot in ("daytrade", "swing"):
+    for slot in (DAYTRADE, SWING):
         assert f"/operacao/{slot}/caixa" in html
         assert f"/operacao/{slot}/iniciar" in html
         assert f"/operacao/{slot}/fragment" in html
+
+
+def test_operacao_sem_nenhum_robo_de_day_trade_mostra_so_o_swing_e_o_form(
+    isolated_journal, client,
+):
+    """Estado inicial de quem nunca criou nada: nenhum cartao de day trade, e
+    o formulario para criar o primeiro."""
+    html = client.get("/operacao").text
+
+    assert "Novo rob" in html            # o form existe
+    assert "/operacao/swing/caixa" in html
+    assert "/operacao/dt-" not in html   # nenhum cartao de day trade ainda
 
 
 def test_home_lista_os_dois_tipos_de_robo_no_MESMO_catalogo(client):
@@ -826,7 +856,7 @@ def test_operacao_nunca_resolve_o_robo_de_day_trade_pelo_registry_de_swing(
         return original(chave)
 
     monkeypatch.setattr(dashboard_app.live_service, "get_strategy", _spy)
-    _create_mt5_account(isolated_journal, capital=1_000.0, slot="daytrade")
+    _create_mt5_account(isolated_journal, capital=1_000.0, slot=DAYTRADE)
 
     resp = client.get("/operacao")
 
@@ -839,9 +869,11 @@ def test_operacao_poe_os_robos_antes_das_credenciais(isolated_journal, client):
     "Acesso e credenciais" -- um form de senha que se preenche uma vez na vida
     -- abria a pagina, entao quem chegava para olhar a operacao encontrava
     configuracao primeiro. Configuracao vem DEPOIS do que ela configura."""
+    _create_mt5_account(isolated_journal, capital=100.0, slot=DAYTRADE)
+
     html = client.get("/operacao").text
 
-    assert html.index("Day trade") < html.index("Acesso e credenciais")
+    assert html.index(f'id="ops-slot-live-{DAYTRADE}"') < html.index("Acesso e credenciais")
     assert html.index("Swing") < html.index("Acesso e credenciais")
 
 
@@ -862,13 +894,59 @@ def test_painel_ao_vivo_linka_a_ficha_do_robo_da_conta(isolated_journal, client)
 def test_fragmento_de_um_slot_nao_renderiza_o_outro(isolated_journal, client):
     """Um poll por slot: o refresh de fundo de um robo nao pode recriar o DOM
     do outro (nem reabrir/fechar nada do outro cartao)."""
-    html = client.get("/operacao/daytrade/fragment").text
+    _create_mt5_account(isolated_journal, capital=100.0, slot=DAYTRADE)
 
-    assert 'id="ops-slot-live-daytrade"' in html
+    html = client.get(f"/operacao/{DAYTRADE}/fragment").text
+
+    assert f'id="ops-slot-live-{DAYTRADE}"' in html
     assert "ops-slot-live-swing" not in html
     # credencial e caixa ficam FORA do no com polling
     assert "Acesso e credenciais" not in html
     assert "/operacao/daytrade/caixa" not in html
+
+
+def test_aba_velha_pedindo_slot_que_nao_existe_mais_recarrega(isolated_journal, client):
+    """Visto ao vivo em 2026-08-22: uma aba aberta antes de os slots virarem
+    dinamicos ficou pedindo `/operacao/daytrade/fragment` a cada 20s e levando
+    404 para sempre -- o cartao congelou exibindo o estado antigo de um robo
+    que nao existe mais. `HX-Refresh` faz a aba se corrigir sozinha."""
+    r = client.get("/operacao/daytrade/fragment")
+
+    assert r.status_code == 200
+    assert r.headers["HX-Refresh"] == "true"
+    assert r.text == ""
+
+
+def test_conta_removida_em_outra_janela_recarrega_a_aba_aberta(isolated_journal, client):
+    """O mesmo buraco pelo caminho que o painel de fato oferece: o dono clica
+    "Remover" numa janela com outra aberta. O id dinamico continua PARSEANDO
+    (ele carrega robo e ativo dentro de si), entao sem esta checagem o poll
+    responderia 200 com um cartao vazio para sempre, em vez de 404."""
+    _create_mt5_account(isolated_journal, capital=0.0, slot=DAYTRADE)
+    assert client.get(f"/operacao/{DAYTRADE}/fragment").status_code == 200
+
+    with live_store.live_journal(isolated_journal) as conn:
+        live_store.delete_account(conn, DAYTRADE)
+
+    r = client.get(f"/operacao/{DAYTRADE}/fragment")
+    assert r.headers.get("HX-Refresh") == "true"
+
+
+def test_banco_doente_nao_vira_laco_de_reload(isolated_journal, client, monkeypatch):
+    """Se consultar os slots falhar, o poll segue o caminho normal (que sabe
+    degradar num banner) em vez de mandar recarregar -- senao um banco travado
+    viraria uma aba recarregando em loop, que e' pior."""
+    _create_mt5_account(isolated_journal, capital=100.0, slot=DAYTRADE)
+    monkeypatch.setattr(
+        "dashboard.slots.all_slots",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("database is locked")),
+    )
+
+    r = client.get(f"/operacao/{DAYTRADE}/fragment")
+
+    assert r.status_code == 200
+    assert "HX-Refresh" not in r.headers
+    assert f'id="ops-slot-live-{DAYTRADE}"' in r.text
 
 
 def test_botao_iniciar_desabilitado_sem_caixa_no_ledger(isolated_journal, client, monkeypatch):
@@ -884,8 +962,12 @@ def test_botao_iniciar_desabilitado_sem_caixa_no_ledger(isolated_journal, client
     monkeypatch.setattr(live_control, "credential_status",
                         lambda: {"telegram": False, "smtp": False, "mt5": True})
     monkeypatch.setattr(live_control, "min_cash_for", lambda slot, robot_key=None: 777.0)
+    # Conta com caixa ZERO, e nao ausencia de conta: um cartao de day trade so'
+    # existe porque a conta existe (e' ela que cria o slot), entao "sem caixa"
+    # ao vivo e' sempre um ledger zerado.
+    _create_mt5_account(isolated_journal, capital=0.0, slot=DAYTRADE)
 
-    html = client.get("/operacao/daytrade/fragment").text
+    html = client.get(f"/operacao/{DAYTRADE}/fragment").text
 
     assert "disabled" in html
     assert "777" in html

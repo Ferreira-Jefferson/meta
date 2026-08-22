@@ -213,6 +213,12 @@ class IntradayLiveRuntime:
         self._capital_checked_for: Optional[date] = None
         self._capital_alarm: Optional[str] = None
         self._capital_minimo_hoje: Optional[float] = None
+        # Aviso de capital disponivel (`_avaliar_sugestao_de_capital`), tambem
+        # 1x por pregao e pelo mesmo motivo: a regra depende do preco do dia.
+        # A deduplicacao POR ATIVO e' do banco (`UNIQUE` em
+        # `live_capital_signals`); este campo so evita reavaliar a regra e
+        # reler parquet a cada barra.
+        self._signal_checked_for: Optional[date] = None
 
     # ---------- log + alerta (mesma regra do lado diario) -----------------
 
@@ -233,6 +239,12 @@ class IntradayLiveRuntime:
                 # skimar. Gravar "" (e nao o robo de saque do swing) e'
                 # deliberado -- o painel mostra a verdade.
                 withdrawal_robot="",
+                # O ATIVO faz parte da identidade da conta de day trade (uma
+                # conta por par robo+ativo, desde 2026-08-22): e' o que permite
+                # ao painel saber quais papeis ja estao alocados e ao proprio
+                # robo nao sugerir um que ja roda. `ensure_account` recusa se a
+                # conta ja existir com OUTRO simbolo.
+                symbol=self.strategy.symbol,
             )
         return acc
 
@@ -395,6 +407,10 @@ class IntradayLiveRuntime:
             # o minimo depende do PRECO e a primeira barra fechada e' a primeira
             # coisa que da esse preco de forma confiavel.
             alarme_capital = self._check_capital(conn, account, hoje, barras[-1].close)
+            # Aviso de capital para um ativo NOVO — avaliado antes do desvio
+            # abaixo de proposito: e' informacao para o dono, e nao deve sumir
+            # justamente no pregao em que o robo nao vai operar.
+            self._avaliar_sugestao_de_capital(conn, account, hoje, barras[-1].close)
             if alarme_capital is not None and self.machine.position is None:
                 # Sem posicao aberta: nao comeca. Avanca `last_bar_ts` de
                 # proposito -- ficar sem consumir faria o proximo passo ver o
@@ -491,6 +507,83 @@ class IntradayLiveRuntime:
                    "minimo": round(minimo, 2), "preco": preco,
                    "quantidade": self.config.default_quantity})
         return self._capital_alarm
+
+    def _avaliar_sugestao_de_capital(
+        self, conn, account: AccountState, session: date, preco: float
+    ) -> None:
+        """Uma vez por pregao: este robo ja juntou caixa que banque um robo
+        NOVO em outro ativo? Se sim, grava o aviso para o dono ver no painel.
+
+        NAO abre robo, nao move dinheiro, nao aporta nada. A regra e' de
+        `strategy.daytrade.enxame.avaliar_sugestao` (regra 6 do AGENTS.md —
+        `live/` aplica regra declarada, nunca inventa a propria); aqui so se
+        junta o que ela precisa saber do MUNDO: quais ativos ja estao
+        alocados, quanto o dono ja aportou nos outros robos, e o preco de hoje
+        do proximo da fila.
+
+        O caixa usado e' o `account.cash` REAL (o ledger que o dono digitou,
+        mais o que o robo realizou em modo `live`) — nunca o P&L de sombra.
+        Em modo sombra o robo nao ganhou dinheiro nenhum, e sugerir um aporte
+        novo com base em lucro imaginario seria pedir dinheiro de verdade
+        contra resultado que nao existe.
+
+        Nunca levanta: um aviso e' conveniencia, e nenhuma falha aqui
+        (parquet ausente, simbolo sem calibracao, robo fora do registry) pode
+        derrubar o robo que esta operando dinheiro.
+        """
+        if self._signal_checked_for == session:
+            return
+        self._signal_checked_for = session
+        try:
+            from market_data_intraday.storage import last_close
+            from strategy.daytrade.enxame import Candidato, avaliar_sugestao
+            from strategy.daytrade.registry import symbols_for_robot
+
+            outras = [a for a in store.accounts_with_symbol(conn)
+                      if a.name != self.account_name]
+            ocupados = {a.symbol for a in outras if a.symbol}
+            ocupados.add(self.strategy.symbol)
+            fila = [s for s in symbols_for_robot(self.strategy.name) if s not in ocupados]
+            if not fila:
+                return
+            # So o PRIMEIRO da fila e' consultado: a fila e' estrita e nunca
+            # pula (ver `strategy.daytrade.enxame`). Isso tambem mantem o custo
+            # em UMA leitura de parquet por pregao.
+            preco_candidato, _data = last_close(fila[0])
+            sugestao = avaliar_sugestao(
+                caixa_brl=account.cash,
+                preco_proprio=preco,
+                candidatos=[Candidato(symbol=fila[0], preco_atual=preco_candidato or 0.0,
+                                      shares_per_lot=self.config.default_quantity)],
+                # O que o dono JA pos do bolso nos outros robos. E' o
+                # abatimento que faz a barra subir a cada robo novo — sem ele,
+                # o mesmo caixa aprovaria a fila inteira de uma vez.
+                ja_aportado_brl=sum(a.initial_capital for a in outras),
+                shares_per_lot=self.config.default_quantity,
+            )
+            if sugestao is None:
+                return
+            novo = store.record_capital_signal(
+                conn, account_id=account.id, robot=self.strategy.name,
+                suggested_symbol=sugestao.symbol,
+                cash_brl=sugestao.cash_brl, required_brl=sugestao.required_brl,
+            )
+            if novo:
+                self._log(
+                    conn, account.id, "info",
+                    f"da' para abrir {self.strategy.name} em {sugestao.symbol}: "
+                    f"caixa R$ {sugestao.cash_brl:.2f} (R$ {sugestao.disponivel_brl:.2f} "
+                    f"livres, ja descontado o que voce aportou nos outros robos) "
+                    f"cobre os R$ {sugestao.required_brl:.2f} que {sugestao.symbol} exige "
+                    f"e o minimo de {self.strategy.symbol}.",
+                    {"pregao": session.isoformat(), "sugestao": sugestao.symbol,
+                     "necessario": round(sugestao.required_brl, 2),
+                     "disponivel": round(sugestao.disponivel_brl, 2)},
+                )
+        except Exception as e:  # noqa: BLE001 — ver docstring: aviso nunca derruba robo
+            self._log(conn, account.id, "warn",
+                      f"nao consegui avaliar sugestao de capital: {e}",
+                      {"pregao": session.isoformat()})
 
     def _handle_gap(self, conn, account: AccountState, session: date, barras: list[Bar]) -> StepReport:
         """Buraco grande: o processo ficou fora do ar. Nao reprocessa (isso

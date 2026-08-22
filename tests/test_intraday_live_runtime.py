@@ -32,10 +32,11 @@ from live import intraday_runtime as itr_mod
 from live.intraday_runtime import MAX_GAP_BARS, IntradayLiveRuntime
 from strategy.daytrade.base import Bar
 
-SLOT = slot_by_id("daytrade")
-# O simbolo e' propriedade do ROBO desde 2026-08-21 (`Slot` nao declara mais
-# `symbol`) -- este e' o default da `Gremah` usada nestes testes.
+# O slot de day trade e' DINAMICO desde 2026-08-22: o id carrega robo+ativo
+# (`dt-<robo>-<ativo>`) e o painel abre quantos o dono quiser. Nao existe mais
+# um slot fixo chamado "daytrade".
 SYMBOL = "PMAM3"
+SLOT = slot_by_id("dt-gremah-pmam3")
 SESSION = date(2026, 8, 21)
 
 
@@ -1047,3 +1048,92 @@ def test_status_mostra_o_minimo_do_dia_e_o_alarme(tmp_path, pregao_aberto):
 
     assert dt["capital_minimo_hoje"] == pytest.approx(20.0)
     assert "nao cobre o minimo" in dt["capital_alarme"]
+
+
+# ---------- aviso de capital para um ativo novo (enxame, 2026-08-22) --------
+
+def _com_preco_de_candidato(monkeypatch, preco: float | None):
+    """`last_close` do proximo da fila. `None` = sem parquet salvo."""
+    monkeypatch.setattr(
+        "market_data_intraday.storage.last_close",
+        lambda symbol, *a, **k: (preco, "2026-08-21") if preco else (None, ""),
+    )
+
+
+def test_avisa_uma_vez_quando_o_caixa_banca_um_ativo_novo(tmp_path, pregao_aberto, monkeypatch):
+    """O robo em operacao sinaliza que da' para o dono abrir um robo novo. E'
+    so' um AVISO: nada e' aberto, nada e' aportado, o caixa dele nao muda.
+
+    Uma vez por ativo, e nao a cada barra: a condicao continua verdadeira em
+    todas as barras seguintes, e sem a deduplicacao a caixa de mensagens
+    viraria log de spam."""
+    barras = [
+        _bar("13:00", 10.00, 10.00, 10.00, 10.00),
+        _bar("13:01", 10.00, 10.00, 10.00, 10.00),
+    ]
+    rt, _feed = _runtime(tmp_path, barras)
+    # `_config()` usa `default_quantity=1` (lote de 1 acao) nestes testes:
+    # proprio a R$10 -> minimo R$20; candidato (KLBN4) a R$1 -> minimo R$2.
+    # Barra: caixa >= 2 + 20.
+    _com_preco_de_candidato(monkeypatch, 1.00)
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        acc.cash = 30.0
+        store.save_account(conn, acc)
+
+    rt.run_once(now=_agora("13:05:00"))
+
+    with store.live_journal(rt.db_path) as conn:
+        avisos = store.capital_signals(conn)
+        caixa_depois = store.load_account(conn, SLOT.id).cash
+    assert [(a["robot"], a["suggested_symbol"]) for a in avisos] == [("gremah", "KLBN4")]
+    assert avisos[0]["required_brl"] == pytest.approx(2.0)
+    # O aviso nao move dinheiro nenhum.
+    assert caixa_depois == pytest.approx(30.0)
+
+    # Pregao seguinte, mesma condicao ainda verdadeira: nao duplica.
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        rt._signal_checked_for = None
+        rt._avaliar_sugestao_de_capital(conn, acc, date(2026, 8, 24), 10.00)
+        assert len(store.capital_signals(conn)) == 1
+
+
+def test_nao_avisa_quando_o_caixa_nao_cobre_os_dois_minimos(tmp_path, pregao_aberto, monkeypatch):
+    """Precisa cobrir o minimo do candidato E continuar cobrindo o proprio —
+    avisar sem isso empurraria o dono a esvaziar o robo que ja opera."""
+    barras = [_bar("13:00", 10.00, 10.00, 10.00, 10.00),
+              _bar("13:01", 10.00, 10.00, 10.00, 10.00)]
+    rt, _feed = _runtime(tmp_path, barras)
+    _com_preco_de_candidato(monkeypatch, 1.00)
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        acc.cash = 21.99   # falta R$0,01 para os R$22 (ver o teste acima)
+        store.save_account(conn, acc)
+
+    rt.run_once(now=_agora("13:05:00"))
+
+    with store.live_journal(rt.db_path) as conn:
+        assert store.capital_signals(conn) == []
+
+
+def test_falha_ao_avaliar_sugestao_nunca_derruba_o_robo(tmp_path, pregao_aberto, monkeypatch):
+    """Um aviso e' conveniencia. Parquet ilegivel, simbolo sem calibracao ou
+    registry fora do ar nao podem parar um robo que esta operando dinheiro."""
+    barras = [_bar("13:00", 10.00, 10.00, 10.00, 10.00),
+              _bar("13:01", 10.00, 10.00, 9.79, 9.85)]
+    rt, _feed = _runtime(tmp_path, barras)
+
+    def _explode(*a, **k):
+        raise RuntimeError("parquet ilegivel")
+
+    monkeypatch.setattr("market_data_intraday.storage.last_close", _explode)
+
+    passos = rt.run_once(now=_agora("13:05:00"))
+
+    assert [p for p in passos if p.action == "daytrade"]  # o robo operou normalmente
+    with store.live_journal(rt.db_path) as conn:
+        assert store.capital_signals(conn) == []
+        avisos_log = [r["message"] for r in conn.execute(
+            "SELECT message FROM live_events WHERE level = 'warn'")]
+    assert any("sugestao de capital" in m for m in avisos_log)

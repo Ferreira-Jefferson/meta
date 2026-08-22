@@ -297,6 +297,36 @@ def ensure_tables(conn: sqlite3.Connection, schema_path: Path = SCHEMA_PATH) -> 
     if ddl:
         conn.executescript(ddl)
         conn.commit()
+    _add_missing_account_columns(conn)
+
+
+#: Colunas adicionadas a `live_accounts` DEPOIS de o banco existir em produção.
+#: `CREATE TABLE IF NOT EXISTS` (o caminho normal de `ensure_tables`) não toca
+#: numa tabela que já existe, então uma coluna nova precisa de `ALTER TABLE`
+#: explícito — e um rebuild completo (o caminho de
+#: `_migrate_account_mode_vocabulary`) seria desproporcional para acrescentar
+#: coluna com default.
+_ACCOUNT_COLUMNS_ADICIONADAS = (
+    ("symbol", "TEXT NOT NULL DEFAULT ''"),
+)
+
+
+def _add_missing_account_columns(conn: sqlite3.Connection) -> None:
+    """Acrescenta a `live_accounts` as colunas de `_ACCOUNT_COLUMNS_ADICIONADAS`
+    que ainda não existirem. Idempotente e barato (uma leitura de
+    `PRAGMA table_info` por conexão), no mesmo espírito de `ensure_tables`:
+    o store funciona em banco novo ou antigo, sem passo manual."""
+    # Índice posicional (coluna 1 = `name`), e não `row["name"]`: esta função
+    # roda dentro de `ensure_tables`, que também é chamada por
+    # `scripts/migrate_live_db.py` com uma conexão CRUA — sem
+    # `row_factory = sqlite3.Row`, e ali um acesso por chave seria `TypeError`.
+    existentes = {row[1] for row in conn.execute("PRAGMA table_info(live_accounts)")}
+    novas = [(nome, ddl) for nome, ddl in _ACCOUNT_COLUMNS_ADICIONADAS if nome not in existentes]
+    if not novas:
+        return
+    for nome, ddl in novas:
+        conn.execute(f"ALTER TABLE live_accounts ADD COLUMN {nome} {ddl}")
+    conn.commit()
 
 
 def _connect(db_path: Path = LIVE_DB_PATH) -> sqlite3.Connection:
@@ -360,6 +390,7 @@ def ensure_account(
     initial_capital: float,
     investment_robot: str,
     withdrawal_robot: str,
+    symbol: str = "",
 ) -> AccountState:
     """Cria a conta se não existir; se já existir, não mexe nela.
 
@@ -372,10 +403,11 @@ def ensure_account(
     """
     conn.execute(
         """INSERT INTO live_accounts
-            (name, mode, initial_capital, cash, investment_robot, withdrawal_robot)
-           VALUES (?, ?, ?, ?, ?, ?)
+            (name, mode, initial_capital, cash, investment_robot, withdrawal_robot, symbol)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(name) DO NOTHING""",
-        (name, mode, initial_capital, initial_capital, investment_robot, withdrawal_robot),
+        (name, mode, initial_capital, initial_capital, investment_robot,
+         withdrawal_robot, symbol),
     )
     account = load_account(conn, name)
     assert account is not None, "insert com ON CONFLICT DO NOTHING não pode deixar a conta ausente"
@@ -384,6 +416,17 @@ def ensure_account(
             f"conta '{name}' já existe com mode={account.mode!r}, mas foi "
             f"pedida com mode={mode!r} — divergência entre a conta gravada "
             "e o broker/CLI que está chamando agora."
+        )
+    # Mesmo rigor de `mode`, e pelo mesmo motivo — mas mais grave: o ativo é o
+    # que a conta NEGOCIA. Uma conta criada para PMAM3 sendo aberta para KLBN4
+    # herdaria posições, caixa e histórico do papel errado. Só bloqueia quando
+    # os dois lados declaram algo: uma conta antiga (`symbol=''`, criada antes
+    # da coluna existir) aceita ganhar o símbolo em `save_account`.
+    if symbol and account.symbol and account.symbol != symbol:
+        raise ValueError(
+            f"conta '{name}' já existe negociando {account.symbol!r}, mas foi "
+            f"pedida para {symbol!r} — uma conta de day trade é o par "
+            "robô+ativo e nunca troca de papel; crie outra conta."
         )
     return account
 
@@ -401,6 +444,7 @@ def load_account(conn: sqlite3.Connection, name: str) -> Optional[AccountState]:
         cash=row["cash"],
         investment_robot=row["investment_robot"] or "",
         withdrawal_robot=row["withdrawal_robot"] or "",
+        symbol=(row["symbol"] or "") if "symbol" in row.keys() else "",
         withdrawn_total=row["withdrawn_total"],
         external_cash=row["external_cash"],
         policy_state=_loads(row["policy_state"]),
@@ -410,15 +454,33 @@ def load_account(conn: sqlite3.Connection, name: str) -> Optional[AccountState]:
 
 
 def save_account(conn: sqlite3.Connection, account: AccountState) -> None:
-    """Persiste cash/withdrawn_total/external_cash/policy_state.
+    """Persiste o estado mutável da conta: caixa, contadores de saque,
+    `policy_state`, e a IDENTIDADE OPERACIONAL (robô, capital inicial, ativo).
 
     Não mexe em posições — elas têm suas próprias funções (`upsert_position`/
     `delete_position`), porque uma conta pode ter N posições e não faz sentido
     reescrever a lista inteira a cada save da conta.
+
+    `investment_robot`/`initial_capital`/`symbol` entraram aqui em 2026-08-22,
+    corrigindo um bug silencioso: eles só eram gravados no INSERT de
+    `ensure_account`, que é `ON CONFLICT(name) DO NOTHING`. Como o painel cria
+    a conta primeiro como linha só contábil (`POST /operacao/.../caixa`, com
+    `investment_robot=''`, para o caixa digitado sobreviver ao F5) e só depois
+    escolhe o robô, o `ensure_account` seguinte não atualizava nada e o
+    `save_account` também não — o robô ficava gravado só em memória e a conta
+    permanecia para sempre sem `investment_robot`. Efeito visível:
+    `live_service.get_status()` devolvia `existe: False` para uma conta que
+    estava operando de verdade.
+
+    Não é escrita perigosa: todo chamador em produção carrega a conta com
+    `load_account` e devolve a MESMA instância, então os três campos fazem
+    round-trip idênticos a menos que alguém os mude de propósito.
+    `mode` continua de fora — esse é imutável por decisão (ver `ensure_account`).
     """
     conn.execute(
         """UPDATE live_accounts
            SET cash = ?, withdrawn_total = ?, external_cash = ?, policy_state = ?,
+               investment_robot = ?, initial_capital = ?, symbol = ?,
                updated_at = datetime('now')
            WHERE id = ?""",
         (
@@ -426,9 +488,121 @@ def save_account(conn: sqlite3.Connection, account: AccountState) -> None:
             account.withdrawn_total,
             account.external_cash,
             _dumps(account.policy_state),
+            account.investment_robot or "",
+            account.initial_capital,
+            account.symbol or "",
             account.id,
         ),
     )
+
+
+def accounts_with_symbol(conn: sqlite3.Connection) -> list[AccountState]:
+    """Todas as contas que declaram um ativo (`symbol != ''`), em ordem de
+    criação — ou seja, as contas de DAY TRADE.
+
+    É a fonte de verdade de "quais ativos já estão alocados", e existe para
+    ser lida por DOIS lados independentes: o painel (para desenhar a bolinha
+    verde e ordenar o select) e o PROCESSO de cada robô (para saber o que já
+    roda antes de sugerir um ativo novo). Vem do BANCO, e não do arquivo de
+    estado dos processos (`db/live_process.json`), de propósito: aquele
+    arquivo é do dashboard, e um robô parado continua sendo dono do ativo
+    dele — o caixa está lá.
+    """
+    rows = conn.execute(
+        "SELECT name FROM live_accounts WHERE symbol IS NOT NULL AND symbol != '' "
+        "ORDER BY id"
+    ).fetchall()
+    contas = [load_account(conn, row["name"]) for row in rows]
+    return [c for c in contas if c is not None]
+
+
+def delete_account(conn: sqlite3.Connection, name: str) -> bool:
+    """Apaga a conta e TUDO que pende dela (posições, ordens, fills, avisos —
+    `ON DELETE CASCADE`). `False` se não existia.
+
+    Existe para o painel poder remover um robô de day trade que o dono criou
+    por engano ou não quer mais. RECUSA (`ValueError`) se a conta ainda tiver
+    posição aberta ou caixa: apagar a linha não fecha posição na corretora nem
+    devolve dinheiro — deixaria uma posição órfã, viva no MT5 e invisível no
+    painel. Zerar o caixa e fechar posição é decisão do dono, feita antes.
+    """
+    account = load_account(conn, name)
+    if account is None:
+        return False
+    if account.positions:
+        raise ValueError(
+            f"conta '{name}' tem {len(account.positions)} posição(ões) aberta(s) — "
+            "feche na corretora antes de remover o robô, senão a posição fica "
+            "viva no MT5 e invisível aqui."
+        )
+    if abs(account.cash) >= 0.005:
+        raise ValueError(
+            f"conta '{name}' ainda tem R$ {account.cash:.2f} em caixa — "
+            "zere o caixa dela no painel antes de remover o robô."
+        )
+    conn.execute("DELETE FROM live_accounts WHERE id = ?", (account.id,))
+    return True
+
+
+# ---------------------------------------------------------------------------
+# avisos de capital disponível (enxame de day trade)
+# ---------------------------------------------------------------------------
+
+def record_capital_signal(
+    conn: sqlite3.Connection,
+    account_id: int,
+    robot: str,
+    suggested_symbol: str,
+    cash_brl: float,
+    required_brl: float,
+) -> bool:
+    """Grava o aviso "esta conta já tem caixa para o dono abrir `robot` em
+    `suggested_symbol`". `True` se foi gravado agora, `False` se já existia.
+
+    A deduplicação é do BANCO (`UNIQUE(account_id, suggested_symbol)` +
+    `ON CONFLICT DO NOTHING`), não de quem chama: a condição que dispara o
+    aviso continua verdadeira em toda barra seguinte, e um robô de day trade vê
+    centenas de barras por dia. Sem isso, a caixa de mensagens viraria um log
+    de spam e o "marcar como feito" não significaria nada.
+
+    Um aviso já marcado como feito NÃO volta: a linha continua lá (com
+    `acknowledged_at` preenchido) e o `ON CONFLICT` a preserva. É o
+    comportamento desejado — "já cuidei disso" vale para sempre naquele ativo,
+    e se o dono quiser ser avisado de novo ele remove o aviso.
+    """
+    cur = conn.execute(
+        """INSERT INTO live_capital_signals
+            (account_id, robot, suggested_symbol, cash_brl, required_brl)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(account_id, suggested_symbol) DO NOTHING""",
+        (account_id, robot, suggested_symbol, float(cash_brl), float(required_brl)),
+    )
+    return cur.rowcount > 0
+
+
+def capital_signals(conn: sqlite3.Connection, pending_only: bool = False) -> list[dict]:
+    """Avisos de capital, do mais novo para o mais velho, já com o nome da
+    conta que avisou. `pending_only=True` devolve só os que ainda não foram
+    marcados como feitos."""
+    sql = """SELECT s.id, s.ts, s.robot, s.suggested_symbol, s.cash_brl,
+                    s.required_brl, s.acknowledged_at, a.name AS account_name
+             FROM live_capital_signals s
+             JOIN live_accounts a ON a.id = s.account_id"""
+    if pending_only:
+        sql += " WHERE s.acknowledged_at IS NULL"
+    sql += " ORDER BY s.ts DESC, s.id DESC"
+    return [dict(row) for row in conn.execute(sql)]
+
+
+def acknowledge_capital_signal(conn: sqlite3.Connection, signal_id: int) -> bool:
+    """Marca o aviso como feito. `False` se o id não existe ou já estava
+    marcado — idempotente contra F5/POST repetido."""
+    cur = conn.execute(
+        "UPDATE live_capital_signals SET acknowledged_at = datetime('now') "
+        "WHERE id = ? AND acknowledged_at IS NULL",
+        (signal_id,),
+    )
+    return cur.rowcount > 0
 
 
 # ---------------------------------------------------------------------------

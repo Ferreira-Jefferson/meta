@@ -30,6 +30,11 @@ from dashboard import live_control
 from journal import live_store
 from live import runtime as live_runtime
 
+# Slot de day trade DINAMICO (`dt-<robo>-<ativo>`), o formato desde
+# 2026-08-22: nao existe mais um slot fixo chamado "daytrade" em
+# `core.config.SLOTS` -- o painel abre quantos o dono quiser, um por ativo.
+DAYTRADE = "dt-gremah-pmam3"
+
 
 class _FakeProc:
     def __init__(self, pid: int, poll_value):
@@ -49,6 +54,16 @@ def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(live_control, "_STARTUP_GRACE_SECONDS", 0)
     monkeypatch.setattr(live_runtime, "DB_PATH", db_path)
     monkeypatch.setattr(live_store.live_journal.__wrapped__, "__defaults__", (db_path,))
+    # `IntradayLiveRuntime` NAO passa pelo default de `live_journal()`: ele
+    # guarda `LIVE_DB_PATH` no `__init__` e o passa EXPLICITAMENTE em toda
+    # chamada. Sem este patch, `create_account`/`start` de um slot de day trade
+    # criavam conta no `db/live.sqlite` REAL durante a suite -- descoberto em
+    # 2026-08-22, quando o id do slot deixou de ser "daytrade" (que ja existia
+    # no banco real e absorvia a escrita em silencio via ON CONFLICT) e passou
+    # a ser `dt-gremah-pmam3`, que aparecia como conta nova de R$1.000.
+    from live import intraday_runtime
+
+    monkeypatch.setattr(intraday_runtime, "LIVE_DB_PATH", db_path)
     return {"state": state_path, "dir": tmp_path, "db": db_path}
 
 
@@ -251,9 +266,9 @@ def test_create_account_usa_o_magic_do_slot_nunca_um_fixo(monkeypatch):
             return _FakeRuntime()
 
     monkeypatch.setattr(live_control, "_load_cli", lambda: _FakeCli)
-    live_control.create_account(_cfg(slot="daytrade", strategy="gremah"))
+    live_control.create_account(_cfg(slot=DAYTRADE, strategy="gremah"))
 
-    assert captured_args[0].mt5_magic == slot_by_id("daytrade").magic
+    assert captured_args[0].mt5_magic == slot_by_id(DAYTRADE).magic
 
 
 # ---------- --strategy/--slot sempre no argv, sem robo padrao --------------
@@ -306,13 +321,13 @@ def test_start_day_trade_usa_passo_de_5s_swing_60s(isolated, monkeypatch):
     fechada: um passo de 60s perderia a barra inteira. Swing decide 1x por
     pregão e mantém 60s."""
     _seed_cash(isolated["db"], "swing", 1_000.0)
-    _seed_cash(isolated["db"], "daytrade", 100.0)
+    _seed_cash(isolated["db"], DAYTRADE, 100.0)
     captured: list = []
     monkeypatch.setattr(live_control.subprocess, "Popen",
                         _fake_popen(poll_value=None, captured_argv=captured))
     monkeypatch.setattr(live_control, "_pid_alive", lambda pid: True)
 
-    live_control.start(_cfg(slot="daytrade", strategy="gremah"))
+    live_control.start(_cfg(slot=DAYTRADE, strategy="gremah"))
     live_control.start(_cfg(slot="swing"))
 
     assert captured[0][captured[0].index("--seconds") + 1] == "5"
@@ -363,8 +378,8 @@ def test_min_cash_for_daytrade_usa_capital_minimo_do_robo(monkeypatch):
     símbolo do robô, não de um número cego (`Slot.min_cash_brl`)."""
     from core.config import slot_by_id
 
-    monkeypatch.setattr(live_control, "_intraday_capital_minimo", lambda robot_key: 123.45)
-    slot = slot_by_id("daytrade")
+    monkeypatch.setattr(live_control, "_intraday_capital_minimo", lambda robot_key, symbol=None: 123.45)
+    slot = slot_by_id(DAYTRADE)
 
     assert live_control.min_cash_for(slot, "gremah") == pytest.approx(123.45)
 
@@ -376,8 +391,8 @@ def test_min_cash_for_daytrade_sem_robot_key_usa_o_default_do_slot(monkeypatch):
 
     capturado = []
     monkeypatch.setattr(live_control, "_intraday_capital_minimo",
-                        lambda robot_key: capturado.append(robot_key) or 50.0)
-    slot = slot_by_id("daytrade")
+                        lambda robot_key, symbol=None: capturado.append(robot_key) or 50.0)
+    slot = slot_by_id(DAYTRADE)
 
     live_control.min_cash_for(slot)
 
@@ -390,8 +405,8 @@ def test_min_cash_for_daytrade_sem_preco_local_cai_no_piso_generico(monkeypatch)
     que não é culpa do dono — degrada para `Slot.min_cash_brl`."""
     from core.config import slot_by_id
 
-    monkeypatch.setattr(live_control, "_intraday_capital_minimo", lambda robot_key: None)
-    slot = slot_by_id("daytrade")
+    monkeypatch.setattr(live_control, "_intraday_capital_minimo", lambda robot_key, symbol=None: None)
+    slot = slot_by_id(DAYTRADE)
 
     assert live_control.min_cash_for(slot, "gremah") == pytest.approx(slot.min_cash_brl)
 
@@ -400,7 +415,7 @@ def test_start_daytrade_recusa_caixa_abaixo_do_piso_do_robo(isolated, monkeypatc
     """O ponto central do pedido, de ponta a ponta pelo `start()`: caixa que
     cobriria o piso genérico de R$50 mas não cobre o piso REAL do robô
     escolhido tem de ser recusado."""
-    _seed_cash(isolated["db"], "daytrade", 100.0)
+    _seed_cash(isolated["db"], DAYTRADE, 100.0)
     monkeypatch.setattr(live_control, "min_cash_for", lambda slot, robot_key=None: 200.0)
     called = []
     monkeypatch.setattr(
@@ -409,7 +424,7 @@ def test_start_daytrade_recusa_caixa_abaixo_do_piso_do_robo(isolated, monkeypatc
     )
 
     with pytest.raises(RuntimeError, match="abaixo do mínimo de R\\$ 200"):
-        live_control.start(_cfg(slot="daytrade", strategy="gremah"))
+        live_control.start(_cfg(slot=DAYTRADE, strategy="gremah"))
 
     assert called == []
 
@@ -420,10 +435,10 @@ def test_available_cash_sem_conta_devolve_none(isolated):
 
 def test_available_cash_le_o_ledger_do_slot_pedido(isolated):
     _seed_cash(isolated["db"], "swing", 123.45)
-    _seed_cash(isolated["db"], "daytrade", 67.89)
+    _seed_cash(isolated["db"], DAYTRADE, 67.89)
 
     assert live_control.available_cash("swing") == pytest.approx(123.45)
-    assert live_control.available_cash("daytrade") == pytest.approx(67.89)
+    assert live_control.available_cash(DAYTRADE) == pytest.approx(67.89)
 
 
 # ---------- dois slots, dois processos independentes ------------------------
@@ -432,27 +447,28 @@ def test_start_de_dois_slots_convivem_e_stop_derruba_so_um(isolated, monkeypatch
     """O pedido inteiro: os dois robôs operando ao mesmo tempo, cada um com o
     seu processo. Parar um não pode parar o outro."""
     _seed_cash(isolated["db"], "swing", 1_000.0)
-    _seed_cash(isolated["db"], "daytrade", 100.0)
+    _seed_cash(isolated["db"], DAYTRADE, 100.0)
     pids = iter([111, 222])
 
     monkeypatch.setattr(live_control.subprocess, "Popen",
                         lambda argv, **kw: _FakeProc(pid=next(pids), poll_value=None))
     monkeypatch.setattr(live_control, "_pid_alive", lambda pid: True)
+    monkeypatch.setattr(live_control, "_pids_alive", lambda pids: set(pids))
     monkeypatch.setattr(live_control.subprocess, "run", lambda *a, **k: None)
 
     live_control.start(_cfg(slot="swing"))
-    live_control.start(_cfg(slot="daytrade", strategy="gremah"))
+    live_control.start(_cfg(slot=DAYTRADE, strategy="gremah"))
 
     assert live_control.status("swing")["pid"] == 111
-    assert live_control.status("daytrade")["pid"] == 222
-    assert set(live_control.status_all()) == {"swing", "daytrade"}
+    assert live_control.status(DAYTRADE)["pid"] == 222
+    assert set(live_control.status_all(["swing", DAYTRADE])) == {"swing", DAYTRADE}
 
-    assert live_control.stop("daytrade") is True
+    assert live_control.stop(DAYTRADE) is True
 
     assert live_control.status("swing")["pid"] == 111       # intacto
-    assert live_control.status("daytrade") is None
+    assert live_control.status(DAYTRADE) is None
     # `stop` preserva a config para o form de retomada continuar preenchido.
-    assert live_control.last_config("daytrade")["strategy"] == "gremah"
+    assert live_control.last_config(DAYTRADE)["strategy"] == "gremah"
 
 
 def test_start_no_mesmo_slot_duas_vezes_recusa_a_segunda(isolated, monkeypatch):
@@ -469,16 +485,16 @@ def test_start_no_mesmo_slot_duas_vezes_recusa_a_segunda(isolated, monkeypatch):
 def test_start_log_e_por_slot(isolated, monkeypatch):
     """Dois processos no MESMO arquivo de log entrelaçariam linhas, e
     `_tail_log()` explicaria a morte de um robô com o log do outro."""
-    _seed_cash(isolated["db"], "daytrade", 100.0)
+    _seed_cash(isolated["db"], DAYTRADE, 100.0)
     monkeypatch.setattr(
         live_control.subprocess, "Popen",
         _fake_popen(poll_value=1, captured_argv=[], log_message="[erro fake] boom daytrade"),
     )
 
     with pytest.raises(RuntimeError, match="boom daytrade"):
-        live_control.start(_cfg(slot="daytrade", strategy="gremah"))
+        live_control.start(_cfg(slot=DAYTRADE, strategy="gremah"))
 
-    assert (isolated["dir"] / "live_process.daytrade.log").exists()
+    assert (isolated["dir"] / f"live_process.{DAYTRADE}.log").exists()
     assert not (isolated["dir"] / "live_process.log").exists()
 
 
@@ -492,7 +508,7 @@ def test_estado_legado_v1_e_adotado_como_slot_de_swing(isolated):
     }), encoding="utf-8")
 
     assert live_control._read_state("swing")["pid"] == 4242
-    assert live_control._read_state("daytrade") is None
+    assert live_control._read_state(DAYTRADE) is None
     assert live_control.last_config("swing")["strategy"] == "portfolio_dip2_hw40"
 
 
@@ -501,15 +517,15 @@ def test_write_state_de_um_slot_preserva_o_outro(isolated):
     pode apagar o do outro (é por isso que `_start_lock` continua único, e
     não um lock por slot)."""
     live_control._write_state("swing", {"pid": 1, "started_at": None, "config": {}})
-    live_control._write_state("daytrade", {"pid": 2, "started_at": None, "config": {}})
+    live_control._write_state(DAYTRADE, {"pid": 2, "started_at": None, "config": {}})
 
     assert live_control._read_state("swing")["pid"] == 1
-    assert live_control._read_state("daytrade")["pid"] == 2
+    assert live_control._read_state(DAYTRADE)["pid"] == 2
 
-    live_control._write_state("daytrade", None)
+    live_control._write_state(DAYTRADE, None)
 
     assert live_control._read_state("swing")["pid"] == 1
-    assert live_control._read_state("daytrade") is None
+    assert live_control._read_state(DAYTRADE) is None
 
 
 def test_start_concorrente_no_mesmo_slot_apenas_um_vence(isolated, monkeypatch):
@@ -630,7 +646,7 @@ def test_universe_for_slot_intraday_e_o_simbolo_declarado(isolated):
     `get_strategy("gremah")` levantaria `KeyError` (o scan de
     `strategy.discovery` exige `issubclass(obj, Strategy)` e nem varre o
     pacote `daytrade`) e isso viraria um 500 em `/operacao`."""
-    assert live_control.universe_for_slot("daytrade") == ("PMAM3",)
+    assert live_control.universe_for_slot(DAYTRADE) == ("PMAM3",)
 
 
 def test_universe_for_slot_swing_vem_do_robo(isolated):
@@ -674,7 +690,7 @@ def test_detect_shares_per_lot_usa_credenciais_salvas_e_universo_do_slot(monkeyp
 
     monkeypatch.setattr(broker_mt5, "MT5Broker", _factory)
 
-    assert live_control.detect_shares_per_lot("daytrade") == pytest.approx(1.0)
+    assert live_control.detect_shares_per_lot(DAYTRADE) == pytest.approx(1.0)
     assert captured[0]["login"] == 12345
     assert captured[0]["server"] == "Corretora-Live"
     assert fakes[0].tickers == ["PMAM3"]
@@ -688,7 +704,7 @@ def test_detect_shares_per_lot_sem_valor_unico_devolve_none(monkeypatch):
     monkeypatch.setattr(broker_mt5, "MT5Broker",
                         lambda **kwargs: _FakeLotBroker(None, [], **kwargs))
 
-    assert live_control.detect_shares_per_lot("daytrade") is None
+    assert live_control.detect_shares_per_lot(DAYTRADE) is None
 
 
 class _FakeFractionalBroker:
@@ -722,7 +738,7 @@ def test_detect_fractional_symbol_map_do_slot_de_day_trade(monkeypatch):
 
     monkeypatch.setattr(broker_mt5, "MT5Broker", _factory)
 
-    assert live_control.detect_fractional_symbol_map("daytrade") == {"PMAM3": "PMAM3F"}
+    assert live_control.detect_fractional_symbol_map(DAYTRADE) == {"PMAM3": "PMAM3F"}
     assert captured[0]["login"] == 12345
     assert fakes[0].tickers == ["PMAM3"]
 
@@ -739,7 +755,7 @@ def test_detect_fractional_symbol_map_filtra_quem_nao_tem_fracionario(monkeypatc
         lambda **kwargs: _FakeFractionalBroker({"PMAM3": "PMAM3"}, [], **kwargs),
     )
 
-    assert live_control.detect_fractional_symbol_map("daytrade") == {}
+    assert live_control.detect_fractional_symbol_map(DAYTRADE) == {}
 
 
 def test_detect_fractional_symbol_map_falha_de_conexao_devolve_none(monkeypatch):
@@ -751,4 +767,4 @@ def test_detect_fractional_symbol_map_falha_de_conexao_devolve_none(monkeypatch)
     monkeypatch.setattr(broker_mt5, "MT5Broker",
                         lambda **kwargs: _FakeFractionalBroker(None, [], **kwargs))
 
-    assert live_control.detect_fractional_symbol_map("daytrade") is None
+    assert live_control.detect_fractional_symbol_map(DAYTRADE) is None

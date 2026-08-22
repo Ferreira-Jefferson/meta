@@ -52,6 +52,33 @@ def load_m1(symbol: str, data_dir: Path = INTRADAY_DATA_DIR) -> pd.DataFrame:
     return df
 
 
+def last_close(symbol: str, data_dir: Path = INTRADAY_DATA_DIR) -> tuple[float | None, str]:
+    """`(ultimo fechamento de minuto salvo, data ISO)` — `(None, "")` se nao ha
+    parquet, ele esta vazio, ou nao da para ler.
+
+    Mora aqui (e nao em quem chama) porque DOIS lados independentes precisam do
+    mesmo numero e nao podem se importar: a ficha do robo no painel
+    (`dashboard/robot_view.py`, que poe um cache por mtime em cima disto) e o
+    processo de cada robo ao vivo (`live/intraday_runtime.py`, que precisa do
+    preco de hoje para saber quanto caixa um ativo exige). Duas leituras do
+    mesmo parquet escritas separadamente divergiriam no primeiro parquet
+    corrompido.
+
+    Nunca levanta: quem chama esta num painel de leitura ou num robo operando,
+    e nenhum dos dois pode morrer por causa de um arquivo ilegivel.
+    """
+    try:
+        df = load_m1(symbol, data_dir)
+    except Exception:
+        return (None, "")
+    if df.empty or "close" not in df.columns:
+        return (None, "")
+    try:
+        return (float(df["close"].iloc[-1]), str(df.index[-1].date()))
+    except Exception:
+        return (None, "")
+
+
 def merge_m1(
     symbol: str, df_new: pd.DataFrame, data_dir: Path = INTRADAY_DATA_DIR
 ) -> tuple[pd.DataFrame, int]:

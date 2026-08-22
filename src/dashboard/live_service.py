@@ -83,8 +83,9 @@ def _build_intraday_runtime(slot: Slot, capital: float, execution_mode: str, rob
     O robô vem da CONTA (`live_accounts.investment_robot`), não de um import
     fixo — mesmo motivo de `_build_daily_runtime`: um painel que sempre
     mostra `Gremah` mentiria se a conta tivesse escolhido outro robô
-    registrado. O símbolo, por sua vez, vem do ROBÔ (`robo.symbol`), não do
-    slot — `core.config.Slot` não declara símbolo desde 2026-08-21.
+    registrado. O ATIVO vem do slot (`dt-<robô>-<ativo>`, desde 2026-08-22):
+    o painel abre N robôs de day trade, e usar o default do robô mostraria
+    PMAM3 em todos eles.
 
     Não conecta em nada: o `MT5BarFeed` nunca é lido por `status()` — o painel
     só reporta o fuso em uso, não busca barra. Também não passa `clock_feed`:
@@ -104,7 +105,7 @@ def _build_intraday_runtime(slot: Slot, capital: float, execution_mode: str, rob
             "conta sem `investment_robot` gravado — nao da para montar o painel "
             "sem saber qual robo ela opera"
         )
-    robo = get_daytrade_robot(robot)
+    robo = get_daytrade_robot(robot, symbol=slot.symbol or None)
     profile = PROFILES[robo.symbol]
     return IntradayLiveRuntime(
         slot=slot,

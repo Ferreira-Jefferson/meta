@@ -331,6 +331,18 @@ class AccountState:
     cash: float
     investment_robot: str = ""
     withdrawal_robot: str = ""
+    # Ativo que ESTA conta negocia. Vazio para swing (o robo diario escolhe o
+    # papel sozinho, dentro do universo dele) e obrigatorio para day trade,
+    # onde a conta E' o par robo+ativo: desde 2026-08-22 o painel abre quantas
+    # contas de day trade o dono quiser, uma por ativo, cada uma com processo e
+    # caixa proprios. Antes disso o ativo era propriedade do ROBO (um `Gremah`
+    # por chave no registry), o que impedia dois `gremah` em papeis diferentes.
+    #
+    # E' tambem o que garante o invariante da conta NETTING da Rico: duas
+    # contas nunca podem declarar o mesmo `symbol`, senao as posicoes se
+    # fundiriam numa so na corretora e os dois livros-caixa passariam a mentir
+    # (ver `dashboard.live_control._assert_slots_disjuntos`).
+    symbol: str = ""
     positions: dict[str, LivePosition] = field(default_factory=dict)
     withdrawn_total: float = 0.0         # somatorio historico retirado
     external_cash: float = 0.0           # caixa fora do risco (com juros)

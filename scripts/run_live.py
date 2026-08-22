@@ -249,9 +249,9 @@ def _resolve_slot(args):
     """Slot pedido, ou erro. Sem default (ver docstring do modulo)."""
     if not getattr(args, "slot", None):
         raise ValueError(
-            "--slot é obrigatório — não há vaga padrão. Use 'daytrade' "
-            "(day trade, barra a barra) ou 'swing' (diário). Ver "
-            "core.config.SLOTS."
+            "--slot é obrigatório — não há vaga padrão. Use 'swing' (diário) "
+            "ou um slot de day trade no formato 'dt-<robô>-<ativo>' "
+            "(ex.: 'dt-gremah-pmam3'). Ver core.config.slot_by_id."
         )
     try:
         return slot_by_id(args.slot)
@@ -262,11 +262,15 @@ def _resolve_slot(args):
 def build_intraday(args):
     """Monta o `IntradayLiveRuntime` do slot de day trade.
 
-    O símbolo NÃO vem do slot (removido de `core.config.Slot` em
-    2026-08-21) — vem do robô resolvido por
-    `strategy.daytrade.registry.get_daytrade_robot`, porque o ativo é
-    propriedade do robô: dois robôs registrados podem operar símbolos
-    diferentes no mesmo slot, um por vez."""
+    O símbolo vem do SLOT (`dt-<robô>-<ativo>`, ver
+    `core.config.daytrade_slot`) desde 2026-08-22, quando o painel passou a
+    abrir N robôs de day trade — um por ativo, cada um num processo próprio.
+    Antes disso o ativo era propriedade do robô resolvido no registry, o que
+    tornava impossível rodar dois `gremah` em papéis diferentes.
+
+    Um slot SEM símbolo (id fora do formato dinâmico) cai no default da
+    classe: mantém funcionando qualquer invocação antiga da linha de comando,
+    sem inventar um ativo."""
     from backtest.intraday.profiles import PROFILES, config_for
     from live.bar_feed import MT5BarFeed
     from live.intraday_runtime import IntradayLiveRuntime
@@ -275,9 +279,15 @@ def build_intraday(args):
 
     slot = _resolve_slot(args)
     try:
-        strategy_obj = get_daytrade_robot(args.strategy or slot.robot_key)
+        strategy_obj = get_daytrade_robot(args.strategy or slot.robot_key,
+                                          symbol=slot.symbol or None)
     except KeyError as e:
         raise ValueError(str(e)) from e
+    except ValueError as e:
+        # `Gremah.__init__` recusa símbolo sem calibração própria. Reempacota
+        # com o slot no texto: o operador precisa saber QUAL robô morreu, não
+        # só que "algum" símbolo não tem calibração.
+        raise ValueError(f"slot {slot.id!r}: {e}") from e
     symbol = strategy_obj.symbol
     if args.mode != "mt5":
         raise ValueError(f"--mode inválido ou ausente: {args.mode!r} — use 'mt5'.")
@@ -580,9 +590,15 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--mode", default="mt5", choices=("mt5",))
-    p.add_argument("--slot", default=None, choices=tuple(s.id for s in SLOTS),
-                   help="vaga de operacao (core.config.SLOTS) -- obrigatorio, sem "
-                        "default (ver docstring, secao 'Slots')")
+    # SEM `choices`: os slots de day trade sao DINAMICOS (`dt-<robo>-<ativo>`,
+    # criados pelo dono no painel) e nao existem em `SLOTS`. Um `choices` fixo
+    # recusaria todo robo de day trade antes de `_resolve_slot` poder explicar
+    # o que ha de errado. Quem valida e' `core.config.slot_by_id`, que conhece
+    # os dois formatos e devolve mensagem util.
+    p.add_argument("--slot", default=None,
+                   help="vaga de operacao -- obrigatorio, sem default. Estaticos: "
+                        f"{', '.join(s.id for s in SLOTS)}. Day trade: "
+                        "dt-<robo>-<ativo> (ex.: dt-gremah-pmam3)")
     p.add_argument("--execution-mode", default="shadow", choices=("shadow", "live"),
                    help="'shadow' journaliza sem enviar ordem (default); 'live' envia "
                         "de verdade. So o slot de day trade honra esta flag hoje")

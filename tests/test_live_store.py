@@ -104,6 +104,7 @@ def test_ensure_account_recusa_divergencia_de_modo(db_path):
                 cash               REAL    NOT NULL,
                 investment_robot   TEXT    NOT NULL DEFAULT '',
                 withdrawal_robot   TEXT    NOT NULL DEFAULT '',
+                symbol             TEXT    NOT NULL DEFAULT '',
                 withdrawn_total    REAL    NOT NULL DEFAULT 0,
                 external_cash      REAL    NOT NULL DEFAULT 0,
                 policy_state       TEXT    NOT NULL DEFAULT '{}',
