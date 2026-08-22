@@ -23,10 +23,21 @@
 
 *, *::before, *::after { box-sizing: border-box; }
 
-html, body {
+/* `font-size` fica SÓ no body -- de propósito, e é correção de bug.
+   `html, body { font-size: var(--fs-body) }` aplicava 0.8125rem DUAS vezes:
+   o `html` virava 13px e o `body` recalculava 0.8125 × 13 = 10,56px. Todo
+   `rem` do projeto passava a valer 13px em vez de 16 (`--fs-h1: 3rem`
+   renderizava 39px, não 48) e, pior, a unidade `ch` -- que mede pelo tamanho
+   REAL da fonte e é o que define a medida de todo bloco de texto -- encolhia
+   junto: `max-width: 72ch` dava 403px de 1312 disponíveis, e a prosa virava
+   uma fita estreita encostada na esquerda. */
+html {
   margin: 0; padding: 0;
   background: var(--bg);
   color: var(--fg);
+}
+body {
+  margin: 0; padding: 0;
   font-family: var(--font-mono);
   font-size: var(--fs-body);
   line-height: var(--lh-body);

@@ -1104,8 +1104,12 @@
   font-size: var(--fs-body-lg);
   line-height: 1.7;
   color: var(--fg);
+  /* Medida em `ch` porque é o que mede LINHA (largura do glifo), não pixel
+     arbitrário: ~72 caracteres é a faixa legível para prosa. Isso só passou
+     a valer de verdade depois do bug de `font-size` duplicado em `base.css`
+     — antes, `ch` era medido sobre 10,56px e a mesma declaração produzia uma
+     coluna de 403px. */
   max-width: 72ch;
-  margin-bottom: var(--s-6);
 }
 .doc-body p { margin: 0 0 var(--s-4); }
 .doc-body p:last-child { margin-bottom: 0; }
@@ -1145,7 +1149,27 @@
   border: none;
   line-height: 1.6;
 }
-.doc-spec .doc-list { max-width: 88ch; }
+.doc-block-resumo { align-items: baseline; }
+
+/* As regras em DUAS colunas balanceadas dentro da coluna de conteúdo.
+   `columns` (multi-coluna) e não grid: ele equilibra a altura sozinho, então
+   um bloco de 3 itens e um de 14 ficam igualmente bem — foi por não
+   equilibrar que a versão anterior, em grade de 4 colunas, deixava um vão
+   grande embaixo da lista menor. E é isto que faz o texto OCUPAR a largura
+   da página sem produzir linha de 130 caracteres: a coluna de conteúdo tem
+   ~1060px, dividida em duas de ~510px (≈65 caracteres cada, a medida certa
+   para leitura). */
+.doc-spec .doc-list {
+  columns: 2;
+  column-gap: var(--s-7);
+}
+.doc-spec .doc-list li {
+  /* Item não pode ser cortado no meio pela quebra de coluna. */
+  break-inside: avoid;
+}
+@media (max-width: 1180px) {
+  .doc-spec .doc-list { columns: 1; max-width: 80ch; }
+}
 @media (max-width: 820px) {
   .doc-spec .doc-block { grid-template-columns: 1fr; gap: var(--s-3); }
 }

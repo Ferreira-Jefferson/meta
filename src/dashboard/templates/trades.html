@@ -27,7 +27,9 @@
     <select name="ticker">
       <option value="">Todos</option>
       {% for t in tickers %}
-        <option value="{{ t }}" {% if filters.ticker == t %}selected{% endif %}>{{ t }}</option>
+        {# `value` mantém o `.SA` (é a chave da consulta); só o RÓTULO perde,
+           como na tabela e nos outros filtros do app. #}
+        <option value="{{ t }}" {% if filters.ticker == t %}selected{% endif %}>{{ t.replace(".SA", "") }}</option>
       {% endfor %}
     </select>
   </label>

@@ -80,8 +80,11 @@
   <div class="metric">
     <span class="k">vs IBOV</span>
     {% set delta = ((run.cagr or 0) - (run.benchmark_cagr or 0)) * 100 %}
+    {# Sinal explícito (o "+" importa aqui: é excedente sobre o índice) mas
+       vírgula decimal como o resto da tela — `num_br` não emite sinal, então
+       o "+" vem à parte. #}
     <span class="v num {% if delta >= 0 %}pos{% else %}neg{% endif %}">
-      {{ "%+0.2fpp"|format(delta) }}
+      {% if delta >= 0 %}+{% endif %}{{ delta | num_br }}pp
     </span>
     <span class="sub">CAGR excedente</span>
   </div>

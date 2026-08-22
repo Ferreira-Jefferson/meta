@@ -6,12 +6,16 @@
   {% set cls = "winner" if (t.pnl_pct or 0) > 0 else ("loser" if (t.pnl_pct or 0) < 0 else "") %}
   <tr class="{{ cls }}" onclick="location.href='/trades/{{ t.id }}'">
     <td class="dim">{{ t.id }}</td>
-    <td class="ticker">{{ t.ticker }}</td>
+    {# Sufixo `.SA` fora: é detalhe do provedor de dado (yfinance), não do
+       ativo, e some em toda outra tabela do app. Decimais com vírgula
+       (`num_br`), como o resto — o sinal vem à parte porque `num_br` não
+       emite sinal e aqui ele importa (ganho × perda). #}
+    <td class="ticker">{{ t.ticker.replace(".SA", "") }}</td>
     <td>{{ t.entry_date }}</td>
     <td>{{ t.exit_date or "—" }}</td>
     <td class="right">{{ t.holding_days or 0 }}d</td>
-    <td class="right pnl">{{ "%+0.2f%%"|format((t.pnl_pct or 0) * 100) }}</td>
-    <td class="right">{{ "%+0.2f"|format(t.r_multiple or 0) }}</td>
+    <td class="right pnl">{% if (t.pnl_pct or 0) >= 0 %}+{% endif %}{{ ((t.pnl_pct or 0) * 100) | num_br }}%</td>
+    <td class="right">{% if (t.r_multiple or 0) >= 0 %}+{% endif %}{{ (t.r_multiple or 0) | num_br }}</td>
     <td class="dim">{{ t.exit_reason }}</td>
     <td class="tags-cell">
       {% for tag in tags_by_trade.get(t.id, []) %}

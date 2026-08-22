@@ -83,15 +83,20 @@
   {{ ui.section_head("Regras", "Como ele opera",
      "Texto lido da própria classe que o backtest e a operação real executam —
       se a regra mudar no código, esta página muda com ela.") }}
-  <div class="doc-body">{{ robot.narrative|safe }}</div>
+  {#  Lista de ESPECIFICAÇÃO (rótulo à esquerda, conteúdo à direita), não
+      quatro colunas lado a lado: as listas têm de 3 a 14 itens de prosa
+      longa, e em colunas estreitas isso virava quatro parágrafos verticais
+      ilegíveis com um vão enorme embaixo da menor delas.
 
-  {#  Lista de ESPECIFICAÇÃO (rótulo à esquerda, regras à direita), não quatro
-      colunas lado a lado: as listas têm de 3 a 14 itens de prosa longa, e em
-      colunas estreitas isso virava quatro parágrafos verticais ilegíveis com
-      um vão enorme embaixo da menor delas. Aqui cada bloco ocupa a largura da
-      página e cresce quanto precisar. #}
-  {% if robot.blocks %}
+      A NARRATIVA entra como primeira linha desta mesma grade, e não como um
+      bloco solto acima dela: soltando-a, ela virava uma fita de texto
+      encostada na margem esquerda, sem relação de alinhamento com nada — o
+      resto da seção começa 250px mais à direita, na coluna de conteúdo. #}
   <div class="doc-spec">
+    <article class="doc-block doc-block-resumo">
+      <h3>Em resumo</h3>
+      <div class="doc-body">{{ robot.narrative|safe }}</div>
+    </article>
     {% for titulo, itens in robot.blocks %}
     <article class="doc-block">
       <h3>{{ titulo }}</h3>
@@ -99,17 +104,21 @@
         {% for item in itens %}<li>{{ item|inline_code }}</li>{% endfor %}
       </ul>
     </article>
+    {% else %}
+    {# Robô sem ficha declarada: a nota entra como linha da grade, no mesmo
+       alinhamento das outras — não como um parágrafo flutuando fora dela. #}
+    <article class="doc-block">
+      <h3>Ficha de regras</h3>
+      <p class="doc-empty">
+        Este robô ainda não declara a ficha na classe
+        (<code>watched_signals</code>, <code>entry_rules</code>,
+        <code>exit_rules</code>, <code>sizing_rules</code> — ver
+        <code>strategy/base.py</code>). A tabela de parâmetros abaixo vem da
+        assinatura real dele.
+      </p>
+    </article>
     {% endfor %}
   </div>
-  {% else %}
-  <p class="doc-empty">
-    Este robô ainda não declara a ficha de regras na classe
-    (<code>watched_signals</code>, <code>entry_rules</code>,
-    <code>exit_rules</code>, <code>sizing_rules</code> — ver
-    <code>strategy/base.py</code>). A tabela de parâmetros abaixo vem da
-    assinatura real dele.
-  </p>
-  {% endif %}
 
   {% if robot.params %}
   <article class="doc-block params-block">
