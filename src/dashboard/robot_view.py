@@ -202,10 +202,19 @@ def _daytrade_assets(cls, robo) -> tuple[RobotAsset, ...]:
         preco, data = _ultimo_preco(symbol)
         return (_asset(symbol, getattr(robo, "profit_pct", 0.0),
                        getattr(robo, "stop_multiplier", 0.0), preco, data),)
-    return tuple(
+    ativos = tuple(
         _asset(s.symbol, s.profit_pct, s.stop_multiplier, *_ultimo_preco(s.symbol))
         for s in setups()
     )
+    # Ordenado pelo CAIXA MÍNIMO, do mais barato ao mais caro. A ordem antiga
+    # era a de medição (lucro OOS decrescente), que responde "qual mediu
+    # melhor?" — mas a primeira pergunta de quem lê a tabela é "qual eu
+    # consigo operar?", e essa é decidida pelo caixa: os ativos desta família
+    # vão de ~R$28 a ~R$30.390, mais de mil vezes de diferença. Ativo sem
+    # preço salvo (caixa `None`) vai para o fim: sem preço não há como
+    # ordená-lo, e fingir que é o mais barato o colocaria em primeiro.
+    return tuple(sorted(
+        ativos, key=lambda a: (a.min_capital is None, a.min_capital or 0.0, a.symbol)))
 
 
 def _asset(symbol, profit_pct, stop_multiplier, preco, data) -> RobotAsset:

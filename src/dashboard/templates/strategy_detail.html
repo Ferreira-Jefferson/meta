@@ -105,9 +105,10 @@
 {% if robot.assets and robot.assets|length > 1 %}
 <section class="robot-assets">
   {{ ui.section_head("Ativos", "O que ele pode operar",
-     "Um ativo por conta. Cada um foi medido separadamente e tem alvo, stop e
-      caixa mínimo próprios — a calibração de um não vale para o outro, e pedir
-      um ativo fora desta lista faz o robô se recusar a ligar.") }}
+     "Um ativo por conta, e a lista está em ordem de CAIXA MÍNIMO: os primeiros
+      são os que cabem em menos dinheiro. Cada um foi medido separadamente e tem
+      alvo, stop e caixa próprios — a calibração de um não vale para os outros, e
+      pedir um ativo fora desta lista faz o robô se recusar a ligar.") }}
   <table class="assets-table">
     <thead>
       <tr>
@@ -138,10 +139,15 @@
       {% endfor %}
     </tbody>
   </table>
+  {# A regra do caixa mínimo mudou em 2026-08-22 (`strategy/daytrade/base.py::
+     capital_minimo_brl`): era o custo do lote arredondado para cima ao próximo
+     múltiplo de R$ 50, virou o DOBRO do custo do lote. Esta nota descrevia a
+     regra velha e por isso mentia — o texto de tela tem de sair do que a
+     função faz hoje, não do que ela fazia quando a nota foi escrita. #}
   <p class="example-note">
-    O caixa mínimo é o custo de um lote de 100 ações no último preço, arredondado
-    para cima ao próximo múltiplo de R$ 50. Ele acompanha o preço: sobe e desce
-    com o ativo.
+    O caixa mínimo é o DOBRO do custo de um lote de 100 ações no último preço —
+    um lote para comprar e a mesma folga para aguentar o stop. Ele acompanha o
+    preço: sobe e desce com o ativo, e por isso é reavaliado a cada pregão.
   </p>
 </section>
 {% endif %}

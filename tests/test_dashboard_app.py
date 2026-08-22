@@ -889,3 +889,32 @@ def test_botao_iniciar_desabilitado_sem_caixa_no_ledger(isolated_journal, client
 
     assert "disabled" in html
     assert "777" in html
+
+
+def test_tabela_de_ativos_vem_ordenada_pelo_caixa_minimo(client):
+    """A primeira pergunta de quem lê a tabela é "qual eu consigo operar?".
+
+    A ordem original era a de medição (lucro OOS decrescente), que responde
+    outra pergunta. Nesta família o caixa mínimo vai de ~R$ 28 (PMAM3) a
+    ~R$ 30.390 (CLSC4) — mais de mil vezes — então a ordem decide se a tabela
+    é útil ou se o dono precisa varrer dez linhas para achar o que cabe no
+    bolso. Ativo sem preço salvo (caixa `None`) fica no fim: sem preço não há
+    como ordená-lo, e tratá-lo como zero o poria em primeiro lugar.
+    """
+    from dashboard.robot_view import detail
+
+    ativos = detail("gremah").assets
+    assert len(ativos) > 1
+
+    com_caixa = [a for a in ativos if a.min_capital is not None]
+    sem_caixa = [a for a in ativos if a.min_capital is None]
+    valores = [a.min_capital for a in com_caixa]
+    assert valores == sorted(valores), f"tabela fora de ordem: {valores}"
+    # Os sem preço vêm depois de todos os que têm.
+    if sem_caixa:
+        assert ativos.index(sem_caixa[0]) > ativos.index(com_caixa[-1])
+
+    # E a ordem tem de chegar na página, não só no view-model.
+    html = client.get("/strategies/gremah").text
+    posicoes = [html.index(a.symbol) for a in com_caixa]
+    assert posicoes == sorted(posicoes)
