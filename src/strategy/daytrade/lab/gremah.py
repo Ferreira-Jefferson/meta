@@ -48,7 +48,15 @@ from strategy.daytrade.base import (
     IntradayAction,
     IntradayOpenPosition,
     IntradayStrategy,
+    capital_minimo_brl,
 )
+
+#: Perda-limite diaria padrao, como fracao do caixa minimo do dia
+#: (`capital_minimo_brl`). Substituiu o R$30 fixo em 2026-08-22: medido nos
+#: 10 ativos calibrados, 20% reproduz o MESMO resultado (IS e OOS) do R$30
+#: antigo, mas escala com o preco de cada ativo em vez de travar num numero
+#: so'.
+SESSION_STOP_FRACAO_PADRAO = 0.20
 
 
 @dataclass(frozen=True)
@@ -144,7 +152,7 @@ class SymbolSetup:
     MESMOS números numa forma estável de ler: uma instância de `Gremah` opera
     UM símbolo, então a tabela de parâmetros dela mostra o alvo/stop de um
     ativo só — e mostrar esse número solto anunciava "o robô usa 0,32%" quando
-    0,32% é a calibração da PMAM3 e não vale para os outros dois.
+    0,32% é a calibração da PMAM3 e não vale para nenhum outro papel.
 
     O capital mínimo fica de fora de propósito: ele depende do preço de HOJE,
     e buscar preço não é assunto de `strategy/` (AGENTS.md #1) — quem exibe
@@ -184,6 +192,8 @@ class _SessionState:
     spacing_ticks_today: int = 1
     profit_ticks_today: int = 1
     stop_ticks_today: int | None = None
+    session_stop_armed: bool = False
+    session_stop_brl_hoje: float = 0.0
 
 
 class Gremah(IntradayStrategy):
@@ -226,11 +236,16 @@ class Gremah(IntradayStrategy):
     # quem le (`dashboard/robot_view.py`) usa `getattr` com default vazio.
     # Existe para a pagina `/strategies/gremah` poder explicar o robo em prosa
     # em vez de mostrar so' a tabela de parametros.
+    # A frase de abertura explica o NOME, porque o nome é a descrição do
+    # desenho: cada uma das quatro partes de "Grid REload MAker Hybrid" é uma
+    # decisão do robô, e explicar a sigla explica a estratégia de uma vez.
     tagline = (
-        "Deixa uma ordem parada logo abaixo do preço, compra se o mercado vier até "
-        "ela e revende poucos centavos acima — dezenas de vezes por dia, sempre "
-        "zerando antes do fim do pregão. Opera um ativo por conta, entre três já "
-        "calibrados."
+        "Grid REload MAker Hybrid — o nome é o desenho: uma GRADE de "
+        "níveis em volta do preço (Grid), que se RECARREGA a cada ida e volta "
+        "(REload), com a ordem sempre PARADA esperando o mercado em vez de "
+        "persegui-lo (MAker), e com duas âncoras no mesmo pregão — a abertura nas "
+        "primeiras horas, o preço do momento depois (Hybrid). Dezenas de operações "
+        "por dia, um ativo por conta, nunca dormindo com posição aberta."
     )
     plain_summary = (
         "Ele não tenta adivinhar se a ação vai subir ou cair. Deixa uma ordem de "
@@ -242,16 +257,19 @@ class Gremah(IntradayStrategy):
         "preço chegar, nunca perseguem o mercado. Quem espera recebe o spread em vez "
         "de pagá-lo, e é essa diferença que separa o robô de dar lucro ou prejuízo "
         "com o mesmo número de operações.",
-        "Ele opera UM ativo por conta, e hoje há três liberados: PMAM3, CSAN3 e "
-        "KLBN4. Cada um tem alvo de lucro e stop próprios, medidos separadamente — "
-        "o que funciona numa ação de centavos não funciona numa de três reais, e "
-        "isso não é uma preferência, é medição. Pedir um ativo fora dessa lista faz "
-        "o robô se recusar a ligar em vez de reaproveitar a calibração de outro "
-        "papel. A tabela de ativos abaixo mostra os números de cada um.",
+        "Ele opera UM ativo por conta, escolhido entre os que já têm calibração "
+        "medida — a tabela de ativos abaixo é a lista completa, e o número dela é o "
+        "número de verdade. Cada ativo tem alvo de lucro e stop próprios, medidos "
+        "separadamente: o que funciona numa ação de centavos não funciona numa de "
+        "cento e cinquenta reais, e isso não é preferência, é medição. Pedir um "
+        "ativo fora da lista faz o robô se recusar a ligar em vez de reaproveitar a "
+        "calibração de outro papel.",
         "Cada ativo também exige um caixa mínimo diferente, e é aí que a escolha "
-        "aperta: day trade compra em lote inteiro de 100 ações, então o piso é o "
-        "custo de um lote. Uma ação de R$ 0,14 pede cerca de R$ 50; uma de R$ 3,64 "
-        "pede cerca de R$ 400. O mesmo robô, o mesmo desenho, oito vezes o capital.",
+        "aperta: day trade compra em lote inteiro de 100 ações, e o piso é o DOBRO "
+        "do custo de um lote. Uma ação de R$ 0,14 pede R$ 28; uma de R$ 151,95 pede "
+        "R$ 30.390. O mesmo robô, o mesmo desenho, mais de mil vezes o capital — é o "
+        "caixa, não a mecânica, que decide quais ativos estão ao alcance de quem "
+        "opera.",
         "Nas primeiras horas do pregão, os níveis são calculados a partir do preço de "
         "abertura do dia. Depois das 11h de Brasília, passam a ser calculados a partir "
         "do preço do momento, refeitos a cada ordem nova — medimos que os níveis "
@@ -259,12 +277,13 @@ class Gremah(IntradayStrategy):
         "ser tocados.",
         "Ele alterna os lados: depois de fechar uma compra, a próxima tentativa é uma "
         "venda. Nunca dorme com posição aberta, e se o prejuízo acumulado do dia "
-        "chegar a R$ 30 ele fecha o que estiver aberto e não opera mais até o próximo "
-        "pregão.",
+        "chegar a 20% do caixa mínimo do ativo ele fecha o que estiver aberto e não "
+        "opera mais até o próximo pregão — numa ação de R$ 0,14 isso são uns R$ 5,60; "
+        "numa de R$ 151,95, uns R$ 6.078.",
     )
     plain_example = (
-        "O exemplo abaixo usa PMAM3, um dos três ativos calibrados. Com CSAN3 ou "
-        "KLBN4 a mecânica é idêntica, mas os números mudam — alvo, stop e caixa "
+        "O exemplo abaixo usa PMAM3, um dos ativos calibrados. Em qualquer outro da "
+        "tabela a mecânica é idêntica, mas os números mudam — alvo, stop e caixa "
         "mínimo são próprios de cada ativo.",
         "PMAM3 abre o dia a R$ 0,14. O alvo de lucro dela é 0,32% do preço — menos "
         "de um centavo. Como a bolsa não negocia fração de centavo, o alvo vira o "
@@ -285,7 +304,8 @@ class Gremah(IntradayStrategy):
         "O preço de abertura do dia, que ancora todos os níveis das primeiras horas.",
         "O preço do momento, que passa a ancorar os níveis depois das 11h de Brasília.",
         "O relógio do pregão — é ele que decide qual das duas âncoras vale agora.",
-        "O resultado acumulado do dia, em reais, contra o limite de R$ 30 de prejuízo.",
+        "O resultado acumulado do dia, em reais, contra o limite de prejuízo do ativo "
+        "(20% do caixa mínimo dele).",
         "Quantas operações já fez de cada lado, contra o teto de 15 por lado.",
         "Há quanto tempo a ordem parada está esperando sem ser tocada.",
     )
@@ -296,9 +316,9 @@ class Gremah(IntradayStrategy):
         "Os três níveis (entrada, alvo e stop) saem de um percentual do preço de "
         "referência, arredondado para centavos inteiros. Em ações de centavos, esse "
         "arredondamento é o que manda: tudo tende a virar 1 centavo.",
-        "Esse percentual é do ATIVO, não do robô: cada um dos três ativos liberados "
-        "tem alvo e stop próprios, medidos separadamente. Trocar de ativo troca os "
-        "dois números junto — ver a tabela de ativos.",
+        "Esse percentual é do ATIVO, não do robô: cada ativo liberado tem alvo e "
+        "stop próprios, medidos separadamente. Trocar de ativo troca os dois "
+        "números junto — ver a tabela de ativos.",
         "Até as 11h de Brasília a referência é a abertura do dia; depois, é o preço "
         "do momento. Esse corte não foi otimizado — é o meio entre o horário em que a "
         "medição ainda dava lucro e o em que já dava prejuízo.",
@@ -312,18 +332,19 @@ class Gremah(IntradayStrategy):
         "Vende com uma ordem parada no alvo, também sem perseguir o preço: sair como "
         "quem espera, e não como quem paga o spread, é o centro do desenho.",
         "Se o preço vai contra, o stop fecha a posição na direção oposta ao alvo.",
-        "Se o prejuízo acumulado do dia chega a R$ 30, fecha o que estiver aberto e "
-        "encerra: nada mais é enviado até o próximo pregão.",
+        "Se o prejuízo acumulado do dia chega a 20% do caixa mínimo do ativo, fecha "
+        "o que estiver aberto e encerra: nada mais é enviado até o próximo pregão.",
         "Nunca carrega posição para o dia seguinte. O fechamento segue o calendário "
         "real da B3, não um horário fixo — o pregão muda de hora com o horário de "
         "verão americano.",
     )
     sizing_rules = (
         "Lote inteiro de 100 ações por ordem, sempre — day trade aqui não usa o "
-        "mercado fracionário. Foi assim que os três ativos foram medidos.",
-        "Por isso cada ativo tem um caixa mínimo próprio: o piso é o custo de um "
-        "lote de 100 ações, arredondado para cima ao próximo múltiplo de R$ 50. É a "
-        "diferença entre poder operar um ativo e não poder — ver a tabela de ativos.",
+        "mercado fracionário, onde cada ordem custaria R$ 1,90 fixos de corretagem. "
+        "Foi em lote inteiro que todos os ativos da tabela foram medidos.",
+        "Por isso cada ativo tem um caixa mínimo próprio: o piso é o DOBRO do custo "
+        "de um lote de 100 ações, sem arredondamento. É a diferença entre poder "
+        "operar um ativo e não poder — ver a tabela de ativos.",
         "Em lote inteiro a corretagem é zero na Rico. O que sobra é a taxa da bolsa, "
         "e o backtest assume o DOBRO da taxa real, de propósito, como margem de "
         "segurança.",
@@ -332,12 +353,12 @@ class Gremah(IntradayStrategy):
     )
     # Fração mostrada como percentual na ficha (ver `Strategy.param_pct` --
     # `IntradayStrategy` não herda de `Strategy`, mas quem lê usa `getattr`).
-    param_pct = ("profit_pct",)
+    param_pct = ("profit_pct", "session_stop_pct_capital")
     # Fora da tabela PLANA de parâmetros porque o valor deles é POR ATIVO, e a
     # tabela mostra uma instância só (a default, PMAM3). Ela anunciava
     # "symbol=PMAM3, profit_pct=0,32%, stop_multiplier=10" como se fossem os
-    # números DO ROBÔ -- são os da PMAM3, e não valem para CSAN3 nem KLBN4.
-    # Quem carrega os três é a tabela de ativos da ficha, alimentada por
+    # números DO ROBÔ -- são os da PMAM3, e não valem para nenhum outro papel.
+    # Quem carrega todos é a tabela de ativos da ficha, alimentada por
     # `calibrated_setups()`.
     param_hidden = ("symbol", "profit_pct", "stop_multiplier")
     # O valor cru é o relógio do terminal MT5 (UTC), e é ele que `on_bar`
@@ -353,7 +374,10 @@ class Gremah(IntradayStrategy):
         "stop_multiplier": "Distância do stop, em múltiplos do alvo. Vazio = mesmo lookup de "
                            "`profit_pct`.",
         "max_trades_per_side": "Teto de preenchimentos por lado, por sessão.",
-        "session_stop_brl": "Perda acumulada, em reais, que encerra o dia.",
+        "session_stop_pct_capital": "Percentual do caixa mínimo do dia que define a "
+                                    "perda-limite diária.",
+        "session_stop_brl": "Perda-limite diária fixa em reais, em vez do percentual acima. "
+                            "Vazio (padrão) = usa session_stop_pct_capital.",
         "quantity": "Ações por ordem. Vazio = 1 lote inteiro (100 ações), do perfil do ativo.",
         # Exibido em hora de Brasília com o UTC ao lado (`param_utc_time`), então
         # a descrição não precisa mais carregar a conversão.
@@ -385,7 +409,8 @@ class Gremah(IntradayStrategy):
         spacing_multiplier: float = 2.0,
         stop_multiplier: float | None = None,
         max_trades_per_side: int = 15,
-        session_stop_brl: float = 30.0,
+        session_stop_pct_capital: float = SESSION_STOP_FRACAO_PADRAO,
+        session_stop_brl: float | None = None,
         quantity: int | None = None,
         fixed_anchor_until: time = time(14, 0),
         rolling_reanchor_after_bars: int = 30,
@@ -417,7 +442,11 @@ class Gremah(IntradayStrategy):
         self.spacing_multiplier = spacing_multiplier
         self.stop_multiplier = stop_multiplier
         self.max_trades_per_side = max_trades_per_side
-        self.session_stop_brl = abs(session_stop_brl)
+        # Perda-limite do dia = session_stop_pct_capital x capital_minimo_brl,
+        # recalculada na abertura da sessao (ver on_bar). `session_stop_brl`,
+        # se passado, sobrepoe e fixa reais para sempre, ignorando o percentual.
+        self.session_stop_pct_capital = abs(session_stop_pct_capital)
+        self.session_stop_brl = None if session_stop_brl is None else abs(session_stop_brl)
         self.quantity = quantity
         self.fixed_anchor_until = fixed_anchor_until
         # uma ordem ROLANTE parada esperando por muitas barras acumula o
@@ -487,11 +516,24 @@ class Gremah(IntradayStrategy):
         actions: list[IntradayAction] = []
         is_fixed_phase = ts.time() < self.fixed_anchor_until
 
+        # Armada UMA vez por sessao, na primeira barra vista -- independente
+        # de comecar em fase fixa ou ja' direto em rolante (robo ligado
+        # atrasado): `_arm_fixed_session_params`, abaixo, so' roda em fase
+        # fixa, e um inicio 100% rolante nunca a chamaria, deixando o limite
+        # de perda diaria travado no default `0.0` do dataclass (halt na
+        # primeira barra) se isto morasse la' dentro.
+        if not state.session_stop_armed:
+            state.session_stop_armed = True
+            state.session_stop_brl_hoje = (
+                self.session_stop_brl if self.session_stop_brl is not None
+                else capital_minimo_brl(bar.open) * self.session_stop_pct_capital
+            )
+
         if is_fixed_phase and state.open_price is None:
             state.open_price = bar.open
             self._arm_fixed_session_params()
 
-        if not state.session_halted and session_pnl_brl <= -self.session_stop_brl:
+        if not state.session_halted and session_pnl_brl <= -state.session_stop_brl_hoje:
             state.session_halted = True
             if position is not None:
                 actions.append(Exit(reason="stop_agregado_sessao"))
