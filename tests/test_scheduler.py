@@ -101,3 +101,66 @@ def test_run_champion_uses_strategy_universe_when_set(monkeypatch, tmp_db):
     )
 
     assert calls == [bank_universe]
+
+
+def test_run_oficial_cobra_a_taxa_fixa_do_fracionario(monkeypatch, tmp_db):
+    """A run de ranking tem de rodar no regime que o dono consegue EXECUTAR.
+
+    Até 2026-08-22 o pódio media R$ 1.000 com `fractional_fixed_fee=0.0` — dez
+    vezes o capital real e sem a corretagem de R$ 1,90/ordem que o fracionário
+    cobra. No `liqflop` isso era a diferença entre "bate o IBOV em 2019-2026"
+    e "perde" (R$ 106,12 contra R$ 184,51). Este teste existe para a taxa não
+    voltar a zero em silêncio numa refatoração do `BacktestConfig`.
+    """
+    capturado = {}
+
+    def fake_load_universe(tickers=WATCHLIST, include_benchmark=True, out_dir=None):
+        return _fake_universe(tickers)
+
+    def fake_run(universe, strategy, config, start, end):
+        capturado["config"] = config
+        return _FakeResult(pd.Series([100.0, 101.0], index=pd.date_range("2024-01-01", periods=2)))
+
+    monkeypatch.setattr(scheduler_mod, "load_universe", fake_load_universe)
+    monkeypatch.setattr(scheduler_mod, "run_backtest_dispatch", fake_run)
+
+    scheduler_mod._run_champion(
+        "fake_bank_strategy", lambda: _FakeStrategy(universe_tickers=None),
+        "2024-01-01", "2024-01-03", "champion_full",
+    )
+
+    cfg = capturado["config"]
+    assert cfg.costs.fractional_fixed_fee == scheduler_mod.CHAMPION_FRACTIONAL_FEE > 0
+    assert cfg.initial_capital == scheduler_mod.CHAMPION_CAPITAL
+    # Capital do ranking tem de ser o que existe, não um múltiplo confortável.
+    assert cfg.initial_capital <= 100.0
+    # O caixa parado continua remunerado (regressão de 2026-08-20).
+    assert cfg.cash_yield_path == scheduler_mod.CHAMPION_CASH_YIELD
+
+
+def test_mudar_o_regime_invalida_a_run_gravada():
+    """Trocar capital ou taxa tem de forçar rerrodada, não herdar o número velho.
+
+    `_champion_is_current` compara `period_end` + `data_fingerprint`. Se o
+    fingerprint carregasse só o DADO, mudar o regime deixaria o pódio exibindo
+    o resultado do regime anterior com o cabeçalho do novo — foi exatamente o
+    risco ao trocar R$ 1.000/taxa zero por R$ 100/R$ 1,90.
+    """
+    base = "dado-identico"
+    atual = scheduler_mod.regime_fingerprint(base)
+
+    assert base in atual and atual != base
+    assert f"{scheduler_mod.CHAMPION_CAPITAL:g}" in atual
+    assert f"{scheduler_mod.CHAMPION_FRACTIONAL_FEE:g}" in atual
+
+    original_cap = scheduler_mod.CHAMPION_CAPITAL
+    original_fee = scheduler_mod.CHAMPION_FRACTIONAL_FEE
+    try:
+        scheduler_mod.CHAMPION_CAPITAL = 1_000.0
+        assert scheduler_mod.regime_fingerprint(base) != atual
+        scheduler_mod.CHAMPION_CAPITAL = original_cap
+        scheduler_mod.CHAMPION_FRACTIONAL_FEE = 0.0
+        assert scheduler_mod.regime_fingerprint(base) != atual
+    finally:
+        scheduler_mod.CHAMPION_CAPITAL = original_cap
+        scheduler_mod.CHAMPION_FRACTIONAL_FEE = original_fee

@@ -76,7 +76,9 @@
   {{ ui.section_head(
       "Ranking automático",
       "Pódio em três horizontes",
-      "Capital inicial <strong>R$ 1.000</strong>, lote fracionário, o mesmo robô nas três
+      "Capital inicial <strong>R$ " ~ (ranking_capital|num_br(0)) ~ "</strong>, lote fracionário,
+       com a corretagem de R$ " ~ (ranking_fee|num_br(2)) ~ " por ordem que o fracionário cobra de
+       verdade — o mesmo robô nas três
        janelas. Calculado a partir do diário: todo robô de swing em <code>strategy/</code>
        compete sozinho, sem ninguém promover na mão. Só entra quem não perde do IBOV
        da própria janela em MaxDD e anos negativos.",

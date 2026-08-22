@@ -48,7 +48,8 @@
       "Medições oficiais",
       "O que ele já mediu",
       "Mesma fonte do pódio — a última run oficial deste robô em cada janela, do
-       diário. Capital inicial R$ 1.000.") }}
+       diário. Capital inicial R$ " ~ (ranking_capital|num_br(0)) ~ ", com a corretagem de
+       R$ " ~ (ranking_fee|num_br(2)) ~ " por ordem do mercado fracionário.") }}
   <div class="measure-grid">
     {% for m in medicoes %}
     <a class="measure{% if m.disqualified %} is-reproved{% endif %}" href="/runs/{{ m.id }}">

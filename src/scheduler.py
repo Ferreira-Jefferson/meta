@@ -7,7 +7,8 @@
   sozinha quando o ano vigente terminar.
 - TODO robô descoberto em `strategy/` (ver `strategy.discovery`) é rerrodado
   nas três janelas com o capital/lote do critério oficial de ranking
-  (R$ 1.000, lote fracionário) e persistido no diário com `run_kind` marcado
+  (R$ 100, lote fracionário, com a taxa fixa de R$ 1,90/ordem que o
+  fracionário cobra de verdade) e persistido no diário com `run_kind` marcado
   ('champion_full' / 'champion_3y') — isso que o ranking em
   `journal.reader.top_strategies_by_final_capital()` lê para montar o pódio.
   Não há promoção manual: um robô novo em `strategy/` entra na disputa no
@@ -22,13 +23,21 @@ from __future__ import annotations
 
 import sqlite3
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import pandas as pd
 
 from backtest.metrics import negative_years
 from backtest.runner import run as run_backtest_dispatch
-from core.config import BENCHMARK, DB_PATH, HISTORY_START, WATCHLIST, BacktestConfig
+from core.config import (
+    BENCHMARK,
+    DB_PATH,
+    HISTORY_START,
+    WATCHLIST,
+    BacktestConfig,
+    CostModel,
+)
 from journal.enrichment import enrich
 from journal.writer import append_equity, create_run, finalize_run, insert_trade, journal
 from market_data.download import download_all
@@ -37,8 +46,32 @@ from strategy.registry import list_strategies
 
 # Critério oficial de ranking (ver memória `ranking-criterion`): capital
 # inicial pequeno, lote fracionário — não os R$ 100k/lote 100 do canonical antigo.
-CHAMPION_CAPITAL = 1_000.0
+#
+# 2026-08-22 — R$ 1.000 virou R$ 100, e a taxa fixa do fracionário passou a ser
+# COBRADA. Decisão do dono do capital, com o motivo dele: "pra conseguir operar
+# com o capital que realmente tenho só é possível com ele fracionado, pq testou
+# sem se não consigo operar um lote completo?".
+#
+# O que a medição mostrou e por que os DOIS números tinham de mudar juntos:
+# ligar a taxa mantendo os R$ 1.000 muda o `liqflop` no FULL em -1,2%
+# (R$28.341,70 -> R$27.998,29), praticamente nada — a R$ 1.000 boa parte das
+# ordens fecha lote padrão e não paga taxa fixa nenhuma. O que vira o resultado
+# é a INTERAÇÃO capital x taxa: a R$ 100, com a mesma taxa, o mesmo robô faz
+# R$ 2.957,93 no FULL e PERDE do IBOV em 2019-2026 (R$ 106,12 contra R$ 184,51).
+# Ranquear a R$ 1.000 media um regime que o dono não consegue executar.
+#
+# O default de `CostModel.fractional_fixed_fee` continua 0.0 de propósito (ver
+# o comentário lá): mudá-lo reescreveria o significado de todo o diário
+# gravado. Aqui a taxa é explícita, como o `CHAMPION_CASH_YIELD` logo abaixo —
+# mesma regra: a run OFICIAL compara robôs no mundo real, e o resto do repo
+# continua reproduzindo o que gravou.
+CHAMPION_CAPITAL = 100.0
 CHAMPION_LOT_SIZE = 1
+# R$ 1,90 por ORDEM no fracionário (não percentual), confirmado pelo dono em
+# 2026-08-22 — ver memória `rico_fractional_fee_2026_08_21`. Cobrada em cada
+# perna cuja quantidade não fecha lote padrão, a mesma regra que
+# `live/broker_mt5.py` aplica ao vivo.
+CHAMPION_FRACTIONAL_FEE = 1.90
 # Caixa parado rende Selic nas runs de ranking. Até 2026-08-20 rendia 0%, e isso
 # não era um detalhe: `liquid_champion` passa 32% do tempo com algum sleeve
 # descoberto, o campeão antigo 24%, e a Selic média do período foi 9,48% a.a. O
@@ -48,6 +81,32 @@ CHAMPION_LOT_SIZE = 1
 # de comparar robôs no mundo real, onde dinheiro parado rende.
 CHAMPION_CASH_YIELD = "data/raw/selic.parquet"
 CHAMPION_5Y_YEARS = 5
+
+
+def regime_fingerprint(data_fingerprint: str) -> str:
+    """Junta o dado E o regime econômico num só carimbo de validade.
+
+    `_champion_is_current` compara `period_end` + este carimbo para decidir se
+    rerroda. Enquanto ele era só o fingerprint do DADO, mudar o regime oficial
+    (capital, taxa) não invalidava nada: as runs do regime velho continuariam
+    no pódio, com o preço novo escrito no cabeçalho da página e o número antigo
+    embaixo. Aconteceu de verdade em 2026-08-22, ao trocar R$ 1.000/taxa zero
+    por R$ 100/R$ 1,90 — só um `force=True` na mão salvou.
+    """
+    return f"{data_fingerprint}|cap={CHAMPION_CAPITAL:g}|frac={CHAMPION_FRACTIONAL_FEE:g}"
+
+
+def champion_costs() -> CostModel:
+    """Custos da run OFICIAL de ranking: os percentuais padrão do repo + a
+    taxa fixa do fracionário, que é real e o dono paga.
+
+    Função, e não constante de módulo, para que quem for medir fora do
+    `scheduler` (script de laboratório, teste, contraprova) consiga rodar no
+    MESMO regime do painel chamando UMA coisa, em vez de reconstruir o
+    `CostModel` de memória e errar um campo — foi assim que o ranking passou
+    meses cobrando taxa zero num mercado que cobra R$ 1,90.
+    """
+    return replace(CostModel(), fractional_fixed_fee=CHAMPION_FRACTIONAL_FEE)
 
 
 # ---------- data freshness -------------------------------------------------
@@ -84,7 +143,8 @@ def _run_champion(strategy_key: str, factory, start: str, end: str, run_kind: st
     # — ver o comentário em `strategy/base.py`.
     universe = load_universe(tickers=strategy.universe_tickers) if strategy.universe_tickers else load_universe()
     config = BacktestConfig(initial_capital=CHAMPION_CAPITAL, lot_size=CHAMPION_LOT_SIZE,
-                            cash_yield_path=CHAMPION_CASH_YIELD)
+                            cash_yield_path=CHAMPION_CASH_YIELD,
+                            costs=champion_costs())
     result = run_backtest_dispatch(universe, strategy, config, start=start, end=end)
 
     metrics = dict(result.metrics)
@@ -178,7 +238,8 @@ def refresh_champion_rankings(force: bool = False) -> dict:
         # especialista em bancos) tem que ser invalidado quando O SEU dado
         # avança, não quando o WATCHLIST canonical avança — e vice-versa.
         strategy_tickers = info.factory().universe_tickers
-        fingerprint = universe_fingerprint(tickers=strategy_tickers or WATCHLIST)
+        fingerprint = regime_fingerprint(
+            universe_fingerprint(tickers=strategy_tickers or WATCHLIST))
         for run_kind, start, end in windows:
             if not force and _champion_is_current(info.key, run_kind, end, fingerprint):
                 continue

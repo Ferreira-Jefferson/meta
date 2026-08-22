@@ -30,7 +30,12 @@ from journal import reader
 from live import clock
 from market_data.download import download_macro
 from market_data.loader import load_one
-from scheduler import refresh_champion_rankings, refresh_market_data
+from scheduler import (
+    CHAMPION_CAPITAL,
+    CHAMPION_FRACTIONAL_FEE,
+    refresh_champion_rankings,
+    refresh_market_data,
+)
 from strategy import registry as strategy_registry
 from strategy.registry import candidate_keys, get_strategy, list_strategies
 
@@ -292,6 +297,11 @@ def home(request: Request):
         "start_full": window_full[0] if window_full else None,
         "end_full": window_full[1] if window_full else None,
         "full_years_label": full_years_label,
+        # Capital e taxa do critério oficial vêm do `scheduler`, não escritos
+        # à mão no template: a tela dizia "R$ 1.000" muito depois de o
+        # ranking ter mudado de capital seria mentira difícil de notar.
+        "ranking_capital": CHAMPION_CAPITAL,
+        "ranking_fee": CHAMPION_FRACTIONAL_FEE,
         # Filtro "Robô" na tabela: todo robô conhecido pelo registry.
         "run_strategies": [s.key for s in all_strategies],
         "run_tickers": reader.distinct_run_tickers(),
@@ -384,7 +394,11 @@ def strategy_detail(request: Request, key: str):
         "watchlist": list(WATCHLIST),
         "default_start": "2015-01-01",
         "default_end": _latest_available_date(),
-        "default_capital": 1_000,
+        # Mesmo capital do ranking, para o formulário de simulação não
+        # sugerir um regime que o dono não consegue executar.
+        "default_capital": int(CHAMPION_CAPITAL),
+        "ranking_capital": CHAMPION_CAPITAL,
+        "ranking_fee": CHAMPION_FRACTIONAL_FEE,
         "recent_runs": runs,
         "run_tickers": reader.distinct_run_tickers(),
         "has_more": len(runs) == RUNS_PAGE_SIZE,
