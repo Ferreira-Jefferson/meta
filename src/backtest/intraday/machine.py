@@ -529,6 +529,7 @@ class IntradaySessionMachine:
 
         # (5) decisao do robo para a PROXIMA barra — nao roda mais depois do flatten.
         if not self.flattened:
+            self.strategy.on_capital_update(cfg.initial_capital + self.realized_pnl)
             actions = self.strategy.on_bar(ts, bar, self.position_view(), self.session_pnl)
             for action in actions:
                 if isinstance(action, AdjustStop) and self.position is not None:

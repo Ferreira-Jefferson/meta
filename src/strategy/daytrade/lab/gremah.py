@@ -41,7 +41,10 @@ from datetime import time
 
 import pandas as pd
 
+import math
+
 from strategy.daytrade.base import (
+    LOTE_PADRAO_B3,
     Bar,
     EnterLimit,
     Exit,
@@ -57,6 +60,26 @@ from strategy.daytrade.base import (
 #: antigo, mas escala com o preco de cada ativo em vez de travar num numero
 #: so'.
 SESSION_STOP_FRACAO_PADRAO = 0.20
+
+#: Quantas vezes o custo de 1 lote (no preco da ANCORA da entrada) o caixa
+#: ACUMULADO (capital inicial + PnL realizado ate agora, ver
+#: `IntradayStrategy.on_capital_update`) precisa ter para a proxima entrada
+#: usar mais um lote. Formula: `lotes = 1 + floor(caixa / (limiar x custo_do_
+#: lote))` -- cresce com o caixa, encolhe de volta se ele cair (perdas, ou o
+#: preco subiu e o lote ficou mais caro). Medido 2026-08-22 em PMAM3 (R$50 ->
+#: R$10.380,17 em ~11 meses, contra R$971,21 de 1 lote fixo sempre, MESMO
+#: MaxDD) -- pedido do dono para virar comportamento padrao do robo, nao so'
+#: experimento.
+REALOCACAO_LIMIAR_CAIXA_PADRAO = 4.0
+
+#: Teto de tamanho de posicao, como fracao do volume negociado no PRIMEIRO
+#: minuto do proprio pregao (ver o bloco "armada uma vez por sessao" em
+#: `on_bar`) -- nao uma media historica de varios dias. Pedido do dono
+#: 2026-08-22: nunca pedir uma fatia do mercado maior que isto (ex.: ativo
+#: negocia 1.000 acoes no minuto de abertura -> teto de 100 acoes = 1 lote),
+#: porque o backtest simula preenchimento instantaneo e o book real nao
+#: absorve uma ordem grande demais frente ao proprio giro do dia.
+REALOCACAO_TETO_PCT_VOLUME_MINUTO_PADRAO = 0.10
 
 
 @dataclass(frozen=True)
@@ -194,6 +217,7 @@ class _SessionState:
     stop_ticks_today: int | None = None
     session_stop_armed: bool = False
     session_stop_brl_hoje: float = 0.0
+    max_lotes_dia: int = 1
 
 
 class Gremah(IntradayStrategy):
@@ -339,12 +363,17 @@ class Gremah(IntradayStrategy):
         "verão americano.",
     )
     sizing_rules = (
-        "Lote inteiro de 100 ações por ordem, sempre — day trade aqui não usa o "
-        "mercado fracionário, onde cada ordem custaria R$ 1,90 fixos de corretagem. "
-        "Foi em lote inteiro que todos os ativos da tabela foram medidos.",
-        "Por isso cada ativo tem um caixa mínimo próprio: o piso é o DOBRO do custo "
-        "de um lote de 100 ações, sem arredondamento. É a diferença entre poder "
-        "operar um ativo e não poder — ver a tabela de ativos.",
+        "Sempre em lotes inteiros de 100 ações — nunca no mercado fracionário, onde "
+        "cada ordem custaria R$ 1,90 fixos de corretagem. O NÚMERO de lotes por "
+        "ordem, porém, não é fixo: cresce com o caixa acumulado e encolhe de volta "
+        "se ele cair.",
+        "A cada entrada nova ele recalcula: a cada 4x o custo de 1 lote que o caixa "
+        "acumulado tiver, usa mais um lote. O teto do dia é 10% do volume negociado "
+        "no primeiro minuto do próprio pregão — nunca pedir do mercado uma fatia "
+        "maior que essa.",
+        "Cada ativo tem um caixa mínimo próprio para começar a operar: o piso é o "
+        "DOBRO do custo de um lote de 100 ações, sem arredondamento. É a diferença "
+        "entre poder operar um ativo e não poder — ver a tabela de ativos.",
         "Em lote inteiro a corretagem é zero na Rico. O que sobra é a taxa da bolsa, "
         "e o backtest assume o DOBRO da taxa real, de propósito, como margem de "
         "segurança.",
@@ -353,7 +382,7 @@ class Gremah(IntradayStrategy):
     )
     # Fração mostrada como percentual na ficha (ver `Strategy.param_pct` --
     # `IntradayStrategy` não herda de `Strategy`, mas quem lê usa `getattr`).
-    param_pct = ("profit_pct", "session_stop_pct_capital")
+    param_pct = ("profit_pct", "session_stop_pct_capital", "realocacao_teto_pct_volume_minuto")
     # Fora da tabela PLANA de parâmetros porque o valor deles é POR ATIVO, e a
     # tabela mostra uma instância só (a default, PMAM3). Ela anunciava
     # "symbol=PMAM3, profit_pct=0,32%, stop_multiplier=10" como se fossem os
@@ -377,6 +406,11 @@ class Gremah(IntradayStrategy):
         "session_stop_pct_capital": "Percentual do caixa mínimo do dia que define a "
                                     "perda-limite diária.",
         "quantity": "Quantidade de ações por operação.",
+        "realocacao_limiar_caixa": "Quantas vezes o custo de 1 lote o caixa acumulado precisa "
+                                   "ter para a próxima entrada usar mais um lote (encolhe de volta "
+                                   "se o caixa cair).",
+        "realocacao_teto_pct_volume_minuto": "Teto de posição: % do volume negociado no 1º "
+                                             "minuto do próprio pregão.",
         # Exibido em hora de Brasília com o UTC ao lado (`param_utc_time`), então
         # a descrição não precisa mais carregar a conversão.
         "fixed_anchor_until": "Hora em que a âncora fixa vira rolante.",
@@ -411,6 +445,8 @@ class Gremah(IntradayStrategy):
         quantity: int | None = None,
         fixed_anchor_until: time = time(14, 0),
         rolling_reanchor_after_bars: int = 30,
+        realocacao_limiar_caixa: float = REALOCACAO_LIMIAR_CAIXA_PADRAO,
+        realocacao_teto_pct_volume_minuto: float = REALOCACAO_TETO_PCT_VOLUME_MINUTO_PADRAO,
     ):
         self.symbol = symbol
         self.tick_size = tick_size
@@ -454,11 +490,22 @@ class Gremah(IntradayStrategy):
         # de verdade num horario atrasado -- o hibrido ficava pior que a
         # rolling pura em todo horario de entrada atrasada.
         self.rolling_reanchor_after_bars = rolling_reanchor_after_bars
+        self.realocacao_limiar_caixa = abs(realocacao_limiar_caixa)
+        self.realocacao_teto_pct_volume_minuto = abs(realocacao_teto_pct_volume_minuto)
 
         self._state = _SessionState()
+        # Atualizado por `on_capital_update`, chamado pelo motor logo antes de
+        # `on_bar` -- 0.0 so' antes da primeira barra real (warm start nunca
+        # chama `on_capital_update`, entao a primeira ordem calibrada por
+        # replay usa 1 lote, o minimo; a primeira barra AO VIVO ja chega com o
+        # caixa real).
+        self._cash_atual_brl = 0.0
 
     def on_session_start(self, session_date) -> None:
         self._state = _SessionState()
+
+    def on_capital_update(self, cash_brl: float) -> None:
+        self._cash_atual_brl = cash_brl
 
     def _ticks_from_pct(self, price: float, pct: float) -> int:
         return max(1, round(price * pct / self.tick_size))
@@ -482,7 +529,19 @@ class Gremah(IntradayStrategy):
                 return side
         return None
 
+    def _lotes_por_realocacao(self, anchor: float) -> int:
+        """Quantos lotes a proxima entrada usa, dado o caixa acumulado
+        (`on_capital_update`) e o teto do dia (`_state.max_lotes_dia`).
+        Verificado a CADA entrada nova, nao 1x por dia -- tambem ENCOLHE se o
+        caixa cair. `anchor` e' a mesma ancora que spacing/alvo/stop ja usam
+        (fixa na abertura ou rolante), nao um preco fixo: o custo de 1 lote
+        muda com ela."""
+        custo_do_lote = anchor * LOTE_PADRAO_B3
+        lotes = 1 + math.floor(self._cash_atual_brl / (self.realocacao_limiar_caixa * custo_do_lote))
+        return min(self._state.max_lotes_dia, max(1, lotes))
+
     def _build_entry(self, side: str, anchor: float, spacing_ticks: int, profit_ticks: int, stop_ticks: int | None) -> EnterLimit:
+        self.quantity = self._lotes_por_realocacao(anchor) * LOTE_PADRAO_B3
         spacing_off = spacing_ticks * self.tick_size
         level_price = round(anchor - spacing_off, 2) if side == "long" else round(anchor + spacing_off, 2)
         profit_off = profit_ticks * self.tick_size
@@ -520,6 +579,12 @@ class Gremah(IntradayStrategy):
         if not state.session_stop_armed:
             state.session_stop_armed = True
             state.session_stop_brl_hoje = capital_minimo_brl(bar.open) * self.session_stop_pct_capital
+            # Teto de realocacao do dia: fracao do volume do PRIMEIRO minuto
+            # do proprio pregao (ver `REALOCACAO_TETO_PCT_VOLUME_MINUTO_PADRAO`),
+            # nao uma media historica -- "aguardar 1 minuto da abertura" e'
+            # exatamente esta barra, a primeira que `on_bar` ve no dia.
+            teto_acoes = bar.volume * self.realocacao_teto_pct_volume_minuto
+            state.max_lotes_dia = max(1, int(teto_acoes) // LOTE_PADRAO_B3)
 
         if is_fixed_phase and state.open_price is None:
             state.open_price = bar.open

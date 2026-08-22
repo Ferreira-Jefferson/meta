@@ -163,6 +163,17 @@ class IntradayStrategy(ABC):
         """Reseta estado por-dia (ex.: contador de perda diaria, numero de
         entradas ja feitas hoje). Default no-op."""
 
+    def on_capital_update(self, cash_brl: float) -> None:
+        """Avisa o robo do caixa acumulado (capital inicial + PnL realizado
+        ate agora, contas anteriores incluidas) ANTES de decidir a barra.
+        Chamado pelo motor (`backtest.intraday.machine.IntradaySessionMachine`)
+        logo antes de `on_bar`, com o MESMO numero em backtest e ao vivo
+        (`config.initial_capital + machine.realized_pnl` — o segundo termo ja
+        e' persistido entre reinicios, ver `IntradaySessionMachine.state`).
+        Default no-op: so' um robo que dimensiona posicao pelo caixa (ex.:
+        `Gremah`, reload 2026-08-22) precisa disso; a maioria decide so' com
+        o que ja recebe em `on_bar`."""
+
     @abstractmethod
     def on_bar(
         self,
