@@ -1,20 +1,22 @@
 {% extends "base.html" %}
-{% set page = "strategies" %}
+{% import "partials/ui.html" as ui %}
+{% set page = "robots" %}
 {% block title %}Robôs · META{% endblock %}
 {% block content %}
 
 <section class="page-head">
   <div>
-    <div class="kicker">Laboratório</div>
-    <h1>Robôs disponíveis</h1>
+    <div class="kicker">Laboratório · B3</div>
+    <h1>Robôs</h1>
     <p class="dek">
-      Cada robô implementa uma estratégia auditável. Escolha um para ver as regras,
-      configurar o período e o capital, e rodar uma simulação em tempo real.
+      Cada robô é uma estratégia auditável: as regras estão no código, as
+      medições no diário. Abra a ficha de um para ler como ele opera e rodar
+      uma simulação.
     </p>
   </div>
   <aside>
     <div>Data mais recente · <span class="pos">{{ default_end }}</span></div>
-    <div>Robôs · {{ strategies|length }}</div>
+    <div>Robôs · {{ robots|length }}</div>
     <div>Watchlist · {{ watchlist|length }} ativos</div>
   </aside>
 </section>
@@ -27,21 +29,28 @@
       <h3>{{ r.strategy_name }} <span class="dim">v{{ r.strategy_version }}</span></h3>
       <dl>
         <dt>Capital final</dt>
-        <dd class="{% if (r.final_capital or 0) >= (r.initial_capital or 0) %}pos{% else %}neg{% endif %} big">R$ {{ "%.2f"|format(r.final_capital or 0) }}</dd>
-        <dt>CAGR</dt><dd class="{% if (r.cagr or 0) >= 0 %}pos{% else %}neg{% endif %}">{{ "%.2f%%"|format((r.cagr or 0) * 100) }}</dd>
-        <dt>Sharpe</dt><dd>{{ "%.2f"|format(r.sharpe or 0) }}</dd>
-        <dt>Max DD</dt><dd class="neg">{{ "%.2f%%"|format((r.max_drawdown or 0) * 100) }}</dd>
+        <dd class="{% if (r.final_capital or 0) >= (r.initial_capital or 0) %}pos{% else %}neg{% endif %} big">R$ {{ (r.final_capital or 0) | num_br }}</dd>
+        <dt>CAGR</dt><dd class="{% if (r.cagr or 0) >= 0 %}pos{% else %}neg{% endif %}">{{ ((r.cagr or 0) * 100) | num_br }}%</dd>
+        <dt>Sharpe</dt><dd>{{ (r.sharpe or 0) | num_br }}</dd>
+        <dt>Max DD</dt><dd class="neg">{{ ((r.max_drawdown or 0) * 100) | num_br }}%</dd>
         <dt>Anos negativos</dt><dd>{{ r.neg_years if r.neg_years is not none else "—" }}</dd>
-        <dt>Equity mín.</dt><dd>R$ {{ "%.2f"|format(r.min_equity or 0) }}</dd>
+        <dt>Equity mín.</dt><dd>R$ {{ (r.min_equity or 0) | num_br }}</dd>
         <dt>Trades</dt><dd>{{ r.trades_count or 0 }}</dd>
       </dl>
-      <span class="podium-cta">Abrir robô →</span>
+      {# Mesmo destino do cartão do catálogo (`/strategies/<key>`), então mesmo
+         rótulo: "abrir robô" aqui e "abrir ficha" lá sugeria duas telas. #}
+      <span class="podium-cta">Abrir ficha →</span>
     </div>
   </a>
 </li>
 {% endmacro %}
 
-{% macro podium_window(title, subtitle, rows, empty_label) %}
+{#  `rodou` distingue duas coisas que a tela antiga contava como uma: "o
+    scheduler nunca rodou esta janela" e "rodou, e nenhum robô passou o portão
+    de risco". Com um pódio de um robô só, a segunda é o caso comum — e dizer
+    "ainda não rodou" quando a run existe (e está listada na tabela abaixo,
+    com número e tudo) é a tela afirmando algo falso. #}
+{% macro podium_window(title, subtitle, rows, empty_label, rodou) %}
 <div class="podium-window">
   <div class="podium-window-head">
     <h3>{{ title }}</h3>
@@ -51,6 +60,12 @@
   <ol class="podium-window-list">
     {% for r in rows %}{{ podium_card(r, loop.index) }}{% endfor %}
   </ol>
+  {% elif rodou %}
+  <p class="dek podium-window-empty">
+    Rodou nesta janela, mas nenhum robô passou o portão de risco — ninguém
+    ficou melhor que o IBOV em MaxDD e anos negativos. A medição está na ficha
+    de cada robô.
+  </p>
   {% else %}
   <p class="dek podium-window-empty">Ranking ainda não rodou ({{ empty_label }}) — aguardando o primeiro refresh do scheduler.</p>
   {% endif %}
@@ -58,40 +73,41 @@
 {% endmacro %}
 
 <section class="podium stagger">
-  <div class="podium-head">
-    <div class="kicker">Ranking automático · 3 horizontes</div>
-    <h2>1 ano · 5 anos · {{ full_years_label or "—" }} anos</h2>
-    <p class="dek">
-      Capital inicial <strong>R$ 1.000</strong>, lote fracionário, mesmo robô nos três horizontes.
-      Calculado a partir do diário — todo robô em <code>strategy/</code> compete automaticamente.
-      Só entra no pódio quem tem no máximo 1 ano negativo e MaxDD não pior que -35,12% (gates da janela FULL).
-    </p>
-  </div>
+  {{ ui.section_head(
+      "Ranking automático",
+      "Pódio em três horizontes",
+      "Capital inicial <strong>R$ 1.000</strong>, lote fracionário, o mesmo robô nas três
+       janelas. Calculado a partir do diário: todo robô de swing em <code>strategy/</code>
+       compete sozinho, sem ninguém promover na mão. Só entra quem não perde do IBOV
+       da própria janela em MaxDD e anos negativos.",
+      '<span class="dim">1 ano · 5 anos · ' ~ (full_years_label or "—") ~ ' anos</span>') }}
   <div class="podium-windows">
-    {{ podium_window("1 ano", (start_1y or "—") ~ " → " ~ (end_1y or "—"), top3_1y, "1Y") }}
-    {{ podium_window("5 anos", (start_5y or "—") ~ " → " ~ (end_5y or "hoje"), top3_5y, "5Y") }}
-    {{ podium_window((full_years_label or "—") ~ " anos (full)", (start_full or "2010-01-01") ~ " → " ~ (end_full or "hoje"), top3_full, "FULL") }}
+    {{ podium_window("1 ano", (start_1y or "—") ~ " → " ~ (end_1y or "—"), top3_1y, "1Y", start_1y) }}
+    {{ podium_window("5 anos", (start_5y or "—") ~ " → " ~ (end_5y or "hoje"), top3_5y, "5Y", start_5y) }}
+    {{ podium_window((full_years_label or "—") ~ " anos (full)", (start_full or "2010-01-01") ~ " → " ~ (end_full or "hoje"), top3_full, "FULL", start_full) }}
   </div>
 </section>
 
-<section class="robots-grid stagger">
-  {% for s in strategies %}
-  <a class="robot-card" href="/strategies/{{ s.key }}">
-    <div class="robot-kicker">Robô · v{{ s.version }}</div>
-    <h2>{{ s.name }}</h2>
-    <p class="dek">{{ s.description }}</p>
-    <div class="robot-cta">
-      Ver regras &amp; simular <span class="arrow">→</span>
-    </div>
-  </a>
-  {% endfor %}
+<section class="catalog">
+  {{ ui.section_head(
+      "Catálogo",
+      "Todos os robôs",
+      "Swing e day trade na mesma lista, com a etiqueta do tipo em cada um. O robô
+       de day trade decide barra a barra e não carrega posição de um dia para o
+       outro, então ele não disputa o pódio acima — capital, risco e instrumento
+       não são comparáveis. Todos abrem a mesma ficha.",
+      '<a class="section-link" href="/operacao">Ver a operação ao vivo →</a>') }}
+  <div class="robots-grid stagger">
+    {% for r in robots %}{{ ui.robot_card(r) }}{% endfor %}
+  </div>
 </section>
 
 <section class="recent-runs stagger">
-  <div class="recent-runs-head">
-    <h3>Simulações recentes</h3>
-    <p class="dek">Filtre por robô, período, capital ou ativo. Clique numa linha para abrir o resultado.</p>
-  </div>
+  {{ ui.section_head(
+      "Diário",
+      "Simulações recentes",
+      "Toda run gravada, oficial ou avulsa. Filtre por robô, período, capital ou
+       ativo — cada linha abre o resultado completo.") }}
 
   <form id="runs-filter-form"
         class="runs-filters"
@@ -178,9 +194,9 @@
           {% if r.final_capital is not none %}R$ {{ "{:,.0f}".format(r.final_capital).replace(",", ".") }}{% else %}<span class="dim">—</span>{% endif %}
         </td>
         <td class="right num {% if (r.cagr or 0) >= 0 %}pos{% else %}neg{% endif %}">
-          {{ "%.2f%%"|format((r.cagr or 0) * 100) }}
+          {{ ((r.cagr or 0) * 100) | num_br }}%
         </td>
-        <td class="right num">{{ "%.2f"|format(r.sharpe or 0) }}</td>
+        <td class="right num">{{ (r.sharpe or 0) | num_br }}</td>
         <td class="right num">{{ r.trades_count or 0 }}</td>
         <td class="right num dim">{{ r.created_at }}</td>
       </tr>

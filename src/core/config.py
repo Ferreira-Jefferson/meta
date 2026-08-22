@@ -52,9 +52,17 @@ HISTORY_START: str = "2010-01-01"
 # pregão) — cada um com o SEU caixa, para que "quanto tenho disponível" seja
 # uma pergunta com resposta por robô, não uma disputa pelo saldo da corretora.
 #
-# Um slot é DADO, não lógica: qual conta, que tipo de cadência, que robô, que
-# símbolo, que `magic`. Quem age em cima disso é `dashboard/live_control.py`
-# (sobe/derruba processo) e `scripts/run_live.py` (monta o runtime certo).
+# Um slot é DADO, não lógica: qual conta, que tipo de cadência, que `magic`.
+# Quem age em cima disso é `dashboard/live_control.py` (sobe/derruba
+# processo) e `scripts/run_live.py` (monta o runtime certo).
+#
+# O SÍMBOLO NÃO é campo do slot (removido 2026-08-21) — é propriedade do
+# ROBÔ escolhido (`strategy.daytrade.registry`/`strategy.registry`), porque
+# o slot só empresta caixa/conta/processo: dois robôs de day trade diferentes
+# podem operar símbolos diferentes no MESMO slot, um por vez. `robot_key`
+# abaixo é só o DEFAULT sugerido para uma conta nova — depois de criada, a
+# conta fixa o robô dela (`live_accounts.investment_robot`) e o catálogo
+# nunca mais escolhe por ela.
 #
 # `id` É o nome da conta em `live_accounts.name` — de propósito: um slot sem
 # conta própria não teria caixa próprio, e caixa próprio é o pedido inteiro.
@@ -67,11 +75,10 @@ class Slot:
 
     id: str            # == `live_accounts.name`
     kind: str          # "daily" (decide no fecho) | "intraday" (barra a barra)
-    robot_key: str     # robô declarado deste slot
+    robot_key: str     # robô DEFAULT sugerido para conta nova (não é o robô da conta)
     label: str
     dek: str           # uma linha explicando o slot no painel
     order: int         # posição no painel (0 = em cima)
-    symbol: str | None  # símbolo único que este slot negocia (None = universo do robô)
     magic: int         # identificador das ordens deste slot no MT5
     min_cash_brl: float = 50.0
 
@@ -83,21 +90,22 @@ class Slot:
 # Ordem do painel decidida pelo dono (2026-08-21): day trade em CIMA, e não
 # por ser melhor — é a primeira opção operável, porque o capital atual não
 # alcança o swing (ver `capital_real_100_mes`/`liquid_focus_promoted` na
-# memória do projeto). `magic` distinto por slot e símbolos disjuntos são
-# obrigatórios, não estética: a conta da Rico é NETTING (`margin_mode=0`,
-# verificado no terminal real em 2026-08-21), então dois robôs no MESMO
-# símbolo virariam UMA posição só na corretora e os dois livros-caixa
-# passariam a mentir. `live_control.start()` checa isso.
+# memória do projeto). `magic` distinto por slot é obrigatório, não estética:
+# a conta da Rico é NETTING (`margin_mode=0`, verificado no terminal real em
+# 2026-08-21), então dois robôs no MESMO símbolo virariam UMA posição só na
+# corretora e os dois livros-caixa passariam a mentir.
+# `live_control.start()` checa universo disjunto entre slots dinamicamente
+# (pelo robô ESCOLHIDO, não por um símbolo fixo aqui — ver
+# `_assert_slots_disjuntos`).
 SLOTS: tuple[Slot, ...] = (
     Slot(
         id="daytrade",
         kind="intraday",
         robot_key="gremah",
-        label="Day trade — PMAM3",
+        label="Day trade",
         dek=("Grade de ordens-limite recarregada dentro do pregão, sem posição "
              "overnight. Primeira opção porque cabe no capital atual."),
         order=0,
-        symbol="PMAM3",
         magic=20260821,
     ),
     Slot(
@@ -109,7 +117,6 @@ SLOTS: tuple[Slot, ...] = (
              "fechamento do pregão. Precisa de capital maior para a taxa fixa "
              "não comer o retorno."),
         order=1,
-        symbol=None,
         magic=20260817,  # o mesmo de antes: a conta swing herda o histórico do CLI antigo
     ),
 )

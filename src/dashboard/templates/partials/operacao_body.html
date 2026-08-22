@@ -59,7 +59,7 @@
 
   {% with slot = slot, status = bloco.status, proc = bloco.proc,
           config_anterior = bloco.config_anterior, caixa_ok = bloco.caixa_ok,
-          top3 = bloco.top3, creds_status = creds_status, poll_seconds = poll_seconds %}
+          robot_options = bloco.robot_options, creds_status = creds_status, poll_seconds = poll_seconds %}
     {% include "partials/operacao_slot_live.html" %}
   {% endwith %}
 </section>

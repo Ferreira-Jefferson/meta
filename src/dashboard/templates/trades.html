@@ -1,11 +1,12 @@
 {% extends "base.html" %}
+{% import "partials/ui.html" as ui %}
 {% set page = "trades" %}
 {% block title %}Trades · META{% endblock %}
 {% block content %}
 
 <section class="page-head">
   <div>
-    <div class="kicker"><a href="/runs/{{ run.id }}" class="crumb">← Run #{{ run.id }}</a> · Diário de operações</div>
+    {{ ui.crumbs([("Robôs", "/"), ("Run #" ~ run.id, "/runs/" ~ run.id)], "Trades") }}
     <h1>Trades</h1>
     <p class="dek">Cada linha é uma decisão tomada pelo robô — filtre para inspecionar contexto.</p>
   </div>

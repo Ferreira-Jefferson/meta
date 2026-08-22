@@ -18,9 +18,9 @@
     {% if r.final_capital is not none %}R$ {{ "{:,.0f}".format(r.final_capital).replace(",", ".") }}{% else %}<span class="dim">—</span>{% endif %}
   </td>
   <td class="right num {% if (r.cagr or 0) >= 0 %}pos{% else %}neg{% endif %}">
-    {{ "%.2f%%"|format((r.cagr or 0) * 100) }}
+    {{ ((r.cagr or 0) * 100) | num_br }}%
   </td>
-  <td class="right num">{{ "%.2f"|format(r.sharpe or 0) }}</td>
+  <td class="right num">{{ (r.sharpe or 0) | num_br }}</td>
   <td class="right num">{{ r.trades_count or 0 }}</td>
   <td class="right num dim">{{ r.created_at }}</td>
 </tr>

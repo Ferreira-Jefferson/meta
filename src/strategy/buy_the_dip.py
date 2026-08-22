@@ -23,6 +23,62 @@ class BuyTheDip(Strategy):
     # -> `DipTop1Portfolio` (a campea), sem redeclarar em cada subclasse.
     _stateful_keys = ("_pending_rebalance",)
 
+    # Ficha técnica da RAIZ da família (ver `Strategy` em `strategy/base.py`):
+    # toda a linhagem dip herda daqui e só declara o que ela muda.
+    watched_signals = (
+        "Momentum 12-1: retorno de `lookback` pregões atrás até `skip_recent` atrás. "
+        "O mês mais recente fica FORA do cálculo de propósito — não comprar o que "
+        "acabou de disparar.",
+        "Distância da máxima: fechamento dividido pela máxima dos últimos "
+        "`high_window` pregões. Negativo = abaixo do topo.",
+        "Selic: variação da taxa nos últimos `selic_window` pregões, lida de "
+        "`selic_path`. Acima de `selic_threshold` conta como aperto monetário.",
+        "Calendário: último pregão de cada mês (é a única data em que ele decide) "
+        "e blackout de divulgação de resultados.",
+    )
+    entry_rules = (
+        "Decide UMA vez por mês, no último pregão. Em qualquer outro dia devolve "
+        "lista vazia — não entra, não rotaciona, não olha preço.",
+        "Ranqueia o universo pelo momentum 12-1 e mira nos `top_n` primeiros.",
+        "Só compra se o papel estiver pelo menos `dip_pct` abaixo da máxima de "
+        "`high_window` pregões. Sem o dip, o mês passa em branco — a espera é a regra, "
+        "não uma falha.",
+        "Blackout de resultados não força a decisão: adia. A rotação fica DEVIDA "
+        "(`_pending_rebalance`) e é recalculada do zero no próximo pregão livre.",
+        "Sinal visto no fechamento de D é executado na abertura de D+1 — o engine "
+        "não deixa a estratégia tocar o preço do próprio dia da decisão.",
+    )
+    exit_rules = (
+        "Rotação: papel que caiu fora dos `top_n` na virada do mês é vendido "
+        "(`ROTATION_OUT`).",
+        "Aperto de Selic: variação acima de `selic_threshold` zera a carteira inteira "
+        "(`IBOV_DEFENSIVE`). É o único gate macro do robô.",
+        "Stop de -15% sobre o preço de ENTRADA (`BacktestConfig.stop_loss_pct`): é do "
+        "ENGINE, não desta classe. Dispara em qualquer dia, intra-barra, sem esperar "
+        "o fim do mês — e nunca sobe junto com o preço.",
+        "Pregão perdido ao vivo não vira ordem atrasada: se era fim de mês, a rotação "
+        "fica devida e é redecidida com o dado do pregão de retorno.",
+    )
+    sizing_rules = (
+        "Capital dividido em `top_n` fatias iguais — cada entrada leva `1/top_n` do "
+        "caixa livre no momento da compra.",
+        "Custo sempre aplicado: corretagem + taxas por perna e slippage de "
+        "`CostModel.slippage_pct` (padrão 0,15%) na execução.",
+        "Ordem fracionária (abaixo de `fractional_lot_shares` ações) paga ainda a "
+        "corretagem FIXA de `fractional_fixed_fee` por perna — o que decide se um "
+        "capital pequeno sobrevive ao giro.",
+    )
+    param_docs = {
+        "lookback": "Pregões do início da janela de momentum (252 ≈ 1 ano).",
+        "skip_recent": "Pregões recentes ignorados no momentum (21 ≈ 1 mês).",
+        "top_n": "Quantas posições simultâneas o robô persegue.",
+        "selic_window": "Janela, em pregões, da variação da Selic.",
+        "selic_threshold": "Alta de Selic que dispara a saída defensiva.",
+        "selic_path": "Parquet da Selic diária. Ausente = gate desligado.",
+        "dip_pct": "Queda mínima abaixo da máxima recente para poder comprar.",
+        "high_window": "Pregões da máxima usada como referência do dip.",
+    }
+
     def __init__(
         self,
         lookback: int = 252,

@@ -1,0 +1,71 @@
+{#  Componentes compartilhados da interface.
+
+    Existe porque cada seção estava inventando o próprio cabeçalho: a home
+    tinha `page-head` (grade de duas colunas, `h1`), `podium-head` (`h2`,
+    kicker mono) e `recent-runs-head` (`h3`, sem kicker) — três anatomias para
+    a mesma função. Quando o day trade entrou, ele trouxe uma quarta: um
+    segundo `page-head` com `h2` dentro, no meio da página, que é o que fazia a
+    tela parecer emendada.
+
+    Regra: `page-head` (em `base.css`) é o título da PÁGINA e aparece uma vez;
+    `section-head` é o título de uma seção e aparece quantas vezes precisar.
+    Estética fixa do projeto (ver AGENTS.md): serifa para prosa, mono para
+    rótulo de sistema, régua de 1px para hierarquia, sem sombra. #}
+
+{#  Trilha de navegação. `trail` é uma lista de pares (rótulo, href) do mais
+    geral ao mais específico; `current` é a página em que você está (sem link,
+    porque link para si mesmo é ruído).
+
+    Substitui o padrão antigo — um `<a class="crumb">← Robôs</a>` dentro do
+    kicker, emendado com metadata por um "·". Aquilo dizia de onde você veio,
+    mas não onde você está, e cada página escrevia a própria versão: "← Robôs",
+    "← Run #12", "← Trades da run #12". Uma trilha é uma coisa só e tem uma
+    forma só. #}
+{% macro crumbs(trail, current) %}
+<nav class="crumbs" aria-label="Trilha">
+  {% for rotulo, href in trail %}
+  <a href="{{ href }}">{{ rotulo }}</a>
+  <span aria-hidden="true">/</span>
+  {% endfor %}
+  <span class="crumb-current">{{ current }}</span>
+</nav>
+{% endmacro %}
+
+{% macro section_head(kicker, title, dek="", aside="") %}
+<header class="section-head">
+  <div>
+    {% if kicker %}<div class="kicker">{{ kicker }}</div>{% endif %}
+    <h2>{{ title }}</h2>
+    {% if dek %}<p class="dek">{{ dek|safe }}</p>{% endif %}
+  </div>
+  {% if aside %}<div class="section-head-aside">{{ aside|safe }}</div>{% endif %}
+</header>
+{% endmacro %}
+
+{#  UM cartão de robô, seja de swing ou de day trade — ver
+    `dashboard/robot_view.py::RobotCard`. O tipo é uma ETIQUETA dentro do
+    cartão, não uma seção separada da página: os dois são robôs do sistema, e
+    o que difere entre eles (cadência, universo/ativo) cabe na linha de fatos.
+    Os dois levam para a ficha (`/strategies/<key>`) — clicar em robôs da mesma
+    grade e cair em telas diferentes era um bug de navegação, não uma
+    distinção útil. #}
+{% macro robot_card(r) %}
+<a class="robot-card" href="{{ r.href }}">
+  <div class="robot-card-top">
+    <span class="robot-kind robot-kind-{{ r.kind }}">{{ r.kind_label }}</span>
+    <span class="robot-ver">v{{ r.version }}</span>
+    {% if r.in_ranking %}<span class="robot-pill" title="Disputa o ranking automático">no pódio</span>{% endif %}
+  </div>
+  <h3>{{ r.key }}</h3>
+  {# `inline_code` (e não `safe`): a descrição sai do docstring da classe, com
+     `crase` marcando nome de parâmetro — sem o filtro, a crase aparecia crua
+     na tela. Ver `app.py`/`strategy/registry.py::inline_html`. #}
+  <p class="dek">{{ r.description|inline_code }}</p>
+  <dl class="robot-facts">
+    {% for rotulo, valor in r.facts %}
+    <div><dt>{{ rotulo }}</dt><dd>{{ valor }}</dd></div>
+    {% endfor %}
+  </dl>
+  <span class="robot-cta">Abrir ficha <span class="arrow">→</span></span>
+</a>
+{% endmacro %}

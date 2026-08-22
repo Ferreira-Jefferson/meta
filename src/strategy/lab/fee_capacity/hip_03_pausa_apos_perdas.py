@@ -73,9 +73,16 @@ from strategy.lab.fee_capacity.hip_01_concentracao import LiquidFocus
 
 
 class LiquidFocusLossStreakPause(LiquidFocus):
-    """`LiquidFocus` + pausa de entradas apos `loss_streak_threshold` saidas
-    negativas seguidas. Ver docstring do modulo para a hipotese e a
-    simplificacao declarada (pausa de calendario, nao gate por momentum)."""
+    """`LiquidFocus` + pausa de entradas após `loss_streak_threshold` saídas
+    negativas seguidas.
+
+    Ver o docstring do módulo para a hipótese a priori e a simplificação
+    declarada — a pausa é de calendário, não um gate por momentum.
+    """
+    # (docstring COM acento de propósito: a primeira frase dele é o resumo
+    # que aparece no cartão do catálogo e no topo da ficha do robô, ver
+    # `strategy/registry.py::docstring_parts`. O docstring do módulo segue em
+    # ASCII, como o resto do histórico escrito antes disto.)
 
     # "liqflop" = LIQ(uid) + F(ocus) + LO(ss) + P(ause) -- as quatro pecas do
     # desenho, na ordem em que foram decididas: LiquidSleeves5 (universo por
@@ -86,6 +93,33 @@ class LiquidFocusLossStreakPause(LiquidFocus):
     name = "liqflop"
     version = "1.0"
     candidate = True  # UNICO candidato do podio desde 2026-08-21 -- ver docstring do modulo
+
+    # Ficha: o que este arquivo acrescenta e a PAUSA, e so ela (ver `Strategy`
+    # em `strategy/base.py`).
+    watched_signals = LiquidFocus.watched_signals + (
+        "Sequência de perdas: compara o snapshot de posições entre pregões para "
+        "descobrir toda saída — inclusive a que o engine decidiu por stop, que nunca "
+        "aparece nas ações devolvidas por `on_bar`. Saída abaixo do preço de entrada "
+        "conta como perda; qualquer ganho zera a contagem.",
+    )
+    entry_rules = LiquidFocus.entry_rules + (
+        "Depois de `loss_streak_threshold` saídas negativas SEGUIDAS, para de abrir "
+        "posição nova por `pause_bars` pregões e fica em caixa (rendendo Selic, se "
+        "ligado).",
+        "A pausa é de CALENDÁRIO, não de sinal: ela não espera o momentum virar. É a "
+        "simplificação declarada da hipótese — acoplar a liberação ao ranking interno "
+        "do sleeve deixaria o robô frágil a qualquer mudança de como ele pontua.",
+        "Risco declarado da aposta: ficar de fora `pause_bars` pregões pode atrasar a "
+        "entrada bem no início de uma recuperação.",
+    )
+    exit_rules = LiquidFocus.exit_rules + (
+        "A pausa NUNCA bloqueia uma saída. Só `Enter` é filtrado — controle de risco "
+        "real não espera pausa nenhuma.",
+    )
+    param_docs = {
+        "loss_streak_threshold": "Saídas negativas seguidas que disparam a pausa.",
+        "pause_bars": "Pregões sem comprar depois do gatilho (21 ≈ 1 mês).",
+    }
 
     def __init__(self, loss_streak_threshold: int = 2, pause_bars: int = 21, **kwargs):
         super().__init__(**kwargs)

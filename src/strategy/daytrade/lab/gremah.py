@@ -73,6 +73,74 @@ class Gremah(IntradayStrategy):
 
     name = "gremah"
     version = "0.1"
+
+    # FICHA TECNICA -- documentacao, nunca decisao: nada disto e' lido por
+    # `on_bar`. Mesma convencao (e mesmos nomes de atributo) da familia de
+    # swing, declarada em `strategy/base.py::Strategy` -- `IntradayStrategy`
+    # nao herda de `Strategy` de proposito, entao os atributos moram aqui e
+    # quem le (`dashboard/robot_view.py`) usa `getattr` com default vazio.
+    # Existe para a pagina `/strategies/gremah` poder explicar o robo em prosa
+    # em vez de mostrar so' a tabela de parametros.
+    watched_signals = (
+        "Abertura da sessão: o `open` da primeira barra vista antes de "
+        "`fixed_anchor_until` — é a âncora de toda a fase fixa do dia.",
+        "Preço atual (`close` da barra): âncora da fase rolante, recalculada a cada "
+        "rearme de ordem.",
+        "Relógio do pregão: `fixed_anchor_until` é o que separa a fase de âncora fixa "
+        "da rolante.",
+        "P&L agregado da sessão, em reais, contra `session_stop_brl`.",
+        "Preenchimentos já feitos em cada lado (long/short), contra "
+        "`max_trades_per_side`.",
+        "Idade da ordem pendente, em barras, contra `rolling_reanchor_after_bars`.",
+    )
+    entry_rules = (
+        "Uma ordem-limite PARADA por vez, `spacing` ticks abaixo da âncora (long) ou "
+        "acima (short) — ele espera o preço vir até ele, nunca paga o spread para "
+        "entrar.",
+        "Os três níveis saem de `profit_pct` sobre a âncora, convertidos em ticks: "
+        "alvo = 1×, espaçamento da entrada = `spacing_multiplier`×, stop = "
+        "`stop_multiplier`×.",
+        "Antes de `fixed_anchor_until`, a âncora é a ABERTURA do dia; depois, é o "
+        "PREÇO ATUAL. O corte não foi otimizado — é o ponto médio observável entre "
+        "\"13:00 ainda positivo\" e \"15:00 já negativo\" na medição que motivou o "
+        "desenho.",
+        "Alterna de lado: depois de fechar um long tenta o short primeiro, e só "
+        "insiste no mesmo lado quando o outro estourou `max_trades_per_side`.",
+        "Ordem parada obsoleta é abandonada e rearmada no preço/modo atuais — a que "
+        "foi armada na fase fixa quando o relógio já virou, e a rolante que esperou "
+        "`rolling_reanchor_after_bars` barras sem ser tocada.",
+    )
+    exit_rules = (
+        "Alvo: ordem-limite parada a `profit_pct` do preço de entrada. Sair como MAKER "
+        "é o centro do desenho (`target_fills_as_maker`) — capturar o spread em vez de "
+        "pagá-lo —, não um detalhe de modelagem.",
+        "Stop: `stop_multiplier`× a distância do alvo, na direção contrária.",
+        "Stop agregado da sessão: perda acumulada de `session_stop_brl` fecha a posição "
+        "aberta e encerra o dia — nada mais é armado até o próximo pregão.",
+        "Nunca carrega posição overnight: o motor achata no fim da sessão, pelo "
+        "calendário da B3 (`session_end_policy`), não por um horário fixo.",
+    )
+    sizing_rules = (
+        "`quantity` fixa por ordem. `None` = usa o `default_quantity` do perfil do "
+        "símbolo (PMAM3: 100 ações, um lote padrão).",
+        "Custo do perfil congelado do símbolo (`backtest/intraday/profiles.py`): "
+        "corretagem zero em lote padrão na Rico, mais taxa de bolsa por perna — "
+        "assumida ao DOBRO da real, de propósito, como margem de segurança.",
+        "Giro alto é o risco econômico do desenho: cada round-trip paga taxa de bolsa "
+        "duas vezes, e `max_trades_per_side` é o teto que limita isso por sessão.",
+    )
+    param_docs = {
+        "symbol": "Ativo que ele negocia.",
+        "tick_size": "Variação mínima de preço do ativo.",
+        "profit_pct": "Alvo de lucro por trade, em % do preço da âncora.",
+        "spacing_multiplier": "Distância da entrada, em múltiplos do alvo.",
+        "stop_multiplier": "Distância do stop, em múltiplos do alvo.",
+        "max_trades_per_side": "Teto de preenchimentos por lado, por sessão.",
+        "session_stop_brl": "Perda acumulada, em reais, que encerra o dia.",
+        "quantity": "Quantidade por ordem. Vazio = default do perfil do símbolo.",
+        "fixed_anchor_until": "Hora (UTC) em que a âncora fixa vira rolante.",
+        "rolling_reanchor_after_bars": "Barras que uma ordem rolante espera antes de rearmar.",
+    }
     # A saida por alvo deste robo e uma ordem-limite parada no nivel: e o
     # centro do desenho (capturar o spread em vez de paga-lo), nao um
     # detalhe de modelagem. Ver `IntradayStrategy.target_fills_as_maker`.

@@ -58,16 +58,23 @@ def client():
 
 
 # Slot de SWING -- e' onde vivem as regras de robo/ranking/disjuntor que este
-# arquivo cobre. O slot de day trade (`daytrade`) tem robo declarado no
-# catalogo e nao passa pelo ranking (ver `tests/test_operacao_slots.py`).
+# arquivo cobre. O slot de day trade (`daytrade`) escolhe robo pelo catalogo
+# PROPRIO de day trade (`strategy.daytrade.registry`, sempre disponivel, sem
+# ranking recalculado por hora) -- ver `tests/test_dashboard_daytrade_robot.py`.
 SWING = "swing"
 
 
-def _create_mt5_account(db_path, capital: float = 50_000.0, slot: str = SWING) -> int:
+def _create_mt5_account(
+    db_path, capital: float = 50_000.0, slot: str = SWING, investment_robot: str | None = None,
+) -> int:
+    # Default por slot: "portfolio_dip2_hw40" (swing) nao existe no registry
+    # de day trade -- uma conta do slot "daytrade" com esse robo levantaria
+    # `KeyError` ao montar o painel (ver `strategy.daytrade.registry`).
+    robo = investment_robot or ("gremah" if slot == "daytrade" else "portfolio_dip2_hw40")
     with live_store.live_journal(db_path) as conn:
         acc = live_store.ensure_account(
             conn, name=slot, mode="mt5",
-            initial_capital=capital, investment_robot="portfolio_dip2_hw40",
+            initial_capital=capital, investment_robot=robo,
             withdrawal_robot="official_policy",
         )
         return acc.id
@@ -170,7 +177,7 @@ def test_operacao_iniciar_sem_shares_per_lot_detectavel_pede_campo_sem_iniciar(
     vez de subir o processo sem valor."""
     called: list = []
     monkeypatch.setattr(live_control, "start", lambda cfg: called.append(cfg))
-    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot: None)
+    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot, robot_key=None: None)
 
     resp = client.post(f"/operacao/{SWING}/iniciar", data={})
 
@@ -191,8 +198,8 @@ def test_operacao_iniciar_primeira_vez_usa_caixa_do_ledger_como_capital(
     errados."""
     captured: list = []
     monkeypatch.setattr(live_control, "start", lambda cfg: captured.append(cfg))
-    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot: 1.0)
-    monkeypatch.setattr(live_control, "detect_fractional_symbol_map", lambda slot: None)
+    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot, robot_key=None: 1.0)
+    monkeypatch.setattr(live_control, "detect_fractional_symbol_map", lambda slot, robot_key=None: None)
     monkeypatch.setattr(dashboard_app.reader, "top_strategies_by_final_capital",
                         lambda **kw: [{"strategy_name": "portfolio_dip2_hw40", "final_capital": 5_000.0}])
 
@@ -215,8 +222,8 @@ def test_operacao_iniciar_sem_caixa_no_ledger_bloqueia_com_piso_claro(
     de so desabilitar o botao."""
     called: list = []
     monkeypatch.setattr(live_control, "start", lambda cfg: called.append(cfg))
-    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot: 1.0)
-    monkeypatch.setattr(live_control, "detect_fractional_symbol_map", lambda slot: None)
+    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot, robot_key=None: 1.0)
+    monkeypatch.setattr(live_control, "detect_fractional_symbol_map", lambda slot, robot_key=None: None)
     monkeypatch.setattr(dashboard_app.reader, "top_strategies_by_final_capital",
                         lambda **kw: [{"strategy_name": "portfolio_dip2_hw40", "final_capital": 5_000.0}])
 
@@ -237,9 +244,9 @@ def test_operacao_iniciar_usa_mapa_fracionario_detectado_no_config(
     sempre rejeitadas pelo MT5, inviabilizando operar com capital pequeno."""
     captured: list = []
     monkeypatch.setattr(live_control, "start", lambda cfg: captured.append(cfg))
-    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot: 1.0)
+    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot, robot_key=None: 1.0)
     monkeypatch.setattr(live_control, "detect_fractional_symbol_map",
-                        lambda slot: {"WEGE3.SA": "WEGE3F"})
+                        lambda slot, robot_key=None: {"WEGE3.SA": "WEGE3F"})
     monkeypatch.setattr(dashboard_app.reader, "top_strategies_by_final_capital",
                         lambda **kw: [{"strategy_name": "portfolio_dip2_hw40", "final_capital": 5_000.0}])
 
@@ -261,8 +268,8 @@ def test_operacao_iniciar_ignora_piso_e_disjuntor_arbitrarios_do_form(
     `monthly_loss_limit` nao pode influenciar o robo."""
     captured: list = []
     monkeypatch.setattr(live_control, "start", lambda cfg: captured.append(cfg))
-    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot: 1.0)
-    monkeypatch.setattr(live_control, "detect_fractional_symbol_map", lambda slot: None)
+    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot, robot_key=None: 1.0)
+    monkeypatch.setattr(live_control, "detect_fractional_symbol_map", lambda slot, robot_key=None: None)
     monkeypatch.setattr(dashboard_app.reader, "top_strategies_by_final_capital",
                         lambda **kw: [{"strategy_name": "portfolio_dip2_hw40", "final_capital": 5_000.0}])
 
@@ -288,8 +295,8 @@ def test_operacao_iniciar_retoma_conta_mt5_existente_usa_shares_per_lot_detectad
     com o valor detectado, sem nenhum campo digitado em lugar nenhum."""
     db_path = isolated_journal
     _create_mt5_account(db_path)
-    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot: 3.5)
-    monkeypatch.setattr(live_control, "detect_fractional_symbol_map", lambda slot: None)
+    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot, robot_key=None: 3.5)
+    monkeypatch.setattr(live_control, "detect_fractional_symbol_map", lambda slot, robot_key=None: None)
 
     captured: list = []
     monkeypatch.setattr(live_control, "start", lambda cfg: captured.append(cfg))
@@ -312,7 +319,7 @@ def test_operacao_iniciar_mt5_shares_per_lot_zero_detectado_pede_campo_sem_inici
     real (`volume = quantity / shares_per_lot`)."""
     called: list = []
     monkeypatch.setattr(live_control, "start", lambda cfg: called.append(cfg))
-    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot: 0.0)
+    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot, robot_key=None: 0.0)
 
     resp = client.post(f"/operacao/{SWING}/iniciar", data={})
 
@@ -331,7 +338,7 @@ def test_operacao_iniciar_robo_fora_do_top3_bloqueia_sem_iniciar(
     chave que nao esta mais no ranking nao pode colar."""
     called: list = []
     monkeypatch.setattr(live_control, "start", lambda cfg: called.append(cfg))
-    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot: 1.0)
+    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot, robot_key=None: 1.0)
     monkeypatch.setattr(dashboard_app.reader, "top_strategies_by_final_capital",
                         lambda **kw: [{"strategy_name": "portfolio_dip2_hw40", "final_capital": 5_000.0}])
 
@@ -349,7 +356,7 @@ def test_operacao_iniciar_sem_ranking_ainda_bloqueia_com_erro_claro(
     mensagem clara em vez de deixar escolher qualquer coisa ou estourar."""
     called: list = []
     monkeypatch.setattr(live_control, "start", lambda cfg: called.append(cfg))
-    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot: 1.0)
+    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot, robot_key=None: 1.0)
     monkeypatch.setattr(dashboard_app.reader, "top_strategies_by_final_capital", lambda **kw: [])
 
     resp = client.post(f"/operacao/{SWING}/iniciar", data={"robo": "portfolio_dip2_hw40"})
@@ -370,8 +377,8 @@ def test_operacao_iniciar_conta_existente_ignora_robo_do_form_usa_investment_rob
     explicitamente seria um incidente."""
     db_path = isolated_journal
     _create_mt5_account(db_path)  # investment_robot="portfolio_dip2_hw40"
-    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot: 1.0)
-    monkeypatch.setattr(live_control, "detect_fractional_symbol_map", lambda slot: None)
+    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot, robot_key=None: 1.0)
+    monkeypatch.setattr(live_control, "detect_fractional_symbol_map", lambda slot, robot_key=None: None)
     # Ranking mudou depois da criacao -- top-3 atual nem contem o robo da conta.
     monkeypatch.setattr(dashboard_app.reader, "top_strategies_by_final_capital",
                         lambda **kw: [{"strategy_name": "um-robo-novo", "final_capital": 9_000.0}])
@@ -538,6 +545,99 @@ def test_operacao_mostra_os_dois_cartoes_com_day_trade_em_cima(isolated_journal,
         assert f"/operacao/{slot}/caixa" in html
         assert f"/operacao/{slot}/iniciar" in html
         assert f"/operacao/{slot}/fragment" in html
+
+
+def test_home_lista_os_dois_tipos_de_robo_no_MESMO_catalogo(client):
+    """A home tem UM catalogo, com etiqueta de tipo por robo -- nao uma grade
+    de swing e uma segunda secao de day trade emendada embaixo.
+
+    O discovery de swing nunca varre `strategy/daytrade/` (motor/metricas
+    incomparaveis ao ranking FULL/5Y/1Y), entao os dois catalogos sao
+    diferentes na origem; o que NAO precisava ser diferente era a tela. Ver
+    `dashboard/robot_view.py`."""
+    html = client.get("/").text
+
+    assert "liqflop" in html
+    assert "gremah" in html
+    # Uma grade so: a segunda secao "Robôs de day trade" deixou de existir.
+    assert html.count('class="robots-grid') == 1
+    assert "Robôs de day trade" not in html
+    # A etiqueta de tipo vive DENTRO do cartao.
+    assert "robot-kind-swing" in html
+    assert "robot-kind-daytrade" in html
+
+
+def test_home_manda_os_dois_robos_para_a_ficha_e_nao_um_para_operacao(client):
+    """Pedido do dono (2026-08-21): clicar no `gremah` tem de abrir
+    `/strategies/gremah`, como acontece com o `liqflop` -- antes o cartao de
+    day trade apontava para `/operacao` (a rota de ficha nao resolvia robo de
+    day trade e dava 404), e dois cartoes da mesma grade levavam a dois
+    lugares diferentes."""
+    html = client.get("/").text
+
+    assert 'href="/strategies/liqflop"' in html
+    assert 'href="/strategies/gremah"' in html
+
+
+def test_ficha_do_robo_de_day_trade_existe_e_explica_o_robo(client):
+    """`/strategies/gremah` era 404 -- a rota so consultava o registry de
+    swing. Agora resolve os dois catalogos (`robot_view.detail`) e a ficha tem
+    de trazer a EXPLICACAO, nao so' a tabela de parametros: era exatamente
+    isso que faltava na tela antiga, que renderizava "Entrada/Saida/Sizing"
+    como tres caixas vazias porque ninguem nunca preenchia esses campos."""
+    resp = client.get("/strategies/gremah")
+
+    assert resp.status_code == 200
+    html = resp.text
+    assert "Sinais que ele observa" in html
+    assert "Quando compra" in html
+    assert "Quando vende" in html
+    # Motor incomparavel: a ficha dele NAO oferece o formulario de simulacao
+    # de carteira, manda para o painel de operacao.
+    assert 'action="/strategies/gremah/run"' not in html
+    assert 'href="/operacao"' in html
+
+
+def test_ficha_nunca_renderiza_bloco_de_regra_vazio(client):
+    """A tela antiga mostrava sempre os tres titulos (Entrada, Saida, Sizing &
+    custos) com `<ol>` vazio embaixo, porque `StrategyInfo` criava as listas
+    vazias e nada as populava. Bloco sem item nao pode existir: ou tem
+    conteudo, ou nao e' renderizado."""
+    import re
+
+    html = client.get("/strategies/liqflop").text
+
+    blocos = re.findall(r'<article class="doc-block">.*?</article>', html, re.S)
+    assert blocos, "a ficha do robo do podio tem de ter blocos de regra"
+    for bloco in blocos:
+        assert "<li>" in bloco, f"bloco de regra sem nenhum item: {bloco[:120]}"
+
+
+def test_ficha_mostra_o_valor_EFETIVO_do_parametro_nao_o_default_da_base(client):
+    """`liqflop` opera `dip_pct=0.02`/`high_window=40` (postos por
+    `DipTop1Portfolio` via `kwargs.setdefault`), nao o 0.03/20 da assinatura de
+    `BuyTheDip`. A ficha le do OBJETO -- um numero errado na tela e' pior que
+    numero nenhum, porque parece conferido."""
+    html = client.get("/strategies/liqflop").text
+
+    assert "dip_pct" in html and "high_window" in html
+    # os defaults da raiz da familia nao podem aparecer como se fossem dele
+    linha_dip = [l for l in html.splitlines() if "dip_pct" in l]
+    assert linha_dip and "0.02" in html
+
+
+def test_menu_nao_marca_a_home_como_pagina_atual_na_ficha_do_robo(client):
+    """Reclamacao do dono: estando em `/strategies/<robo>`, o item "Robôs" do
+    menu (que aponta para `/`) acendia como `aria-current="page"` -- o menu
+    afirmava que a pagina atual era a home. Filha de secao usa
+    `data-section`, um estado visual mais fraco."""
+    # so' o <header> do topo (o menu) -- o resto da pagina tem outros headers
+    menu_home = client.get("/").text.split("</header>")[0]
+    menu_ficha = client.get("/strategies/liqflop").text.split("</header>")[0]
+
+    assert 'aria-current="page"' in menu_home       # na home, "Robôs" É a pagina
+    assert 'aria-current="page"' not in menu_ficha  # na ficha, nao
+    assert 'data-section="true"' in menu_ficha      # so' a secao acesa
 
 
 def test_operacao_nunca_resolve_o_robo_de_day_trade_pelo_registry_de_swing(

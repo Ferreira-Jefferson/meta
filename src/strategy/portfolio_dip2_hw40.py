@@ -36,6 +36,12 @@ class DipTop1Portfolio(PortfolioHysteresis):
 
     satellite_pct: float = 0.00
 
+    # Ficha: sem satelites, 100% na posicao principal (ver base.py).
+    sizing_rules = (
+        "Sem satélites: 100% do capital vai para a posição principal. A geração "
+        "anterior deixava 5% para trás em cada rotação; aqui não sobra ponta.",
+    ) + PortfolioHysteresis.sizing_rules[1:]
+
     def __init__(self, **kwargs):
         kwargs.setdefault("confirm_months", 2)
         kwargs.setdefault("redist_mode", "pool")

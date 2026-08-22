@@ -1,11 +1,12 @@
 {% extends "base.html" %}
+{% import "partials/ui.html" as ui %}
 {% set page = "strategies" %}
 {% block title %}Resultado · {{ sim.strategy_name }} · META{% endblock %}
 {% block content %}
 
 <section class="page-head">
   <div>
-    <div class="kicker"><a href="/" class="crumb">← Robôs</a> · Simulação #{{ sim.id }}</div>
+    {{ ui.crumbs([("Robôs", "/"), (sim.strategy_name, "/strategies/" ~ sim.strategy_name)], "Simulação #" ~ sim.id) }}
     <h1>{{ sim.strategy_name }}</h1>
     <p class="dek">
       Período <em>{{ sim.start }}</em> → <em>{{ sim.end }}</em> ·

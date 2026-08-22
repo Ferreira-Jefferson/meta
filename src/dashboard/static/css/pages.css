@@ -572,40 +572,65 @@
 }
 .sim-done .submit-row { margin-top: var(--s-5); }
 
-/* ============ HOME · Top 3 pódio ========================================= */
+/* ============ Cabeçalho de SEÇÃO (componente único) =====================
+   Ver `templates/partials/ui.html`. Toda seção de conteúdo usa este bloco:
+   antes existiam `podium-head`, `recent-runs-head` e um segundo `page-head`
+   no meio da página, três anatomias para a mesma função — era isso que fazia
+   a home parecer montada em pedaços. */
 
-.podium { margin-bottom: var(--s-7); }
-.podium-head { margin-bottom: var(--s-4); }
-.podium-head h2 {
+.section-head {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: baseline;
+  gap: var(--s-5);
+  margin-bottom: var(--s-5);
+  padding-bottom: var(--s-3);
+  border-bottom: 1px solid var(--grid);
+}
+.section-head h2 {
   font-family: var(--font-serif);
   font-weight: 400;
   font-size: var(--fs-h2);
-  margin: var(--s-1) 0 var(--s-2);
+  line-height: var(--lh-tight);
+  letter-spacing: -0.01em;
+  margin: var(--s-1) 0 0;
   color: var(--fg-strong);
 }
-.podium-head .kicker {
+.section-head .kicker {
   font-family: var(--font-mono);
   font-size: var(--fs-metadata);
   text-transform: uppercase;
-  letter-spacing: 0.14em;
+  letter-spacing: 0.18em;
   color: var(--accent-amber);
 }
-.podium-head .dek {
+.section-head .dek {
   font-family: var(--font-serif);
   font-style: italic;
+  font-size: var(--fs-body-lg);
   color: var(--fg-muted);
-  max-width: 68ch;
-  margin: 0;
+  max-width: 72ch;
+  margin: var(--s-2) 0 0;
 }
-.podium-list {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: var(--s-4);
+.section-head .dek code,
+.section-head .dek strong { font-style: normal; }
+.section-head-aside {
+  font-family: var(--font-mono);
+  font-size: var(--fs-metadata);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--fg-muted);
+  white-space: nowrap;
 }
-@media (max-width: 900px) { .podium-list { grid-template-columns: 1fr; } }
+.section-link { color: var(--accent-amber); }
+.section-link:hover { border-bottom: 1px solid var(--accent-amber); }
+@media (max-width: 720px) {
+  .section-head { grid-template-columns: 1fr; }
+  .section-head-aside { white-space: normal; }
+}
+
+/* ============ HOME · Top 3 pódio ========================================= */
+
+.podium { margin-bottom: var(--s-8); }
 
 /* 3 horizontes de tempo lado a lado (1 ano / 5 anos / full), cada um com sua
    própria mini-lista de robôs empilhada verticalmente dentro da coluna. */
@@ -711,39 +736,45 @@
   color: var(--accent-amber);
 }
 
-/* ============ HOME · Robôs disponíveis =================================== */
+/* ============ HOME · Catálogo de robôs ===================================
+   UM cartão para os dois tipos de robô (ver `partials/ui.html::robot_card`).
+   A régua da grade é feita com borda no PRÓPRIO cartão (direita + baixo) mais
+   a borda de cima/esquerda no contêiner: com `gap:1px` sobre um fundo colorido,
+   uma última fileira incompleta deixaria o vão pintado como se fosse um cartão
+   fantasma. Assim funciona com qualquer quantidade de robôs. */
 
+.catalog { margin-bottom: var(--s-8); }
 .robots-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-  gap: 0;
-  border: 1px solid var(--grid);
-  margin-bottom: var(--s-7);
+  grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr));
+  border-top: 1px solid var(--grid);
+  border-left: 1px solid var(--grid);
 }
 .robot-card {
-  display: block;
-  padding: var(--s-6);
+  display: flex;
+  flex-direction: column;
+  padding: var(--s-5) var(--s-5) var(--s-4);
   border-right: 1px solid var(--grid);
   border-bottom: 1px solid var(--grid);
   background: var(--bg-elevated);
   text-decoration: none;
   color: inherit;
-  transition: background 120ms linear;
+  transition: background 120ms linear, border-color 120ms linear;
 }
-.robot-card:hover { background: var(--bg-hover, #1a1a1c); }
-.robot-card:last-child { border-right: none; }
-.robot-kicker {
-  font-family: var(--font-mono);
-  font-size: var(--fs-metadata);
-  text-transform: uppercase;
-  letter-spacing: 0.18em;
-  color: var(--accent-amber);
-  margin-bottom: var(--s-3);
+.robot-card:hover { background: var(--bg-hover); }
+.robot-card:hover .robot-cta { color: var(--fg-strong); }
+
+.robot-card-top {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  margin-bottom: var(--s-4);
 }
-.robot-card h2 {
+.robot-card h3 {
   font-family: var(--font-serif);
   font-weight: 400;
   font-size: var(--fs-h2);
+  line-height: 1;
   margin: 0 0 var(--s-3);
   letter-spacing: -0.01em;
   color: var(--fg-strong);
@@ -751,33 +782,79 @@
 .robot-card .dek {
   font-family: var(--font-serif);
   font-style: italic;
+  font-size: var(--fs-body-lg);
   color: var(--fg-muted);
-  max-width: 42ch;
+  max-width: 46ch;
   margin: 0 0 var(--s-5);
 }
+.robot-card .dek code { font-style: normal; font-size: 0.9em; }
+
+/* Etiqueta de TIPO — o que antes era uma seção separada da página. Diferença
+   de tipo é diferença de cor de traço, não de arquitetura de tela. */
+.robot-kind {
+  font-family: var(--font-mono);
+  font-size: var(--fs-metadata);
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  padding: 2px var(--s-2);
+  border: 1px solid var(--grid-strong);
+  color: var(--fg-muted);
+}
+.robot-kind-swing { color: var(--accent-amber); border-color: var(--accent-amber); }
+.robot-kind-daytrade { color: var(--fg-strong); border-color: var(--grid-strong); }
+.robot-ver {
+  font-family: var(--font-mono);
+  font-size: var(--fs-metadata);
+  letter-spacing: 0.1em;
+  color: var(--fg-faint);
+}
+.robot-pill {
+  font-family: var(--font-mono);
+  font-size: var(--fs-metadata);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--accent-green);
+  margin-left: auto;
+}
+.robot-pill::before { content: "● "; }
+.robot-pill.is-off { color: var(--fg-faint); }
+
+/* Fatos do robô: mesma anatomia no cartão e no cabeçalho da ficha. */
+.robot-facts,
+.robot-head-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2) var(--s-5);
+  margin: 0 0 var(--s-5);
+  font-family: var(--font-mono);
+  font-size: var(--fs-metadata);
+}
+.robot-facts > div,
+.robot-head-facts > div { display: flex; gap: var(--s-2); align-items: baseline; }
+.robot-facts dt,
+.robot-head-facts dt {
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+.robot-facts dd,
+.robot-head-facts dd {
+  margin: 0;
+  color: var(--fg-strong);
+  font-variant-numeric: tabular-nums;
+}
 .robot-cta {
+  margin-top: auto;
   font-family: var(--font-mono);
   font-size: var(--fs-metadata);
   text-transform: uppercase;
   letter-spacing: 0.14em;
   color: var(--accent-amber);
+  transition: color 120ms linear;
 }
 .robot-cta .arrow { margin-left: var(--s-2); }
 
-.recent-runs { margin-top: var(--s-6); }
-.recent-runs-head { margin-bottom: var(--s-4); }
-.recent-runs-head h3 {
-  font-family: var(--font-serif);
-  font-weight: 400;
-  font-size: var(--fs-h3);
-  margin: 0 0 var(--s-2);
-}
-.recent-runs-head .dek {
-  font-family: var(--font-serif);
-  font-style: italic;
-  color: var(--fg-muted);
-  margin: 0;
-}
+.recent-runs { margin-top: var(--s-8); }
 
 .runs-filters {
   display: grid;
@@ -920,63 +997,203 @@
   margin-right: 2px;
 }
 
-/* ============ Detalhe do robô =========================================== */
+/* ============ Ficha do robô (`/strategies/<key>`) ========================
+   Uma página, dois tipos de robô (ver `dashboard/robot_view.py`). A ordem das
+   seções é a ordem das perguntas de quem chega: o que é isto → quanto ele
+   mediu → como decide → com que números → posso rodar → o que já rodou. */
 
-.crumb {
-  color: var(--fg-muted);
-  text-decoration: none;
-  transition: color 90ms linear;
+/* Trilha. Substitui o antigo `.kicker > a.crumb`, que misturava navegação
+   ("← Robôs") com metadata ("· v1.0") na mesma linha, sem dizer onde você
+   está — e o menu do topo, em paralelo, acendia a home como se fosse a
+   página atual. */
+.crumbs {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-metadata);
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--fg-faint);
+  margin-bottom: var(--s-3);
 }
-.crumb:hover { color: var(--accent-amber); }
+.crumbs a { color: var(--fg-muted); }
+.crumbs a:hover { color: var(--accent-amber); }
+.crumbs .crumb-current { color: var(--accent-amber); }
 
-.robot-doc { display: grid; gap: var(--s-6); margin-bottom: var(--s-7); }
-.doc-block { padding: 0; }
-.doc-block h2 {
-  font-family: var(--font-serif);
-  font-weight: 400;
-  font-size: var(--fs-h2);
-  margin: 0 0 var(--s-3);
-  letter-spacing: -0.01em;
+.robot-head { align-items: start; }
+.robot-head-tags {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  margin-top: var(--s-4);
 }
-.doc-block h3 {
-  font-family: var(--font-serif);
-  font-weight: 400;
-  font-size: var(--fs-h3);
-  margin: 0 0 var(--s-3);
-  padding-bottom: var(--s-2);
+.robot-head-tags .robot-pill { margin-left: 0; }
+.robot-head-facts {
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--s-2);
+  margin: 0;
+  text-transform: none;
+}
+.robot-head-facts > div { gap: var(--s-3); }
+
+/* Medições oficiais — mesma fonte do pódio, uma coluna por janela. */
+.robot-metrics { margin-bottom: var(--s-8); }
+.measure-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
+  border-top: 1px solid var(--grid);
+  border-left: 1px solid var(--grid);
+}
+.measure {
+  display: block;
+  padding: var(--s-5);
+  border-right: 1px solid var(--grid);
   border-bottom: 1px solid var(--grid);
+  background: var(--bg-elevated);
+  color: inherit;
+  transition: background 120ms linear;
+}
+.measure:hover { background: var(--bg-hover); }
+.measure-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--s-3);
+  padding-bottom: var(--s-3);
+  margin-bottom: var(--s-4);
+  border-bottom: 1px solid var(--grid);
+  font-family: var(--font-mono);
+  font-size: var(--fs-metadata);
+}
+.measure-head .k {
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--fg-strong);
+}
+.measure-v {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-size: var(--fs-h2);
+  line-height: 1;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  margin-bottom: var(--s-4);
+}
+.measure dl {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--s-2) var(--s-4);
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-metadata);
+}
+.measure dl > div { display: flex; justify-content: space-between; gap: var(--s-2); }
+.measure dt { color: var(--fg-muted); text-transform: uppercase; letter-spacing: 0.1em; }
+.measure dd { margin: 0; color: var(--fg-strong); font-variant-numeric: tabular-nums; }
+.measure.is-reproved { border-left: 2px solid var(--accent-red); }
+.measure-note {
+  margin: var(--s-4) 0 0;
+  padding-top: var(--s-3);
+  border-top: 1px solid var(--grid);
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: var(--fs-body);
+  color: var(--fg-muted);
+}
+
+.robot-doc { margin-bottom: var(--s-8); }
+.doc-block { padding: 0; }
+.doc-block h3 {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-size: var(--fs-metadata);
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--accent-amber);
+  margin: 0 0 var(--s-4);
+  padding-bottom: var(--s-3);
+  border-bottom: 1px solid var(--grid-strong);
 }
 .doc-body {
   font-family: var(--font-serif);
   font-size: var(--fs-body-lg);
   line-height: 1.7;
   color: var(--fg);
-  max-width: 68ch;
+  max-width: 72ch;
+  margin-bottom: var(--s-6);
 }
-.doc-body em { font-style: italic; color: var(--accent-amber); }
-.doc-columns {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 0;
-  border: 1px solid var(--grid);
-}
-.doc-columns .doc-block {
-  padding: var(--s-5);
-  border-right: 1px solid var(--grid);
+.doc-body p { margin: 0 0 var(--s-4); }
+.doc-body p:last-child { margin-bottom: 0; }
+.doc-body code,
+.doc-list code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  color: var(--accent-amber);
   background: var(--bg-elevated);
+  padding: 1px 4px;
 }
-.doc-columns .doc-block:last-child { border-right: none; }
-.doc-columns .doc-block h3 { border-bottom-color: var(--grid-strong); }
+.doc-empty {
+  font-family: var(--font-serif);
+  font-style: italic;
+  color: var(--fg-muted);
+  border-left: 2px solid var(--grid-strong);
+  padding-left: var(--s-4);
+  max-width: 72ch;
+}
+/* Lista de especificação: rótulo em mono à esquerda, regras em prosa à
+   direita, uma régua de 1px entre blocos. Aguenta bloco de 3 e de 14 itens
+   sem deixar buraco — o que uma grade de colunas não aguenta. */
+.doc-spec {
+  border-top: 1px solid var(--grid-strong);
+  margin-bottom: var(--s-6);
+}
+.doc-spec .doc-block {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: var(--s-6);
+  padding: var(--s-5) 0;
+  border-bottom: 1px solid var(--grid);
+}
+.doc-spec .doc-block h3 {
+  margin: 0;
+  padding: 0;
+  border: none;
+  line-height: 1.6;
+}
+.doc-spec .doc-list { max-width: 88ch; }
+@media (max-width: 820px) {
+  .doc-spec .doc-block { grid-template-columns: 1fr; gap: var(--s-3); }
+}
 .doc-list {
   margin: 0;
   padding-left: var(--s-4);
   font-size: var(--fs-body);
   color: var(--fg);
-  line-height: 1.7;
+  line-height: 1.65;
+  list-style: none;
 }
-.doc-list li { margin-bottom: var(--s-2); }
-.doc-list li em { color: var(--accent-amber); font-style: italic; }
+.doc-list li {
+  margin-bottom: var(--s-3);
+  position: relative;
+}
+.doc-list li:last-child { margin-bottom: 0; }
+.doc-list li::before {
+  content: "—";
+  position: absolute;
+  left: calc(-1 * var(--s-4));
+  color: var(--fg-faint);
+}
 
+.params-block { border-top: 1px solid var(--grid); padding-top: var(--s-5); }
+.params-block .dek {
+  font-family: var(--font-serif);
+  font-style: italic;
+  color: var(--fg-muted);
+  margin: 0 0 var(--s-4);
+  max-width: 72ch;
+}
 .params-table {
   width: 100%;
   border-collapse: collapse;
@@ -995,6 +1212,11 @@
   letter-spacing: 0.14em;
   color: var(--fg-muted);
 }
+.params-table th.right, .params-table td.right { text-align: right; }
+.params-table td.pname {
+  font-family: var(--font-mono);
+  color: var(--fg-strong);
+}
 .params-table td.num {
   font-family: var(--font-mono);
   color: var(--accent-amber);
@@ -1002,26 +1224,27 @@
   white-space: nowrap;
 }
 .params-table td.dim { color: var(--fg-muted); }
+.params-table tbody tr:hover { background: var(--bg-elevated); }
 
 .run-form {
   border: 1px solid var(--grid);
   padding: var(--s-6);
   background: var(--bg-elevated);
 }
-.run-form-head { margin-bottom: var(--s-5); }
-.run-form-head h2 {
-  font-family: var(--font-serif);
-  font-weight: 400;
-  font-size: var(--fs-h2);
-  margin: 0 0 var(--s-2);
+/* Robô que não roda no motor deste formulário (day trade): o bloco continua
+   no mesmo lugar da página, com a mesma moldura, mas manda para onde ele de
+   fato roda em vez de oferecer um botão que rodaria o motor errado. */
+.run-form.is-elsewhere { border-left: 2px solid var(--accent-amber); }
+.elsewhere-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s-5);
+  flex-wrap: wrap;
 }
-.run-form-head .dek {
-  font-family: var(--font-serif);
-  font-style: italic;
-  color: var(--fg-muted);
-  max-width: 62ch;
-  margin: 0;
-}
+/* O botão usa o `.cta` canônico (o mesmo de "Executar simulação"): nas duas
+   fichas a ação principal fica no mesmo lugar da página e com o mesmo peso
+   visual — é a ação que muda, não o botão. */
+.elsewhere-actions .cta { text-decoration: none; }
 
 /* ============ Cards de capital (inicial · pico · vale · final) ========= */
 

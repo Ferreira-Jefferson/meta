@@ -1,11 +1,12 @@
 {% extends "base.html" %}
+{% import "partials/ui.html" as ui %}
 {% set page = "strategies" %}
 {% block title %}Trade #{{ trade.id }} · META{% endblock %}
 {% block content %}
 
 <section class="page-head">
   <div>
-    <div class="kicker"><a href="/runs/{{ run.id }}/trades" class="crumb">← Trades da run #{{ run.id }}</a></div>
+    {{ ui.crumbs([("Robôs", "/"), ("Run #" ~ run.id, "/runs/" ~ run.id), ("Trades", "/runs/" ~ run.id ~ "/trades")], "Trade #" ~ trade.id) }}
     <h1>{{ trade.ticker }}</h1>
     <p class="dek">
       Entrada {{ trade.entry_date }} · Saída {{ trade.exit_date or "em aberto" }} ·

@@ -1,71 +1,143 @@
 {% extends "base.html" %}
-{% set page = "strategies" %}
-{% block title %}{{ strategy.name }} · META{% endblock %}
+{% import "partials/ui.html" as ui %}
+{#  `robot_detail` e não `strategies`: o menu marca "Robôs" como SEÇÃO (estado
+    fraco) em vez de acender como se esta fosse a home. Ver `base.html`. #}
+{% set page = "robot_detail" %}
+{% block title %}{{ robot.key }} · META{% endblock %}
 {% block content %}
 
-<section class="page-head">
+{#  Ficha de UM robô, de swing ou de day trade — o mesmo template para os dois
+    (ver `dashboard/robot_view.py`). A ordem da página é a ordem das perguntas
+    de quem chega: o que é isto → quanto ele mediu → como ele decide → com que
+    números → posso rodar / onde ele opera → o que já rodou. #}
+
+<section class="page-head robot-head">
   <div>
-    <div class="kicker"><a href="/" class="crumb">← Robôs</a> · v{{ strategy.version }}</div>
-    <h1>{{ strategy.name }}</h1>
-    <p class="dek">{{ strategy.description }}</p>
+    {{ ui.crumbs([("Robôs", "/")], robot.key) }}
+    <h1>{{ robot.key }}</h1>
+    <p class="dek">{{ robot.description|inline_code }}</p>
+    <div class="robot-head-tags">
+      <span class="robot-kind robot-kind-{{ robot.kind }}">{{ robot.kind_label }}</span>
+      <span class="robot-ver">v{{ robot.version }}</span>
+      {% if robot.in_ranking %}
+        <span class="robot-pill">no pódio</span>
+      {% else %}
+        <span class="robot-pill is-off" title="Não disputa o ranking automático de swing">fora do ranking</span>
+      {% endif %}
+    </div>
   </div>
   <aside>
-    <div>Data mais recente · <span class="pos">{{ default_end }}</span></div>
-    <div>Ativos elegíveis · {{ watchlist|length }}</div>
+    <dl class="robot-head-facts">
+      {% for rotulo, valor in robot.facts %}
+      <div><dt>{{ rotulo }}</dt><dd>{{ valor }}</dd></div>
+      {% endfor %}
+      {# Só para quem roda no dado DIÁRIO: `default_end` é a última barra de
+         `data/raw/` (ação, 1 pregão), e mostrá-la na ficha de um robô
+         intradiário afirmaria algo sobre o dado de minuto dele que esta
+         página não consultou. #}
+      {% if robot.can_simulate %}
+      <div><dt>Dado até</dt><dd class="pos">{{ default_end }}</dd></div>
+      {% endif %}
+    </dl>
   </aside>
 </section>
 
-<section class="robot-doc stagger">
-  <article class="doc-block">
-    <h2>Como opera</h2>
-    <p class="doc-body">{{ strategy.long_description|safe }}</p>
-  </article>
-
-  <div class="doc-columns">
-    <article class="doc-block">
-      <h3>Entrada</h3>
-      <ol class="doc-list">
-        {% for r in strategy.entry_rules %}<li>{{ r|safe }}</li>{% endfor %}
-      </ol>
-    </article>
-    <article class="doc-block">
-      <h3>Saída</h3>
-      <ol class="doc-list">
-        {% for r in strategy.exit_rules %}<li>{{ r|safe }}</li>{% endfor %}
-      </ol>
-    </article>
-    <article class="doc-block">
-      <h3>Sizing &amp; custos</h3>
-      <ol class="doc-list">
-        {% for r in strategy.sizing_rules %}<li>{{ r|safe }}</li>{% endfor %}
-      </ol>
-    </article>
+{% if medicoes %}
+<section class="robot-metrics">
+  {{ ui.section_head(
+      "Medições oficiais",
+      "O que ele já mediu",
+      "Mesma fonte do pódio — a última run oficial deste robô em cada janela, do
+       diário. Capital inicial R$ 1.000.") }}
+  <div class="measure-grid">
+    {% for m in medicoes %}
+    <a class="measure{% if m.disqualified %} is-reproved{% endif %}" href="/runs/{{ m.id }}">
+      <div class="measure-head">
+        <span class="k">{{ m.janela }}</span>
+        <span class="dim num">{{ m.period_start }} → {{ m.period_end }}</span>
+      </div>
+      <div class="measure-v {% if (m.final_capital or 0) >= (m.initial_capital or 0) %}pos{% else %}neg{% endif %}">
+        R$ {{ m.final_capital | num_br }}
+      </div>
+      {# Percentual com vírgula decimal (`num_br`), como todo número em reais
+         da tela: a mesma página mostrando "R$ 1.216,31" e "21.79%" era ponto
+         e vírgula decimal convivendo em duas células vizinhas. #}
+      <dl>
+        <div><dt>CAGR</dt><dd class="{% if (m.cagr or 0) >= 0 %}pos{% else %}neg{% endif %}">{{ ((m.cagr or 0) * 100) | num_br }}%</dd></div>
+        <div><dt>Max DD</dt><dd class="neg">{{ ((m.max_drawdown or 0) * 100) | num_br }}%</dd></div>
+        <div><dt>Sharpe</dt><dd>{{ (m.sharpe or 0) | num_br }}</dd></div>
+        <div><dt>Trades</dt><dd>{{ m.trades_count or 0 }}</dd></div>
+      </dl>
+      {% if m.disqualified %}
+      <p class="measure-note">Reprovou o portão de risco desta janela (perdeu do IBOV em MaxDD ou anos negativos) — medição mantida, fora do pódio.</p>
+      {% elif m.gate_unavailable %}
+      <p class="measure-note">Sem benchmark gravado nesta run: o portão não foi avaliado.</p>
+      {% endif %}
+    </a>
+    {% endfor %}
   </div>
+</section>
+{% endif %}
 
-  <article class="doc-block">
+<section class="robot-doc">
+  {{ ui.section_head("Regras", "Como ele opera",
+     "Texto lido da própria classe que o backtest e a operação real executam —
+      se a regra mudar no código, esta página muda com ela.") }}
+  <div class="doc-body">{{ robot.narrative|safe }}</div>
+
+  {#  Lista de ESPECIFICAÇÃO (rótulo à esquerda, regras à direita), não quatro
+      colunas lado a lado: as listas têm de 3 a 14 itens de prosa longa, e em
+      colunas estreitas isso virava quatro parágrafos verticais ilegíveis com
+      um vão enorme embaixo da menor delas. Aqui cada bloco ocupa a largura da
+      página e cresce quanto precisar. #}
+  {% if robot.blocks %}
+  <div class="doc-spec">
+    {% for titulo, itens in robot.blocks %}
+    <article class="doc-block">
+      <h3>{{ titulo }}</h3>
+      <ul class="doc-list">
+        {% for item in itens %}<li>{{ item|inline_code }}</li>{% endfor %}
+      </ul>
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="doc-empty">
+    Este robô ainda não declara a ficha de regras na classe
+    (<code>watched_signals</code>, <code>entry_rules</code>,
+    <code>exit_rules</code>, <code>sizing_rules</code> — ver
+    <code>strategy/base.py</code>). A tabela de parâmetros abaixo vem da
+    assinatura real dele.
+  </p>
+  {% endif %}
+
+  {% if robot.params %}
+  <article class="doc-block params-block">
     <h3>Parâmetros</h3>
+    <p class="dek">Valores EFETIVOS deste robô, lidos do objeto — não os defaults da classe-base, que a família reescreve por herança.</p>
     <table class="params-table">
-      <thead><tr><th>Nome</th><th>Valor</th><th>Descrição</th></tr></thead>
+      <thead><tr><th>Nome</th><th class="right">Valor</th><th>O que é</th></tr></thead>
       <tbody>
-        {% for p in strategy.params %}
+        {% for nome, valor, descricao in robot.params %}
         <tr>
-          <td>{{ p[0] }}</td>
-          <td class="num">{{ p[1] }}</td>
-          <td class="dim">{{ p[2] }}</td>
+          <td class="pname">{{ nome }}</td>
+          <td class="right num">{{ valor }}</td>
+          <td class="dim">{{ descricao or "—" }}</td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
   </article>
+  {% endif %}
 </section>
 
-<section class="run-form stagger">
-  <div class="run-form-head">
-    <h2>Rodar simulação</h2>
-    <p class="dek">A data final é sempre a última barra disponível. O robô processa o histórico dia a dia e você acompanha o capital em tempo real.</p>
-  </div>
+{% if robot.can_simulate %}
+<section class="run-form">
+  {{ ui.section_head("Simular", "Rodar no histórico",
+     "A data final é sempre a última barra disponível. O robô processa o histórico
+      pregão a pregão e você acompanha o capital em tempo real.") }}
 
-  <form method="post" action="/strategies/{{ strategy.key }}/run" class="sim-form">
+  <form method="post" action="/strategies/{{ robot.key }}/run" class="sim-form">
     <div class="row">
       <label>
         <span class="k">Data início</span>
@@ -112,12 +184,26 @@
     </div>
   </form>
 </section>
-
-<section class="recent-runs stagger">
-  <div class="recent-runs-head">
-    <h3>Simulações deste robô</h3>
-    <p class="dek">Histórico de execuções do {{ strategy.name }}. Filtre por período, capital ou ativo específico.</p>
+{% else %}
+{#  Day trade não roda o motor de carteira deste formulário (ver
+    `robot_view.can_simulate`): em vez de um botão que rodaria o motor errado,
+    a página diz onde este robô de fato roda. #}
+<section class="run-form is-elsewhere">
+  {{ ui.section_head("Onde ele roda", "Operação intradiária",
+     "Este robô decide barra a barra dentro do pregão, num ativo só — motor
+      diferente do formulário de simulação de carteira, que roda sobre a
+      watchlist com decisão no fechamento. O backtest dele vive em
+      <code>backtest/intraday/</code>; ao vivo, no painel de operação.") }}
+  <div class="elsewhere-actions">
+    <a class="cta" href="/operacao">Abrir o painel de operação →</a>
+    <span class="dim">O ativo e o caixa são do slot; o robô é escolhido lá.</span>
   </div>
+</section>
+{% endif %}
+
+<section class="recent-runs">
+  {{ ui.section_head("Histórico", "Simulações deste robô",
+     "Execuções gravadas no diário. Filtre por período, capital ou ativo.") }}
 
   <form id="runs-filter-form"
         class="runs-filters compact"
@@ -126,7 +212,7 @@
         hx-target="#runs-tbody"
         hx-swap="innerHTML"
         hx-vals='{"offset": 0}'>
-    <input type="hidden" name="strategy" value="{{ strategy.key }}" />
+    <input type="hidden" name="strategy" value="{{ robot.key }}" />
     <label>
       <span class="k">Período de</span>
       <input type="date" name="start_from" value="{{ filters.start_from }}" />
@@ -194,14 +280,21 @@
           {% if r.final_capital is not none %}R$ {{ "{:,.0f}".format(r.final_capital).replace(",", ".") }}{% else %}<span class="dim">—</span>{% endif %}
         </td>
         <td class="right num {% if (r.cagr or 0) >= 0 %}pos{% else %}neg{% endif %}">
-          {{ "%.2f%%"|format((r.cagr or 0) * 100) }}
+          {{ ((r.cagr or 0) * 100) | num_br }}%
         </td>
-        <td class="right num">{{ "%.2f"|format(r.sharpe or 0) }}</td>
+        <td class="right num">{{ (r.sharpe or 0) | num_br }}</td>
         <td class="right num">{{ r.trades_count or 0 }}</td>
         <td class="right num dim">{{ r.created_at }}</td>
       </tr>
       {% else %}
-      <tr><td colspan="10" class="runs-empty">Nenhuma simulação para este robô ainda. Use o formulário acima para rodar a primeira.</td></tr>
+      <tr><td colspan="10" class="runs-empty">
+        {% if robot.can_simulate %}
+          Nenhuma simulação para este robô ainda. Use o formulário acima para rodar a primeira.
+        {% else %}
+          Nenhuma run deste robô no diário de backtest de carteira — o histórico
+          intradiário dele fica no diário da operação.
+        {% endif %}
+      </td></tr>
       {% endfor %}
     </tbody>
   </table>

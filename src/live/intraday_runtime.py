@@ -513,7 +513,7 @@ class IntradayLiveRuntime:
             # `t+1` do MESMO pregao. `execute_on == decided_on` diz isso
             # explicitamente, em vez de fingir uma sessao seguinte.
             execute_on=evento.ts.date(),
-            ticker=self.slot.symbol,
+            ticker=self.strategy.symbol,
             reason=evento.reason,
             stop_price=evento.stop,
             status=IntentStatus.EXECUTING,
@@ -537,7 +537,7 @@ class IntradayLiveRuntime:
         self._open_intent_id = intent_id
 
         order = Order(
-            ticker=self.slot.symbol,
+            ticker=self.strategy.symbol,
             side=OrderSide.BUY if evento.side == "long" else OrderSide.SELL,
             quantity=evento.quantity,
             order_type=OrderType.LIMIT if evento.order_kind == "limit" else OrderType.MARKET,
@@ -556,7 +556,7 @@ class IntradayLiveRuntime:
         store.set_intent_status(conn, intent_id, IntentStatus.DONE)
 
         pos = LivePosition(
-            ticker=self.slot.symbol, quantity=assinado, entry_date=evento.ts.date(),
+            ticker=self.strategy.symbol, quantity=assinado, entry_date=evento.ts.date(),
             entry_price=evento.price, capital_allocated=abs(evento.price * evento.quantity),
             current_stop=evento.stop, max_price_seen=evento.price, min_price_seen=evento.price,
             bars_held=0, metadata={"side": evento.side, "target": evento.target,
@@ -568,7 +568,7 @@ class IntradayLiveRuntime:
 
         self._log(conn, account.id, "info",
                   f"{'SOMBRA: ' if self.execution_mode == 'shadow' else ''}entrada "
-                  f"{evento.side} {evento.quantity} {self.slot.symbol} @ {evento.price:.4f} "
+                  f"{evento.side} {evento.quantity} {self.strategy.symbol} @ {evento.price:.4f} "
                   f"({evento.order_kind}; penetracao "
                   f"{'n/a' if penetration is None else f'{penetration:.2f} tick(s)'})",
                   {"side": evento.side, "price": evento.price, "quantity": evento.quantity,
@@ -586,7 +586,7 @@ class IntradayLiveRuntime:
         assinado_saida = trade.quantity if trade.side == "short" else -trade.quantity
 
         order = Order(
-            ticker=self.slot.symbol,
+            ticker=self.strategy.symbol,
             side=OrderSide.SELL if trade.side == "long" else OrderSide.BUY,
             quantity=trade.quantity,
             # Alvo e' saida planejada (ordem-limite no nivel); stop, flatten e
@@ -610,8 +610,8 @@ class IntradayLiveRuntime:
                                      price=trade.exit_price, fees=trade.fees_total,
                                      ts=trade.exit_ts.to_pydatetime()))
 
-        store.delete_position(conn, account.id, self.slot.symbol)
-        account.positions.pop(self.slot.symbol, None)
+        store.delete_position(conn, account.id, self.strategy.symbol)
+        account.positions.pop(self.strategy.symbol, None)
         self._open_intent_id = None
         self._snapshot.trades += 1
 
@@ -622,7 +622,7 @@ class IntradayLiveRuntime:
 
         self._log(conn, account.id, "info",
                   f"{'SOMBRA: ' if self.execution_mode == 'shadow' else ''}saida "
-                  f"{trade.side} {trade.quantity} {self.slot.symbol} @ {trade.exit_price:.4f} "
+                  f"{trade.side} {trade.quantity} {self.strategy.symbol} @ {trade.exit_price:.4f} "
                   f"({trade.exit_reason.value}) — resultado R$ {evento.pnl_brl:+.2f}",
                   {"exit_reason": trade.exit_reason.value, "pnl_brl": round(evento.pnl_brl, 4),
                    "entry_price": trade.entry_price, "exit_price": trade.exit_price,
@@ -644,7 +644,7 @@ class IntradayLiveRuntime:
             eventos = store.recent_events(conn, account.id, limit=10)
 
         pos = self.machine.position
-        marks = {self.slot.symbol: pos.entry_price} if pos is not None else {}
+        marks = {self.strategy.symbol: pos.entry_price} if pos is not None else {}
         return {
             "conta": account.name,
             "existe": True,
@@ -678,7 +678,7 @@ class IntradayLiveRuntime:
             "eventos": eventos,
             "daytrade": {
                 "execution_mode": self.execution_mode,
-                "simbolo": self.slot.symbol,
+                "simbolo": self.strategy.symbol,
                 "sessao": self._snapshot.session.isoformat() if self._snapshot.session else None,
                 "ultima_barra": (self._snapshot.last_bar_ts.isoformat()
                                  if self._snapshot.last_bar_ts is not None else None),

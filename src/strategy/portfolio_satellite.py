@@ -21,6 +21,12 @@ class PortfolioHysteresis(DipTop1Hysteresis):
     signal_confirm_months: int = 1  # 1 = saida imediata, 2 = confirma 2 meses
     redist_mode: str = "pool"
 
+    # Ficha (ver `Strategy` em `strategy/base.py`).
+    param_docs = {
+        "confirm_months": "Meses de momentum negativo para fechar um satélite.",
+        "redist_mode": "Para onde vai o dinheiro de um satélite fechado.",
+    }
+
     def __init__(self, confirm_months: int = 1, redist_mode: str = "pool", **kwargs):
         super().__init__(**kwargs)
         self.signal_confirm_months = confirm_months

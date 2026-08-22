@@ -12,6 +12,18 @@ class DipTop1Hysteresis(BuyTheDip):
     version = "1.0"
     candidate = False  # classe-base da familia dip (usada por composicao), fora do ranking
 
+    # Ficha: o que muda em relacao a `BuyTheDip` e a HISTERESE (ver base.py).
+    entry_rules = BuyTheDip.entry_rules + (
+        "Uma posição por vez: só o rank-1 do momentum interessa.",
+        f"Histerese de {int(HYSTERESIS * 100)}%: o novo rank-1 só substitui a posição "
+        "atual se o score dele for essa margem melhor. Empate técnico não gera giro — "
+        "cada troca custa corretagem, spread e IR.",
+    )
+    exit_rules = BuyTheDip.exit_rules + (
+        "A saída por rotação também passa pela histerese: sem a margem, a posição "
+        "FICA, mesmo tendo perdido o primeiro lugar.",
+    )
+
     def __init__(self, **kwargs):
         kwargs.setdefault("top_n", 1)
         kwargs.setdefault("dip_pct", 0.01)

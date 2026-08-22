@@ -65,6 +65,33 @@ class LiquidSleeves5(DipTop1Portfolio):
     # sleeve — mudando o tamanho de tudo em seguida.
     _stateful_keys = ("_pending_rebalance", "_owner")
 
+    # Ficha: o que muda aqui e a COMPOSICAO — varios sleeves num caixa so
+    # (ver `Strategy` em `strategy/base.py`).
+    watched_signals = LiquidSleeve.watched_signals
+    entry_rules = LiquidSleeve.entry_rules + (
+        "`sleeve_count` sleeves disjuntos decidem em paralelo, cada um dono de uma "
+        "fatia do universo. Nenhum sabe da existência do outro.",
+    )
+    exit_rules = LiquidSleeve.exit_rules + (
+        "A posse da posição é lembrada (`_owner`): papel comprado pelo sleeve 2 "
+        "continua sendo do sleeve 2 mesmo depois de sair do top-20 — é ele quem tem "
+        "de mandá-lo embora.",
+    )
+    sizing_rules = (
+        "O caixa é COMPARTILHADO, mas a fatia não: `size_hint` divide o caixa livre "
+        "pelo número de sleeves DESCOBERTOS, não pelo número de entradas do dia — é o "
+        "que impede um sleeve de herdar o dinheiro do outro.",
+        "Sleeve que vendeu e não recomprou deixa o dinheiro no caixa, rendendo Selic "
+        "se `cash_yield_path` estiver ligado. Ficar em caixa é uma posição, não uma "
+        "pausa.",
+    ) + LiquidSleeve.sizing_rules[1:]
+    # `LiquidSleeve` nao esta no MRO desta classe (e composicao, nao heranca),
+    # entao os `param_docs` dele nao chegam aqui — os parametros de universo
+    # que este `__init__` repassa aos sleeves e nao guarda em `self` ficam
+    # fora da tabela de propósito (a ficha lê valor EFETIVO do objeto; ver
+    # `registry.declared_params`). Os que ficam, ficam documentados.
+    param_docs = {"sleeve_count": "Quantos sleeves disjuntos dividem o universo e o caixa."}
+
     def __init__(
         self,
         sleeve_count: int = 5,

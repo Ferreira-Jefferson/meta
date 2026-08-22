@@ -32,6 +32,9 @@ from live.intraday_runtime import MAX_GAP_BARS, IntradayLiveRuntime
 from strategy.daytrade.base import Bar
 
 SLOT = slot_by_id("daytrade")
+# O simbolo e' propriedade do ROBO desde 2026-08-21 (`Slot` nao declara mais
+# `symbol`) -- este e' o default da `Gremah` usada nestes testes.
+SYMBOL = "PMAM3"
 SESSION = date(2026, 8, 21)
 
 
@@ -110,7 +113,7 @@ def _runtime(tmp_path, barras, semente=None, execution_mode="shadow", **strat_kw
     as barras do roteiro -- o teste passaria sem o robo ter operado nada."""
     from strategy.daytrade.lab.gremah import Gremah
 
-    kwargs = dict(symbol=SLOT.symbol, tick_size=0.01, profit_pct=0.01,
+    kwargs = dict(symbol=SYMBOL, tick_size=0.01, profit_pct=0.01,
                   spacing_multiplier=2.0, stop_multiplier=20.0)
     kwargs.update(strat_kwargs)
     feed = _ScriptedBarFeed(barras, barras[:1] if semente is None else semente)
@@ -484,7 +487,7 @@ def test_sem_conta_nao_opera_e_reporta_skip(tmp_path, pregao_aberto):
     from strategy.daytrade.lab.gremah import Gremah
 
     rt = IntradayLiveRuntime(
-        slot=SLOT, strategy=Gremah(symbol=SLOT.symbol), config=_config(),
+        slot=SLOT, strategy=Gremah(symbol=SYMBOL), config=_config(),
         bar_feed=_ScriptedBarFeed([_bar("13:00", 10.0, 10.0, 10.0, 10.0)]),
         broker=_ExplodingBroker(), db_path=tmp_path / "vazio.sqlite",
     )
@@ -506,7 +509,7 @@ def test_broker_de_modo_divergente_e_erro_fatal(tmp_path, pregao_aberto):
         mode = "outro"
 
     rt2 = IntradayLiveRuntime(
-        slot=SLOT, strategy=Gremah(symbol=SLOT.symbol), config=_config(),
+        slot=SLOT, strategy=Gremah(symbol=SYMBOL), config=_config(),
         bar_feed=_ScriptedBarFeed([]), broker=_OutroModo(), db_path=rt.db_path,
     )
     with pytest.raises(ValueError, match="divergentes"):
@@ -527,7 +530,7 @@ def test_estado_da_sessao_sobrevive_a_um_processo_novo(tmp_path, pregao_aberto):
 
     # processo NOVO, mesmo banco
     rt2 = IntradayLiveRuntime(
-        slot=SLOT, strategy=Gremah(symbol=SLOT.symbol, tick_size=0.01, profit_pct=0.01,
+        slot=SLOT, strategy=Gremah(symbol=SYMBOL, tick_size=0.01, profit_pct=0.01,
                                    fixed_anchor_until=time(14, 0)),
         config=_config(),
         bar_feed=_ScriptedBarFeed(barras, semente), broker=_ExplodingBroker(),

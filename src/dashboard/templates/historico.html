@@ -1,11 +1,14 @@
 {% extends "base.html" %}
-{% set page = "operacao" %}
+{% import "partials/ui.html" as ui %}
+{#  Filha de "Operação": o menu marca a seção, sem afirmar que esta é a página
+    `/operacao` (ver `base.html`). #}
+{% set page = "operacao_child" %}
 {% block title %}Histórico · Operação · META{% endblock %}
 {% block content %}
 
 <section class="page-head">
   <div>
-    <div class="kicker"><a href="/operacao" class="crumb">← Operação ao vivo</a> · Histórico</div>
+    {{ ui.crumbs([("Operação", "/operacao")], "Histórico") }}
     <h1>Histórico</h1>
     <p class="dek">
       O retrospecto da conta: a curva de patrimônio desde o início e toda

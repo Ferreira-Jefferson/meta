@@ -77,8 +77,14 @@ def _build_daily_runtime(slot: Slot, mode: str, capital: float, robot: str | Non
     )
 
 
-def _build_intraday_runtime(slot: Slot, capital: float, execution_mode: str):
+def _build_intraday_runtime(slot: Slot, capital: float, execution_mode: str, robot: str | None):
     """Runtime de LEITURA do slot de day trade.
+
+    O robô vem da CONTA (`live_accounts.investment_robot`), não de um import
+    fixo — mesmo motivo de `_build_daily_runtime`: um painel que sempre
+    mostra `Gremah` mentiria se a conta tivesse escolhido outro robô
+    registrado. O símbolo, por sua vez, vem do ROBÔ (`robo.symbol`), não do
+    slot — `core.config.Slot` não declara símbolo desde 2026-08-21.
 
     Não conecta em nada: o `MT5BarFeed` nunca é lido por `status()` — o painel
     só reporta o fuso em uso, não busca barra. Também não passa `clock_feed`:
@@ -91,16 +97,21 @@ def _build_intraday_runtime(slot: Slot, capital: float, execution_mode: str):
     from live.bar_feed import MT5BarFeed
     from live.broker_mt5 import MT5Broker  # import tardio: nao conecta ao construir
     from live.intraday_runtime import IntradayLiveRuntime
-    from strategy.daytrade.lab.gremah import Gremah
+    from strategy.daytrade.registry import get_daytrade_robot
 
-    profile = PROFILES[slot.symbol]
-    robo = Gremah(symbol=slot.symbol)
+    if not robot:
+        raise ValueError(
+            "conta sem `investment_robot` gravado — nao da para montar o painel "
+            "sem saber qual robo ela opera"
+        )
+    robo = get_daytrade_robot(robot)
+    profile = PROFILES[robo.symbol]
     return IntradayLiveRuntime(
         slot=slot,
         strategy=robo,
         config=config_for(profile, trade_tick_value=0.01, trade_tick_size=0.01,
                           target_fills_as_maker=robo.target_fills_as_maker),
-        bar_feed=MT5BarFeed(slot.symbol),
+        bar_feed=MT5BarFeed(robo.symbol),
         broker=MT5Broker(magic=slot.magic),
         execution_mode=execution_mode,
         initial_capital=capital,
@@ -146,7 +157,8 @@ def get_status(slot_id: str = DEFAULT_SLOT) -> dict:
     if slot.is_intraday:
         cfg = live_control.last_config(slot.id) or {}
         return _build_intraday_runtime(
-            slot, account.initial_capital, cfg.get("execution_mode") or "shadow"
+            slot, account.initial_capital, cfg.get("execution_mode") or "shadow",
+            account.investment_robot,
         ).status()
     return _build_daily_runtime(
         slot, account.mode, account.initial_capital, account.investment_robot

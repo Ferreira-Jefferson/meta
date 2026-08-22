@@ -344,47 +344,64 @@ def _broker_for_detection():
     )
 
 
-def universe_for_slot(slot_id: str) -> tuple[str, ...]:
-    """Símbolos/tickers que este slot precisa consultar no terminal.
+def universe_for_slot(slot_id: str, robot_key: Optional[str] = None) -> tuple[str, ...]:
+    """Símbolos/tickers que este slot precisa consultar no terminal, para o
+    robô `robot_key` — ou o default do catálogo (`Slot.robot_key`) se
+    omitido, útil quando quem chama ainda não sabe qual robô vai rodar (ex.:
+    uma conta já existente cujo robô real está gravado nela, não no
+    catálogo — ver chamadores).
 
-    Slot `intraday` declara UM símbolo MT5 direto (`Slot.symbol`, ex.
-    "PMAM3") — não passa pelo registry de swing, que nem conhece robôs de day
-    trade (`IntradayStrategy` não herda de `Strategy`, ver
-    `strategy/daytrade/base.py`). Slot `daily` usa o universo do próprio robô
-    via o MESMO `_universe_of()` de `run_live.py::build()`."""
+    Slot `intraday` resolve pelo registry PRÓPRIO de day trade
+    (`strategy.daytrade.registry`) — não passa pelo registry de swing, que
+    nem conhece robôs de day trade (`IntradayStrategy` não herda de
+    `Strategy`, ver `strategy/daytrade/base.py`). O ativo é propriedade do
+    ROBÔ (`robo.symbol`), não do slot — `core.config.Slot` não declara
+    símbolo desde 2026-08-21. Slot `daily` usa o universo do próprio robô via
+    o MESMO `_universe_of()` de `run_live.py::build()`."""
     from core.config import WATCHLIST, slot_by_id
 
     slot = slot_by_id(slot_id)
+    key = robot_key or slot.robot_key
     if slot.is_intraday:
-        return (slot.symbol,) if slot.symbol else ()
+        from strategy.daytrade.registry import get_daytrade_robot
+
+        try:
+            robo = get_daytrade_robot(key)
+        except KeyError:
+            return ()
+        return (robo.symbol,)
     from strategy.registry import get_strategy
 
     cli = _load_cli()
     try:
-        strategy_obj = get_strategy(slot.robot_key).factory()
+        strategy_obj = get_strategy(key).factory()
     except KeyError:
         return tuple(WATCHLIST)
     return cli._universe_of(strategy_obj)
 
 
-def detect_shares_per_lot(slot_id: str) -> Optional[float]:
+def detect_shares_per_lot(slot_id: str, robot_key: Optional[str] = None) -> Optional[float]:
     """Descobre quantas ações equivalem a 1.0 de volume no terminal MT5,
-    consultando o `symbol_info` de cada papel do universo DESTE slot — o
-    usuário nunca digita esse número (antes exigia abrir o MT5 e conferir na
-    mão; ver `MT5Broker.detect_shares_per_lot`).
+    consultando o `symbol_info` de cada papel do universo DESTE slot (robô
+    `robot_key`, se informado — ver `universe_for_slot`) — o usuário nunca
+    digita esse número (antes exigia abrir o MT5 e conferir na mão; ver
+    `MT5Broker.detect_shares_per_lot`).
 
     Devolve `None` se a corretora não responder ou se os papéis não tiverem
     um `shares_per_lot` único no terminal — o chamador decide como bloquear
     nesse caso, nunca inventa um default."""
-    tickers = universe_for_slot(slot_id)
+    tickers = universe_for_slot(slot_id, robot_key)
     if not tickers:
         return None
     return _broker_for_detection().detect_shares_per_lot(tickers)
 
 
-def detect_fractional_symbol_map(slot_id: str) -> Optional[dict[str, str]]:
-    """Descobre, para o UNIVERSO do slot `slot_id`, quais tickers REALMENTE
-    têm símbolo de mercado fracionário no terminal MT5 conectado.
+def detect_fractional_symbol_map(
+    slot_id: str, robot_key: Optional[str] = None
+) -> Optional[dict[str, str]]:
+    """Descobre, para o UNIVERSO do slot `slot_id` (robô `robot_key`, se
+    informado), quais tickers REALMENTE têm símbolo de mercado fracionário
+    no terminal MT5 conectado.
 
     Diferente de `MT5Broker.detect_fractional_symbol_map` (que devolve um
     mapa COMPLETO, com fallback pro símbolo de lote padrão quando não há
@@ -399,16 +416,16 @@ def detect_fractional_symbol_map(slot_id: str) -> Optional[dict[str, str]]:
 
     Universo vem de `universe_for_slot()` -- o MESMO `_universe_of()` que
     `run_live.py::build()` usa no slot de swing (robôs com universo largo,
-    ex. por liquidez, precisam do mapa cobrindo todo o pool) e o símbolo
-    declarado do slot no de day trade (PMAM3 -> PMAM3F, que é justamente o
-    que torna uma ordem de R$14 executável — ver
+    ex. por liquidez, precisam do mapa cobrindo todo o pool) e o símbolo do
+    robô de day trade escolhido (PMAM3 -> PMAM3F, que é justamente o que
+    torna uma ordem de R$14 executável — ver
     `mt5_fractional_execution_2026_08_21` na memória do projeto).
 
     Devolve `None` se a corretora não responder ou se o slot não tiver
     universo -- `create_account()`/`start()` tratam isso como "sem
     fracionário pra nenhum ticker" (só lote padrão), nunca como erro fatal
     (ver docstring de `ProcessConfig.mt5_fractional_map`)."""
-    tickers = universe_for_slot(slot_id)
+    tickers = universe_for_slot(slot_id, robot_key)
     if not tickers:
         return None
     broker = _broker_for_detection()
@@ -475,7 +492,7 @@ def create_account(config: ProcessConfig):
     return rt.ensure_account()
 
 
-def _assert_slots_disjuntos(slot) -> None:
+def _assert_slots_disjuntos(slot, robot_key: str) -> None:
     """A conta da Rico é NETTING (`margin_mode=0`, verificado no terminal
     real em 2026-08-21): duas ordens no MESMO símbolo se FUNDEM numa posição
     única na corretora, independente de `magic`. Dois slots compartilhando
@@ -483,10 +500,16 @@ def _assert_slots_disjuntos(slot) -> None:
     posição do outro sem saber. Checado aqui (e não só no catálogo) porque
     `SLOTS` é editável e o custo do erro é dinheiro real.
 
-    Slot com `symbol=None` (swing, universo do robô) não é comparável por
-    símbolo — a checagem só vale entre slots que declaram um símbolo fixo."""
+    `robot_key` é o robô que ESTE slot está prestes a rodar — desde que o
+    símbolo deixou de ser campo do slot (2026-08-21), a única forma de saber
+    o que ele vai negociar é perguntar ao robô escolhido
+    (`universe_for_slot`). O outro lado da comparação usa o robô JÁ GRAVADO
+    na conta do outro slot, se existir (nunca o default do catálogo, que
+    pode não ser o que a conta de fato opera) — ver `universe_for_slot`."""
     from core.config import SLOTS
+    from journal import live_store
 
+    meu_universo = set(universe_for_slot(slot.id, robot_key))
     for outro in SLOTS:
         if outro.id == slot.id:
             continue
@@ -496,12 +519,15 @@ def _assert_slots_disjuntos(slot) -> None:
                 f"({slot.magic}) — as ordens dos dois robôs ficariam "
                 "indistinguíveis na corretora. Corrija `core.config.SLOTS`."
             )
-        if slot.symbol is not None and outro.symbol == slot.symbol:
+        with live_store.live_journal() as conn:
+            conta_outro = live_store.load_account(conn, outro.id)
+        outro_robot_key = (conta_outro.investment_robot if conta_outro else None) or outro.robot_key
+        colisao = meu_universo & set(universe_for_slot(outro.id, outro_robot_key))
+        if colisao:
             raise RuntimeError(
-                f"slots {slot.id!r} e {outro.id!r} negociam o mesmo símbolo "
-                f"({slot.symbol!r}) numa conta NETTING — as duas posições se "
-                "fundiriam numa só e os dois caixas passariam a mentir. "
-                "Corrija `core.config.SLOTS`."
+                f"slots {slot.id!r} e {outro.id!r} negociam o(s) mesmo(s) símbolo(s) "
+                f"({', '.join(sorted(colisao))}) numa conta NETTING — as posições se "
+                "fundiriam numa só e os dois caixas passariam a mentir."
             )
 
 
@@ -554,19 +580,22 @@ def start(config: ProcessConfig) -> dict:
             raise RuntimeError(
                 f"o robô do slot '{slot.label}' já está rodando — pare antes de iniciar de novo."
             )
-        _assert_slots_disjuntos(slot)
+        if not config.strategy:
+            raise RuntimeError(
+                "nenhum robô de investimento selecionado — não há robô "
+                "padrão (ver docstring de scripts/run_live.py, seção 'Robô "
+                "de investimento')."
+            )
+        # Depende de `config.strategy` já resolvido (o robô decide o
+        # universo/símbolo, ver docstring da função) — por isso checado
+        # DEPOIS do guard acima, nunca antes.
+        _assert_slots_disjuntos(slot, config.strategy)
         if config.mt5_shares_per_lot is None or config.mt5_shares_per_lot <= 0:
             raise RuntimeError(
                 "modo mt5 exige 'ações por lote' (mt5_shares_per_lot) — não foi "
                 "possível detectar automaticamente via detect_shares_per_lot() "
                 "(terminal MT5 fechado/deslogado, ou símbolos da watchlist com "
                 "contract_size diferente entre si)."
-            )
-        if not config.strategy:
-            raise RuntimeError(
-                "nenhum robô de investimento selecionado — não há robô "
-                "padrão (ver docstring de scripts/run_live.py, seção 'Robô "
-                "de investimento')."
             )
         if config.execution_mode not in ("shadow", "live"):
             raise RuntimeError(

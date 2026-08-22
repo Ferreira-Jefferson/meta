@@ -1,11 +1,12 @@
 {% extends "base.html" %}
+{% import "partials/ui.html" as ui %}
 {% set page = "strategies" %}
 {% block title %}Run #{{ run.id }} · META{% endblock %}
 {% block content %}
 
 <section class="page-head">
   <div>
-    <div class="kicker"><a href="/" class="crumb">← Robôs</a> · Run #{{ run.id }}</div>
+    {{ ui.crumbs([("Robôs", "/"), (run.strategy_name, "/strategies/" ~ run.strategy_name)], "Run #" ~ run.id) }}
     <h1>{{ run.strategy_name }} <span class="ver">v{{ run.strategy_version }}</span></h1>
     <p class="dek">
       Período <em>{{ run.period_start }}</em> → <em>{{ run.period_end }}</em> ·
@@ -57,18 +58,18 @@
   <div class="metric">
     <span class="k">CAGR</span>
     <span class="v num {% if (run.cagr or 0) >= 0 %}pos{% else %}neg{% endif %}">
-      {{ "%.2f%%"|format((run.cagr or 0) * 100) }}
+      {{ ((run.cagr or 0) * 100) | num_br }}%
     </span>
     <span class="sub">Anualizado</span>
   </div>
   <div class="metric">
     <span class="k">Sharpe</span>
-    <span class="v num">{{ "%.2f"|format(run.sharpe or 0) }}</span>
+    <span class="v num">{{ (run.sharpe or 0) | num_br }}</span>
     <span class="sub">Ajustado a risco</span>
   </div>
   <div class="metric">
     <span class="k">Max DD</span>
-    <span class="v num neg">{{ "%.2f%%"|format((run.max_drawdown or 0) * 100) }}</span>
+    <span class="v num neg">{{ ((run.max_drawdown or 0) * 100) | num_br }}%</span>
     <span class="sub">Pico → vale</span>
   </div>
   <div class="metric">

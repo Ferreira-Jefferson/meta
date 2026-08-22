@@ -21,15 +21,17 @@ from fastapi.responses import (
 )
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from markupsafe import Markup
 
 from core.config import BENCHMARK, WATCHLIST
 from core.indicators import sma
-from dashboard import live_control, live_service, simulate as sim_mgr
+from dashboard import live_control, live_service, robot_view, simulate as sim_mgr
 from journal import reader
 from live import clock
 from market_data.download import download_macro
 from market_data.loader import load_one
 from scheduler import refresh_champion_rankings, refresh_market_data
+from strategy import registry as strategy_registry
 from strategy.registry import candidate_keys, get_strategy, list_strategies
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -106,6 +108,15 @@ def num_br(valor, casas: int | None = 2) -> str:
 
 
 TEMPLATES.env.filters["num_br"] = num_br
+# Uma frase da ficha técnica do robô virando HTML: escapa tudo e traduz
+# `crase` em <code>. Filtro (e não `|safe` num texto já montado em Python)
+# porque assim o template nunca recebe HTML cru de lugar nenhum — o escape
+# acontece no último passo, onde é auditável. Ver `strategy/registry.py`.
+# `Markup` no dashboard, não em `strategy/`: o `<code>` já sai escapado de
+# `inline_html`, e é aqui (camada de apresentação) que se declara "este HTML
+# pode passar". Sem o wrapper, o autoescape do Jinja mostrava `&lt;code&gt;`
+# literal na tela.
+TEMPLATES.env.filters["inline_code"] = lambda t: Markup(strategy_registry.inline_html(t or ""))
 
 
 def _static_v(css_filename: str) -> int:
@@ -259,8 +270,15 @@ def home(request: Request):
     # Grid "Robôs disponíveis": todo robô descoberto automaticamente
     # (strategy.discovery via registry) — não só os que já venceram um pódio.
     all_strategies = list_strategies()
+    # CATÁLOGO ÚNICO — swing e day trade no mesmo formato de cartão (ver
+    # `dashboard/robot_view.py`). Robô de day trade não entra no discovery de
+    # swing (motor/timeframe incomparável ao ranking FULL/5Y/1Y) e por isso
+    # não disputa o pódio acima; o que ele NÃO precisava era de uma segunda
+    # seção com outra anatomia de cartão, que foi como ele entrou na home
+    # primeiro.
+    robots = robot_view.catalog(candidate_keys())
     ctx = {
-        "strategies": all_strategies,
+        "robots": robots,
         "watchlist": list(WATCHLIST),
         "default_end": _latest_available_date(),
         "recent_runs": runs,
@@ -280,7 +298,7 @@ def home(request: Request):
         "has_more": len(runs) == RUNS_PAGE_SIZE,
         "next_offset": RUNS_PAGE_SIZE,
         "filters": {"strategy": "", "start_from": "", "end_to": "", "capital_min": "", "capital_max": "", "ticker": ""},
-        "page": "strategies",
+        "page": "robots",
     }
     return TEMPLATES.TemplateResponse(request, "strategies_list.html", ctx)
 
@@ -320,15 +338,49 @@ def runs_list_fragment(
     return TEMPLATES.TemplateResponse(request, "partials/runs_rows.html", ctx)
 
 
+_JANELAS_RANKING = (
+    ("1 ano", "champion_1y"),
+    ("5 anos", "champion_5y"),
+    ("Período completo", "champion_full"),
+)
+
+
+def _medicoes_do_robo(key: str) -> list[dict]:
+    """A última run OFICIAL deste robô em cada janela do ranking.
+
+    Mesma fonte do pódio da home (`journal.reader`), não um número reescrito
+    aqui: a ficha do robô mostrando um capital final diferente do pódio seria
+    a mesma medição contada de dois jeitos. Sem `only=` de propósito — a ficha
+    de um robô APOSENTADO também deve mostrar o que ele mediu enquanto
+    competia; quem filtra candidato é o pódio, não o histórico.
+    """
+    medicoes = []
+    for rotulo, run_kind in _JANELAS_RANKING:
+        linhas = reader.top_strategies_by_final_capital(
+            top_n=1, run_kind=run_kind, only=[key], include_disqualified=True)
+        if linhas:
+            medicoes.append({"janela": rotulo, **linhas[0]})
+    return medicoes
+
+
 @app.get("/strategies/{key}", response_class=HTMLResponse)
 def strategy_detail(request: Request, key: str):
-    try:
-        info = get_strategy(key)
-    except KeyError:
+    """Ficha de UM robô — de swing OU de day trade.
+
+    Até 2026-08-21 esta rota só resolvia o registry de swing, então
+    `/strategies/gremah` era 404 e o cartão de day trade da home tinha de
+    apontar para `/operacao`: clicar em dois robôs na mesma grade levava a
+    dois lugares diferentes. `robot_view.detail()` resolve os dois catálogos e
+    devolve a MESMA ficha, com `can_simulate` dizendo se o formulário de
+    simulação de carteira faz sentido para aquele motor.
+    """
+    robot = robot_view.detail(key, candidate_keys())
+    if robot is None:
         return PlainTextResponse("Robô não encontrado.", status_code=404)
     runs = reader.list_runs(strategy=key, limit=RUNS_PAGE_SIZE, offset=0)
     ctx = {
-        "strategy": info,
+        "robot": robot,
+        "medicoes": _medicoes_do_robo(key),
         "watchlist": list(WATCHLIST),
         "default_start": "2015-01-01",
         "default_end": _latest_available_date(),
@@ -405,13 +457,23 @@ def _slot_ctx(slot) -> dict:
     genérico) e degrada para o estado "sem conta" com a mensagem real no
     banner de erro, em vez de estourar. `LegacyManualAccountError` (modo
     manual descontinuado) é a mesma situação por um motivo diferente —
-    mesmo tratamento."""
+    mesmo tratamento.
+
+    `KeyError` entra pelo mesmo motivo: uma conta cujo `investment_robot`
+    gravado não existe mais no registry (robô removido do catálogo, ou linha
+    corrompida) não pode virar 500 — degrada com a mensagem do próprio
+    `KeyError` (ver `strategy.daytrade.registry.get_daytrade_robot`/
+    `strategy.registry.get_strategy`, os dois levantam `KeyError` com o
+    motivo em texto)."""
     from journal import live_store
 
     erro = None
     try:
         status_payload = live_service.get_status(slot.id)
     except (live_store.LegacyPaperAccountError, live_store.LegacyManualAccountError) as e:
+        status_payload = {"conta": slot.id, "existe": False, "kind": slot.kind}
+        erro = str(e)
+    except KeyError as e:
         status_payload = {"conta": slot.id, "existe": False, "kind": slot.kind}
         erro = str(e)
     caixa = live_control.available_cash(slot.id) or 0.0
@@ -427,19 +489,37 @@ def _slot_ctx(slot) -> dict:
     }
 
 
-def _top3_para(slot, bloco: dict) -> list:
-    """Top-3 do ranking automático (janela FULL) — só para o select "Robô" do
-    form de conta NOVA de um slot de SWING.
+def _robot_options(slot, bloco: dict) -> list[dict]:
+    """Opções do select "Robô" do form de conta NOVA deste slot — vazio se a
+    conta já existe (o robô dela já está fixado, ver `operacao_iniciar`).
 
-    Restringir a esse caso não é micro-otimização: sem isso, o cartão de day
-    trade dispararia uma consulta ao banco de BACKTESTS (`journal.reader`,
-    arquivo separado do live) a cada poll de 20s, por um número que ele nem
-    mostra — e não existe pódio intradiário para consultar (ver
-    `strategy/daytrade/base.py`)."""
-    if slot.is_intraday or bloco["status"].get("existe"):
+    Day trade: TODO robô registrado em `strategy.daytrade.registry` — não é
+    um ranking recalculado, é o catálogo de robôs implementados, então nunca
+    fica vazio. O rótulo mostra o SÍMBOLO que cada robô opera (propriedade do
+    robô, não do slot, desde 2026-08-21) — informação que o dono precisa para
+    escolher, já que dois robôs registrados podem negociar ativos diferentes.
+
+    Swing: TOP-3 do ranking automático (janela FULL) — pódio recalculado a
+    cada 6h, PODE ficar vazio (ver `operacao_iniciar`). Restringir a consulta
+    a este caso (conta nova) não é micro-otimização: sem isso, o cartão de
+    day trade dispararia uma consulta ao banco de BACKTESTS
+    (`journal.reader`, arquivo separado do live) a cada poll de 20s, por um
+    número que ele nem mostra."""
+    if bloco["status"].get("existe"):
         return []
-    return reader.top_strategies_by_final_capital(
+    if slot.is_intraday:
+        from strategy.daytrade.registry import list_daytrade_robots
+
+        return [
+            {"value": r.key, "label": f"{r.key} — {r.symbol}"}
+            for r in list_daytrade_robots()
+        ]
+    top3 = reader.top_strategies_by_final_capital(
         top_n=3, run_kind="champion_full", only=candidate_keys())
+    # Sem o capital final na label: a POSIÇÃO na lista (ordenada pelo
+    # ranking) já mostra qual é o melhor — repetir o número aqui era
+    # redundante e envelhecia entre um refresh do scheduler e outro.
+    return [{"value": c["strategy_name"], "label": c["strategy_name"]} for c in top3]
 
 
 def _operacao_ctx(**extra) -> dict:
@@ -452,7 +532,7 @@ def _operacao_ctx(**extra) -> dict:
     for bloco in slots:
         if bloco["erro_slot"]:
             extra.setdefault("erro", bloco["erro_slot"])
-        bloco["top3"] = _top3_para(bloco["slot"], bloco)
+        bloco["robot_options"] = _robot_options(bloco["slot"], bloco)
     return {
         "slots": slots,
         "creds": live_control.display_credentials(),
@@ -501,7 +581,7 @@ def operacao_fragment(request: Request, slot_id: str):
         # O painel usa isto para decidir se o botão "Iniciar" pode estar
         # habilitado — sem credencial MT5 salva não há como operar.
         "creds_status": live_control.credential_status(),
-        "top3": _top3_para(slot, bloco),
+        "robot_options": _robot_options(slot, bloco),
     }
     return TEMPLATES.TemplateResponse(request, "partials/operacao_slot_live.html", ctx)
 
@@ -535,34 +615,30 @@ async def operacao_iniciar(request: Request, slot_id: str):
     nunca_comecou = conta is None or not conta.investment_robot
     capital = conta.initial_capital if not nunca_comecou else 0.0
     strategy_key = None
-    # "Ações por lote" é parâmetro do TERMINAL MT5 do usuário, não da
-    # estratégia nem da sessão -- detectado sozinho a cada clique em
-    # "Iniciar operação" via `detect_shares_per_lot()` (consulta o
-    # symbol_info do terminal MT5 já conectado), nunca digitado pelo
-    # usuário (decisão do dono, 2026-08-20; substitui o campo manual em
-    # Acesso e credenciais, que por sua vez substituiu o workaround ainda
-    # mais antigo que reexibia o campo no form de retomada).
-    mt5_shares_per_lot = live_control.detect_shares_per_lot(slot.id)
-    if mt5_shares_per_lot is None or mt5_shares_per_lot <= 0:
-        erro = (
-            "Não foi possível detectar 'ações por lote' automaticamente — "
-            "confirme que o terminal MetaTrader 5 está aberto e logado nesta "
-            "máquina (ou que login/senha/servidor MT5 foram salvos em 'Acesso "
-            "e credenciais') e que os papéis deste robô têm o mesmo "
-            "contract_size no seu terminal."
-        )
 
-    if erro is None and not nunca_comecou:
+    # Robô ANTES da detecção de "ações por lote" abaixo: ela precisa saber
+    # qual robô vai rodar, porque o SÍMBOLO é propriedade do robô (não do
+    # slot desde 2026-08-21) — dois robôs de day trade registrados podem
+    # operar símbolos diferentes.
+    if not nunca_comecou:
         # conta já em operação: robô é o da conta, NUNCA do form -- evita que
-        # a conta troque de robô sozinha só porque o ranking automático mudou
-        # depois da criação (decisão do dono, 2026-08-19: "nada automático").
+        # a conta troque de robô sozinha só porque o ranking automático (ou
+        # o catálogo de day trade) mudou depois da criação (decisão do dono,
+        # 2026-08-19: "nada automático").
         strategy_key = conta.investment_robot
-    elif erro is None and slot.is_intraday:
-        # Day trade não tem ranking automático (não há pódio intradiário — ver
-        # `strategy/daytrade/base.py`): o robô do slot é o declarado no
-        # catálogo, e o form não escolhe nada.
-        strategy_key = slot.robot_key
-    elif erro is None:
+    elif slot.is_intraday:
+        # Primeira conta de day trade: o robô vem do catálogo de robôs
+        # registrados (`strategy.daytrade.registry`) -- nunca uma chave
+        # arbitrária, mesmo espírito do TOP-3 do swing abaixo. Diferente do
+        # TOP-3, este catálogo nunca fica vazio (não é um ranking recalculado
+        # por hora, é uma lista de robôs implementados).
+        from strategy.daytrade.registry import list_daytrade_robots
+
+        valid_keys = {r.key for r in list_daytrade_robots()}
+        strategy_key = form.get("robo") or slot.robot_key
+        if strategy_key not in valid_keys:
+            erro = "Escolha um robô da lista antes de iniciar."
+    else:
         # Primeira conta de swing: o robô vem do TOP-3 do ranking automático
         # (janela FULL) mostrado no form -- nunca uma chave arbitrária, mesmo
         # que o form venha adulterado/desatualizado (mesmo espírito de floor/
@@ -579,6 +655,25 @@ async def operacao_iniciar(request: Request, slot_id: str):
             )
         elif strategy_key not in valid_keys:
             erro = "Escolha um robô da lista antes de iniciar."
+
+    # "Ações por lote" é parâmetro do TERMINAL MT5 do usuário, não da
+    # estratégia nem da sessão -- detectado sozinho a cada clique em
+    # "Iniciar operação" via `detect_shares_per_lot()` (consulta o
+    # symbol_info do terminal MT5 já conectado), nunca digitado pelo
+    # usuário (decisão do dono, 2026-08-20; substitui o campo manual em
+    # Acesso e credenciais, que por sua vez substituiu o workaround ainda
+    # mais antigo que reexibia o campo no form de retomada).
+    mt5_shares_per_lot = None
+    if erro is None:
+        mt5_shares_per_lot = live_control.detect_shares_per_lot(slot.id, strategy_key)
+        if mt5_shares_per_lot is None or mt5_shares_per_lot <= 0:
+            erro = (
+                "Não foi possível detectar 'ações por lote' automaticamente — "
+                "confirme que o terminal MetaTrader 5 está aberto e logado nesta "
+                "máquina (ou que login/senha/servidor MT5 foram salvos em 'Acesso "
+                "e credenciais') e que os papéis deste robô têm o mesmo "
+                "contract_size no seu terminal."
+            )
 
     if erro is None:
         # Piso de caixa: checado SEMPRE (não só na conta nova). O botão
@@ -609,7 +704,7 @@ async def operacao_iniciar(request: Request, slot_id: str):
         # comportamento de antes desta detecção existir). O broker decide, a
         # cada ordem, entre lote padrão (grátis na Rico) e fracionário (paga
         # por ordem) conforme a quantidade pedida — nunca fixo por conta.
-        mt5_fractional_map = live_control.detect_fractional_symbol_map(slot.id)
+        mt5_fractional_map = live_control.detect_fractional_symbol_map(slot.id, strategy_key)
 
     if erro is None and nunca_comecou and conta is not None:
         # A conta já existia só como linha de caixa (criada por

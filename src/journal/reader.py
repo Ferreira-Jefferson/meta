@@ -106,6 +106,7 @@ def top_strategies_by_final_capital(
     run_kind: str = "champion_full",
     db_path: Path = DB_PATH,
     only: Iterable[str] | None = None,
+    include_disqualified: bool = False,
 ) -> list[dict]:
     """Ranking automático de robôs por capital final, dentro de `run_kind`.
 
@@ -123,6 +124,13 @@ def top_strategies_by_final_capital(
     aposentar um robô é uma decisão de curadoria que não deve destruir medição
     (AGENTS.md: "não descarte dado"). `only=None` mantém o comportamento antigo,
     para não mudar em silêncio quem chama sem saber deste parâmetro.
+
+    `include_disqualified=True` devolve também quem NÃO passou os portões, já
+    marcado com `disqualified`. Serve para a FICHA de um robô (`/strategies/
+    <key>`), que precisa mostrar o que ele mediu mesmo quando reprovou — a
+    alternativa era a página parecer "nunca medido" justamente no caso em que
+    houve medição e ela foi ruim. O default `False` mantém o pódio idêntico:
+    reprovado não aparece em ranking.
     """
     q = (
         "WITH latest AS ( "
@@ -166,7 +174,7 @@ def top_strategies_by_final_capital(
         )
         r["disqualified"] = not qualifies
         r["gate_unavailable"] = False
-        if qualifies:
+        if qualifies or include_disqualified:
             ranked.append(r)
     return ranked[:top_n]
 

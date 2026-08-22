@@ -79,5 +79,14 @@ class LiquidFocus(LiquidSleeves5):
     version = "1.0"
     candidate = False  # despromovido 2026-08-21 -- ver docstring do modulo
 
+    # Ficha: o que muda e so a CONCENTRACAO (ver `Strategy` em base.py).
+    sizing_rules = (
+        "Uma posição por vez: os 100% do caixa livre vão para o único sleeve. "
+        "Concentrar não é agressividade — é o que faz a corretagem FIXA de R$1,90 por "
+        "ordem virar fração pequena da posição em vez de 19-38% dela.",
+        "O preço disso está declarado: um papel perdedor pesa o capital inteiro. "
+        "A conta aparece no MaxDD, não é de graça.",
+    ) + LiquidSleeves5.sizing_rules[2:]
+
     def __init__(self, sleeve_count: int = 1, **kwargs):
         super().__init__(sleeve_count=sleeve_count, **kwargs)

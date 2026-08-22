@@ -14,11 +14,18 @@
       próprio, e a partir daí ele decide sozinho.
     </p>
   </div>
+  {#  Link para a FICHA do robô de cada slot (`/strategies/<robo>`): fecha o
+      ciclo de navegação nos dois sentidos — a ficha de um robô de day trade
+      manda para cá, e daqui se chega às regras que o robô está executando
+      com dinheiro real. `robo_investimento` é o robô GRAVADO na conta (ver
+      `live/runtime.py::status`), não o default do slot: mostrar o default
+      seria mostrar um robô que talvez não seja o que está rodando. #}
   <aside>
     {% for bloco in slots %}
     <div>
       {{ bloco.slot.label }} ·
       {% if bloco.status.existe %}
+        <a href="/strategies/{{ bloco.status.robo_investimento }}">{{ bloco.status.robo_investimento }}</a> ·
         <a href="/operacao/historico?slot={{ bloco.slot.id }}">histórico →</a>
       {% else %}
         <span class="dim">sem conta ainda</span>

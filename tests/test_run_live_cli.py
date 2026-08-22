@@ -325,20 +325,25 @@ def test_build_slot_diario_usa_o_magic_do_slot(cli, isolated_db):
 
 def test_daytrade_strategy_resolve_gremah_fora_do_registry_de_swing(cli):
     """`IntradayStrategy` NAO herda de `Strategy` (de proposito), entao
-    `strategy.registry.get_strategy("gremah")` levantaria `KeyError`. O CLI
-    tem um resolvedor proprio para a familia intradiaria."""
+    `strategy.registry.get_strategy("gremah")` levantaria `KeyError`. O
+    resolvedor proprio da familia intradiaria (`strategy.daytrade.registry`,
+    usado por `cli.build_intraday`) resolve normalmente."""
+    from strategy.daytrade.registry import get_daytrade_robot
     from strategy.registry import get_strategy
 
     with pytest.raises(KeyError):
         get_strategy("gremah")
 
-    robo = cli._daytrade_strategy("gremah")
+    robo = get_daytrade_robot("gremah")
     assert robo.name == "gremah"
+    assert robo.symbol == "PMAM3"
 
 
-def test_daytrade_strategy_desconhecida_levanta_valueerror(cli):
-    with pytest.raises(ValueError, match="day trade"):
-        cli._daytrade_strategy("robo-intradiario-que-nao-existe")
+def test_daytrade_strategy_desconhecida_levanta_keyerror(cli):
+    from strategy.daytrade.registry import get_daytrade_robot
+
+    with pytest.raises(KeyError, match="day trade"):
+        get_daytrade_robot("robo-intradiario-que-nao-existe")
 
 
 def test_cmd_decide_recusa_slot_intradiario(cli, isolated_db, monkeypatch):

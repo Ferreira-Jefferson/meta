@@ -83,6 +83,13 @@ a:hover { color: var(--accent-amber); }
   color: var(--fg-strong);
   border-bottom-color: var(--accent-amber);
 }
+/* Você está DENTRO desta seção, mas não nesta página (ficha de um robô,
+   resultado de uma run). Dois estados distintos porque o menu não pode
+   afirmar que a página atual é a home quando ela não é. */
+.chrome nav a[data-section] {
+  color: var(--fg);
+  border-bottom-color: var(--grid-strong);
+}
 .chrome .meta {
   font-family: var(--font-mono);
   font-size: var(--fs-metadata);

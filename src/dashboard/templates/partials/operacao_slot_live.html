@@ -19,27 +19,28 @@
     </span>
     <form hx-post="/operacao/{{ slot.id }}/iniciar" hx-target="#ops-body" hx-swap="outerHTML"
           hx-disabled-elt="find button[type=submit]">
-      {# Capital vem do ledger manual (form de caixa acima), robô vem da conta
-         ou do catálogo do slot. Piso do saque, disjuntor e ações por lote não
-         são campo nenhum aqui — o robô já decide sozinho (official_policy/
-         CircuitBreaker defaults) e ações por lote é detectado no terminal MT5
-         a cada clique. #}
+      {# Capital vem do ledger manual (form de caixa acima), robô vem do
+         select abaixo (conta nova) ou da própria conta (conta existente).
+         Piso do saque, disjuntor e ações por lote não são campo nenhum aqui
+         — o robô já decide sozinho (official_policy/CircuitBreaker
+         defaults) e ações por lote é detectado no terminal MT5 a cada
+         clique. #}
       {% if config_anterior %}
       <input type="hidden" name="notify_min_level" value="{{ config_anterior.notify_min_level or 'warn' }}" />
       {% endif %}
-      {% if not s.existe and not slot.is_intraday and top3 %}
+      {% if not s.existe and robot_options %}
       <label class="ops-inline-field">
         <span class="k">Robô</span>
-        {# Top-3 do ranking automático, janela FULL (`journal.reader.
-           top_strategies_by_final_capital`) -- nunca uma lista fixa. Só vale
-           pra CONTA NOVA: uma conta já existente sempre reusa o
-           `investment_robot` gravado na criação (decisão do dono,
-           2026-08-19). O slot de day trade não tem select: não há pódio
-           intradiário, o robô dele é o declarado no catálogo. #}
+        {# Day trade: todo robô registrado em `strategy.daytrade.registry`
+           (rótulo mostra o SÍMBOLO que ele opera — propriedade do robô, não
+           do slot). Swing: TOP-3 do ranking automático, janela FULL (rótulo
+           mostra o capital final). Só vale pra CONTA NOVA: uma conta já
+           existente sempre reusa o `investment_robot` gravado na criação
+           (decisão do dono, 2026-08-19). Ver `app.py::_robot_options`. #}
         <select name="robo" required>
-          {% for cand in top3 %}
-          <option value="{{ cand.strategy_name }}"{% if cand.strategy_name == slot.robot_key %} selected{% endif %}>
-            {{ cand.strategy_name }} — R$ {{ "{:,.0f}".format(cand.final_capital).replace(",", ".") }}
+          {% for opt in robot_options %}
+          <option value="{{ opt.value }}"{% if opt.value == slot.robot_key %} selected{% endif %}>
+            {{ opt.label }}
           </option>
           {% endfor %}
         </select>
@@ -103,6 +104,14 @@
   <span class="ops-badge">
     <span class="dot"></span> Robô · <strong>{{ s.robo_investimento }}</strong>
   </span>
+  {% if s.daytrade %}
+  {# O ativo é propriedade do ROBÔ escolhido, não do slot (desde
+     2026-08-21) — precisa aparecer aqui porque dois robôs registrados podem
+     operar símbolos diferentes. #}
+  <span class="ops-badge">
+    <span class="dot"></span> Ativo · <strong>{{ s.daytrade.simbolo }}</strong>
+  </span>
+  {% endif %}
   {% if s.robo_saque %}
   <span class="ops-badge">
     <span class="dot"></span> Saque · <strong>{{ s.robo_saque.replace("withdrawal:", "") }}</strong>

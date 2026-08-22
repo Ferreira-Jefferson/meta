@@ -81,6 +81,42 @@ class LiquidSleeve(DipTop1Portfolio):
     candidate = False  # peca de composicao — o robo e `liquid_sleeves5`
     universe_tickers = POOL
 
+    # Ficha: o que muda em relacao a `DipTop1Portfolio` e DE ONDE ele escolhe
+    # (ver `Strategy` em `strategy/base.py`).
+    watched_signals = DipTop1Portfolio.watched_signals + (
+        "Liquidez: giro financeiro (preço × volume) mediano dos últimos "
+        "`liquidity_window` pregões, calculado no calendário nativo de cada papel. "
+        "É o que define o universo — e não olha retorno nenhum.",
+    )
+    entry_rules = DipTop1Portfolio.entry_rules + (
+        "Universo point-in-time: a cada `refresh_months` meses, ranqueia o pool bruto "
+        "por liquidez e fica com os `universe_n` primeiros. O mesmo universo era "
+        "montável naquele dia, com o dado daquele dia.",
+        "Sleeve: opera só a fatia `[sleeve_index::sleeve_count]` desse universo — "
+        "rodízio, não bloco, para nenhum sleeve ficar só com blue chips e outro só "
+        "com as menos líquidas.",
+        "Papel fora do sleeve não tem score naquele dia, então nunca vira rank-1 — o "
+        "filtro de universo entra mascarando o score, sem tocar em dip nem histerese.",
+    )
+    exit_rules = DipTop1Portfolio.exit_rules + (
+        "Despejo na virada de época (`evict_on_refresh=True`): posição cujo papel "
+        "saiu do top-N líquido é vendida. Sem isso ela ficaria PRESA — score "
+        "mascarado nunca vira rank-1 e a histerese nunca manda sair.",
+        "Com `evict_on_refresh=False` vale o grandfathering: o papel já comprado "
+        "continua julgado pelo momentum real dele, e o que o refresh proíbe é "
+        "COMPRAR fora do universo — não segurar o que já se tem.",
+    )
+    param_docs = {
+        "sleeve_index": "Qual fatia do universo é deste sleeve (0 = a primeira).",
+        "sleeve_count": "Em quantas fatias o universo é dividido.",
+        "universe_n": "Tamanho do universo por liquidez (top-N do pool).",
+        "rank_offset": "Posições de liquidez puladas antes de cortar o top-N.",
+        "liquidity_window": "Pregões da mediana de giro financeiro.",
+        "refresh_months": "Cada quantos meses o universo é reranqueado.",
+        "min_history_days": "Histórico mínimo do papel para ser elegível.",
+        "evict_on_refresh": "Vender ao sair do top-N (True) ou manter (grandfathering).",
+    }
+
     def __init__(
         self,
         sleeve_index: int = 0,

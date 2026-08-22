@@ -124,6 +124,31 @@ class Strategy(ABC):
     # sobreviver a um restart.
     _stateful_keys: tuple[str, ...] = ()
 
+    # ---------------------------------------------------------------- ficha
+    # FICHA TÉCNICA — documentação, nunca decisão. Nada aqui é lido por
+    # `on_bar`; quem lê é `strategy/registry.py`, para a página do robô
+    # (`/strategies/<key>`) poder dizer em prosa o que o código faz. Ficam na
+    # CLASSE (e não num dicionário no dashboard) por um motivo só: assim a
+    # explicação e a regra explicada moram no mesmo arquivo e divergem juntas
+    # — uma tabela de textos em `dashboard/` envelheceria em silêncio no dia
+    # em que alguém mudasse a regra aqui.
+    #
+    # São HERDADAS como qualquer atributo de classe: uma subclasse que não
+    # declara nada mostra a ficha da mãe (correto — ela opera as mesmas
+    # regras). Quem muda uma peça declara a lista INTEIRA, tipicamente
+    # somando à da mãe (`entry_rules = Mae.entry_rules + ("...",)`), para o
+    # que a subclasse acrescenta ficar explícito na leitura do código.
+    #
+    # Convenção de texto: uma frase por item, `crase` para nome de
+    # parâmetro/arquivo (virá `<code>` na tela). Sem HTML cru.
+    watched_signals: tuple[str, ...] = ()   # o que o robô calcula e observa
+    entry_rules: tuple[str, ...] = ()       # quando e por que compra
+    exit_rules: tuple[str, ...] = ()        # quando e por que vende
+    sizing_rules: tuple[str, ...] = ()      # quanto compra, e o que custa
+    # Descrição de um parâmetro do `__init__`, por nome. Mesclado ao longo do
+    # MRO (a classe mais derivada ganha) por `registry.declared_params()`.
+    param_docs: dict[str, str] = {}
+
     def initialize(self, panels: dict[str, pd.DataFrame], ibov: pd.DataFrame) -> None:
         """Pré-calcula indicadores sobre o histórico completo.
 

@@ -505,43 +505,54 @@ def _slot(**over):
     from core.config import Slot
 
     base = dict(id="a", kind="daily", robot_key="x", label="A", dek="",
-                order=0, symbol=None, magic=1)
+                order=0, magic=1)
     base.update(over)
     return Slot(**base)
 
 
-def test_assert_slots_disjuntos_recusa_magic_repetido(monkeypatch):
+def test_assert_slots_disjuntos_recusa_magic_repetido(isolated, monkeypatch):
     """`SLOTS` é editável — e o custo de dois slots com o mesmo `magic` é
     dinheiro real (ordens indistinguíveis na corretora). A checagem existe
-    no código, não só na revisão do catálogo."""
+    no código, não só na revisão do catálogo.
+
+    `robot_key="x"` não existe em registry nenhum, mas isso não importa
+    aqui: o `magic` repetido é recusado ANTES de qualquer resolução de
+    robô/símbolo (ver ordem das checagens em `_assert_slots_disjuntos`)."""
     from core import config as core_config
 
     gemeos = (_slot(id="a", magic=777), _slot(id="b", magic=777, order=1))
     monkeypatch.setattr(core_config, "SLOTS", gemeos)
 
     with pytest.raises(RuntimeError, match="mesmo `magic`"):
-        live_control._assert_slots_disjuntos(gemeos[0])
+        live_control._assert_slots_disjuntos(gemeos[0], "x")
 
 
-def test_assert_slots_disjuntos_recusa_simbolo_repetido(monkeypatch):
+def test_assert_slots_disjuntos_recusa_simbolo_repetido(isolated, monkeypatch):
     """Conta NETTING: duas posições no mesmo símbolo se FUNDEM numa só,
-    independente de `magic` — e os dois livros-caixa passam a mentir."""
+    independente de `magic` — e os dois livros-caixa passam a mentir.
+
+    Símbolo não é mais campo do slot (removido 2026-08-21) — vem do robô
+    ESCOLHIDO. Dois slots intraday resolvendo o MESMO robô (`gremah`, sem
+    conta ainda em nenhum dos dois — cai no default do catálogo) colidem no
+    símbolo dele (PMAM3), que é o cenário que este teste cobre."""
     from core import config as core_config
 
-    gemeos = (_slot(id="a", kind="intraday", symbol="PMAM3", magic=1),
-              _slot(id="b", kind="intraday", symbol="PMAM3", magic=2, order=1))
+    gemeos = (_slot(id="a", kind="intraday", robot_key="gremah", magic=1),
+              _slot(id="b", kind="intraday", robot_key="gremah", magic=2, order=1))
     monkeypatch.setattr(core_config, "SLOTS", gemeos)
 
-    with pytest.raises(RuntimeError, match="mesmo símbolo"):
-        live_control._assert_slots_disjuntos(gemeos[0])
+    with pytest.raises(RuntimeError, match="mesmo\\(s\\) símbolo"):
+        live_control._assert_slots_disjuntos(gemeos[0], "gremah")
 
 
-def test_catalogo_oficial_de_slots_e_disjunto():
-    """O catálogo REAL do projeto tem de passar na própria checagem."""
+def test_catalogo_oficial_de_slots_e_disjunto(isolated):
+    """O catálogo REAL do projeto tem de passar na própria checagem, com o
+    robô DEFAULT de cada slot (nenhuma conta ainda existe no banco isolado
+    deste teste)."""
     from core.config import SLOTS
 
     for slot in SLOTS:
-        live_control._assert_slots_disjuntos(slot)
+        live_control._assert_slots_disjuntos(slot, slot.robot_key)
 
 
 # ---------- universo por slot ---------------------------------------------

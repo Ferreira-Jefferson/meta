@@ -20,9 +20,21 @@
 <body>
   <header class="chrome">
     <a class="brand" href="/">META</a>
+    {#  `aria-current="page"` só na página EXATA do link; página filha (ficha de
+        um robô, resultado de uma run, histórico) ganha `data-section`, um
+        estado visual mais fraco. Antes, tudo que descendia de "Robôs" acendia
+        o item como se o usuário estivesse na home — o menu dizia que ele
+        estava num lugar onde ele não estava.
+        `page` in (...) mantém uma lista só: quem adiciona uma tela filha nova
+        declara o `page` dela aqui e herda o comportamento. #}
+    {% set secao_robos = ["robots", "robot_detail", "strategies", "trades"] %}
     <nav>
-      <a href="/" {% if page == "strategies" %}aria-current="page"{% endif %}>Robôs</a>
-      <a href="/operacao" {% if page == "operacao" %}aria-current="page"{% endif %}>Operação</a>
+      <a href="/"
+         {% if page == "robots" %}aria-current="page"
+         {% elif page in secao_robos %}data-section="true"{% endif %}>Robôs</a>
+      <a href="/operacao"
+         {% if page == "operacao" %}aria-current="page"
+         {% elif page == "operacao_child" %}data-section="true"{% endif %}>Operação</a>
     </nav>
     <div class="meta">
       {% if run %}

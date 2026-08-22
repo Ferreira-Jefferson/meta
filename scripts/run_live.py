@@ -146,15 +146,23 @@ outra (sacar desde ja, ou piso em valor absoluto), passe `--floor`.
 
 Robo de investimento (--strategy) — sem default, escolha explicita sempre
 ---------------------------------------------------------------------------
-Nao ha robo hardcoded: `--strategy` recebe a CHAVE de um robo do registry
-(`strategy.registry.list_strategies()` / pagina `/estrategias`) e o
-runtime resolve via `strategy.registry.get_strategy(chave).factory()`. O
-dashboard resolve isso sozinho (top-3 da janela FULL na criacao da conta,
-`live_accounts.investment_robot` da conta ja existente ao retomar — nunca
-troca de robo sozinho numa conta ja em operacao). Quem usa este CLI direto
-numa conta JA EXISTENTE precisa passar a MESMA chave usada na criacao —
-`status` mostra o `investment_robot` gravado; uma chave diferente aqui e a
-conta ja existente diverge silenciosamente (ver `LiveRuntime.
+Nao ha robo hardcoded, nos dois slots. Slot `swing`: `--strategy` recebe a
+CHAVE de um robo do registry de swing (`strategy.registry.list_strategies()`
+/ pagina `/estrategias`), resolvido via
+`strategy.registry.get_strategy(chave).factory()`. Slot `daytrade`: a chave
+vem do registry PROPRIO de day trade (`strategy.daytrade.registry.
+list_daytrade_robots()`, hoje so `gremah` — ver docstring de la para o
+motivo de nao ser o mesmo registry). O SIMBOLO negociado e' propriedade do
+ROBO escolhido (`IntradayStrategy.symbol`), nao do slot: `core.config.Slot`
+nao declara simbolo desde 2026-08-21, exatamente para permitir registrar um
+segundo robo de day trade operando outro ativo sem tocar no catalogo.
+
+Nos dois casos o dashboard resolve isso sozinho (catalogo/top-3 na criacao da
+conta, `live_accounts.investment_robot` da conta ja existente ao retomar —
+nunca troca de robo sozinho numa conta ja em operacao). Quem usa este CLI
+direto numa conta JA EXISTENTE precisa passar a MESMA chave usada na
+criacao — `status` mostra o `investment_robot` gravado; uma chave diferente
+aqui e a conta ja existente diverge silenciosamente (ver `LiveRuntime.
 _restore_robot_state`, que descarta o estado do robo antigo sem avisar).
 """
 from __future__ import annotations
@@ -248,36 +256,26 @@ def _resolve_slot(args):
         raise ValueError(str(e)) from e
 
 
-def _daytrade_strategy(key: str):
-    """Resolve um robo de DAY TRADE por chave.
-
-    Registry proprio (nao `strategy.registry`) porque `IntradayStrategy` NAO
-    herda de `Strategy` de proposito — ver `strategy/daytrade/base.py`. Um
-    `get_strategy("gremah")` levantaria `KeyError`: o scan de
-    `discover_strategies` exige `issubclass(obj, Strategy)` e nem varre o
-    pacote `daytrade`. Isto e' o oposto de um acidente: um robo intradiario de
-    UM papel nao pode competir no mesmo podio que um robo diario de carteira
-    (capital, risco e instrumento incomparaveis)."""
-    from strategy.daytrade.lab.gremah import Gremah
-
-    robos = {Gremah.name: Gremah}
-    if key not in robos:
-        raise ValueError(
-            f"robô de day trade desconhecido: {key!r} — disponíveis: "
-            f"{', '.join(sorted(robos))}"
-        )
-    return robos[key]()
-
-
 def build_intraday(args):
-    """Monta o `IntradayLiveRuntime` do slot de day trade."""
+    """Monta o `IntradayLiveRuntime` do slot de day trade.
+
+    O símbolo NÃO vem do slot (removido de `core.config.Slot` em
+    2026-08-21) — vem do robô resolvido por
+    `strategy.daytrade.registry.get_daytrade_robot`, porque o ativo é
+    propriedade do robô: dois robôs registrados podem operar símbolos
+    diferentes no mesmo slot, um por vez."""
     from backtest.intraday.profiles import PROFILES, config_for
     from live.bar_feed import MT5BarFeed
     from live.intraday_runtime import IntradayLiveRuntime
     from market_data_intraday.mt5_source import symbol_economics
+    from strategy.daytrade.registry import get_daytrade_robot
 
     slot = _resolve_slot(args)
-    strategy_obj = _daytrade_strategy(args.strategy or slot.robot_key)
+    try:
+        strategy_obj = get_daytrade_robot(args.strategy or slot.robot_key)
+    except KeyError as e:
+        raise ValueError(str(e)) from e
+    symbol = strategy_obj.symbol
     if args.mode != "mt5":
         raise ValueError(f"--mode inválido ou ausente: {args.mode!r} — use 'mt5'.")
     if args.mt5_shares_per_lot is None or args.mt5_shares_per_lot <= 0:
@@ -285,13 +283,13 @@ def build_intraday(args):
             "--mt5-shares-per-lot é obrigatório no modo mt5 — confira o "
             "symbol_info do SEU terminal MT5 antes de operar."
         )
-    if slot.symbol not in PROFILES:
+    if symbol not in PROFILES:
         raise ValueError(
-            f"símbolo {slot.symbol!r} do slot {slot.id!r} não tem perfil econômico "
+            f"símbolo {symbol!r} do robô {strategy_obj.name!r} não tem perfil econômico "
             f"declarado em backtest.intraday.profiles.PROFILES — sem custo, corte de "
             "flatten e lote de referência não há como operar honestamente."
         )
-    profile = PROFILES[slot.symbol]
+    profile = PROFILES[symbol]
 
     from live.broker_mt5 import MT5Broker  # import tardio: so quando de fato usado
 
@@ -302,10 +300,10 @@ def build_intraday(args):
 
     # A economia do contrato vem do TERMINAL (tick size/value reais), nunca
     # hardcoded — mesma filosofia de `MT5Feed` autocalibrar o fuso.
-    econ = symbol_economics(slot.symbol, **credenciais)
+    econ = symbol_economics(symbol, **credenciais)
     if econ is None:
         raise ValueError(
-            f"não consegui ler symbol_economics de {slot.symbol!r} no terminal MT5 — "
+            f"não consegui ler symbol_economics de {symbol!r} no terminal MT5 — "
             "confirme que o terminal está aberto e logado, e que o símbolo está "
             "visível no Market Watch."
         )
@@ -317,7 +315,7 @@ def build_intraday(args):
     # papel liquido de referencia: se ele acusar, o runtime nao opera (ver
     # `IntradayLiveRuntime`), em vez de reescrever o offset por conta propria.
     clock_feed = MT5Feed(**credenciais)
-    bar_feed = MT5BarFeed(slot.symbol, **credenciais)
+    bar_feed = MT5BarFeed(symbol, **credenciais)
     return IntradayLiveRuntime(
         slot=slot,
         strategy=strategy_obj,
