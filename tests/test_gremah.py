@@ -11,7 +11,7 @@ import pandas as pd
 import pytest
 
 from strategy.daytrade.base import Bar
-from strategy.daytrade.lab.gremah import Gremah
+from strategy.daytrade.lab.gremah import _CALIBRATION_BY_SYMBOL, Gremah, capital_minimo_brl
 
 
 def _strat(**kwargs) -> Gremah:
@@ -112,3 +112,72 @@ def test_ordem_rolante_tambem_e_reancorada_apos_esperar_demais():
     assert actions_reanchor[0].side == "long"
     assert actions_reanchor[0].limit_price == pytest.approx(11.76)  # 12.00 - 2*12 ticks, nao mais 7.84
     assert strat._state.pending_bars_waited == 0
+
+
+# ---------- calibracao por simbolo (2026-08-21, IS apenas) ----------------
+
+@pytest.mark.parametrize("symbol,profit_pct,stop_multiplier", [
+    ("PMAM3", 0.0032, 10.0),
+    ("CSAN3", 0.0021, 20.0),
+    ("KLBN4", 0.0021, 5.0),
+])
+def test_calibracao_por_simbolo_e_usada_quando_nao_sobrescrita(symbol, profit_pct, stop_multiplier):
+    strat = Gremah(symbol=symbol)
+
+    assert strat.profit_pct == pytest.approx(profit_pct)
+    assert strat.stop_multiplier == pytest.approx(stop_multiplier)
+    # a tabela em si tem que bater com o que o teste espera -- se alguem
+    # editar `_CALIBRATION_BY_SYMBOL` sem atualizar este teste, isto pega.
+    assert _CALIBRATION_BY_SYMBOL[symbol].profit_pct == pytest.approx(profit_pct)
+    assert _CALIBRATION_BY_SYMBOL[symbol].stop_multiplier == pytest.approx(stop_multiplier)
+
+
+def test_profit_pct_explicito_vence_a_calibracao_da_tabela():
+    strat = Gremah(symbol="PMAM3", profit_pct=0.0099)
+
+    assert strat.profit_pct == pytest.approx(0.0099)
+    # stop_multiplier nao foi passado -- continua vindo do lookup da tabela.
+    assert strat.stop_multiplier == pytest.approx(10.0)
+
+
+def test_stop_multiplier_explicito_vence_a_calibracao_da_tabela():
+    strat = Gremah(symbol="CSAN3", stop_multiplier=99.0)
+
+    assert strat.stop_multiplier == pytest.approx(99.0)
+    # profit_pct nao foi passado -- continua vindo do lookup da tabela.
+    assert strat.profit_pct == pytest.approx(0.0021)
+
+
+def test_ambos_explicitos_ignora_a_tabela_mesmo_para_simbolo_desconhecido():
+    strat = Gremah(symbol="ATIVO_INEXISTENTE", profit_pct=0.005, stop_multiplier=8.0)
+
+    assert strat.profit_pct == pytest.approx(0.005)
+    assert strat.stop_multiplier == pytest.approx(8.0)
+
+
+def test_simbolo_desconhecido_sem_override_falha_alto():
+    with pytest.raises(ValueError, match="ATIVO_INEXISTENTE"):
+        Gremah(symbol="ATIVO_INEXISTENTE")
+
+
+def test_simbolo_desconhecido_com_apenas_um_override_ainda_falha():
+    # so' profit_pct foi passado -- stop_multiplier ainda precisaria do
+    # lookup, que nao existe para este simbolo: tem que falhar, nao usar
+    # nenhum stop_multiplier "default" implicito.
+    with pytest.raises(ValueError, match="ATIVO_INEXISTENTE"):
+        Gremah(symbol="ATIVO_INEXISTENTE", profit_pct=0.005)
+
+
+# ---------- capital minimo (lote padrao, sem fracionario) -----------------
+
+def test_capital_minimo_brl_arredonda_pra_cima_ao_proximo_multiplo_de_50():
+    """A folga NAO e' um valor somado a parte -- e' a distancia ate o
+    proximo multiplo de R$50 acima do custo do lote (pedido explicito do
+    usuario 2026-08-21). PMAM3 (R$0,14): lote de R$14 -> R$50."""
+    assert capital_minimo_brl(0.14) == pytest.approx(50.0)  # lote 14.00 -> 50
+    assert capital_minimo_brl(3.64) == pytest.approx(400.0)  # lote 364.00 -> 400
+    assert capital_minimo_brl(3.66) == pytest.approx(400.0)  # lote 366.00 -> 400
+
+
+def test_capital_minimo_brl_lote_exato_multiplo_de_50_nao_sobe_pro_proximo():
+    assert capital_minimo_brl(0.50) == pytest.approx(50.0)  # lote 50.00 -> 50 (ja e multiplo)

@@ -36,6 +36,7 @@ comporta como puro modo rolante nesse caso). Ver
 campeao de day trade PMAM3 para o historico completo da investigacao."""
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import time
 
@@ -49,6 +50,54 @@ from strategy.daytrade.base import (
     IntradayOpenPosition,
     IntradayStrategy,
 )
+
+
+@dataclass(frozen=True)
+class _SymbolCalibration:
+    profit_pct: float
+    stop_multiplier: float
+
+
+# Calibracao por SIMBOLO, medida 2026-08-21 (backtest M1, janela comum
+# 2025-09-16..2026-06-13, capital dimensionado ao custo real de 1 lote
+# padrao -- day trade nao usa fracionario porque cada ordem fracionaria
+# custa R$1,90 fixos na corretora, proibitivo dado o giro alto da gremah).
+#
+# IMPORTANTE: estes 3 numeros sao IN-SAMPLE APENAS -- o trecho
+# out-of-sample reservado (2026-06-13..2026-08-20) AINDA NAO foi rodado
+# com eles. Tratar como candidato, nao como resultado validado.
+#
+# lucro IS medido vs. o antigo default global (0.42%/20x), mesma janela:
+#   PMAM3: +R$759,08 vs +R$609,04 (+24,6%)
+#   CSAN3: +R$751,82 vs +R$129,54 (+480%)
+#   KLBN4: +R$1.226,35 vs +R$146,75 (+736%)
+#
+# Um simbolo novo exige a MESMA medicao antes de entrar aqui -- ver
+# `Gremah.__init__`, que FALHA ALTO (`ValueError`) para qualquer simbolo
+# ausente desta tabela em vez de herdar a calibracao de outro papel (jah
+# provado que profit_pct/stop_multiplier nao transferem entre precos).
+_CALIBRATION_BY_SYMBOL: dict[str, _SymbolCalibration] = {
+    "PMAM3": _SymbolCalibration(profit_pct=0.0032, stop_multiplier=10.0),
+    "CSAN3": _SymbolCalibration(profit_pct=0.0021, stop_multiplier=20.0),
+    "KLBN4": _SymbolCalibration(profit_pct=0.0021, stop_multiplier=5.0),
+}
+
+
+def capital_minimo_brl(preco_atual: float) -> float:
+    """Capital minimo para operar um simbolo SEM ordem fracionaria: custo de
+    1 lote padrao (100 acoes, corretagem zero na Rico) arredondado PARA CIMA
+    ao proximo multiplo de R$50 (pedido explicito do usuario 2026-08-21).
+
+    A folga de seguranca NAO e' um valor somado a parte -- e' a propria
+    distancia ate o multiplo de 50 (ex.: PMAM3 a R$0,14 -> lote de R$14,00
+    -> R$50,00; CSAN3 a R$3,64 -> lote de R$364,00 -> R$400,00).
+
+    Uso pretendido, AINDA NAO conectado a nada: o saldo em caixa da conta
+    deveria ser conferido contra este numero antes de deixar um slot de day
+    trade comecar a operar um dado simbolo -- essa checagem mora no
+    dashboard/selecao de conta (fora do escopo deste modulo), nao aqui."""
+    custo_lote = preco_atual * 100
+    return math.ceil(custo_lote / 50.0) * 50.0
 
 
 @dataclass
@@ -69,7 +118,21 @@ class _SessionState:
 
 class Gremah(IntradayStrategy):
     """Ancora fixa na abertura ate' `fixed_anchor_until`; ancora rolante
-    (preco atual, recalculada a cada recarga) depois disso."""
+    (preco atual, recalculada a cada recarga) depois disso.
+
+    ESCOPO: desenhada para operar acoes ABAIXO de R$4 (conservador,
+    2026-08-21). Achado do MESMO dia (sessao de pesquisa completa, ver
+    `_CALIBRATION_BY_SYMBOL` acima): um `profit_pct`/`stop_multiplier`
+    GLOBAL nao transfere bem entre simbolos em faixas de preco diferentes
+    -- por isso `profit_pct=None`/`stop_multiplier=None` (os defaults do
+    construtor) nao sao mais um numero fixo, e' um LOOKUP por `symbol` na
+    tabela de calibracao. PMAM3, CSAN3 e KLBN4 tem numeros IN-SAMPLE
+    confirmados ali (nao OOS ainda); qualquer outro simbolo faz
+    `Gremah.__init__` levantar `ValueError` em vez de herdar a calibracao
+    de outro papel -- medir antes de operar, nao presumir. Acima de ~R$6-7
+    o alvo (mesmo calibrado) tende a ficar pequeno demais frente ao piso de
+    1 tick (`_ticks_from_pct`) -- ainda nao medido, nao usar `symbol=` com
+    uma acao mais cara sem recalibrar."""
 
     name = "gremah"
     version = "0.1"
@@ -132,9 +195,11 @@ class Gremah(IntradayStrategy):
     param_docs = {
         "symbol": "Ativo que ele negocia.",
         "tick_size": "Variação mínima de preço do ativo.",
-        "profit_pct": "Alvo de lucro por trade, em % do preço da âncora.",
+        "profit_pct": "Alvo de lucro por trade, em % do preço da âncora. Vazio = lookup por "
+                      "símbolo em `_CALIBRATION_BY_SYMBOL` (falha se o símbolo não estiver lá).",
         "spacing_multiplier": "Distância da entrada, em múltiplos do alvo.",
-        "stop_multiplier": "Distância do stop, em múltiplos do alvo.",
+        "stop_multiplier": "Distância do stop, em múltiplos do alvo. Vazio = mesmo lookup de "
+                           "`profit_pct`.",
         "max_trades_per_side": "Teto de preenchimentos por lado, por sessão.",
         "session_stop_brl": "Perda acumulada, em reais, que encerra o dia.",
         "quantity": "Quantidade por ordem. Vazio = default do perfil do símbolo.",
@@ -150,9 +215,9 @@ class Gremah(IntradayStrategy):
         self,
         symbol: str = "PMAM3",
         tick_size: float = 0.01,
-        profit_pct: float = 0.0042,
+        profit_pct: float | None = None,
         spacing_multiplier: float = 2.0,
-        stop_multiplier: float = 20.0,
+        stop_multiplier: float | None = None,
         max_trades_per_side: int = 15,
         session_stop_brl: float = 30.0,
         quantity: int | None = None,
@@ -161,6 +226,27 @@ class Gremah(IntradayStrategy):
     ):
         self.symbol = symbol
         self.tick_size = tick_size
+        # `None` (o default) = busca a calibracao do SIMBOLO na tabela
+        # (mesmo padrao de `default_quantity` em
+        # `backtest/intraday/profiles.py::config_for`: sentinela `None`
+        # resolvido aqui dentro, nunca herdado de outro papel). Quem passa
+        # `profit_pct=`/`stop_multiplier=` explicito sempre vence o lookup.
+        if profit_pct is None or stop_multiplier is None:
+            calib = _CALIBRATION_BY_SYMBOL.get(symbol)
+            if calib is None:
+                raise ValueError(
+                    f"gremah: sem calibracao para o simbolo {symbol!r} em "
+                    "_CALIBRATION_BY_SYMBOL (strategy/daytrade/lab/gremah.py). "
+                    "profit_pct/stop_multiplier NAO transferem entre simbolos "
+                    "(medido 2026-08-21) -- passe profit_pct= e "
+                    "stop_multiplier= explicitamente, ou meca este simbolo "
+                    "(backtest IS + OOS) e adicione-o a tabela antes de "
+                    "operar com o default."
+                )
+            if profit_pct is None:
+                profit_pct = calib.profit_pct
+            if stop_multiplier is None:
+                stop_multiplier = calib.stop_multiplier
         self.profit_pct = profit_pct
         self.spacing_multiplier = spacing_multiplier
         self.stop_multiplier = stop_multiplier
