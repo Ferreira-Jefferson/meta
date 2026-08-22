@@ -1747,15 +1747,29 @@
    em verde, negativo (parado) neutro; o botão de parar é o único elemento
    "quente" (vermelho) da tela porque é a única ação destrutiva do painel. */
 
+/* Desde 2026-08-22 a barra divide a LINHA com o campo de caixa (`.ops-bar`),
+   entao deixou de ser uma caixa propria com fundo e moldura: virou o lado
+   direito de uma linha. Os campos ficam inline, o botao ao lado deles. */
 .ops-control {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: var(--s-4);
-  border: 1px solid var(--grid-strong);
-  background: var(--bg-elevated);
-  padding: var(--s-4) var(--s-5);
-  margin-bottom: var(--s-6);
+  flex-wrap: wrap;
+}
+.ops-control form {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+}
+/* Rotulo ACIMA do select (dono, 2026-08-22): e' o mesmo par usado em
+   `.ops-cash` ao lado e em todo outro formulario da pagina — um so' padrao de
+   campo, nao um por barra. `align-items: flex-end` no form (acima) alinha o
+   PE dos campos com o botao, que nao tem rotulo. */
+.ops-control-hint {
+  font-family: var(--font-mono);
+  font-size: var(--fs-metadata);
+  color: var(--accent-red);
 }
 .ops-status {
   display: inline-flex;
@@ -1802,14 +1816,10 @@
   cursor: not-allowed;
 }
 .ops-control button:disabled:hover { background: var(--grid); }
-/* O form de controle carrega o botao e, na conta nova de swing, o select
-   "Robo" -- os dois na mesma linha, alinhados pela base. */
-.ops-control form {
-  display: flex;
-  align-items: flex-end;
-  gap: var(--s-4);
-  flex-wrap: wrap;
-}
+/* (A regra de layout de `.ops-control form` esta la em cima, junto com a
+   `.ops-bar`. Havia uma segunda copia aqui, com `align-items: flex-end`, que
+   por vir depois VENCIA a de cima — os campos agora sao inline e alinham pelo
+   centro, entao a copia so desalinhava a linha.) */
 
 .ops-alert {
   border: 1px solid var(--accent-red);
@@ -1898,27 +1908,10 @@
 
 /* ============ OPERAÇÃO · ACESSO E CREDENCIAIS ==============================
    Login da corretora (MT5) e canais de alerta (Telegram/SMTP) — reusa a
-   grade `.row`/`label .k` do `.ops-start-form`, mas fica em <details>
-   fechado por padrão (não é o primeiro gesto do usuário, então não deve
-   competir com o botão iniciar/parar pela atenção). */
+   grade `.row`/`label .k` do `.ops-start-form`. Desde 2026-08-22 o bloco
+   deixou de ter caixa própria (`.ops-credentials`) e passou a ser a seção 01
+   do painel, com o mesmo cabeçalho recolhível das outras — ver `.ops-sec`. */
 
-.ops-credentials {
-  border: 1px solid var(--grid-strong);
-  background: var(--bg-elevated);
-  padding: var(--s-4) var(--s-5);
-  margin-bottom: var(--s-6);
-}
-.ops-credentials summary {
-  cursor: pointer;
-  font-family: var(--font-mono);
-  font-size: var(--fs-body);
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.14em;
-  color: var(--fg-strong);
-}
-.ops-credentials summary:hover { color: var(--accent-amber); }
-.ops-credentials details[open] summary { margin-bottom: var(--s-4); }
 .ops-creds-form fieldset {
   border: none;
   border-top: 1px dashed var(--grid);
@@ -2027,45 +2020,51 @@
    simples (um campo + botão lado a lado) por ser uma ação única, não um
    formulário de configuração com várias seções. */
 
-/* ---------- Operacao: cartao por SLOT (2026-08-21) --------------------
-   O painel deixou de ter um robo e passou a ter dois (`core.config.SLOTS`),
-   cada um com o seu caixa. Cada slot e' um cartao fechado: cabecalho, ledger
-   de caixa (fora do polling HTMX, senao o campo em digitacao seria apagado
-   a cada refresh de fundo) e o painel operacional dentro.
-   Substituiu `.ops-deposit*`, que era o form unico de "saldo observado". */
-.ops-slot {
+/* ---------- Operacao: secoes recolhiveis (2026-08-22) -----------------
+   O painel tinha dois cartoes fixos, sempre abertos. Com N robos de day
+   trade a pagina cresce sem teto, entao tudo passou a recolher: tres secoes
+   de primeiro nivel (01 credenciais, 02 swing, 03 day trade) e, dentro da
+   03, um cartao por robo mais os sub-blocos de avisos e robo novo.
+
+   Nenhuma direcao estetica nova (AGENTS.md, "Estetica do frontend"): a
+   hierarquia continua sendo regua de 1px + escala de tipo, e o unico
+   ornamento e' o filete de topo que ja existia no `.capital-card`. O que
+   distingue nivel aqui e' INDENTACAO e peso do rotulo, nao caixa dentro de
+   caixa -- o conteudo interno (`.ops-badge`, `.capital-card`) usa
+   `--bg-elevated` e sumiria contra um fundo elevado. */
+
+.ops-sec {
   position: relative;
-  /* `--bg`, NAO `--bg-elevated`: tudo que mora dentro do cartao
-     (`.ops-badge`, `.capital-card`) usa o fundo elevado e desapareceria
-     contra ele. Hierarquia aqui e regua de 1px + escala de tipo, nunca caixa
-     dentro de caixa. */
   background: var(--bg);
   border: 1px solid var(--grid-strong);
-  padding: var(--s-5);
-  margin-bottom: var(--s-7);
+  margin-bottom: var(--s-6);
 }
-/* Filete de topo: ambar no slot 01 (a primeira opcao operavel), neutro nos
-   demais. Mesmo vocabulario do `.capital-card::before`. */
-.ops-slot::before {
+/* Filete de topo ambar na secao operavel (day trade, a que cabe no capital
+   de hoje); neutro nas demais. Mesmo vocabulario do `.capital-card::before`. */
+.ops-sec::before {
   content: "";
   position: absolute;
   left: 0; top: 0; right: 0; height: 2px;
   background: var(--grid-strong);
 }
-.ops-slot.is-primary::before { background: var(--accent-amber); }
+.ops-sec.is-primary::before { background: var(--accent-amber); }
 
-.ops-slot-head {
+/* O cabecalho E' o alvo de clique da secao inteira: linha alta, generosa,
+   com o estado a direita. Fechado, ele precisa bastar. */
+.ops-sec-head {
   display: flex;
   align-items: baseline;
-  gap: var(--s-5);
-  padding-bottom: var(--s-4);
-  border-bottom: 1px solid var(--grid);
-  margin-bottom: var(--s-4);
+  gap: var(--s-4);
+  padding: var(--s-4) var(--s-5);
+  cursor: pointer;
+  list-style: none;                       /* marcador nativo: some */
+  transition: color 120ms linear;
 }
-.ops-slot-head > div { flex: 1; min-width: 0; }
-.ops-slot-ord {
+.ops-sec-head::-webkit-details-marker { display: none; }
+.ops-sec-head:hover .ops-sec-title { color: var(--accent-amber); }
+.ops-sec-ord {
   font-family: var(--font-mono);
-  font-size: var(--fs-h2);
+  font-size: var(--fs-h3);
   font-weight: 500;
   line-height: 1;
   letter-spacing: -0.02em;
@@ -2073,114 +2072,275 @@
   font-variant-numeric: tabular-nums;
   flex-shrink: 0;
 }
-.ops-slot.is-primary .ops-slot-ord { color: var(--accent-amber); }
-.ops-slot-head h2 {
+.ops-sec.is-primary .ops-sec-ord { color: var(--accent-amber); }
+.ops-sec-title {
+  flex: 1;
+  min-width: 0;
   font-family: var(--font-mono);
   font-size: var(--fs-h3);
   font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.14em;
   color: var(--fg-strong);
-  margin: 0 0 var(--s-2);
+  transition: color 120ms linear;
 }
-.ops-slot-head .dek { margin: 0; max-width: 68ch; }
-
-/* Faixa de modo de execucao. Existe porque "nenhuma ordem esta sendo
-   enviada" e a informacao mais consequente do painel — uma etiqueta entre
-   cinco nao da conta. Regua ambar a esquerda, prosa em serifa: e um aviso
-   editorial, nao um dado. */
-.ops-mode-strip {
-  border-left: 2px solid var(--accent-amber);
-  background: var(--bg-elevated);
-  padding: var(--s-3) var(--s-4);
-  margin: 0 0 var(--s-5);
-  font-family: var(--font-serif);
-  font-size: var(--fs-body-lg);
-  line-height: var(--lh-body);
-  color: var(--fg-muted);
-  max-width: 78ch;
-}
-.ops-mode-strip .k {
-  display: block;
+.ops-sec-meta {
   font-family: var(--font-mono);
   font-size: var(--fs-metadata);
   text-transform: uppercase;
-  letter-spacing: 0.18em;
-  color: var(--accent-amber);
-  margin-bottom: var(--s-1);
+  letter-spacing: 0.14em;
+  color: var(--fg-muted);
+  text-align: right;
+}
+/* `+`/`−` em mono no lugar do triangulo do navegador: o triangulo e' o unico
+   elemento arredondado que sobraria numa pagina de cantos vivos. Largura fixa
+   para o rotulo nao pular quando o glifo troca. */
+.ops-sec-caret {
+  flex-shrink: 0;
+  width: 1.2em;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: var(--fs-body-lg);
+  line-height: 1;
+  color: var(--fg-faint);
+}
+.ops-sec-caret::before { content: "+"; }
+/* `> summary` e nao `> .ops-sec-head`: o mesmo caret serve os tres niveis
+   (secao, cartao de robo, sub-bloco), e amarrar a regra a uma classe so
+   deixaria os outros dois eternamente com o sinal de "fechado". */
+details[open] > summary .ops-sec-caret::before { content: "\2212"; }
+.ops-sec-head:hover .ops-sec-caret,
+.ops-slot-head:hover .ops-sec-caret,
+.ops-sub-head:hover .ops-sec-caret { color: var(--accent-amber); }
+.ops-sec-body {
+  padding: var(--s-5);
+  border-top: 1px solid var(--grid);
 }
 
-.ops-cash {
+/* Resumo do cabecalho: caixa + estado, atualizado pelo polling via
+   `hx-swap-oob` (ver `partials/operacao_resumo.html`). E' a peca que deixa
+   recolher um cartao sem perder de vista o dinheiro. */
+.ops-sum {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--s-4);
+  /* Deixou de ser `nowrap`: o mínimo passou a viver aqui (dono, 2026-08-22),
+     e "R$ 0,00 · mín. R$ 28,00 — não opera · parado" é comprido demais para
+     nunca quebrar numa tela estreita. */
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  font-family: var(--font-mono);
+  font-size: var(--fs-metadata);
+}
+.ops-sum-cash { color: var(--fg-strong); font-variant-numeric: tabular-nums; }
+/* O mínimo, ao lado do caixa que ele qualifica (era um bloco à parte perto do
+   campo de edição, longe de onde o cartão já mostra o valor). */
+.ops-sum-hint { color: var(--fg-faint); white-space: nowrap; }
+.ops-sum-hint.is-blocked { color: var(--accent-red); }
+.ops-sum-state {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--fg-muted);
+}
+.ops-sum-dot {
+  width: 7px; height: 7px;
+  background: var(--fg-faint);
+  flex-shrink: 0;
+}
+.ops-sum-state.is-running { color: var(--accent-green); }
+.ops-sum-state.is-running .ops-sum-dot {
+  background: var(--accent-green);
+  box-shadow: 0 0 0 3px rgba(90,160,105,0.16);
+}
+
+/* Sub-bloco dentro de uma secao (avisos, robo novo): mesma logica de
+   recolher, um degrau abaixo no peso -- rotulo menor, sem ordinal. */
+.ops-sub-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-4);
+  padding: var(--s-3) 0;
+  cursor: pointer;
+  list-style: none;
+}
+.ops-sub-head::-webkit-details-marker { display: none; }
+.ops-sub-title {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: var(--fs-body);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--fg-strong);
+  transition: color 120ms linear;
+}
+.ops-sub-head:hover .ops-sub-title { color: var(--accent-amber); }
+.ops-sub-meta {
+  font-family: var(--font-mono);
+  font-size: var(--fs-metadata);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--fg-muted);
+}
+.ops-sub-body { padding: var(--s-3) 0 var(--s-4); }
+
+/* ---------- Cartao de um robo de day trade (dentro da secao 03) -------- */
+.ops-slot {
+  border-top: 1px solid var(--grid);
+}
+.ops-slot:last-of-type { border-bottom: 1px solid var(--grid); }
+.ops-slot-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-4);
+  padding: var(--s-4) 0;
+  cursor: pointer;
+  list-style: none;
+}
+.ops-slot-head::-webkit-details-marker { display: none; }
+/* O ATIVO e' a identidade do robo (um robo por ativo, conta NETTING), entao
+   e' ele que carrega o peso tipografico -- nao um ordinal de criacao. */
+.ops-slot-sym {
+  font-family: var(--font-mono);
+  font-size: var(--fs-h3);
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  color: var(--fg-strong);
+  flex-shrink: 0;
+  transition: color 120ms linear;
+}
+.ops-slot-head:hover .ops-slot-sym { color: var(--accent-amber); }
+.ops-slot-name {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-metadata);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--fg-muted);
+}
+.ops-slot-body {
+  padding: 0 0 var(--s-5) var(--s-5);
+  /* Filete a esquerda: diz "isto pertence ao cabecalho acima" com uma linha,
+     sem abrir outra caixa. */
+  border-left: 1px solid var(--grid);
+  margin-left: 2px;
+}
+.ops-slot-body > .dek { margin: 0 0 var(--s-4); max-width: 68ch; }
+
+/* `.ops-mode-strip` (faixa de prosa "Modo sombra") foi REMOVIDA em
+   2026-08-22 a pedido do dono: o cartao do robo tinha texto demais. O fato
+   virou a etiqueta "Execucao" em `.ops-badges` (lida do modo real do
+   processo, o que a faixa nem fazia). O filete ambar a esquerda continua
+   vivo em `.ops-signals`, com o mesmo vocabulario. */
+
+/* CAIXA em UMA linha (2026-08-22). Antes eram dois blocos lado a lado — o
+   valor grande a esquerda e, a direita, um formulario rotulado com o MESMO
+   numero dentro de um campo, mais um botao ambar do tamanho de uma acao
+   primaria. Tres representacoes do mesmo dado, e a mais alta da tela para um
+   campo que se digita uma vez.
+
+   O campo segue o MESMO padrao visual de todo outro input da pagina
+   (`.ops-creds-form input`, `.ops-start-form input`): caixa com borda de 1px,
+   sem raio, fundo `--bg`. A primeira versao tirava a borda e deixava so' uma
+   regua embaixo, o que destoava do resto do sistema (achado do dono,
+   2026-08-22) — corrigido para a MESMA caixa, so' que com rotulo em cima
+   (`.ops-inline-field`, o mesmo par usado em "Robo"/"Execucao" ao lado). */
+/* A LINHA do robo: caixa a esquerda, controle a direita. Dois `<form>`, um
+   layout so. Quebra em duas linhas no estreito, nunca comprime o campo. */
+.ops-bar {
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
-  gap: var(--s-5);
+  gap: var(--s-4) var(--s-6);
   flex-wrap: wrap;
   border-top: 1px solid var(--grid);
   border-bottom: 1px solid var(--grid);
-  padding: var(--s-4) 0;
+  padding: var(--s-3) 0;
   margin-bottom: var(--s-5);
 }
-.ops-cash-now { display: flex; flex-direction: column; gap: var(--s-1); }
-.ops-cash-now .k {
-  font-size: var(--fs-metadata);
-  color: var(--fg-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.14em;
-}
-.ops-cash-now .v {
-  font-family: var(--font-mono);
-  font-size: var(--fs-h2);
-  font-weight: 500;
-  line-height: 1;
-  letter-spacing: -0.02em;
-  color: var(--fg-strong);
-  font-variant-numeric: tabular-nums;
-}
-.ops-cash-now .sub { font-size: var(--fs-metadata); color: var(--fg-muted); }
-/* Abaixo do piso o robo simplesmente nao opera — isso e' um estado
-   bloqueante, nao uma nota de rodape. */
-.ops-cash-now .sub.is-blocked { color: var(--accent-red); }
-
-.ops-cash-form {
+.ops-cash {
   display: flex;
   align-items: flex-end;
-  gap: var(--s-4);
+  gap: var(--s-3);
   flex-wrap: wrap;
 }
-.ops-cash-form label { display: flex; flex-direction: column; gap: var(--s-2); }
-.ops-cash-form label .k {
-  font-size: var(--fs-metadata);
-  color: var(--fg-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.14em;
-}
-.ops-cash-form input[type="number"] {
+.ops-cash-field {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
   background: var(--bg);
   color: var(--fg-strong);
-  font-family: var(--font-mono);
-  font-size: var(--fs-body);
   border: 1px solid var(--grid-strong);
   border-radius: 0;
   padding: var(--s-3);
-  min-width: 180px;
+  transition: border-color 120ms linear;
 }
-.ops-cash-form input:focus { outline: none; border-color: var(--accent-amber); }
-.ops-cash-form button {
-  background: var(--accent-amber);
-  color: var(--bg);
+.ops-cash-field:focus-within { border-color: var(--accent-amber); }
+.ops-cash-field .prefix {
+  font-family: var(--font-mono);
+  font-size: var(--fs-body);
+  color: var(--fg-muted);
+}
+.ops-cash input[data-ops-money] {
+  background: none;
   border: none;
   border-radius: 0;
-  padding: var(--s-3) var(--s-5);
+  padding: 0;
+  color: var(--fg-strong);
   font-family: var(--font-mono);
-  font-weight: 500;
   font-size: var(--fs-body);
-  text-transform: uppercase;
-  letter-spacing: 0.14em;
-  cursor: pointer;
-  transition: background 120ms linear;
+  font-variant-numeric: tabular-nums;
+  /* Largura do CONTEUDO, nao do formulario: 9 caracteres cobrem
+     "999.999,99" sem deixar um campo vazio atravessando o cartao. */
+  width: 9ch;
+  text-align: right;
 }
-.ops-cash-form button:hover { background: var(--fg-strong); }
+.ops-cash input[data-ops-money]:focus { outline: none; }
+/* `.ops-cash-hint` (o "mín. R$ X — não opera" que ficava aqui, ao lado do
+   campo) mudou de lugar em 2026-08-22 -- agora é `.ops-sum-hint`, no resumo
+   do cabeçalho, ao lado do próprio caixa que ele qualifica. */
+/* Confirmar / cancelar: vivem DENTRO da caixa com borda (nao ao lado dela),
+   para o campo continuar parecendo um campo do sistema — nao um traco que
+   ganha botoes. Nascem ESCONDIDOS e aparecem quando o campo entra em foco. O
+   "Salvar" permanente que havia aqui era um chamariz ao lado de um numero que
+   se digita uma vez na vida.
+   `:focus-within` no CAMPO (nao no form): assim o par continua visivel
+   enquanto o foco esta em qualquer um dos dois botoes — inclusive no instante
+   em que o clique tira o foco do input, que e' onde a versao ingenua falha
+   (o botao some antes do clique chegar). */
+.ops-cash-actions {
+  display: inline-flex;
+  gap: var(--s-1);
+  margin-left: var(--s-1);
+  padding-left: var(--s-2);
+  border-left: 1px solid var(--grid);
+  /* `visibility` e nao `display`: o par continua ocupando o lugar dele, entao
+     a caixa nao muda de largura quando aparece. */
+  visibility: hidden;
+}
+.ops-cash-field:focus-within .ops-cash-actions { visibility: visible; }
+.ops-cash-actions button {
+  background: none;
+  border: none;
+  border-radius: 0;
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-metadata);
+  line-height: 1;
+  width: 1.6em;
+  height: 1.6em;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: color 120ms linear;
+}
+.ops-cash-actions button[type="submit"]:hover { color: var(--accent-green); }
+.ops-cash-actions button[type="reset"]:hover { color: var(--accent-red); }
 
 /* Select "Robo" dentro da barra de controle do slot (form de conta nova de
    swing) -- inline, nao um bloco proprio: e' um campo so, ao lado do botao. */
@@ -2191,6 +2351,13 @@
   text-transform: uppercase;
   letter-spacing: 0.14em;
 }
+/* Contagem colada no rotulo do campo ("ATIVO · 10 LIVRES"): um degrau mais
+   apagado que o rotulo, porque e' estado e nao nome do campo. */
+.ops-inline-field .k em {
+  font-style: normal;
+  color: var(--fg-faint);
+}
+.ops-inline-field .k em::before { content: "\00b7\00a0"; }
 .ops-inline-field select {
   background: var(--bg);
   color: var(--fg-strong);
@@ -2213,9 +2380,25 @@
    nenhuma direcao estetica nova (AGENTS.md, "Estetica do frontend"). */
 
 /* Remover robo: acao destrutiva, entao NAO ganha o ambar dos botoes de acao
-   primaria — fica em texto apagado com regua, e so acende no hover. */
-.ops-slot-remove { flex-shrink: 0; align-self: flex-start; }
-.ops-slot-remove button {
+   primaria — fica em texto apagado com regua, e so acende no hover. Mora no
+   PE do cartao (era no cabecalho): o cabecalho virou o alvo de clique que
+   abre/fecha, e um botao destrutivo dentro dele competiria com esse clique. */
+.ops-slot-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  flex-wrap: wrap;
+  border-top: 1px dashed var(--grid);
+  padding-top: var(--s-4);
+  margin-top: var(--s-5);
+}
+.ops-slot-foot .sub {
+  font-family: var(--font-mono);
+  font-size: var(--fs-metadata);
+  color: var(--fg-faint);
+  max-width: 62ch;
+}
+.ops-slot-foot button {
   background: none;
   border: 1px solid var(--grid);
   border-radius: 0;
@@ -2226,9 +2409,10 @@
   letter-spacing: 0.14em;
   padding: var(--s-2) var(--s-3);
   cursor: pointer;
+  white-space: nowrap;
   transition: color 120ms linear, border-color 120ms linear;
 }
-.ops-slot-remove button:hover {
+.ops-slot-foot button:hover {
   color: var(--accent-red);
   border-color: var(--accent-red);
 }
@@ -2239,24 +2423,8 @@
 .ops-signals {
   border-left: 2px solid var(--accent-amber);
   background: var(--bg-elevated);
-  padding: var(--s-4) var(--s-5);
-  margin-bottom: var(--s-7);
-}
-.ops-signals > header {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--s-4);
-  margin-bottom: var(--s-2);
-}
-.ops-signals h2 {
-  font-family: var(--font-mono);
-  font-size: var(--fs-h3);
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.14em;
-  color: var(--fg-strong);
-  margin: 0;
+  padding: 0 var(--s-4);
+  margin-bottom: var(--s-5);
 }
 .ops-signals-count {
   font-family: var(--font-mono);
@@ -2310,39 +2478,11 @@
 }
 .ops-signal form button:hover { color: var(--accent-green); border-color: var(--accent-green); }
 
-/* Formulario de robo novo. */
-.ops-new-robot {
-  border: 1px solid var(--grid-strong);
-  background: var(--bg);
-  padding: var(--s-5);
-  margin-bottom: var(--s-7);
-}
-.ops-new-robot > header {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--s-4);
-  padding-bottom: var(--s-3);
-  border-bottom: 1px solid var(--grid);
-  margin-bottom: var(--s-3);
-}
-.ops-new-robot h2 {
-  font-family: var(--font-mono);
-  font-size: var(--fs-h3);
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.14em;
-  color: var(--fg-strong);
-  margin: 0;
-}
-.ops-new-robot-count {
-  font-family: var(--font-mono);
-  font-size: var(--fs-metadata);
-  text-transform: uppercase;
-  letter-spacing: 0.14em;
-  color: var(--fg-muted);
-}
-.ops-new-robot .dek { margin: 0 0 var(--s-5); max-width: 78ch; }
+/* Formulario de robo novo: SEMPRE visivel quando a secao de day trade esta
+   aberta (nao recolhe) e SEMPRE acima da lista de robos -- ponto fixo da
+   secao, enquanto a lista embaixo cresce. O recolhivel e' o robo criado.
+   Sem regua propria: quem separa e' o `border-top` do primeiro cartao. */
+.ops-new-robot { padding-bottom: var(--s-5); }
 .ops-new-robot-form {
   display: flex;
   align-items: flex-end;
@@ -2368,42 +2508,74 @@
 }
 .ops-new-robot-form button:hover { background: var(--fg-strong); }
 
-/* Lista de ativos: a mesma informacao do <select>, legivel de relance. O
-   <select> nao consegue mostrar cor por opcao de forma confiavel entre
-   navegadores, e o ponto verde e' o pedido central — entao ele vive aqui. */
-.ops-asset-legend {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  border-top: 1px solid var(--grid);
+/* Listas recolhiveis do cartao (posicoes, eventos). Herdam o cabecalho de
+   sub-bloco (`.ops-sub-head`) para haver UM gesto de recolher na pagina
+   inteira, e nao tres parecidos. */
+.ops-list { margin-bottom: var(--s-5); }
+.ops-list > .ops-sub-head { padding: var(--s-3) var(--s-4); }
+.ops-list > .ops-sub-body { padding: 0 var(--s-4) var(--s-4); }
+/* "Ver mais": mesmo gesto da lista de simulacoes da home, mesmo peso visual
+   do botao secundario do cartao. */
+.ops-more {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  padding-top: var(--s-3);
 }
-.ops-asset {
-  display: grid;
-  grid-template-columns: 12px 8ch 12ch 1fr;
-  align-items: baseline;
-  gap: var(--s-3);
-  padding: var(--s-2) 0;
-  border-bottom: 1px solid var(--grid);
+.ops-more button {
+  background: none;
+  border: 1px solid var(--grid-strong);
+  border-radius: 0;
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-metadata);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  padding: var(--s-2) var(--s-4);
+  cursor: pointer;
+  transition: color 120ms linear, border-color 120ms linear;
+}
+.ops-more button:hover { color: var(--accent-amber); border-color: var(--accent-amber); }
+.ops-more .dim { font-family: var(--font-mono); font-size: var(--fs-metadata); }
+
+/* Estado do ativo DENTRO do <select> (2026-08-22, pedido do dono): a lista
+   impressa saiu da pagina, e a cor de cada opcao passou a dizer o estado —
+   verde ja tem robo operando, ambar ja tem robo criado mas parado.
+   `color` em <option> pinta a lista aberta no Chromium e no Firefox; onde nao
+   pintar, o glifo e as palavras "operando"/"robo parado" no texto da opcao
+   dizem o mesmo (cor nunca e' o unico portador da informacao). */
+.ops-asset-select option.is-running { color: var(--accent-green); }
+.ops-asset-select option.is-idle { color: var(--accent-amber); }
+
+/* Legenda das DUAS cores. Nao e' a lista de ativos de volta: sem ela a cor
+   dentro do select seria um codigo sem decodificador. */
+.ops-asset-key {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3) var(--s-5);
+  margin: var(--s-4) 0 0;
   font-family: var(--font-mono);
   font-size: var(--fs-metadata);
   color: var(--fg-muted);
 }
-.ops-asset-sym { color: var(--fg-strong); letter-spacing: 0.08em; }
-.ops-asset-min { font-variant-numeric: tabular-nums; text-align: right; }
-.ops-asset.is-used .ops-asset-sym { color: var(--fg-muted); }
-/* O ponto: cheio e verde = ha robo OPERANDO neste ativo; anel = robo criado
-   mas parado (o ativo continua reservado, o caixa dele esta la); vazio =
-   livre. Tres estados, nao dois, porque "parado" nao libera o ativo. */
+.ops-asset-key > span { display: inline-flex; align-items: center; gap: var(--s-2); }
+/* Ponto verde cheio = robo OPERANDO; ponto ambar cheio = robo criado mas
+   parado (o ativo continua reservado, o caixa dele esta la) — ate 2026-08-22
+   este segundo era so' um anel vazio, e o dono pediu o mesmo peso visual do
+   verde. O terceiro estado — livre — e' a AUSENCIA de marca, nao um terceiro
+   ponto: por isso so' dois seletores existem aqui. */
 .ops-asset-dot {
   width: 7px; height: 7px;
   border: 1px solid var(--grid-strong);
-  align-self: center;
+  flex-shrink: 0;
 }
 .ops-asset-dot.is-running { background: var(--accent-green); border-color: var(--accent-green); }
-.ops-asset-dot.is-idle { border-color: var(--accent-green); }
+.ops-asset-dot.is-idle { background: var(--accent-amber); border-color: var(--accent-amber); }
 
 @media (max-width: 720px) {
-  .ops-asset { grid-template-columns: 12px 1fr auto; }
-  .ops-asset-state { grid-column: 2 / -1; }
   .ops-new-robot-form .ops-asset-field select { min-width: 0; width: 100%; }
+  .ops-sec-head, .ops-slot-head, .ops-sub-head { flex-wrap: wrap; }
+  .ops-sec-title, .ops-slot-name { flex-basis: 100%; order: 3; }
+  .ops-sec-caret { order: 2; margin-left: auto; }
+  .ops-slot-body { padding-left: var(--s-3); }
 }

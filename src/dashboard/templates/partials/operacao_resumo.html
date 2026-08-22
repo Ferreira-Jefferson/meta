@@ -1,0 +1,35 @@
+{# Resumo de UM robô, do tamanho de uma linha: o que o cabeçalho recolhido
+   precisa dizer para que fechar o cartão não signifique perder de vista o
+   dinheiro. Caixa + estado, nada mais.
+
+   Vive num arquivo próprio porque é renderizado de DOIS lugares que não se
+   enxergam: dentro do `<summary>` (em `operacao_body.html`) e, a cada poll,
+   como swap FORA DE BANDA vindo de `operacao_slot_live.html`.
+
+   O fora-de-banda não é enfeite. O nó com `hx-trigger="every Ns"` é o corpo
+   do cartão, que fica DENTRO do `<details>`; o `<summary>` está fora dele e
+   nunca seria trocado pelo refresh de fundo. Sem isto, um cartão recolhido
+   continuaria escrito "operando" depois de o robô parar — e um painel que
+   mente sobre dinheiro é pior que um painel que não resume. #}
+{% macro resumo(slot_id, caixa, proc, caixa_minima=none, caixa_ok=True, oob=False) %}
+<span id="ops-sum-{{ slot_id }}" class="ops-sum"{% if oob %} hx-swap-oob="true"{% endif %}>
+  <span class="ops-sum-cash num">R$ {{ caixa | num_br }}</span>
+  {# O mínimo mudou de lugar (dono, 2026-08-22): ficava ao lado do campo de
+     caixa, longe de onde o cartão já mostra o próprio caixa. `caixa_minima`
+     é `none` só na chamada sem esse dado (não deveria haver mais nenhuma,
+     mas o default evita `UndefinedError` se algum chamador for esquecido). #}
+  {# "— não opera" saiu do texto (dono, 2026-08-22): a cor vermelha do
+     `is-blocked` já é o sinal de bloqueio, e o estado "parado" ao lado
+     confirma que o robô não está rodando — repetir "não opera" por extenso
+     era dizer a mesma coisa três vezes na mesma linha. #}
+  {% if caixa_minima is not none %}
+  <span class="ops-sum-hint{% if not caixa_ok %} is-blocked{% endif %}">mín. R$ {{ caixa_minima | num_br }}</span>
+  {% endif %}
+  <span class="ops-sum-state{{ ' is-running' if proc else '' }}">
+    {# O ponto repete o que a palavra já diz, de propósito: cor sozinha não
+       pode carregar informação (daltonismo, impressão, tema de alto
+       contraste). #}
+    <span class="ops-sum-dot" aria-hidden="true"></span>{{ "operando" if proc else "parado" }}
+  </span>
+</span>
+{% endmacro %}

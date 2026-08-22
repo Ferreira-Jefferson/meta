@@ -15,7 +15,11 @@
   <link rel="stylesheet" href="/static/css/pages.css?v={{ static_v('pages.css') }}" />
   <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" defer></script>
   <script src="https://unpkg.com/htmx.org@1.9.12" defer></script>
-  <script src="/static/js/charts.js" defer></script>
+  <script src="/static/js/charts.js?v={{ static_v('charts.js') }}" defer></script>
+  {# Carregado em toda página (e não só em /operacao) pelo mesmo motivo do
+     charts.js: o <head> é comum, e o script sai do ar sozinho onde não há
+     `[data-ops-key]` nem formulário de robô novo. #}
+  <script src="/static/js/operacao.js?v={{ static_v('operacao.js') }}" defer></script>
 </head>
 <body>
   <header class="chrome">

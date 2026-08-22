@@ -89,7 +89,16 @@ def all_slots(conn=None) -> list[Slot]:
         with live_store.live_journal() as own:
             return all_slots(own)
     slots = [*daytrade_slots(conn), *ordered_slots()]
-    return sorted(slots, key=lambda s: (s.order, s.id))
+    # Ordena SÓ por `order`, e o desempate é a ordem de entrada — `sorted` é
+    # estável, e `daytrade_slots` já vem em ordem de criação (`ORDER BY id`).
+    #
+    # Havia um `s.id` no desempate, e ele era um bug de tela: todo slot de day
+    # trade tem `order == 0`, então o desempate valia SEMPRE e ordenava os
+    # robôs em ordem alfabética do id. Abrir KLBN4 depois de PMAM3 colocava o
+    # novo ACIMA do antigo, e a lista deixava de contar a história de como o
+    # dono chegou nela. Ordem de criação, mais recente por último
+    # (pedido do dono, 2026-08-22).
+    return sorted(slots, key=lambda s: s.order)
 
 
 def symbols_in_use(conn=None) -> dict[str, str]:

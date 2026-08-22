@@ -1,87 +1,155 @@
-{% macro slot_card(bloco, creds_status, poll_seconds, ordinal, primary) %}
-{% set slot = bloco.slot %}
-{% set sombra = slot.is_intraday %}
-{# Um cartão por slot. A hierarquia é feita com RÉGUA (1px) e escala de tipo,
-   nunca com caixa dentro de caixa: o cartão fica no `--bg` da página de
-   propósito, porque tudo que mora dentro dele (`.ops-badge`,
-   `.capital-card`) usa `--bg-elevated` e desapareceria contra um fundo
-   elevado. #}
-<section class="ops-slot stagger{% if primary %} is-primary{% endif %}">
-  <header class="ops-slot-head">
-    {# O ordinal existe para a ORDEM ser legível como decisão, não como
-       acidente de layout: day trade vem primeiro por ser a opção operável no
-       capital atual, não por ser melhor. Vem do laço (e não de `slot.order`,
-       que hoje é 0 para TODO robô de day trade) desde que o painel passou a
-       abrir N robôs — senão todos os cartões se chamariam "01". #}
-    <span class="ops-slot-ord">{{ "%02d"|format(ordinal) }}</span>
-    <div>
-      {# Nome de slot em mono/caixa alta (é rótulo de sistema); os títulos dos
-         painéis de dentro ficam em serifa (são prosa). O contraste é
-         deliberado. #}
-      <h2>{{ slot.label }}</h2>
-      <p class="dek">{{ slot.dek }}</p>
-    </div>
-    {% if slot.is_dynamic %}
-    {# Só robô criado aqui pode ser removido. O botão fica no cabeçalho, em
-       tom apagado e com confirmação: é destrutivo, mas é a única saída para
-       liberar o ativo — e o servidor recusa de novo se houver processo
-       rodando, posição aberta ou caixa. #}
-    <form class="ops-slot-remove" hx-post="/operacao/{{ slot.id }}/remover"
-          hx-target="#ops-body" hx-swap="outerHTML"
-          hx-confirm="Remover o robô {{ slot.label }}? O ativo {{ slot.symbol }} volta a ficar livre.">
-      <button type="submit" title="Remover este robô e liberar {{ slot.symbol }}">Remover</button>
-    </form>
-    {% endif %}
-  </header>
+{% import "partials/operacao_resumo.html" as r %}
 
-  {% if sombra %}
-  {# A informação mais importante da tela não pode ser só uma etiqueta entre
-     cinco: em modo sombra NADA vai para a corretora, e quem olha o painel
-     precisa saber disso antes de olhar qualquer número. #}
-  <p class="ops-mode-strip">
-    <span class="k">Modo sombra</span>
-    Nenhuma ordem é enviada à corretora. O robô decide, registra tudo e mede
-    o que ainda não foi medido — se a ordem-limite de fato preencheria no
-    nível tocado. O caixa não é debitado.
-  </p>
+{# ---------------------------------------------------------------------------
+   ESTRUTURA DA PÁGINA (2026-08-22, pedido do dono)
+
+   Três seções recolhíveis, nesta ordem: 01 acesso e credenciais, 02 swing,
+   03 day trade. Tudo que é de day trade — os robôs, os avisos deles e o
+   formulário de robô novo — mora DENTRO da seção 03, e cada peça recolhe
+   pela mesma lógica.
+
+   Por que recolher tudo: o painel deixou de ter dois cartões fixos e passou
+   a ter N robôs de day trade. Com tudo aberto, a página cresce sem teto e a
+   informação de um robô empurra a do outro para fora da tela.
+
+   REGRA que o desenho tem de respeitar: um cabeçalho recolhido não pode
+   mentir. Por isso cada `<summary>` carrega caixa e estado do robô, e esse
+   pedaço é atualizado pelo polling (ver `partials/operacao_resumo.html`).
+
+   O estado aberto/fechado é do NAVEGADOR (`static/js/operacao.js`,
+   localStorage), não do servidor: qualquer POST aqui troca o `#ops-body`
+   inteiro, e sem isso atualizar o caixa de um robô fecharia a página toda.
+   --------------------------------------------------------------------------- #}
+
+{# Seção de primeiro nível. `{% call %}` para o conteúdo entrar como corpo. #}
+{% macro secao(key, ordinal, titulo, meta, aberta=False, primary=False) %}
+<section class="ops-sec{% if primary %} is-primary{% endif %}">
+  <details data-ops-key="{{ key }}"{% if aberta %} open{% endif %}>
+    <summary class="ops-sec-head">
+      <span class="ops-sec-ord">{{ "%02d"|format(ordinal) }}</span>
+      <span class="ops-sec-title">{{ titulo }}</span>
+      <span class="ops-sec-meta">{{ meta }}</span>
+      <span class="ops-sec-caret" aria-hidden="true"></span>
+    </summary>
+    <div class="ops-sec-body">{{ caller() }}</div>
+  </details>
+</section>
+{% endmacro %}
+
+{# Corpo de um cartão de robô — igual para swing e day trade. O cabeçalho é
+   que muda: o swing é uma seção de primeiro nível, os de day trade são
+   cartões dentro da seção 03. #}
+{% macro slot_body(bloco, creds_status, poll_seconds) %}
+{% set slot = bloco.slot %}
+  {# O cartão de day trade não repete a descrição do robô (pedido do dono,
+     2026-08-22): o cabeçalho já diz ATIVO + robô, e as regras completas ficam
+     a um clique, na ficha dele. O swing mantém o dek porque a seção dele não
+     tem esse par no cabeçalho — o rótulo é só "Swing — carteira B3".
+
+     A faixa "Modo sombra" que ficava aqui SAIU pelo mesmo pedido. Ela também
+     mentia: era `{% raw %}{% if slot.is_intraday %}{% endraw %}`, ou seja, escrevia "nenhuma ordem é
+     enviada à corretora" mesmo com o robô iniciado em modo Real. O fato virou
+     uma etiqueta ao lado das outras, agora lida do modo REAL do processo
+     (`s.daytrade.execution_mode`, em `operacao_slot_live.html`). #}
+  {% if not slot.is_intraday %}
+  <p class="dek">{{ slot.dek }}</p>
   {% endif %}
 
-  {# Form de caixa FORA do nó com polling (ver operacao_slot_live.html): um
-     <input> sendo digitado seria apagado pelo refresh de fundo. #}
-  <div class="ops-cash">
-    <div class="ops-cash-now">
-      <span class="k">Caixa deste robô</span>
-      <span class="v num">R$ {{ bloco.caixa_ledger | num_br }}</span>
-      <span class="sub{% if not bloco.caixa_ok %} is-blocked{% endif %}">
-        {% if bloco.caixa_ok %}
-          Acima do mínimo de R$ {{ bloco.caixa_minima | num_br }}
-        {% else %}
-          Abaixo do mínimo de R$ {{ bloco.caixa_minima | num_br }} — não opera
-        {% endif %}
+  {# BARRA DO ROBÔ — caixa e controle na MESMA linha (pedido do dono,
+     2026-08-22). São dois `<form>` distintos, para endpoints distintos; o que
+     os junta é só o layout. Os dois ficam FORA do nó com polling: um `<input>`
+     sendo digitado seria apagado pelo refresh de fundo, e o `<select>` de modo
+     de execução teria a escolha resetada no meio (ver
+     `partials/operacao_slot_control.html`).
+
+     O caixa era um bloco de três representações do mesmo número — o valor
+     grande, o mesmo valor dentro de um campo e um botão âmbar do tamanho de
+     uma ação primária. Agora o valor É o campo. #}
+  <div class="ops-bar">
+  <form class="ops-cash" hx-post="/operacao/{{ slot.id }}/caixa"
+        hx-target="#ops-body" hx-swap="outerHTML">
+    {# Rótulo ACIMA do campo, mesmo par `.ops-inline-field` usado em
+       "Robô"/"Execução" ao lado (dono, 2026-08-22) — um só padrão de campo na
+       barra inteira, e não um rótulo ao lado aqui e em cima ali. #}
+    <label class="ops-inline-field">
+      <span class="k">Caixa</span>
+      <span class="ops-cash-field">
+        <span class="prefix">R$</span>
+        {# `type="text"` e NÃO `type="number"` (dono, 2026-08-22): o campo
+           numérico aceitava qualquer coisa digitada e só depois acusava
+           ("os dois valores válidos mais próximos são 0,04 e 0,05"), deixando
+           escrever `0,0444410` para reclamar em seguida. Dinheiro não se
+           digita assim.
+
+           Agora é máscara de moeda: cada dígito entra pela DIREITA e o número
+           se forma sozinho, com o centavo sempre em duas casas — 1 vira 0,01,
+           12 vira 0,12, 12345 vira 123,45. Não existe estado inválido para
+           acusar. O `inputmode` traz o teclado numérico no celular.
+
+           Sem JS o campo aceita "1234,56" ou "1.234,56" digitado à mão: quem
+           valida e converte é o servidor (`app.py::_valor_brl`). #}
+        <input type="text" name="caixa" inputmode="decimal" autocomplete="off"
+               data-ops-money value="{{ bloco.caixa_ledger | num_br }}" required
+               aria-label="Caixa deste robô em reais" />
+        {# Confirmar/cancelar aparecem só com o campo em foco (pedido do dono,
+           2026-08-22): um "Salvar" permanente é um chamariz ao lado de um
+           número que se digita uma vez. Vivem DENTRO da caixa com borda (não
+           ao lado dela) para o campo continuar parecendo um campo do sistema,
+           e não um traço que ganha botões.
+
+           `:focus-within` no CSS, e não JS: o par nasce escondido, aparece ao
+           clicar no campo e continua visível enquanto o foco estiver em
+           qualquer um dos dois botões — inclusive no instante do clique. O ✕
+           é `type="reset"`, que devolve o valor original sem JS nenhum. #}
+        <span class="ops-cash-actions">
+          <button type="submit" title="Confirmar o novo caixa" aria-label="Confirmar">✓</button>
+          <button type="reset" title="Cancelar e voltar ao valor atual" aria-label="Cancelar">✕</button>
+        </span>
       </span>
-    </div>
-    <form class="ops-cash-form" hx-post="/operacao/{{ slot.id }}/caixa"
-          hx-target="#ops-body" hx-swap="outerHTML">
-      {# Ponto decimal aqui NÃO é inconsistência com o `num_br` do texto ao
-         lado: é `<input type="number">`, cujo `value` só é válido em formato
-         canônico (ponto). Com vírgula o navegador descarta o valor e o campo
-         aparece vazio. #}
-      <label><span class="k">Definir caixa (R$)</span>
-        <input type="number" name="caixa" step="0.01" min="0"
-               value="{{ "%.2f"|format(bloco.caixa_ledger) }}" required />
-      </label>
-      <button type="submit">Atualizar caixa</button>
-    </form>
+    </label>
+    {# O "mín. R$ X — não opera" que ficava aqui, ao lado do campo, mudou de
+       lugar (dono, 2026-08-22): agora vive no resumo do cabeçalho, ao lado do
+       próprio caixa que ele qualifica — ver `partials/operacao_resumo.html`. #}
+  </form>
+
+  {# A barra de controle divide a LINHA com o caixa (pedido do dono), mas é um
+     `<form>` separado, para outro endpoint. Fica aqui fora do nó com polling
+     junto com o caixa — ver a docstring do próprio partial. #}
+  {% with slot = slot, s = bloco.status, proc = bloco.proc,
+          config_anterior = bloco.config_anterior, caixa_ok = bloco.caixa_ok,
+          robot_options = bloco.robot_options, creds_status = creds_status,
+          oob = False %}
+    {% include "partials/operacao_slot_control.html" %}
+  {% endwith %}
   </div>
 
   {% with slot = slot, status = bloco.status, proc = bloco.proc,
           config_anterior = bloco.config_anterior, caixa_ok = bloco.caixa_ok,
-          caixa_minima = bloco.caixa_minima,
-          robot_options = bloco.robot_options, creds_status = creds_status, poll_seconds = poll_seconds %}
+          caixa_minima = bloco.caixa_minima, caixa_ledger = bloco.caixa_ledger,
+          robot_options = bloco.robot_options, creds_status = creds_status,
+          poll_seconds = poll_seconds %}
     {% include "partials/operacao_slot_live.html" %}
   {% endwith %}
-</section>
+
+  {% if slot.is_dynamic %}
+  {# Remover fica no PÉ do cartão, não no cabeçalho: o cabeçalho virou o
+     alvo de clique que abre/fecha, e um botão destrutivo dentro dele
+     competiria com esse clique. Ação destrutiva também não ganha o âmbar
+     dos botões de ação — texto apagado, acende só no hover. #}
+  <div class="ops-slot-foot">
+    <form hx-post="/operacao/{{ slot.id }}/remover"
+          hx-target="#ops-body" hx-swap="outerHTML"
+          hx-confirm="Remover o robô {{ slot.label }}? O ativo {{ slot.symbol }} volta a ficar livre.">
+      <button type="submit">Remover robô</button>
+    </form>
+    <span class="sub">
+      Libera {{ slot.symbol }} para outro robô. O servidor recusa se o
+      processo estiver rodando, houver posição aberta ou sobrar caixa.
+    </span>
+  </div>
+  {% endif %}
 {% endmacro %}
+
 
 <div id="ops-body">
 {# Só os nós de `partials/operacao_slot_live.html` (um por slot) têm polling
@@ -98,228 +166,299 @@
 <div class="ops-alert ops-alert-ok stagger">{{ caixa_msg }}</div>
 {% endif %}
 
-{# AVISOS DOS ROBÔS. Vêm antes dos cartões porque são a única coisa da página
-   que pede uma AÇÃO do dono; o resto é estado. Um robô em operação grava aqui
-   quando junta caixa que banque um robô novo em outro ativo — uma vez por
-   ativo, nunca repetindo (a deduplicação é do banco, ver
-   `live_capital_signals`). #}
-{% if avisos %}
-<section class="ops-signals stagger">
-  <header>
-    <h2>Avisos dos robôs</h2>
-    {% if avisos_pendentes %}
-    <span class="ops-signals-count">{{ avisos_pendentes }} pendente{{ "s" if avisos_pendentes > 1 }}</span>
-    {% endif %}
-  </header>
-  <p class="dek">
-    Um robô em operação avisa quando o caixa dele já cobre o mínimo de um
-    ativo que ainda não roda — descontado o que você já aportou nos outros
-    robôs. É só um aviso: quem abre o robô é você, no formulário abaixo.
-  </p>
-  <ul class="ops-signal-list">
-    {% for aviso in avisos %}
-    <li class="ops-signal{% if aviso.acknowledged_at %} is-done{% endif %}">
-      <span class="ops-signal-dot" aria-hidden="true"></span>
-      <div class="ops-signal-text">
-        <p>
-          <strong>{{ aviso.account_name }}</strong> tem caixa para abrir
-          <strong>{{ aviso.robot }}</strong> em <strong>{{ aviso.suggested_symbol }}</strong>.
-        </p>
-        <p class="sub num">
-          Caixa R$ {{ aviso.cash_brl | num_br }} · {{ aviso.suggested_symbol }} exige
-          R$ {{ aviso.required_brl | num_br }} · {{ aviso.ts }}
-          {% if aviso.acknowledged_at %} · feito em {{ aviso.acknowledged_at }}{% endif %}
-        </p>
-      </div>
-      {% if not aviso.acknowledged_at %}
-      <form hx-post="/operacao/avisos/{{ aviso.id }}/feito"
-            hx-target="#ops-body" hx-swap="outerHTML">
-        <button type="submit">Marcar como feito</button>
-      </form>
-      {% endif %}
-    </li>
-    {% endfor %}
-  </ul>
-</section>
-{% endif %}
+{% set daytrade = slots | selectattr("slot.is_intraday") | list %}
+{% set swing = slots | rejectattr("slot.is_intraday") | list %}
 
-{# Ordem dos cartões: day trade primeiro (na ordem em que foram criados),
-   swing por último — a primeira opção operável no capital atual vem em cima,
-   não por ser melhor (decisão do dono, 2026-08-21). #}
-{% for bloco in slots %}
-  {{ slot_card(bloco, creds_status, poll_seconds, loop.index, loop.first) }}
+
+{# ---------- 01 · ACESSO E CREDENCIAIS -------------------------------------
+   Primeiro na página a pedido do dono (2026-08-22). É configuração que se
+   preenche uma vez na vida, então entra FECHADO: ocupa uma linha, e a linha
+   já diz se falta alguma coisa. #}
+{% set creds_faltando = [creds_status.mt5, creds_status.telegram, creds_status.smtp] | reject | list | length %}
+{% call secao("cred", 1,
+              "Acesso e credenciais",
+              ("MT5 pendente — nenhum robô inicia" if not creds_status.mt5
+               else ("tudo configurado" if not creds_faltando
+                     else creds_faltando ~ " opcional(is) sem configurar")),
+              aberta=creds_msg or not creds_status.mt5) %}
+  <p class="dek">
+    Login da corretora e canais de alerta — ficam salvos só neste
+    computador (nunca em texto puro na linha de comando) e são passados aos
+    robôs quando eles sobem como processo. Campos de senha/token nunca
+    reaparecem aqui: deixe em branco para manter o que já está salvo.
+  </p>
+  {% if creds_msg %}<div class="ops-alert ops-alert-ok">{{ creds_msg }}</div>{% endif %}
+  <form class="ops-creds-form" hx-post="/operacao/credenciais" hx-target="#ops-body" hx-swap="outerHTML">
+
+    <fieldset>
+      <legend>
+        Telegram
+        <span class="ops-cred-badge{% if creds_status.telegram %} ok{% endif %}">
+          {{ "configurado" if creds_status.telegram else "não configurado" }}
+        </span>
+      </legend>
+      <div class="row">
+        <label><span class="k">Bot token</span>
+          <input type="password" name="telegram_bot_token" autocomplete="off"
+                 placeholder="{{ '******************************' if creds_status.telegram else '123456:ABC-...' }}" />
+        </label>
+        <label><span class="k">Chat ID</span>
+          <input type="text" name="telegram_chat_id" value="{{ creds.telegram_chat_id or '' }}" placeholder="-100123456789" />
+        </label>
+      </div>
+      <label class="switch small"><input type="checkbox" name="remover_telegram" value="1" />
+        <span class="switch-track"><span class="switch-dot"></span></span>
+        <span class="switch-text">Remover esta credencial</span>
+      </label>
+    </fieldset>
+
+    <fieldset>
+      <legend>
+        E-mail (SMTP)
+        <span class="ops-cred-badge{% if creds_status.smtp %} ok{% endif %}">
+          {{ "configurado" if creds_status.smtp else "não configurado" }}
+        </span>
+      </legend>
+      <div class="row">
+        <label><span class="k">Servidor SMTP</span><input type="text" name="smtp_host" value="{{ creds.smtp_host or '' }}" placeholder="smtp.gmail.com" /></label>
+        <label><span class="k">Porta</span><input type="number" name="smtp_port" value="{{ creds.smtp_port or '' }}" placeholder="587" /></label>
+        <label><span class="k">TLS</span>
+          <select name="smtp_tls">
+            <option value="1"{% if creds.smtp_tls != '0' %} selected{% endif %}>Sim</option>
+            <option value="0"{% if creds.smtp_tls == '0' %} selected{% endif %}>Não</option>
+          </select>
+        </label>
+      </div>
+      <div class="row">
+        <label><span class="k">Usuário</span><input type="text" name="smtp_user" value="{{ creds.smtp_user or '' }}" /></label>
+        <label><span class="k">Senha</span>
+          <input type="password" name="smtp_password" autocomplete="off"
+                 placeholder="{{ '******************************' if creds_status.smtp else '' }}" />
+        </label>
+      </div>
+      <div class="row">
+        <label><span class="k">Destinatário</span><input type="text" name="smtp_to" value="{{ creds.smtp_to or '' }}" /></label>
+        <label><span class="k">Remetente (opcional)</span><input type="text" name="smtp_from" value="{{ creds.smtp_from or '' }}" /></label>
+      </div>
+      <label class="switch small"><input type="checkbox" name="remover_smtp" value="1" />
+        <span class="switch-track"><span class="switch-dot"></span></span>
+        <span class="switch-text">Remover esta credencial</span>
+      </label>
+    </fieldset>
+
+    <fieldset>
+      <legend>
+        MetaTrader 5
+        <span class="ops-cred-badge{% if creds_status.mt5 %} ok{% endif %}">
+          {{ "configurado" if creds_status.mt5 else "não configurado" }}
+        </span>
+      </legend>
+      <p class="dek">
+        Sem login/senha/servidor, o robô só consegue enviar ordens se um
+        humano deixar o terminal MT5 aberto e logado nesta máquina; com eles
+        salvos aqui, o próprio robô faz o login ao conectar. "Ações por
+        lote" não é campo aqui: o sistema descobre isso sozinho,
+        consultando o terminal MT5 a cada clique em "Iniciar operação".
+      </p>
+      <div class="row">
+        <label><span class="k">Login</span><input type="text" name="mt5_login" value="{{ creds.mt5_login or '' }}" /></label>
+        <label><span class="k">Senha</span>
+          <input type="password" name="mt5_password" autocomplete="off"
+                 placeholder="{{ '******************************' if creds_status.mt5 else '' }}" />
+        </label>
+        <label><span class="k">Servidor</span><input type="text" name="mt5_server" value="{{ creds.mt5_server or '' }}" placeholder="Corretora-Live" /></label>
+      </div>
+      <label><span class="k">Caminho do terminal (opcional)</span>
+        <input type="text" name="mt5_terminal_path" value="{{ creds.mt5_terminal_path or '' }}" placeholder="C:\Program Files\...\terminal64.exe" />
+      </label>
+      <label class="switch small"><input type="checkbox" name="remover_mt5" value="1" />
+        <span class="switch-track"><span class="switch-dot"></span></span>
+        <span class="switch-text">Remover esta credencial</span>
+      </label>
+    </fieldset>
+
+    <div class="submit-row"><button type="submit">Salvar credenciais</button></div>
+  </form>
+{% endcall %}
+
+
+{# ---------- 02 · SWING ----------------------------------------------------
+   Slot estático, um só, sempre existe. Não é removível: não foi criado
+   aqui. #}
+{% for bloco in swing %}
+{% call secao("slot:" ~ bloco.slot.id, 2, bloco.slot.label,
+              r.resumo(bloco.slot.id, bloco.caixa_ledger, bloco.proc,
+                      bloco.caixa_minima, bloco.caixa_ok),
+              aberta=bloco.proc is not none) %}
+  {{ slot_body(bloco, creds_status, poll_seconds) }}
+{% endcall %}
 {% endfor %}
 
-{# NOVO ROBÔ DE DAY TRADE. Fica depois dos cartões de propósito: a página é
-   sobre o que está operando; adicionar é uma ação, e ação vem depois do
-   estado. Um <form> por robô, cada um com o select dos ativos DELE — em vez
-   de um select de robô que precisaria de JS para repintar o de ativos. #}
-<section class="ops-new-robot stagger">
-  <header>
-    <h2>Novo robô de day trade</h2>
-    <span class="ops-new-robot-count">{{ novo_robo.livres }} ativo{{ "s" if novo_robo.livres != 1 }} livre{{ "s" if novo_robo.livres != 1 }}</span>
-  </header>
-  <p class="dek">
-    Cada robô roda em processo, conta e caixa próprios — se um travar, os
-    outros continuam. Os ativos aparecem do mais barato ao mais caro pelo
-    caixa mínimo que exigem hoje; o ponto verde marca os que já têm robô.
-  </p>
-  {% for robo in novo_robo.robos %}
-  <form class="ops-new-robot-form" hx-post="/operacao/daytrade/novo"
-        hx-target="#ops-body" hx-swap="outerHTML">
-    <input type="hidden" name="robot" value="{{ robo.key }}" />
-    <div class="ops-inline-field">
-      <span class="k">Robô</span>
-      {# Um <select> de um item só, e não um rótulo: mantém a forma do
-         formulário estável para quando houver um segundo robô de day trade
-         registrado, e deixa explícito que a escolha existe. #}
-      <select name="robot_label" disabled>
-        <option>{{ robo.label }}</option>
-      </select>
-    </div>
-    <div class="ops-inline-field ops-asset-field">
-      <span class="k">Ativo</span>
-      <select name="symbol" required>
-        <option value="" disabled selected>escolha o ativo…</option>
-        {% for ativo in robo.ativos %}
-        <option value="{{ ativo.symbol }}"{% if ativo.em_uso %} disabled{% endif %}>
-          {{ "●" if ativo.rodando else ("○" if ativo.em_uso else "　") }}
-          {{ ativo.symbol }} —
-          {% if ativo.minimo %}mín. R$ {{ ativo.minimo | num_br }}{% else %}sem preço salvo{% endif %}
-          {%- if ativo.em_uso %} (em uso){% endif %}
-        </option>
+
+{# ---------- 03 · DAY TRADE ------------------------------------------------
+   Tudo que é de day trade mora aqui dentro: um cartão por robô, os avisos
+   que eles geram e o formulário de robô novo.
+
+   Fica ABERTA quando há aviso pendente. Aviso é a única coisa da página que
+   pede AÇÃO do dono — escondê-lo atrás de uma seção fechada anularia o
+   mecanismo inteiro. #}
+{% set n_rodando = daytrade | selectattr("proc") | list | length %}
+{% call secao("daytrade", 3, "Day trade",
+              (daytrade | length) ~ " robô" ~ ("s" if daytrade | length != 1 else "")
+              ~ (" · " ~ n_rodando ~ " operando" if n_rodando else "")
+              ~ (" · " ~ avisos_pendentes ~ " aviso" ~ ("s" if avisos_pendentes != 1 else "") ~ " pendente" ~ ("s" if avisos_pendentes != 1 else "") if avisos_pendentes else ""),
+              aberta=True, primary=True) %}
+
+  {# AVISOS DOS ROBÔS. Vêm antes dos cartões porque são a única coisa da
+     seção que pede uma AÇÃO; o resto é estado. Um robô em operação grava
+     aqui quando junta caixa que banque um robô novo em outro ativo — uma vez
+     por ativo, nunca repetindo (a deduplicação é do banco, ver
+     `live_capital_signals`). #}
+  {% if avisos %}
+  <details class="ops-signals" data-ops-key="avisos"{% if avisos_pendentes %} open{% endif %}>
+    <summary class="ops-sub-head">
+      <span class="ops-sub-title">Avisos dos robôs</span>
+      {% if avisos_pendentes %}
+      <span class="ops-signals-count">{{ avisos_pendentes }} pendente{{ "s" if avisos_pendentes > 1 }}</span>
+      {% else %}
+      <span class="ops-sub-meta">{{ avisos | length }} · todos atendidos</span>
+      {% endif %}
+      <span class="ops-sec-caret" aria-hidden="true"></span>
+    </summary>
+    <div class="ops-sub-body">
+      <p class="dek">
+        Um robô em operação avisa quando o caixa dele já cobre o mínimo de um
+        ativo que ainda não roda — descontado o que você já aportou nos outros
+        robôs. É só um aviso: quem abre o robô é você, no formulário abaixo.
+      </p>
+      <ul class="ops-signal-list">
+        {% for aviso in avisos %}
+        <li class="ops-signal{% if aviso.acknowledged_at %} is-done{% endif %}">
+          <span class="ops-signal-dot" aria-hidden="true"></span>
+          <div class="ops-signal-text">
+            <p>
+              <strong>{{ aviso.account_name }}</strong> tem caixa para abrir
+              <strong>{{ aviso.robot }}</strong> em <strong>{{ aviso.suggested_symbol }}</strong>.
+            </p>
+            <p class="sub num">
+              Caixa R$ {{ aviso.cash_brl | num_br }} · {{ aviso.suggested_symbol }} exige
+              R$ {{ aviso.required_brl | num_br }} · {{ aviso.ts }}
+              {% if aviso.acknowledged_at %} · feito em {{ aviso.acknowledged_at }}{% endif %}
+            </p>
+          </div>
+          {% if not aviso.acknowledged_at %}
+          <form hx-post="/operacao/avisos/{{ aviso.id }}/feito"
+                hx-target="#ops-body" hx-swap="outerHTML">
+            <button type="submit">Marcar como feito</button>
+          </form>
+          {% endif %}
+        </li>
         {% endfor %}
-      </select>
+      </ul>
     </div>
-    <button type="submit">Criar robô</button>
-  </form>
-  <ul class="ops-asset-legend">
-    {% for ativo in robo.ativos %}
-    <li class="ops-asset{% if ativo.em_uso %} is-used{% endif %}">
-      <span class="ops-asset-dot{% if ativo.rodando %} is-running{% elif ativo.em_uso %} is-idle{% endif %}"
-            aria-hidden="true"></span>
-      <span class="ops-asset-sym">{{ ativo.symbol }}</span>
-      <span class="ops-asset-min num">
-        {% if ativo.minimo %}R$ {{ ativo.minimo | num_br }}{% else %}—{% endif %}
-      </span>
-      <span class="ops-asset-state">
-        {% if ativo.rodando %}operando
-        {% elif ativo.em_uso %}robô criado, parado
-        {% else %}livre{% endif %}
-      </span>
-    </li>
-    {% endfor %}
-  </ul>
-  {% endfor %}
-</section>
-
-{# CONFIGURAÇÃO DEPOIS DA OPERAÇÃO. Este bloco abria a página até
-   2026-08-21: quem chegava no painel para ver os robôs encontrava primeiro
-   um formulário de senhas que se preenche uma vez na vida. O conteúdo é o
-   mesmo; o que mudou é que ele deixou de ser a primeira coisa da tela. O
-   <details> continua fechado por default e continua FORA do nó com polling
-   (ver a nota no fim deste arquivo). #}
-<section class="ops-credentials stagger">
-  <details{% if creds_msg %} open{% endif %}>
-    <summary>Acesso e credenciais</summary>
-    <p class="dek">
-      Login da corretora e canais de alerta — ficam salvos só neste
-      computador (nunca em texto puro na linha de comando) e são passados aos
-      robôs quando eles sobem como processo. Campos de senha/token nunca
-      reaparecem aqui: deixe em branco para manter o que já está salvo.
-    </p>
-    {% if creds_msg %}<div class="ops-alert ops-alert-ok">{{ creds_msg }}</div>{% endif %}
-    <form class="ops-creds-form" hx-post="/operacao/credenciais" hx-target="#ops-body" hx-swap="outerHTML">
-
-      <fieldset>
-        <legend>
-          Telegram
-          <span class="ops-cred-badge{% if creds_status.telegram %} ok{% endif %}">
-            {{ "configurado" if creds_status.telegram else "não configurado" }}
-          </span>
-        </legend>
-        <div class="row">
-          <label><span class="k">Bot token</span>
-            <input type="password" name="telegram_bot_token" autocomplete="off"
-                   placeholder="{{ '******************************' if creds_status.telegram else '123456:ABC-...' }}" />
-          </label>
-          <label><span class="k">Chat ID</span>
-            <input type="text" name="telegram_chat_id" value="{{ creds.telegram_chat_id or '' }}" placeholder="-100123456789" />
-          </label>
-        </div>
-        <label class="switch small"><input type="checkbox" name="remover_telegram" value="1" />
-          <span class="switch-track"><span class="switch-dot"></span></span>
-          <span class="switch-text">Remover esta credencial</span>
-        </label>
-      </fieldset>
-
-      <fieldset>
-        <legend>
-          E-mail (SMTP)
-          <span class="ops-cred-badge{% if creds_status.smtp %} ok{% endif %}">
-            {{ "configurado" if creds_status.smtp else "não configurado" }}
-          </span>
-        </legend>
-        <div class="row">
-          <label><span class="k">Servidor SMTP</span><input type="text" name="smtp_host" value="{{ creds.smtp_host or '' }}" placeholder="smtp.gmail.com" /></label>
-          <label><span class="k">Porta</span><input type="number" name="smtp_port" value="{{ creds.smtp_port or '' }}" placeholder="587" /></label>
-          <label><span class="k">TLS</span>
-            <select name="smtp_tls">
-              <option value="1"{% if creds.smtp_tls != '0' %} selected{% endif %}>Sim</option>
-              <option value="0"{% if creds.smtp_tls == '0' %} selected{% endif %}>Não</option>
-            </select>
-          </label>
-        </div>
-        <div class="row">
-          <label><span class="k">Usuário</span><input type="text" name="smtp_user" value="{{ creds.smtp_user or '' }}" /></label>
-          <label><span class="k">Senha</span>
-            <input type="password" name="smtp_password" autocomplete="off"
-                   placeholder="{{ '******************************' if creds_status.smtp else '' }}" />
-          </label>
-        </div>
-        <div class="row">
-          <label><span class="k">Destinatário</span><input type="text" name="smtp_to" value="{{ creds.smtp_to or '' }}" /></label>
-          <label><span class="k">Remetente (opcional)</span><input type="text" name="smtp_from" value="{{ creds.smtp_from or '' }}" /></label>
-        </div>
-        <label class="switch small"><input type="checkbox" name="remover_smtp" value="1" />
-          <span class="switch-track"><span class="switch-dot"></span></span>
-          <span class="switch-text">Remover esta credencial</span>
-        </label>
-      </fieldset>
-
-      <fieldset>
-        <legend>
-          MetaTrader 5
-          <span class="ops-cred-badge{% if creds_status.mt5 %} ok{% endif %}">
-            {{ "configurado" if creds_status.mt5 else "não configurado" }}
-          </span>
-        </legend>
-        <p class="dek">
-          Sem login/senha/servidor, o robô só consegue enviar ordens se um
-          humano deixar o terminal MT5 aberto e logado nesta máquina; com eles
-          salvos aqui, o próprio robô faz o login ao conectar. "Ações por
-          lote" não é campo aqui: o sistema descobre isso sozinho,
-          consultando o terminal MT5 a cada clique em "Iniciar operação".
-        </p>
-        <div class="row">
-          <label><span class="k">Login</span><input type="text" name="mt5_login" value="{{ creds.mt5_login or '' }}" /></label>
-          <label><span class="k">Senha</span>
-            <input type="password" name="mt5_password" autocomplete="off"
-                   placeholder="{{ '******************************' if creds_status.mt5 else '' }}" />
-          </label>
-          <label><span class="k">Servidor</span><input type="text" name="mt5_server" value="{{ creds.mt5_server or '' }}" placeholder="Corretora-Live" /></label>
-        </div>
-        <label><span class="k">Caminho do terminal (opcional)</span>
-          <input type="text" name="mt5_terminal_path" value="{{ creds.mt5_terminal_path or '' }}" placeholder="C:\Program Files\...\terminal64.exe" />
-        </label>
-        <label class="switch small"><input type="checkbox" name="remover_mt5" value="1" />
-          <span class="switch-track"><span class="switch-dot"></span></span>
-          <span class="switch-text">Remover esta credencial</span>
-        </label>
-      </fieldset>
-
-      <div class="submit-row"><button type="submit">Salvar credenciais</button></div>
-    </form>
   </details>
-</section>
+  {% endif %}
+
+  {# ABRIR UM ROBÔ NOVO. Vem ANTES dos cartões (pedido do dono, 2026-08-22):
+     é o ponto fixo da seção — fica sempre no mesmo lugar, logo abaixo do
+     cabeçalho, enquanto a lista embaixo cresce. Ficasse depois, ele
+     escorregaria página abaixo a cada robô aberto.
+
+     NÃO recolhe, pelo mesmo pedido: abrir "Day trade" já tem de mostrar os
+     selects e o botão. O recolhível é o robô CRIADO — é ele que gera conteúdo
+     sem teto. Um formulário de três controles não justifica um segundo
+     clique, e sem robô nenhum ele é a única coisa que a seção tem a oferecer.
+
+     A lista de ativos NÃO é impressa na página: ela vive dentro do <select>,
+     e a cor de cada opção diz o estado — verde já tem robô operando, âmbar já
+     tem robô criado mas parado. Ativo com robô vem `disabled`: conta NETTING,
+     dois robôs no mesmo papel fundiriam a posição na corretora e os dois
+     caixas passariam a mentir. #}
+  <div class="ops-new-robot">
+      {% if not novo_robo.robos %}
+      <p class="ops-start-hint">
+        Nenhum robô de day trade disponível para abrir agora — a lista vem do
+        catálogo de robôs, que não pôde ser lido (veja o aviso no topo).
+      </p>
+      {% else %}
+      <form class="ops-new-robot-form" hx-post="/operacao/daytrade/novo"
+            hx-target="#ops-body" hx-swap="outerHTML">
+        <div class="ops-inline-field">
+          <span class="k">Robô</span>
+          {# Um único formulário para todos os robôs (antes era um formulário
+             por robô, cada um com a própria lista impressa). Trocar o robô
+             filtra o select de ativos por `data-robot` — ver
+             `static/js/operacao.js`. Sem JS, o select de ativos mostra tudo e
+             o servidor recusa o par inválido com mensagem. #}
+          <select name="robot" data-ops-robot-select required>
+            {% for robo in novo_robo.robos %}
+            <option value="{{ robo.key }}"{% if loop.first %} selected{% endif %}>{{ robo.label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="ops-inline-field ops-asset-field">
+          {# A contagem de livres fica colada no rótulo do campo que ela
+             descreve, e não numa linha própria: sem a lista impressa, é o
+             único lugar onde "quantos ainda cabem" faz sentido de ler. #}
+          <span class="k">Ativo
+            <em>{{ novo_robo.livres }} livre{{ "s" if novo_robo.livres != 1 }}</em>
+          </span>
+          <select name="symbol" class="ops-asset-select" required>
+            {# SEM `disabled` (dono, 2026-08-22): uma opção desabilitada não
+               pode ser reselecionada depois que o dono escolhe outra — ela
+               vira um valor sem volta. `value=""` continua bastando para o
+               `required` do navegador recusar o envio enquanto esta opção
+               estiver marcada; só deixou de significar "prisão". #}
+            <option value="" selected>escolha o ativo…</option>
+            {% for robo in novo_robo.robos %}
+            {% for ativo in robo.ativos %}
+            <option value="{{ ativo.symbol }}" data-robot="{{ robo.key }}"
+                    {%- if ativo.em_uso %} disabled data-em-uso="1"{% endif %}
+                    class="{% if ativo.rodando %}is-running{% elif ativo.em_uso %}is-idle{% endif %}">
+              {{ "●" if ativo.em_uso else "○" }} {{ ativo.symbol }} —
+              {% if ativo.minimo %}mín. R$ {{ ativo.minimo | num_br }}{% else %}sem preço salvo{% endif %}
+              {%- if ativo.rodando %} · operando{% elif ativo.em_uso %} · robô parado{% endif %}
+            </option>
+            {% endfor %}
+            {% endfor %}
+          </select>
+        </div>
+        <button type="submit">Criar robô</button>
+      </form>
+      {# Legenda, não a lista de ativos: sem ela a cor dentro do select seria
+         um código que ninguém decifra. Texto encurtado (dono, 2026-08-22): a
+         explicação longa ("o ativo segue reservado, o caixa está lá") mora na
+         docstring acima — aqui é só o rótulo do estado. #}
+      <p class="ops-asset-key">
+        <span><span class="ops-asset-dot is-running" aria-hidden="true"></span> operando</span>
+        <span><span class="ops-asset-dot is-idle" aria-hidden="true"></span> parado</span>
+      </p>
+      {% endif %}
+  </div>
+
+  {# Um cartão por robô, ABAIXO do formulário e em ordem de criação — o mais
+     recente por último, para a lista ler como o histórico de decisões do dono
+     (ver `dashboard/slots.py::all_slots`, que ordena por criação e não pelo
+     id). Cada um recolhe sozinho e guarda o próprio estado; o cabeçalho
+     continua dizendo caixa e situação com o cartão fechado. #}
+  {% for bloco in daytrade %}
+  <article class="ops-slot ops-robot">
+    <details data-ops-key="slot:{{ bloco.slot.id }}"{% if bloco.proc %} open{% endif %}>
+      <summary class="ops-slot-head">
+        {# O ATIVO é a identidade de um robô de day trade (um robô por ativo,
+           conta NETTING), então é ele que vem em destaque — e não um ordinal,
+           que seria só a ordem de criação. #}
+        <span class="ops-slot-sym">{{ bloco.slot.symbol }}</span>
+        <span class="ops-slot-name">{{ bloco.slot.robot_key }}</span>
+        {{ r.resumo(bloco.slot.id, bloco.caixa_ledger, bloco.proc,
+                    bloco.caixa_minima, bloco.caixa_ok) }}
+        <span class="ops-sec-caret" aria-hidden="true"></span>
+      </summary>
+      <div class="ops-slot-body">
+        {{ slot_body(bloco, creds_status, poll_seconds) }}
+      </div>
+    </details>
+  </article>
+  {% endfor %}
+{% endcall %}
 </div>

@@ -11,6 +11,8 @@ CONTA numa conta já existente — nunca do form nesse segundo caso.
 """
 from __future__ import annotations
 
+import re
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -374,14 +376,22 @@ def test_painel_mostra_o_form_de_robo_novo_com_ativos_por_capital_minimo(
 
 
 def test_ativo_ja_usado_aparece_marcado_e_desabilitado(isolated_journal, client):
-    """A bolinha verde do pedido: um ativo que já tem robô não pode ser
-    escolhido de novo, e o estado dele fica visível na lista."""
+    """A bolinha do pedido, agora DENTRO do <select> (2026-08-22): a lista de
+    ativos saiu da página — "pra ver a lista é só clicar no select".
+
+    Um ativo que já tem robô não pode ser escolhido de novo (conta NETTING: as
+    duas posições se fundiriam na corretora) e o estado dele viaja na própria
+    opção: classe de cor MAIS texto, porque cor sozinha não pode carregar
+    informação."""
     _create_daytrade_account(isolated_journal)
 
     html = client.get("/operacao").text
 
-    assert f'value="{SYMBOL}" disabled' in html
-    assert "robô criado, parado" in html
+    assert re.search(rf'value="{SYMBOL}"[^>]*\bdisabled\b', html)
+    assert 'class="is-idle"' in html          # âmbar: tem robô, está parado
+    assert "robô parado" in html
+    # a lista impressa de todos os ativos deixou de existir
+    assert "ops-asset-legend" not in html
 
 
 def test_fragmento_daytrade_com_conta_mostra_badge_de_ativo(

@@ -1475,13 +1475,17 @@ class LiveRuntime:
             passos.append(StepReport("idle", clock.session_date(now), phase=fase))
         return passos
 
-    def status(self) -> dict:
+    def status(self, eventos_limit: int = 10) -> dict:
         """Retrato da conta para o dashboard e para a linha de comando.
 
         Checa a EXISTENCIA da conta antes de carregar qualquer dado: sem
         conta nao ha nada util a mostrar, e carregar o universo inteiro
         (`_load`) so para descobrir isso e caro — pago por engano em todo
         poll de uma pagina que ainda mostraria "nao configurado".
+
+        `eventos_limit` e' o "ver mais" do painel. Busca UM a mais do que vai
+        exibir: e' assim que a tela sabe se ainda ha historico atras sem
+        precisar de um `COUNT(*)` numa tabela que so cresce.
         """
         session = clock.session_date()
         with store.live_journal(self.db_path) as conn:
@@ -1508,7 +1512,7 @@ class LiveRuntime:
             pend = [i for i in store.pending_intents(conn, account.id, clock.next_session(session))
                     if i.kind != IntentKind.WITHDRAW]
             pend_saque = store.pending_withdraw_intents(conn, account.id)
-            eventos = store.recent_events(conn, account.id, limit=10)
+            eventos = store.recent_events(conn, account.id, limit=eventos_limit + 1)
 
             # Todos os pregoes sem decisao (achado E4) — nao so `session`: um
             # pregao pulado (skip por dado incompleto, processo fora do ar)
@@ -1558,5 +1562,6 @@ class LiveRuntime:
                  "motivo": i.reason, "valor": i.amount, "executa_em": i.execute_on.isoformat()}
                 for i in (pend + pend_saque)
             ],
-            "eventos": eventos,
+            "eventos": eventos[:eventos_limit],
+            "eventos_ha_mais": len(eventos) > eventos_limit,
         }

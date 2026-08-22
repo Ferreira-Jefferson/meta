@@ -5,6 +5,7 @@ import csv
 import io
 import json
 import queue
+import re
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -125,16 +126,22 @@ TEMPLATES.env.filters["num_br"] = num_br
 TEMPLATES.env.filters["inline_code"] = lambda t: Markup(strategy_registry.inline_html(t or ""))
 
 
-def _static_v(css_filename: str) -> int:
-    """Mtime do arquivo CSS, usado como query-string cache-buster nos <link>.
+def _static_v(filename: str) -> int:
+    """Mtime do arquivo estático, usado como query-string cache-buster.
 
     Sem isso, o navegador pode servir uma versão antiga de pages.css do cache
     depois de uma edição — o HTML (nunca cacheado) mostra a estrutura nova mas
     o estilo fica o velho, um bug confuso de diagnosticar. Muda sozinho a cada
     edição do arquivo, sem precisar lembrar de bump manual.
+
+    A pasta sai da EXTENSÃO (`.js` → `static/js/`, resto → `static/css/`) para
+    os chamadores continuarem passando só o nome. Antes só resolvia CSS, e um
+    `.js` caía no `except` devolvendo 0 — cache-buster constante, ou seja,
+    nenhum: exatamente o bug que esta função existe para evitar.
     """
+    sub = "js" if filename.endswith(".js") else "css"
     try:
-        return int((BASE_DIR / "static" / "css" / css_filename).stat().st_mtime)
+        return int((BASE_DIR / "static" / sub / filename).stat().st_mtime)
     except FileNotFoundError:
         return 0
 
@@ -460,7 +467,17 @@ def _operacao_poll_seconds() -> int:
     return min(int(clock.seconds_until_active_window()) + 1, OPERACAO_POLL_IDLE_CAP_SECONDS)
 
 
-def _slot_ctx(slot) -> dict:
+#: Quantas linhas de posição/evento um cartão mostra antes do "ver mais".
+#: Mesmo número da lista de simulações da home, de propósito — é o mesmo
+#: gesto na mesma aplicação.
+OPS_PAGINA = 10
+#: Teto do "ver mais". A URL do fragmento é pública e digitável; sem teto,
+#: `?eventos=99999999` mandaria o SQLite montar em memória uma lista que o
+#: cartão nunca exibiria — e o polling repetiria isso a cada 20 segundos.
+OPS_PAGINA_MAX = 500
+
+
+def _slot_ctx(slot, eventos_limit: int = OPS_PAGINA, posicoes_limit: int = OPS_PAGINA) -> dict:
     """Tudo o que UM cartão de slot precisa: status da conta, processo,
     caixa do ledger manual e se o botão "Iniciar" pode estar habilitado.
 
@@ -484,7 +501,7 @@ def _slot_ctx(slot) -> dict:
 
     erro = None
     try:
-        status_payload = live_service.get_status(slot.id)
+        status_payload = live_service.get_status(slot.id, eventos_limit=eventos_limit)
     except (live_store.LegacyPaperAccountError, live_store.LegacyManualAccountError) as e:
         status_payload = {"conta": slot.id, "existe": False, "kind": slot.kind}
         erro = str(e)
@@ -499,10 +516,20 @@ def _slot_ctx(slot) -> dict:
     # robô, não um número cego ao símbolo (ver docstring de `min_cash_for`).
     robo_previsto = status_payload.get("robo_investimento") or None
     piso = live_control.min_cash_for(slot, robo_previsto)
+    # Posições cortadas AQUI (e não no SQL como os eventos): elas vêm da conta
+    # já carregada em memória e são poucas por construção — o teto de posições
+    # do robô. O corte existe para o cartão ter um comportamento só, não
+    # porque a lista fosse grande.
+    posicoes = status_payload.get("posicoes") or []
+    status_payload["posicoes_total"] = len(posicoes)
+    status_payload["posicoes_ha_mais"] = len(posicoes) > posicoes_limit
+    status_payload["posicoes"] = posicoes[:posicoes_limit]
     return {
         "slot": slot,
         "status": status_payload,
         "proc": proc,
+        "eventos_limit": eventos_limit,
+        "posicoes_limit": posicoes_limit,
         "config_anterior": live_control.last_config(slot.id),
         "caixa_ledger": caixa,
         "caixa_minima": piso,
@@ -624,6 +651,40 @@ def _operacao_ctx(**extra) -> dict:
     }
 
 
+def _valor_brl(texto) -> float | None:
+    """Lê um valor em reais no formato brasileiro. `None` se não for número.
+
+    O campo de caixa é `type="text"` com máscara de moeda (o `type="number"`
+    deixava digitar `0,0444410` para só então acusar — ver o template), então
+    o que chega aqui é "1.234,56". O `float(x.replace(",", "."))` de antes
+    quebrava justamente nesse formato: virava "1.234.56".
+
+    Regras, nesta ordem:
+      * tem vírgula  -> ela é o decimal, e os pontos são milhar ("1.234,56");
+      * só pontos, em grupos de 3 -> são milhar ("1.234" = mil duzentos e
+        trinta e quatro), o caso de quem digita sem JS e sem centavos;
+      * qualquer outro ponto -> é decimal ("1234.56", o formato canônico).
+
+    O SINAL é lido antes da limpeza e reaplicado no fim. Não é detalhe: um
+    "-5" que voltasse como `5.0` passaria pela guarda `valor < 0` do chamador
+    e GRAVARIA cinco reais no caixa em vez de recusar a entrada.
+    """
+    bruto = str(texto).strip()
+    negativo = bruto.startswith("-")
+    limpo = re.sub(r"[^\d,.]", "", bruto)
+    if not limpo:
+        return None
+    if "," in limpo:
+        limpo = limpo.replace(".", "").replace(",", ".")
+    elif re.fullmatch(r"\d{1,3}(\.\d{3})+", limpo):
+        limpo = limpo.replace(".", "")
+    try:
+        valor = float(limpo)
+    except ValueError:
+        return None
+    return -valor if negativo else valor
+
+
 def _slot_or_404(slot_id: str):
     from core.config import slot_by_id
 
@@ -684,7 +745,9 @@ def operacao(request: Request):
 
 
 @app.get("/operacao/{slot_id}/fragment", response_class=HTMLResponse)
-def operacao_fragment(request: Request, slot_id: str):
+def operacao_fragment(request: Request, slot_id: str,
+                      eventos: int = OPS_PAGINA, posicoes: int = OPS_PAGINA,
+                      rodando: int | None = None):
     """Fragmento que o polling HTMX troca (ver `hx-trigger` em
     `operacao_slot_live.html`) -- só o painel operacional DESTE slot (status,
     capital, posições, eventos), NUNCA credenciais e nunca o form de caixa.
@@ -698,11 +761,23 @@ def operacao_fragment(request: Request, slot_id: str):
     não dado que o robô gera.
 
     Um poll por slot (não um poll global): cada cartão troca só o seu nó,
-    então o refresh de um robô não recria o DOM do outro."""
+    então o refresh de um robô não recria o DOM do outro.
+
+    `eventos`/`posicoes` são o "ver mais" das duas listas. Eles vêm na URL, e
+    não num estado guardado no servidor, por causa do polling: o botão "ver
+    mais" aponta para ESTA rota com o limite maior e troca o mesmo nó, e o nó
+    novo já nasce com o `hx-get` do poll carregando o limite novo. Sem isso, o
+    "ver mais" duraria até o refresh seguinte apagá-lo — que é o que
+    aconteceria copiando o `hx-swap="beforeend"` da lista de simulações da
+    home, que não tem polling nenhum."""
     if _slot_sumiu(slot_id):
         return _recarrega_a_pagina()
     slot = _slot_or_404(slot_id)
-    bloco = _slot_ctx(slot)
+    # Teto: a URL é digitável, e `?eventos=999999999` faria o SQLite montar em
+    # memória uma lista que o cartão nunca vai mostrar.
+    bloco = _slot_ctx(slot,
+                      eventos_limit=max(OPS_PAGINA, min(int(eventos), OPS_PAGINA_MAX)),
+                      posicoes_limit=max(OPS_PAGINA, min(int(posicoes), OPS_PAGINA_MAX)))
     ctx = {
         **bloco,
         "poll_seconds": _operacao_poll_seconds(),
@@ -710,6 +785,22 @@ def operacao_fragment(request: Request, slot_id: str):
         # habilitado — sem credencial MT5 salva não há como operar.
         "creds_status": live_control.credential_status(),
         "robot_options": _robot_options(slot, bloco),
+        # Liga o swap fora-de-banda do resumo do cabeçalho: ele mora no
+        # `<summary>`, FORA deste nó, e sem isso um cartão recolhido ficaria
+        # dizendo "operando" depois de o robô parar. Falso no render inicial,
+        # onde o resumo já é desenhado no lugar certo (duplicaria o id).
+        "fragmento": True,
+        # A barra de controle também vive fora deste nó, mas ao contrário do
+        # resumo NÃO pode ser reemitida a cada poll: ela tem o `<select>` de
+        # modo de execução, e trocá-la resetaria a escolha do dono no meio —
+        # nas duas direções ("Real" virando "Sombra" e o inverso), as duas
+        # perigosas. Então só sai quando o estado do processo mudou de fato
+        # em relação ao que o navegador tem na tela, que é o que `rodando`
+        # (posto pelo próprio nó anterior na URL do poll) informa.
+        #
+        # `None` = primeira carga do fragmento sem o parâmetro: nada a
+        # corrigir, o navegador acabou de receber a barra pelo render inicial.
+        "controle_mudou": rodando is not None and bool(rodando) != bool(bloco["proc"]),
     }
     return TEMPLATES.TemplateResponse(request, "partials/operacao_slot_live.html", ctx)
 
@@ -1039,10 +1130,7 @@ async def operacao_caixa(request: Request, slot_id: str):
 
     erro = None
     caixa_msg = None
-    try:
-        valor = float(str(form.get("caixa", "")).replace(",", "."))
-    except ValueError:
-        valor = None
+    valor = _valor_brl(form.get("caixa", ""))
     if valor is None or valor < 0:
         erro = "Informe o caixa destinado a este robô (maior ou igual a zero)."
     else:

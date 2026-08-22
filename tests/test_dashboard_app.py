@@ -43,10 +43,22 @@ from live import runtime as live_runtime
 def isolated_journal(tmp_path, monkeypatch):
     """Redireciona TODO acesso a `journal.live_store.live_journal()` (sem
     argumento) e a construcao de `LiveRuntime` (via `live_service`) para um
-    banco isolado em `tmp_path` — nunca o `db/journal.sqlite` real."""
+    banco isolado em `tmp_path` — nunca o `db/journal.sqlite` real.
+
+    `live.intraday_runtime.LIVE_DB_PATH` precisa de patch PROPRIO: e' um
+    `from core.config import LIVE_DB_PATH` (bind estatico no modulo) que o
+    `IntradayLiveRuntime` ainda guarda no `__init__` e passa explicito, entao
+    nem o default de `live_journal()` nem `live_runtime.DB_PATH` o alcancam.
+    Sem isto, qualquer rota que monte o painel de um slot de day trade
+    (`/operacao`, `/operacao/dt-.../fragment`) grava uma conta fantasma no
+    `db/live.sqlite` REAL -- ja aconteceu. O `conftest.py` tem uma trava
+    autouse que falha o teste que sujar, caso este patch se perca de novo."""
+    from live import intraday_runtime
+
     db_path = tmp_path / "live_journal.sqlite"
     monkeypatch.setattr(live_store.live_journal.__wrapped__, "__defaults__", (db_path,))
     monkeypatch.setattr(live_runtime, "DB_PATH", db_path)
+    monkeypatch.setattr(intraday_runtime, "LIVE_DB_PATH", db_path)
     return db_path
 
 
@@ -82,8 +94,11 @@ def _create_mt5_account(
             initial_capital=capital, investment_robot=robo,
             withdrawal_robot="official_policy",
             # O ativo E' parte da identidade da conta de day trade: sem ele a
-            # conta nao vira slot e o cartao nao aparece no painel.
-            symbol=DAYTRADE_SYMBOL if eh_daytrade else "",
+            # conta nao vira slot e o cartao nao aparece no painel. Sai do
+            # PROPRIO id (`dt-<robo>-<ativo>`) e nao de uma constante, senao
+            # dois slots diferentes nasceriam com o mesmo papel -- exatamente o
+            # que o painel proibe (conta NETTING).
+            symbol=slot.rsplit("-", 1)[-1].upper() if eh_daytrade else "",
         )
         return acc.id
 
@@ -567,19 +582,25 @@ def test_operacao_caixa_valor_negativo_bloqueia(isolated_journal, client):
 
 # ---------- ordem e independencia dos cartoes (pedido do dono, 2026-08-21) --
 
-def test_operacao_mostra_os_cartoes_com_day_trade_em_cima(isolated_journal, client):
-    """Pedido explicito do dono: as duas estrategias como opcoes de topo, day
-    trade EM CIMA -- "nao por ser melhor, mas por ser a primeira opcao, ainda
-    nao temos capital para operar com a liqflop". Desde 2026-08-22 o cartao de
-    day trade so existe depois de o dono criar o robo."""
+def test_operacao_mostra_os_cartoes_na_ordem_pedida(isolated_journal, client):
+    """Ordem da tela, definida pelo dono em 2026-08-22: 01 acesso e
+    credenciais, 02 swing, 03 day trade -- e TUDO que e' de day trade (os
+    robos, os avisos deles, o form de robo novo) mora dentro da secao 03.
+
+    Substituiu a ordem de 2026-08-21 ("day trade em cima, credenciais por
+    ultimo"): com N robos de day trade a secao virou a maior da pagina, e o
+    dono preferiu ve-la por ultimo, ja recolhida por secao."""
     _create_mt5_account(isolated_journal, capital=100.0, slot=DAYTRADE)
 
     html = client.get("/operacao").text
 
-    # Compara os NOS dos cartoes, nao a palavra "Swing" solta: ela tambem
+    # Compara as CHAVES das secoes, nao as palavras soltas: "Swing" tambem
     # aparece no menu de navegacao, muito antes de qualquer cartao.
-    assert (html.index(f'id="ops-slot-live-{DAYTRADE}"')
-            < html.index(f'id="ops-slot-live-{SWING}"'))
+    ordem = [html.index(f'data-ops-key="{k}"')
+             for k in ("cred", f"slot:{SWING}", "daytrade")]
+    assert ordem == sorted(ordem)
+    # o cartao do robo fica DENTRO da secao de day trade
+    assert html.index('data-ops-key="daytrade"') < html.index(f'data-ops-key="slot:{DAYTRADE}"')
     # cada cartao tem o SEU form de caixa e o SEU botao de iniciar
     for slot in (DAYTRADE, SWING):
         assert f"/operacao/{slot}/caixa" in html
@@ -587,14 +608,193 @@ def test_operacao_mostra_os_cartoes_com_day_trade_em_cima(isolated_journal, clie
         assert f"/operacao/{slot}/fragment" in html
 
 
+@pytest.mark.parametrize("digitado, esperado", [
+    ("1.234,56", 1234.56),   # o que a mascara de moeda produz
+    ("0,07", 0.07),
+    ("1234,56", 1234.56),    # sem separador de milhar
+    ("1.234", 1234.0),       # pontos em grupos de 3 = milhar, nao decimal
+    ("1234.56", 1234.56),    # formato canonico (sem JS, ou POST programatico)
+    ("1234", 1234.0),
+    ("R$ 1.234,56", 1234.56),
+    ("-5", -5.0),            # ver o assert abaixo: o sinal TEM de sobreviver
+    ("", None),
+    ("abc", None),
+])
+def test_valor_brl_le_o_formato_da_mascara_de_moeda(digitado, esperado):
+    """O campo de caixa virou `type="text"` com mascara (o `type="number"`
+    deixava digitar `0,0444410` para so entao acusar), entao o servidor passou
+    a receber "1.234,56". O `float(x.replace(",", "."))` de antes quebrava
+    exatamente nesse formato -- virava "1.234.56".
+
+    O caso "-5" e' o que quase passou: a primeira versao limpava tudo que nao
+    fosse digito/virgula/ponto e comia o sinal, entao "-5" voltava `5.0`,
+    escapava da guarda `valor < 0` do handler e GRAVAVA cinco reais no caixa
+    em vez de recusar."""
+    assert dashboard_app._valor_brl(digitado) == esperado
+
+
+def test_robos_ficam_abaixo_do_form_e_em_ordem_de_criacao(isolated_journal, client):
+    """Pedido do dono (2026-08-22): o formulario e' ponto fixo no topo da secao
+    e os robos crescem ABAIXO dele, do mais antigo para o mais recente.
+
+    REGRESSAO: `all_slots` desempatava por `s.id`, e como TODO slot de day
+    trade tem `order == 0` o desempate valia sempre -- a lista saia em ordem
+    alfabetica do id. Criar KLBN4 depois de PMAM3 punha o novo ACIMA do antigo.
+    Este teste so distingue as duas ordens porque cria na ordem CONTRARIA a
+    alfabetica."""
+    _create_mt5_account(isolated_journal, capital=10.0, slot="dt-gremah-pmam3")
+    _create_mt5_account(isolated_journal, capital=10.0, slot="dt-gremah-klbn4")
+
+    html = client.get("/operacao").text
+
+    i_form = html.index('class="ops-new-robot-form"')
+    i_pmam = html.index('data-ops-key="slot:dt-gremah-pmam3"')
+    i_klbn = html.index('data-ops-key="slot:dt-gremah-klbn4"')
+    assert i_form < i_pmam, "o form tem de ficar ACIMA dos cartoes"
+    assert i_pmam < i_klbn, "ordem de criacao, mais recente por ultimo"
+
+
+def test_cartao_de_day_trade_nao_repete_a_descricao_do_robo(isolated_journal, client):
+    """O cartao ficou com texto demais (dono, 2026-08-22): o cabecalho ja diz
+    ATIVO + robo, e as regras completas ficam a um clique na ficha. O swing
+    MANTEM o dek -- o rotulo da secao dele e' so "Swing", sem esse par."""
+    _create_mt5_account(isolated_journal, capital=10.0, slot=DAYTRADE)
+
+    html = client.get("/operacao").text
+
+    assert "sem posição overnight" not in html          # dek do day trade
+    assert "rotação mensal por liquidez" in html        # dek do swing, fica
+
+
+def test_etiqueta_de_execucao_diz_o_modo_REAL_do_processo(isolated_journal, client):
+    """A faixa "Modo sombra" saiu, mas o FATO nao podia sair junto: sem ele um
+    robo mandando ordem de verdade fica indistinguivel de um que nao manda
+    nada.
+
+    REGRESSAO que a faixa carregava: ela era condicionada a `slot.is_intraday`
+    e escrevia "nenhuma ordem e' enviada a corretora" mesmo com o robo
+    iniciado em Real. A etiqueta le `s.daytrade.execution_mode`, que vem do
+    processo."""
+    _create_mt5_account(isolated_journal, capital=10.0, slot=DAYTRADE)
+
+    html = client.get(f"/operacao/{DAYTRADE}/fragment").text
+    assert "Nenhuma ordem é enviada à corretora" not in html   # a prosa saiu
+    assert "Execução" in html and "sombra" in html
+
+    import dashboard.live_service as svc
+    real = svc.get_status
+
+    def _live(slot_id, **kw):
+        st = real(slot_id, **kw)
+        if st.get("daytrade"):
+            st["daytrade"]["execution_mode"] = "live"
+        return st
+
+    svc.get_status = _live
+    try:
+        html = client.get(f"/operacao/{DAYTRADE}/fragment").text
+    finally:
+        svc.get_status = real
+    assert "real — envia ordem" in html
+    assert "ops-badge err" in html          # vermelho: dinheiro de verdade
+
+
+def test_caixa_e_controle_na_mesma_linha_fora_do_polling(isolated_journal, client):
+    """Pedido do dono (2026-08-22): caixa, mínimo e iniciar numa linha só, e o
+    "Salvar" permanente trocado por ✓/✕ que aparecem ao focar o campo.
+
+    Os dois `<form>` ficam FORA do nó com polling. Para o caixa isso já valia
+    (um `<input>` em digitação seria apagado); para o controle passou a valer
+    agora, e por um motivo mais grave — ver o teste seguinte."""
+    _create_mt5_account(isolated_journal, capital=100.0, slot=DAYTRADE)
+
+    html = client.get("/operacao").text
+    i_bar = html.index('class="ops-bar"')
+    i_no_polled = html.index(f'id="ops-slot-live-{DAYTRADE}"')
+
+    assert i_bar < i_no_polled, "a barra tem de ficar fora (antes) do nó com polling"
+    assert 'class="ops-cash-actions"' in html
+    assert 'type="reset"' in html          # cancelar funciona sem JS
+    assert ">Salvar<" not in html          # o botão permanente saiu
+    # e o nó com polling não traz mais uma segunda cópia do controle
+    assert html.count(f'id="ops-ctl-{DAYTRADE}"') == 1
+
+
+def test_controle_so_e_reemitido_quando_o_processo_muda_de_estado(
+    isolated_journal, client, monkeypatch,
+):
+    """A barra de controle tem o `<select name="execution_mode">` dentro.
+
+    Reemiti-la a cada poll (como o resumo do cabeçalho) resetaria a escolha do
+    dono no meio dela, e nas DUAS direções isso é perigoso: escolher "Real" e
+    o refresh voltar para "Sombra" (o clique inicia em sombra achando que é
+    real), ou o inverso — que manda ordem de verdade à corretora.
+
+    Então o fragmento só reemite quando o estado do processo diverge do que o
+    navegador tem na tela, informado pelo `?rodando=` que o próprio nó põe na
+    URL do poll."""
+    _create_mt5_account(isolated_journal, capital=100.0, slot=DAYTRADE)
+    monkeypatch.setattr(live_control, "status", lambda sid: None)     # parado
+
+    # estado bate (parado, e a tela também acha que está parado): não mexe
+    html = client.get(f"/operacao/{DAYTRADE}/fragment?rodando=0").text
+    assert 'id="ops-ctl-' not in html
+    assert "execution_mode" not in html
+
+    # o robô subiu por fora (CLI, ou o processo caiu e voltou): corrige
+    monkeypatch.setattr(live_control, "status",
+                        lambda sid: {"pid": 1, "started_at": "2026-08-22T10:00:00"})
+    html = client.get(f"/operacao/{DAYTRADE}/fragment?rodando=0").text
+    assert f'id="ops-ctl-{DAYTRADE}"' in html
+    assert 'hx-swap-oob="true"' in html
+    assert "Parar operação" in html
+    # e o nó novo passa a declarar o estado certo na URL do próprio poll
+    assert "rodando=1" in html
+
+
+def test_cabecalho_recolhido_diz_caixa_e_estado_e_o_polling_atualiza(
+    isolated_journal, client,
+):
+    """Um cartao fechado nao pode mentir sobre dinheiro.
+
+    O `<summary>` carrega caixa e "operando/parado", e fica FORA do no com
+    `hx-trigger` (que e' o corpo do cartao) -- entao o refresh de fundo jamais
+    o alcancaria. O fragmento resolve mandando o resumo como swap
+    fora-de-banda; sem isso um cartao recolhido seguiria escrito "operando"
+    depois de o robo parar."""
+    _create_mt5_account(isolated_journal, capital=250.0, slot=DAYTRADE)
+
+    html = client.get("/operacao").text
+    assert f'id="ops-sum-{DAYTRADE}"' in html
+    assert "250,00" in html
+
+    frag = client.get(f"/operacao/{DAYTRADE}/fragment").text
+    assert f'id="ops-sum-{DAYTRADE}"' in frag
+    assert 'hx-swap-oob="true"' in frag
+    # O htmx so extrai o fora-de-banda da RAIZ da resposta: se ele vier
+    # aninhado dentro do no principal, o swap silenciosamente nao acontece.
+    assert frag.index("hx-swap-oob") < frag.index('id="ops-slot-live-')
+
+
 def test_operacao_sem_nenhum_robo_de_day_trade_mostra_so_o_swing_e_o_form(
     isolated_journal, client,
 ):
     """Estado inicial de quem nunca criou nada: nenhum cartao de day trade, e
-    o formulario para criar o primeiro."""
+    o formulario para criar o primeiro JA' VISIVEL.
+
+    O formulario nao recolhe (pedido do dono, 2026-08-22): abrir a secao "Day
+    trade" ja tem de mostrar os selects, o botao e quantos ativos sobram. Sem
+    robo nenhum ele e' a unica coisa que a secao tem para oferecer -- esconde-lo
+    atras de um segundo clique deixaria a secao aparentemente vazia."""
     html = client.get("/operacao").text
 
-    assert "Novo rob" in html            # o form existe
+    assert '<form class="ops-new-robot-form"' in html
+    assert "data-ops-robot-select" in html          # select de robô
+    assert 'name="symbol"' in html                  # select de ativo
+    assert "Criar robô" in html                     # botão
+    assert "livre" in html                          # contagem de ativos livres
+    # o form NAO fica dentro de um <details> proprio
+    assert 'data-ops-key="novo"' not in html
     assert "/operacao/swing/caixa" in html
     assert "/operacao/dt-" not in html   # nenhum cartao de day trade ainda
 
@@ -864,17 +1064,26 @@ def test_operacao_nunca_resolve_o_robo_de_day_trade_pelo_registry_de_swing(
     assert "gremah" not in chamado
 
 
-def test_operacao_poe_os_robos_antes_das_credenciais(isolated_journal, client):
-    """Hierarquia da tela (2026-08-21): o painel e' para ver os ROBOS. O bloco
-    "Acesso e credenciais" -- um form de senha que se preenche uma vez na vida
-    -- abria a pagina, entao quem chegava para olhar a operacao encontrava
-    configuracao primeiro. Configuracao vem DEPOIS do que ela configura."""
-    _create_mt5_account(isolated_journal, capital=100.0, slot=DAYTRADE)
+def test_secoes_recolhem_e_credenciais_abre_sozinha_quando_falta_o_mt5(
+    isolated_journal, client, monkeypatch,
+):
+    """Recolher tudo so' e' aceitavel se o que BLOQUEIA a operacao ainda se
+    impuser. Sem credencial do MT5 nenhum robo inicia, entao a secao 01 abre
+    sozinha e o cabecalho diz o motivo -- em vez de esconder o impedimento
+    atras de um `+` que o dono nao tem razao para clicar."""
+    monkeypatch.setattr(live_control, "credential_status",
+                        lambda: {"telegram": False, "smtp": False, "mt5": False})
 
     html = client.get("/operacao").text
 
-    assert html.index(f'id="ops-slot-live-{DAYTRADE}"') < html.index("Acesso e credenciais")
-    assert html.index("Swing") < html.index("Acesso e credenciais")
+    assert '<details data-ops-key="cred" open>' in html
+    assert "MT5 pendente" in html
+
+    monkeypatch.setattr(live_control, "credential_status",
+                        lambda: {"telegram": True, "smtp": True, "mt5": True})
+    html = client.get("/operacao").text
+    assert '<details data-ops-key="cred" open>' not in html
+    assert 'data-ops-key="cred"' in html
 
 
 def test_painel_ao_vivo_linka_a_ficha_do_robo_da_conta(isolated_journal, client):
@@ -967,10 +1176,14 @@ def test_botao_iniciar_desabilitado_sem_caixa_no_ledger(isolated_journal, client
     # ao vivo e' sempre um ledger zerado.
     _create_mt5_account(isolated_journal, capital=0.0, slot=DAYTRADE)
 
-    html = client.get(f"/operacao/{DAYTRADE}/fragment").text
+    # A PAGINA, e nao o fragmento: desde 2026-08-22 a barra de controle divide
+    # a linha com o campo de caixa e por isso vive FORA do no com polling (o
+    # `<select>` de modo de execucao teria a escolha resetada a cada refresh).
+    html = client.get("/operacao").text
 
     assert "disabled" in html
-    assert "777" in html
+    assert "777" in html               # o piso aparece ao lado do proprio caixa
+    assert "ops-sum-hint is-blocked" in html   # cor vermelha marca o bloqueio
 
 
 def test_tabela_de_ativos_vem_ordenada_pelo_caixa_minimo(client):

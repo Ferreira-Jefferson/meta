@@ -3,88 +3,36 @@
    fundo de um robô não recria o DOM do outro, e nem o form de caixa nem as
    credenciais (que ficam fora daqui) são apagados no meio da digitação.
    Ver `app.py::operacao_fragment`. #}
-<div id="ops-slot-live-{{ slot.id }}" hx-get="/operacao/{{ slot.id }}/fragment"
-     hx-trigger="every {{ poll_seconds }}s" hx-swap="outerHTML">
-
-<section class="ops-control stagger">
-  {% if proc %}
-    <span class="ops-status running"><span class="dot"></span> Robô ativo desde {{ proc.started_at[:16].replace("T", " ") }}</span>
-    <form hx-post="/operacao/{{ slot.id }}/parar" hx-target="#ops-body" hx-swap="outerHTML">
-      <button type="submit" class="btn-stop">■ Parar operação</button>
-    </form>
-  {% else %}
-    <span class="ops-status stopped">
-      <span class="dot"></span> Robô parado
-      {% if s.existe and s.modo == "mt5" %}<span class="dim">— ⚠ modo dinheiro real (MetaTrader 5)</span>{% endif %}
-    </span>
-    <form hx-post="/operacao/{{ slot.id }}/iniciar" hx-target="#ops-body" hx-swap="outerHTML"
-          hx-disabled-elt="find button[type=submit]">
-      {# Capital vem do ledger manual (form de caixa acima), robô vem do
-         select abaixo (conta nova) ou da própria conta (conta existente).
-         Piso do saque, disjuntor e ações por lote não são campo nenhum aqui
-         — o robô já decide sozinho (official_policy/CircuitBreaker
-         defaults) e ações por lote é detectado no terminal MT5 a cada
-         clique. #}
-      {% if config_anterior %}
-      <input type="hidden" name="notify_min_level" value="{{ config_anterior.notify_min_level or 'warn' }}" />
-      {% endif %}
-      {% if not s.existe and robot_options %}
-      <label class="ops-inline-field">
-        <span class="k">Robô</span>
-        {# Day trade: todo robô registrado em `strategy.daytrade.registry`
-           (rótulo mostra o SÍMBOLO que ele opera — propriedade do robô, não
-           do slot). Swing: TOP-3 do ranking automático, janela FULL (rótulo
-           mostra o capital final). Só vale pra CONTA NOVA: uma conta já
-           existente sempre reusa o `investment_robot` gravado na criação
-           (decisão do dono, 2026-08-19). Ver `app.py::_robot_options`. #}
-        <select name="robo" required>
-          {% for opt in robot_options %}
-          <option value="{{ opt.value }}"{% if opt.value == slot.robot_key %} selected{% endif %}>
-            {{ opt.label }}
-          </option>
-          {% endfor %}
-        </select>
-      </label>
-      {% endif %}
-      {% if slot.is_intraday %}
-      <label class="ops-inline-field">
-        <span class="k">Modo de execução</span>
-        {# Escolha explícita do dono (pedido 2026-08-22): antes era sempre
-           "shadow", sem opção nenhuma na tela. Não é campo da CONTA (como
-           o robô) -- é config do PROCESSO, então fica disponível em toda
-           partida, inclusive retomando uma conta já existente. "live" manda
-           ordem de verdade -- ver o aviso abaixo e a docstring de
-           `live/intraday_runtime.py` sobre o que ainda não foi medido
-           contra o mercado real antes de escolher isto. #}
-        <select name="execution_mode" required>
-          <option value="shadow"{% if (config_anterior.execution_mode or "shadow") == "shadow" %} selected{% endif %}>Sombra (journaliza, não envia ordem)</option>
-          <option value="live"{% if config_anterior.execution_mode == "live" %} selected{% endif %}>Real (envia ordem de verdade ao MT5)</option>
-        </select>
-      </label>
-      <p class="ops-start-hint">
-        ⚠ "Real" envia ordem de verdade à corretora com dinheiro de verdade.
-        Rode em "Sombra" primeiro e confira a distribuição de penetração de
-        ticks no diário antes de escolher "Real" — ver aviso completo na
-        página do robô.
-      </p>
-      {% endif %}
-      <button type="submit"
-              {% if not creds_status.mt5 or not caixa_ok %} disabled{% endif %}>▶ Iniciar operação</button>
-    </form>
-  {% endif %}
-</section>
-
-{% if not creds_status.mt5 %}
-<p class="ops-start-hint">
-  Preencha login, senha e servidor do MetaTrader 5 em "Acesso e credenciais"
-  para habilitar o início da operação.
-</p>
-{% elif not caixa_ok %}
-<p class="ops-start-hint">
-  Informe acima o caixa destinado a este robô — mínimo
-  R$ {{ caixa_minima | num_br }} para operar.
-</p>
+{% if fragmento %}
+{# Só na RESPOSTA do polling, nunca no render inicial: aqui o resumo viaja
+   como swap fora-de-banda para dentro do `<summary>`, que fica fora deste nó
+   e por isso jamais seria atualizado. No render inicial ele já é desenhado no
+   lugar certo por `operacao_body.html` — repetir aqui duplicaria o id.
+   Precisa ser elemento de PRIMEIRO nível da resposta: o htmx só extrai
+   `hx-swap-oob` da raiz do fragmento. #}
+{% import "partials/operacao_resumo.html" as r %}
+{{ r.resumo(slot.id, caixa_ledger, proc, caixa_minima, caixa_ok, oob=True) }}
 {% endif %}
+{# A barra de controle (iniciar/parar) mudou de lugar: agora divide a linha
+   com o campo de caixa em `operacao_body.html`, FORA deste nó. Aqui só sai o
+   swap fora-de-banda dela, e só quando o estado do processo de fato mudou —
+   ver `partials/operacao_slot_control.html` para o porquê.
+
+   Fica ANTES do nó principal porque o htmx só extrai `hx-swap-oob` da raiz da
+   resposta: aninhado, o swap não acontece e o erro é silencioso. #}
+{% if fragmento and controle_mudou %}
+{% with oob = True %}{% include "partials/operacao_slot_control.html" %}{% endwith %}
+{% endif %}
+{# O `hx-get` do poll carrega o estado ATUAL: os limites das duas listas (é o
+   que faz o "ver mais" sobreviver ao refresh de fundo) e se o processo estava
+   rodando quando este nó foi desenhado (é o que deixa o servidor saber se a
+   barra de controle precisa ser reemitida). Ver `app.py::operacao_fragment`. #}
+{% set ev_n = eventos_limit | default(10) %}
+{% set pos_n = posicoes_limit | default(10) %}
+{% set frag_url = "/operacao/" ~ slot.id ~ "/fragment?eventos=" ~ ev_n ~ "&posicoes=" ~ pos_n
+                  ~ "&rodando=" ~ (1 if proc else 0) %}
+<div id="ops-slot-live-{{ slot.id }}" hx-get="{{ frag_url }}"
+     hx-trigger="every {{ poll_seconds }}s" hx-swap="outerHTML">
 
 {% if not s.existe %}
 
@@ -104,10 +52,19 @@
     <span class="dot"></span> Modo · <strong>{{ s.modo }}</strong>
   </span>
   {% if s.daytrade %}
-  {# O modo de execução já tem a faixa própria acima do cartão (a informação
-     mais importante da tela); aqui só entra o que ela não cobre: a razão
-     entre ordens postas e preenchidas, que é o sinal de prioridade de fila
-     que o modo sombra existe para medir. #}
+  {# Modo de execução. Substitui a faixa de prosa que ficava acima do cartão
+     (removida a pedido do dono, 2026-08-22) — mas o FATO não podia sair
+     junto: sem ele, um robô mandando ordem de verdade fica indistinguível de
+     um que não manda nada. E vem do modo REAL do processo, não do tipo do
+     slot: a faixa antiga era condicionada a `slot.is_intraday` e por isso
+     escrevia "modo sombra" mesmo com o robô iniciado em Real.
+     Vermelho no "real" pelo mesmo motivo que o botão de parar é vermelho: é
+     dinheiro de verdade saindo. #}
+  <span class="ops-badge {% if s.daytrade.execution_mode == 'live' %}err{% endif %}">
+    <span class="dot"></span> Execução ·
+    <strong>{{ "real — envia ordem" if s.daytrade.execution_mode == "live" else "sombra" }}</strong>
+    {% if s.daytrade.execution_mode != "live" %}<span class="dim">não envia ordem, não debita o caixa</span>{% endif %}
+  </span>
   <span class="ops-badge">
     <span class="dot"></span> Ordens hoje ·
     <strong>{{ s.daytrade.trades_na_sessao }}/{{ s.daytrade.ordens_postas }}</strong>
@@ -197,7 +154,10 @@
   <div class="metric">
     <span class="k">Investido a mercado</span>
     <span class="v num">R$ {{ s.investido | num_br }}</span>
-    <span class="sub">{{ s.posicoes | length }} posiç{{ "ão" if s.posicoes | length == 1 else "ões" }} aberta{{ "" if s.posicoes | length == 1 else "s" }}</span>
+    {# `posicoes_total`, não `posicoes | length`: a lista vem CORTADA no "ver
+       mais", e contar o pedaço exibido faria a métrica mentir. #}
+    {% set n_pos = s.posicoes_total | default(s.posicoes | length) %}
+    <span class="sub">{{ n_pos }} posiç{{ "ão" if n_pos == 1 else "ões" }} aberta{{ "" if n_pos == 1 else "s" }}</span>
   </div>
   {% if s.daytrade %}
   <div class="metric">
@@ -239,8 +199,16 @@
   </div>
 </section>
 
-<section class="ops-panel stagger">
-  <h3>Posições abertas</h3>
+{# POSIÇÕES: recolhível e paginada em 10, como a lista de simulações da home
+   (dono, 2026-08-22). O cabeçalho diz a contagem TOTAL, então recolher não
+   esconde "tenho posição aberta?" — só as linhas. #}
+<details class="ops-panel ops-list" data-ops-key="pos:{{ slot.id }}" open>
+  <summary class="ops-sub-head">
+    <span class="ops-sub-title">Posições abertas</span>
+    <span class="ops-sub-meta">{{ n_pos }}</span>
+    <span class="ops-sec-caret" aria-hidden="true"></span>
+  </summary>
+  <div class="ops-sub-body">
   <table class="ops-table">
     <thead>
       <tr>
@@ -269,7 +237,17 @@
       {% endfor %}
     </tbody>
   </table>
-</section>
+  {% if s.posicoes_ha_mais %}
+  <div class="ops-more">
+    <button type="button" hx-get="/operacao/{{ slot.id }}/fragment?eventos={{ ev_n }}&amp;posicoes={{ pos_n + 10 }}"
+            hx-target="#ops-slot-live-{{ slot.id }}" hx-swap="outerHTML">
+      Ver mais 10 posições
+    </button>
+    <span class="dim">{{ s.posicoes | length }} de {{ n_pos }}</span>
+  </div>
+  {% endif %}
+  </div>
+</details>
 
 {% if not s.daytrade %}
 <section class="ops-panel stagger">
@@ -308,12 +286,30 @@
 </section>
 {% endif %}
 
-<section class="console-wrap stagger">
-  <div class="k console-label">Eventos recentes</div>
+{# EVENTOS: mesma lógica das posições, mas o corte é no SQL — `live_events` é
+   a tabela que mais cresce no banco, e ler tudo para exibir 10 seria pagar o
+   histórico inteiro a cada poll. #}
+<details class="console-wrap ops-list" data-ops-key="ev:{{ slot.id }}" open>
+  <summary class="ops-sub-head">
+    <span class="ops-sub-title">Eventos recentes</span>
+    <span class="ops-sub-meta">{{ s.eventos | length }}{{ "+" if s.eventos_ha_mais }}</span>
+    <span class="ops-sec-caret" aria-hidden="true"></span>
+  </summary>
+  <div class="ops-sub-body">
   <pre class="console">{% for e in s.eventos %}[{{ e.ts }}] {{ e.level | upper }} {{ e.source }}: {{ e.message }}
 {% else %}(nenhum evento registrado ainda)
 {% endfor %}</pre>
-</section>
+  {% if s.eventos_ha_mais %}
+  <div class="ops-more">
+    <button type="button" hx-get="/operacao/{{ slot.id }}/fragment?eventos={{ ev_n + 10 }}&amp;posicoes={{ pos_n }}"
+            hx-target="#ops-slot-live-{{ slot.id }}" hx-swap="outerHTML">
+      Ver mais 10 eventos
+    </button>
+    <span class="dim">{{ s.eventos | length }} exibidos · há mais</span>
+  </div>
+  {% endif %}
+  </div>
+</details>
 
 {% endif %}
 

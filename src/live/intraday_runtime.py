@@ -842,17 +842,22 @@ class IntradayLiveRuntime:
 
     # ---------- painel -------------------------------------------------------
 
-    def status(self) -> dict:
+    def status(self, eventos_limit: int = 10) -> dict:
         """Mesmo formato de `LiveRuntime.status()` — o template de `/operacao`
         le as duas fontes pelas mesmas chaves. Campos que so o day trade tem
-        (sombra, penetracao) entram em `daytrade`, sem colidir."""
+        (sombra, penetracao) entram em `daytrade`, sem colidir.
+
+        `eventos_limit` e' o "ver mais" do painel. Busca UM a mais do que vai
+        exibir: e' assim que a tela sabe se ainda ha historico atras sem
+        precisar de um `COUNT(*)` numa tabela que so cresce.
+        """
         session = clock.session_date()
         with store.live_journal(self.db_path) as conn:
             account = self._load_account(conn)
             if account is None:
                 return {"conta": self.account_name, "existe": False}
             self._restore(account, session)
-            eventos = store.recent_events(conn, account.id, limit=10)
+            eventos = store.recent_events(conn, account.id, limit=eventos_limit + 1)
 
         pos = self.machine.position
         marks = {self.strategy.symbol: pos.entry_price} if pos is not None else {}
@@ -886,7 +891,8 @@ class IntradayLiveRuntime:
                 for p in account.positions.values()
             ],
             "intencoes_pendentes": [],
-            "eventos": eventos,
+            "eventos": eventos[:eventos_limit],
+            "eventos_ha_mais": len(eventos) > eventos_limit,
             "daytrade": {
                 "execution_mode": self.execution_mode,
                 "simbolo": self.strategy.symbol,

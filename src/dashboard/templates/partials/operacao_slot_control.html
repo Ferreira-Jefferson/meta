@@ -1,0 +1,88 @@
+{# Barra de controle de UM slot: iniciar/parar, e o que o iniciar precisa
+   perguntar (robô numa conta nova, modo de execução no day trade).
+
+   POR QUE FICA FORA DO NÓ COM POLLING
+   -----------------------------------
+   Ela divide a linha com o formulário de caixa (pedido do dono, 2026-08-22),
+   que precisa ficar fora — um `<input>` sendo digitado seria apagado pelo
+   refresh de fundo. Os dois são `<form>` separados (endpoints diferentes),
+   então só compartilham a linha se estiverem no mesmo nível do DOM.
+
+   E POR QUE NÃO É ATUALIZADA A CADA POLL
+   --------------------------------------
+   Tem um `<select name="execution_mode">` dentro. Um swap a cada 20s
+   resetaria a escolha do dono no meio dela — e nas duas direções isso é
+   perigoso: escolher "Real", o poll voltar para "Sombra" e o clique iniciar
+   em sombra achando que é real; ou o inverso, que manda ordem de verdade.
+
+   Então o fragmento só reemite esta barra (fora de banda) quando o estado do
+   PROCESSO muda de verdade — ver `rodando` em `app.py::operacao_fragment`.
+   Aí trocar o select é justamente o certo: o formulário inteiro mudou de
+   função. Enquanto nada muda, ninguém encosta nela. #}
+<div id="ops-ctl-{{ slot.id }}" class="ops-control"{% if oob %} hx-swap-oob="true"{% endif %}>
+  {% if proc %}
+    <span class="ops-status running"><span class="dot"></span> Ativo desde {{ proc.started_at[:16].replace("T", " ") }}</span>
+    <form hx-post="/operacao/{{ slot.id }}/parar" hx-target="#ops-body" hx-swap="outerHTML">
+      <button type="submit" class="btn-stop">■ Parar operação</button>
+    </form>
+  {% else %}
+    {# "Robô parado" e "modo dinheiro real (MetaTrader 5)" saíram daqui
+       (dono, 2026-08-22): o primeiro é repetição literal do cabeçalho do
+       cartão, que já diz PARADO com o ponto; o segundo era ruído fixo —
+       `s.modo` é "mt5" em TODA conta desde que os modos paper/manual foram
+       descontinuados, então a etiqueta nunca variava. O estado do processo
+       continua vindo do resumo do cabeçalho, que o polling atualiza. #}
+    <form hx-post="/operacao/{{ slot.id }}/iniciar" hx-target="#ops-body" hx-swap="outerHTML"
+          hx-disabled-elt="find button[type=submit]">
+      {# Capital vem do ledger manual (o campo de caixa ao lado), robô vem do
+         select (conta nova) ou da própria conta (conta existente). Piso do
+         saque, disjuntor e ações por lote não são campo nenhum aqui — o robô
+         já decide sozinho (official_policy/CircuitBreaker defaults) e ações
+         por lote é detectado no terminal MT5 a cada clique. #}
+      {% if config_anterior %}
+      <input type="hidden" name="notify_min_level" value="{{ config_anterior.notify_min_level or 'warn' }}" />
+      {% endif %}
+      {% if not s.existe and robot_options %}
+      <label class="ops-inline-field">
+        <span class="k">Robô</span>
+        {# Day trade: todo robô registrado em `strategy.daytrade.registry`
+           (rótulo mostra o SÍMBOLO que ele opera — propriedade do robô, não
+           do slot). Swing: TOP-3 do ranking automático, janela FULL (rótulo
+           mostra o capital final). Só vale pra CONTA NOVA: uma conta já
+           existente sempre reusa o `investment_robot` gravado na criação
+           (decisão do dono, 2026-08-19). Ver `app.py::_robot_options`. #}
+        <select name="robo" required>
+          {% for opt in robot_options %}
+          <option value="{{ opt.value }}"{% if opt.value == slot.robot_key %} selected{% endif %}>
+            {{ opt.label }}
+          </option>
+          {% endfor %}
+        </select>
+      </label>
+      {% endif %}
+      {% if slot.is_intraday %}
+      <label class="ops-inline-field">
+        <span class="k">Execução</span>
+        {# Escolha explícita do dono (pedido 2026-08-22): antes era sempre
+           "shadow", sem opção nenhuma na tela. Não é campo da CONTA (como
+           o robô) -- é config do PROCESSO, então fica disponível em toda
+           partida, inclusive retomando uma conta já existente. "live" manda
+           ordem de verdade -- ver a docstring de `live/intraday_runtime.py`
+           sobre o que ainda não foi medido contra o mercado real. #}
+        <select name="execution_mode" required>
+          <option value="shadow"{% if (config_anterior.execution_mode or "shadow") == "shadow" %} selected{% endif %}>Sombra — não envia ordem</option>
+          <option value="live"{% if config_anterior.execution_mode == "live" %} selected{% endif %}>Real — envia ordem ao MT5</option>
+        </select>
+      </label>
+      {% endif %}
+      <button type="submit"
+              {% if not creds_status.mt5 or not caixa_ok %} disabled{% endif %}>▶ Iniciar</button>
+    </form>
+    {% if not creds_status.mt5 %}
+    {# Único motivo de bloqueio que a linha não explica sozinha: o de caixa já
+       está escrito ao lado do número no resumo do cabeçalho ("mín. R$ X",
+       em vermelho quando abaixo do piso). #}
+    <span class="ops-control-hint">Falta o login do MetaTrader 5 — seção 01.</span>
+    {% endif %}
+  {% endif %}
+</div>
