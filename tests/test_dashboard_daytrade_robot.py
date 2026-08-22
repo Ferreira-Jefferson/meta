@@ -155,6 +155,87 @@ def test_operacao_iniciar_daytrade_robo_explicito_no_form_e_respeitado(
     assert detect_calls == ["gremah"]
 
 
+def test_operacao_iniciar_daytrade_nunca_repassa_mapa_fracionario(
+    isolated_journal, client, monkeypatch,
+):
+    """Pedido explicito do dono (2026-08-22): day trade nao pode conhecer
+    mercado fracionario, nem como fallback -- mesmo que o terminal TENHA um
+    simbolo `*F` para o papel, `ProcessConfig.mt5_fractional_map` tem de
+    chegar `None` no slot `daytrade`. Contraste com
+    `test_dashboard_app.py::test_operacao_iniciar_usa_mapa_fracionario_detectado_no_config`,
+    que confirma o comportamento OPOSTO (repassar) no slot `swing`."""
+    captured: list = []
+    monkeypatch.setattr(live_control, "start", lambda cfg: captured.append(cfg))
+    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot, robot_key=None: 1.0)
+    # Se o handler chamasse isto para um slot intradiario, o teste pegaria: o
+    # mock devolve um mapa NAO-vazio de proposito.
+    monkeypatch.setattr(live_control, "detect_fractional_symbol_map",
+                        lambda slot, robot_key=None: {"PMAM3": "PMAM3F"})
+
+    client.post(f"/operacao/{DAYTRADE}/caixa", data={"caixa": "100.00"})
+    resp = client.post(f"/operacao/{DAYTRADE}/iniciar", data={"robo": "gremah"})
+
+    assert resp.status_code == 200
+    assert len(captured) == 1
+    assert captured[0].mt5_fractional_map is None
+
+
+def test_operacao_iniciar_daytrade_sem_escolha_no_form_cai_no_shadow(
+    isolated_journal, client, monkeypatch,
+):
+    """Sem `execution_mode` no form (form antigo, ou fragmento HTMX velho),
+    o default continua SEGURO -- nunca escorrega pra "live" por omissão."""
+    captured: list = []
+    monkeypatch.setattr(live_control, "start", lambda cfg: captured.append(cfg))
+    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot, robot_key=None: 1.0)
+    monkeypatch.setattr(live_control, "detect_fractional_symbol_map", lambda slot, robot_key=None: None)
+
+    client.post(f"/operacao/{DAYTRADE}/caixa", data={"caixa": "100.00"})
+    resp = client.post(f"/operacao/{DAYTRADE}/iniciar", data={"robo": "gremah"})
+
+    assert resp.status_code == 200
+    assert len(captured) == 1
+    assert captured[0].execution_mode == "shadow"
+
+
+def test_operacao_iniciar_daytrade_escolha_explicita_de_live_e_respeitada(
+    isolated_journal, client, monkeypatch,
+):
+    """O ponto central do pedido (2026-08-22): o dono escolhe na tela, não é
+    mais uma decisão hardcoded no handler."""
+    captured: list = []
+    monkeypatch.setattr(live_control, "start", lambda cfg: captured.append(cfg))
+    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot, robot_key=None: 1.0)
+    monkeypatch.setattr(live_control, "detect_fractional_symbol_map", lambda slot, robot_key=None: None)
+
+    client.post(f"/operacao/{DAYTRADE}/caixa", data={"caixa": "100.00"})
+    resp = client.post(f"/operacao/{DAYTRADE}/iniciar",
+                       data={"robo": "gremah", "execution_mode": "live"})
+
+    assert resp.status_code == 200
+    assert len(captured) == 1
+    assert captured[0].execution_mode == "live"
+
+
+def test_operacao_iniciar_daytrade_valor_invalido_no_form_cai_no_shadow(
+    isolated_journal, client, monkeypatch,
+):
+    """Form adulterado com um valor fora de {"shadow", "live"} nunca vira
+    "live" por acidente -- cai no default seguro."""
+    captured: list = []
+    monkeypatch.setattr(live_control, "start", lambda cfg: captured.append(cfg))
+    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot, robot_key=None: 1.0)
+    monkeypatch.setattr(live_control, "detect_fractional_symbol_map", lambda slot, robot_key=None: None)
+
+    client.post(f"/operacao/{DAYTRADE}/caixa", data={"caixa": "100.00"})
+    resp = client.post(f"/operacao/{DAYTRADE}/iniciar",
+                       data={"robo": "gremah", "execution_mode": "sim-por-favor"})
+
+    assert resp.status_code == 200
+    assert len(captured) == 1
+    assert captured[0].execution_mode == "shadow"
+
+
 def test_operacao_iniciar_daytrade_robo_fora_do_registry_bloqueia_sem_iniciar(
     isolated_journal, client, monkeypatch,
 ):

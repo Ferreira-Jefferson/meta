@@ -410,6 +410,198 @@ class MT5Broker(Broker):
         reprocessar aqui."""
         return order
 
+    # ---------- ordem-limite PENDENTE (day trade maker) --------------------
+    #
+    # `place()` acima manda ordem A MERCADO (`TRADE_ACTION_DEAL`): preenche na
+    # hora, pagando o spread. Os tres metodos abaixo existem para o caso
+    # oposto, que e' o centro do desenho da familia `gremah`: uma ordem-limite
+    # PARADA no nivel, esperando o preco vir ate ela (maker, captura o spread
+    # em vez de paga-lo). Sao um ciclo de vida diferente -- a ordem fica viva
+    # entre chamadas, pode ser cancelada, e o fill chega DEPOIS -- entao nao
+    # cabem em `place()`/`poll()`, que assumem resposta imediata.
+
+    def place_pending(self, order: Order) -> Order:
+        """Registra uma ordem-limite PENDENTE no terminal e devolve `order`
+        com `broker_ref` = ticket da ordem pendente (nao um fill).
+
+        `status` vira `SENT` no sucesso -- nunca `FILLED`: uma ordem-limite
+        recem-registrada NAO executou nada ainda, e tratar registro como fill
+        e' exatamente o erro que este metodo existe para nao cometer. Quem
+        descobre o fill e' `open_position()`, contra o que a corretora de fato
+        reporta.
+
+        `type_time=ORDER_TIME_DAY` (nao GTC como em `place`): day trade nunca
+        carrega nada para o dia seguinte, e uma pendente esquecida viva de um
+        pregao para o outro dispararia uma entrada que nenhum robo decidiu.
+        O robo tambem cancela explicitamente (`cancel`), mas o terminal
+        expirando sozinho e' a segunda linha de defesa que sobrevive ao
+        processo morrer."""
+        try:
+            import MetaTrader5 as mt5  # lazy: ver docstring do modulo
+        except Exception as exc:  # pragma: no cover - ambiente sem o pacote
+            order.status = OrderStatus.REJECTED
+            order.note = f"pacote MetaTrader5 indisponivel: {exc}"
+            return order
+
+        if order.limit_price is None:
+            order.status = OrderStatus.REJECTED
+            order.note = "place_pending exige limit_price -- ordem sem nivel nao e' limite"
+            return order
+
+        try:
+            if not self.connect():
+                code, desc = self._last_error(mt5)
+                order.status = OrderStatus.REJECTED
+                order.note = f"falha ao conectar ao terminal MT5 (last_error={code}: {desc})"
+                return order
+
+            symbol = self.symbol_for(order.ticker)
+            mt5.symbol_select(symbol, True)
+            info = mt5.symbol_info(symbol)
+            if info is None:
+                order.status = OrderStatus.REJECTED
+                order.note = f"simbolo {symbol} nao encontrado no terminal MT5"
+                return order
+
+            volume = self._resolve_volume(order.quantity, info)
+            if volume <= 0:
+                order.status = OrderStatus.REJECTED
+                order.note = (
+                    f"quantidade {order.quantity} acoes (shares_per_lot="
+                    f"{self._shares_per_lot}) resulta em volume 0 no lote padrao de "
+                    f"{symbol} (volume_min={getattr(info, 'volume_min', '?')}) -- "
+                    "day trade nao usa mercado fracionario, ordem nao enviada"
+                )
+                return order
+
+            is_buy = order.side == OrderSide.BUY
+            request = {
+                "action": mt5.TRADE_ACTION_PENDING,
+                "symbol": symbol,
+                "volume": volume,
+                "type": mt5.ORDER_TYPE_BUY_LIMIT if is_buy else mt5.ORDER_TYPE_SELL_LIMIT,
+                "price": float(order.limit_price),
+                "magic": self._magic,
+                "comment": "meta-live",
+                "type_time": mt5.ORDER_TIME_DAY,
+                "type_filling": (self._filling_type if self._filling_type is not None
+                                 else mt5.ORDER_FILLING_RETURN),
+            }
+            result = mt5.order_send(request)
+            if result is None:
+                code, desc = self._last_error(mt5)
+                order.status = OrderStatus.REJECTED
+                order.note = f"order_send (pendente) devolveu None (last_error={code}: {desc})"
+                return order
+            if result.retcode != mt5.TRADE_RETCODE_DONE:
+                order.status = OrderStatus.REJECTED
+                order.note = (
+                    f"MT5 recusou a ordem-limite pendente (retcode={result.retcode}): "
+                    f"{getattr(result, 'comment', '')}"
+                )
+                return order
+
+            order.status = OrderStatus.SENT
+            order.broker_ref = str(getattr(result, "order", None) or "")
+            order.note = (
+                f"ordem-limite pendente registrada em {symbol} @ "
+                f"{order.limit_price:.4f} (ticket={order.broker_ref})"
+            )
+            return order
+        except Exception as exc:
+            order.status = OrderStatus.REJECTED
+            order.note = f"erro inesperado ao registrar ordem pendente no MT5: {exc}"
+            return order
+
+    def cancel(self, order: Order) -> Order:
+        """Remove do terminal a ordem-limite pendente de `order.broker_ref`.
+
+        Sem `broker_ref` (nunca chegou a ser registrada) cai no default do
+        port (`Broker.cancel`, so marca `CANCELLED` localmente). Uma ordem que
+        o terminal ja nao tem mais -- porque preencheu, expirou ou foi
+        cancelada na mao -- NAO e' erro: o objetivo ("nao existe mais pendente
+        neste ticket") ja esta cumprido, entao vira `CANCELLED` com o motivo
+        na nota, para nao virar um retry infinito a cada barra."""
+        if not order.broker_ref:
+            return super().cancel(order)
+        try:
+            import MetaTrader5 as mt5  # lazy: ver docstring do modulo
+        except Exception as exc:  # pragma: no cover - ambiente sem o pacote
+            order.note = f"pacote MetaTrader5 indisponivel ao cancelar: {exc}"
+            return order
+
+        try:
+            if not self.connect():
+                code, desc = self._last_error(mt5)
+                order.note = f"falha ao conectar para cancelar (last_error={code}: {desc})"
+                return order
+            result = mt5.order_send({
+                "action": mt5.TRADE_ACTION_REMOVE,
+                "order": int(order.broker_ref),
+            })
+            if result is not None and result.retcode == mt5.TRADE_RETCODE_DONE:
+                order.status = OrderStatus.CANCELLED
+                order.note = f"ordem pendente {order.broker_ref} removida do terminal"
+                return order
+            order.status = OrderStatus.CANCELLED
+            order.note = (
+                f"ordem pendente {order.broker_ref} ja nao estava viva no terminal "
+                f"(retcode={getattr(result, 'retcode', None)}: "
+                f"{getattr(result, 'comment', '')}) -- nada a remover"
+            )
+            return order
+        except Exception as exc:
+            order.note = f"erro inesperado ao cancelar ordem pendente: {exc}"
+            return order
+
+    def open_position(self, ticker: str) -> Optional[dict]:
+        """O que a CORRETORA diz que esta aberto neste papel para ESTE robo
+        (`magic`) -- a fonte de verdade de "a ordem-limite preencheu ou nao".
+
+        Devolve `{"side", "price", "quantity"}` ou `None` (nada aberto).
+        `side` e' `"long"`/`"short"`; `quantity` e' em ACOES (`volume *
+        shares_per_lot`), na mesma unidade de `Order.quantity`.
+
+        Por que ler posicao e nao o ticket da ordem: numa conta NETTING o
+        terminal consolida tudo do simbolo numa posicao so, e e' esse numero
+        (preco medio e volume REAIS) que representa o que se tem de verdade.
+        Perguntar "o ticket X preencheu?" responderia sobre uma ordem; esta
+        pergunta responde sobre o dinheiro.
+
+        Filtra por `magic` porque a conta e' NETTING e compartilhada entre os
+        dois slots -- sem o filtro, um robo enxergaria a posicao do outro como
+        sua. Qualquer falha (terminal fechado, resposta inesperada) devolve
+        `None`, e quem chama trata isso como "nao consegui confirmar agora",
+        NUNCA como "esta zerado" (ver `live/intraday_execution.py`)."""
+        try:
+            import MetaTrader5 as mt5  # lazy: ver docstring do modulo
+        except Exception:  # pragma: no cover - ambiente sem o pacote
+            return None
+        try:
+            if not self.connect():
+                return None
+            symbol = self.symbol_for(ticker)
+            posicoes = mt5.positions_get(symbol=symbol)
+            if not posicoes:
+                return None
+            minhas = [p for p in posicoes if getattr(p, "magic", None) == self._magic]
+            if not minhas:
+                return None
+            p = minhas[0]
+            volume = float(getattr(p, "volume", 0.0) or 0.0)
+            if volume <= 0:
+                return None
+            # `type` 0 = POSITION_TYPE_BUY, 1 = POSITION_TYPE_SELL.
+            comprado = getattr(p, "type", 0) == getattr(mt5, "POSITION_TYPE_BUY", 0)
+            return {
+                "side": "long" if comprado else "short",
+                "price": float(getattr(p, "price_open", 0.0) or 0.0),
+                "quantity": int(round(volume * self._shares_per_lot)),
+                "ticket": getattr(p, "ticket", None),
+            }
+        except Exception:
+            return None
+
     def supports_automation(self) -> bool:
         return True
 

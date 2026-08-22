@@ -46,6 +46,28 @@
         </select>
       </label>
       {% endif %}
+      {% if slot.is_intraday %}
+      <label class="ops-inline-field">
+        <span class="k">Modo de execução</span>
+        {# Escolha explícita do dono (pedido 2026-08-22): antes era sempre
+           "shadow", sem opção nenhuma na tela. Não é campo da CONTA (como
+           o robô) -- é config do PROCESSO, então fica disponível em toda
+           partida, inclusive retomando uma conta já existente. "live" manda
+           ordem de verdade -- ver o aviso abaixo e a docstring de
+           `live/intraday_runtime.py` sobre o que ainda não foi medido
+           contra o mercado real antes de escolher isto. #}
+        <select name="execution_mode" required>
+          <option value="shadow"{% if (config_anterior.execution_mode or "shadow") == "shadow" %} selected{% endif %}>Sombra (journaliza, não envia ordem)</option>
+          <option value="live"{% if config_anterior.execution_mode == "live" %} selected{% endif %}>Real (envia ordem de verdade ao MT5)</option>
+        </select>
+      </label>
+      <p class="ops-start-hint">
+        ⚠ "Real" envia ordem de verdade à corretora com dinheiro de verdade.
+        Rode em "Sombra" primeiro e confira a distribuição de penetração de
+        ticks no diário antes de escolher "Real" — ver aviso completo na
+        página do robô.
+      </p>
+      {% endif %}
       <button type="submit"
               {% if not creds_status.mt5 or not caixa_ok %} disabled{% endif %}>▶ Iniciar operação</button>
     </form>

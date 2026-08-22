@@ -93,7 +93,10 @@ Modo de corretora
           dois robos carimbarem igual. `--mt5-fractional-map` e diferente: so os tickers com
           mercado fracionario de fato, pro broker escolher lote padrao
           (GRATUITO na Rico) ou fracionario (paga por ordem) sozinho a cada
-          entrada, conforme a quantidade pedida.
+          entrada, conforme a quantidade pedida. So vale pro slot `swing` --
+          `build_intraday` IGNORA esta flag de proposito (pedido explicito do
+          dono, 2026-08-22): day trade nunca pode cair no mercado fracionario,
+          nem como fallback, dado o giro alto da familia gremah.
 
 Alertas externos (opcionais, por variavel de ambiente — nunca em texto puro
 na linha de comando, que fica visivel no historico do shell e na lista de
@@ -294,9 +297,17 @@ def build_intraday(args):
     from live.broker_mt5 import MT5Broker  # import tardio: so quando de fato usado
 
     credenciais = _mt5_credentials()
-    fractional_map = json.loads(args.mt5_fractional_map) if args.mt5_fractional_map else None
+    # Day trade NUNCA conhece mercado fracionario -- nem `--mt5-fractional-map`
+    # (pedido explicito do dono, 2026-08-22). `args.mt5_fractional_map` e'
+    # ignorado de proposito aqui, mesmo se alguem passar a flag na linha de
+    # comando: o `MT5Broker` deste slot nasce SEM `fractional_map`, entao
+    # `_resolve_execution` (broker_mt5.py) nunca tem pra onde cair -- uma
+    # quantidade que nao fecha o lote padrao e' REJEITADA, nunca reencaminhada
+    # a um simbolo "F". Giro alto (`gremah.sizing_rules`) paga taxa de bolsa a
+    # cada round-trip; uma ordem fracionaria custaria R$1,90 fixos a mais por
+    # ordem na Rico, o que inviabilizaria o robo.
     broker = MT5Broker(magic=slot.magic, shares_per_lot=args.mt5_shares_per_lot,
-                       fractional_map=fractional_map, **credenciais)
+                       **credenciais)
 
     # A economia do contrato vem do TERMINAL (tick size/value reais), nunca
     # hardcoded — mesma filosofia de `MT5Feed` autocalibrar o fuso.

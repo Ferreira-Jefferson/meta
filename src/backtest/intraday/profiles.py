@@ -21,6 +21,8 @@ from datetime import time
 from typing import Literal
 
 from backtest.intraday.costs import (
+    CSAN3_EXCHANGE_FEE_PCT_PER_LEG,
+    KLBN4_EXCHANGE_FEE_PCT_PER_LEG,
     PMAM3_EXCHANGE_FEE_PCT_PER_LEG,
     IntradayCostModel,
 )
@@ -73,6 +75,44 @@ PROFILES: dict[str, SymbolProfile] = {
         # regimes de horario de verao americano nas barras salvas — o outro
         # regime (20:54 UTC) foi tratado por anos como "cluster minoritario",
         # quando era o proprio calendario aparecendo no dado.
+        session_end_time=time(19, 54),
+        session_end_policy="b3_equities",
+        default_quantity=100,  # 1 lote padrao
+    ),
+    "CSAN3": SymbolProfile(
+        frozen_cutoff="2026-06-13",
+        frozen_note=(
+            "corte declarado 2026-08-21 antes de medir o OOS da calibracao propria "
+            "(profit_pct=0,21%/stop_multiplier=20x, ver "
+            "`strategy.daytrade.lab.gremah._CALIBRATION_BY_SYMBOL`); "
+            "profundidade real 2025-09-16..2026-08-21 (~11,2 meses); "
+            "IS 2025-09-16..2026-06-13 (~9 meses), OOS 2026-06-13..2026-08-21 "
+            "reconfirmado positivo 2026-08-22 (627 trades, wr 98,2%, pf 4,22, "
+            "MaxDD -4,13%, capital R$350 = lote de R$343-350 arredondado)"
+        ),
+        fee_round_trip_brl=0.0,
+        fee_note="lote padrao (100 acoes): corretagem zero; taxa de bolsa em exchange_fee_pct_per_leg (2x a taxa real)",
+        exchange_fee_pct_per_leg=CSAN3_EXCHANGE_FEE_PCT_PER_LEG,
+        session_end_time=time(19, 54),
+        session_end_policy="b3_equities",
+        default_quantity=100,  # 1 lote padrao
+    ),
+    "KLBN4": SymbolProfile(
+        frozen_cutoff="2026-06-13",
+        frozen_note=(
+            "corte declarado 2026-08-21 antes de medir o OOS da calibracao propria "
+            "(profit_pct=0,21%/stop_multiplier=5x, ver "
+            "`strategy.daytrade.lab.gremah._CALIBRATION_BY_SYMBOL`); "
+            "profundidade real 2025-09-02..2026-08-21 (~11,6 meses); "
+            "IS 2025-09-16..2026-06-13 (~9 meses, mesma janela comum honesta do "
+            "grupo -- ver `feedback_honest_period_comparison` na memoria do "
+            "projeto), OOS 2026-06-13..2026-08-21 reconfirmado positivo "
+            "2026-08-22 (671 trades, wr 98,7%, pf 12,15, MaxDD -1,57%, "
+            "capital R$350 = lote de R$342-350 arredondado)"
+        ),
+        fee_round_trip_brl=0.0,
+        fee_note="lote padrao (100 acoes): corretagem zero; taxa de bolsa em exchange_fee_pct_per_leg (2x a taxa real)",
+        exchange_fee_pct_per_leg=KLBN4_EXCHANGE_FEE_PCT_PER_LEG,
         session_end_time=time(19, 54),
         session_end_policy="b3_equities",
         default_quantity=100,  # 1 lote padrao

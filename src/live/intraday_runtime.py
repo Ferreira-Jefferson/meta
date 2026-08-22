@@ -78,9 +78,10 @@ from core.live_models import (
 from journal import live_store as store
 from live import clock
 from live.bar_feed import MT5BarFeed
+from live.intraday_execution import MT5IntradayExecution
 from live.notify import NullNotifier
 from live.runtime import StepReport
-from strategy.daytrade.base import Bar, warm_start_calibration
+from strategy.daytrade.base import Bar, EnterLimit, warm_start_calibration
 
 #: Acima disto, um buraco de barras nao e' "o processo demorou um pouco" — e'
 #: o processo tendo ficado fora do ar. Reprocessar 200 barras de uma vez faria
@@ -177,7 +178,16 @@ class IntradayLiveRuntime:
         self.execution_mode = execution_mode
         self.initial_capital = float(initial_capital)
         self.db_path = Path(db_path) if db_path is not None else LIVE_DB_PATH
-        self.machine = IntradaySessionMachine(strategy, config)
+        # So o modo REAL injeta a ponte de execucao na maquina. Em sombra ela
+        # fica `None` e os fills seguem simulados pela barra -- que e'
+        # exatamente o que o modo sombra existe para medir contra a realidade
+        # (ver `penetration_ticks`). Ver `live/intraday_execution.py` para por
+        # que a fonte de verdade tem de trocar quando ha dinheiro em jogo.
+        self.executor = (
+            MT5IntradayExecution(broker, strategy.symbol)
+            if execution_mode == "live" else None
+        )
+        self.machine = IntradaySessionMachine(strategy, config, execution=self.executor)
         self._snapshot = _SessionSnapshot()
         # `Intent` da entrada corrente — o `Order`/`Fill` do fechamento
         # penduram na MESMA intencao, para o diario responder "por que abriu
@@ -291,6 +301,18 @@ class IntradayLiveRuntime:
             if seed_bars:
                 pending = warm_start_calibration(self.strategy, session, seed_bars)
                 self.machine.resume_session(session, seed_pending=pending)
+                # `resume_session` planta a ordem do warm start direto em
+                # `resting_limit`, SEM passar por `LimitPlaced` (nao ha barra
+                # sendo consumida). Em execucao real isso a deixaria vigiada
+                # aqui dentro e inexistente na corretora: o robo esperaria por
+                # um fill que nunca poderia acontecer, porque ninguem chegou a
+                # registrar a ordem. Registrar aqui e' o que fecha esse buraco.
+                if self.executor is not None and isinstance(pending, EnterLimit):
+                    self.executor.place_limit(
+                        side=pending.side, limit_price=pending.limit_price,
+                        quantity=pending.quantity or self.config.default_quantity,
+                        ts=seed_bars[-1].ts,
+                    )
                 modo, semente = "warm_start", len(seed_bars)
                 self._snapshot.session = session
                 self._snapshot.last_bar_ts = seed_bars[-1].ts
@@ -464,19 +486,31 @@ class IntradayLiveRuntime:
         CORRENTE aparece em `status()["daytrade"]["ordem_em_pe"]`. O que
         preenche, sim, gera `Intent`/`Order`/`Fill` (ver `_on_opened`)."""
         self._snapshot.ordens_postas += 1
-        if self.execution_mode == "live":
-            raise NotImplementedError(
-                "envio de ordem-limite pendente ao MT5 ainda nao implementado "
-                "(`MT5Broker._send` so faz TRADE_ACTION_DEAL, ordem a mercado) — "
-                "este slot so pode rodar em execution_mode='shadow' por enquanto. "
-                "Degradar para ordem a mercado seria OUTRA estrategia: o robo "
-                "pagaria o spread que ele existe para capturar."
-            )
+        if self.executor is None:
+            return
+        # A maquina SUBSTITUI a ordem vigiada em vez de acumular: se havia uma
+        # anterior (`evento.replaced`), ela tem de sair do terminal primeiro,
+        # senao sobram duas pendentes vivas na corretora e a segunda a
+        # preencher abriria uma posicao que o robo nunca pediu.
+        if evento.replaced is not None:
+            self.executor.cancel_limit(evento.ts, reason="superseded")
+        self.executor.place_limit(
+            side=evento.order.side,
+            limit_price=evento.order.limit_price,
+            quantity=evento.order.quantity or self.config.default_quantity,
+            ts=evento.ts,
+        )
 
     def _on_limit_cancelled(self, conn, account: AccountState, evento: LimitCancelled) -> None:
         """Mesma razao de `_on_limit_placed` para nao gravar evento: e'
-        contado, nao narrado."""
+        contado, nao narrado.
+
+        Em execucao real, cancelar de verdade no terminal e' obrigatorio: a
+        ordem que o robo abandonou continuaria viva na corretora e poderia
+        preencher horas depois, contra um preco que o robo ja descartou."""
         self._snapshot.ordens_abandonadas += 1
+        if self.executor is not None:
+            self.executor.cancel_limit(evento.ts, reason=evento.reason)
 
     @staticmethod
     def _penetration_ticks(evento: PositionOpened, tick_size: float) -> Optional[float]:
@@ -545,7 +579,10 @@ class IntradayLiveRuntime:
             status=OrderStatus.FILLED,
             filled_qty=evento.quantity,
             avg_price=evento.price,
-            broker_ref=None,
+            # Em sombra nao ha ticket nenhum (nada foi enviado); em execucao
+            # real e' o ticket da ordem-limite que virou esta posicao, para a
+            # linha do diario poder ser cruzada com o extrato da corretora.
+            broker_ref=None if self.executor is None else self.executor.last_entry_ref,
             intent_id=intent_id,
             sent_at=evento.ts.to_pydatetime(),
             note=_SHADOW_NOTE if self.execution_mode == "shadow" else "entrada day trade",
@@ -584,22 +621,27 @@ class IntradayLiveRuntime:
         `policy_state`, separado, e aparece no painel como tal."""
         trade = evento.trade
         assinado_saida = trade.quantity if trade.side == "short" else -trade.quantity
+        # Em execucao real TODA saida sai a mercado (ver
+        # `IntradaySessionMachine._close_position`): uma saida por alvo que
+        # dependesse de nova ordem-limite poderia nao preencher e deixar a
+        # posicao aberta contra o proprio stop. Em sombra o alvo continua
+        # sendo registrado como LIMIT, que e' a premissa que o backtest usa e
+        # que a corrida em sombra existe para comparar.
+        saida_real = self.executor.last_exit_order if self.executor is not None else None
+        alvo_maker = trade.exit_reason.value == "target" and saida_real is None
 
         order = Order(
             ticker=self.strategy.symbol,
             side=OrderSide.SELL if trade.side == "long" else OrderSide.BUY,
             quantity=trade.quantity,
-            # Alvo e' saida planejada (ordem-limite no nivel); stop, flatten e
-            # sinal sao saidas por urgencia — vao a mercado. Mesma distincao
-            # de `IntradayBacktestConfig.target_fills_as_maker`.
-            order_type=(OrderType.LIMIT if trade.exit_reason.value == "target" else OrderType.MARKET),
-            limit_price=trade.exit_price if trade.exit_reason.value == "target" else None,
+            order_type=OrderType.LIMIT if alvo_maker else OrderType.MARKET,
+            limit_price=trade.exit_price if alvo_maker else None,
             status=OrderStatus.FILLED,
             filled_qty=trade.quantity,
             avg_price=trade.exit_price,
             fees=trade.fees_total,
             slippage=trade.slippage_total,
-            broker_ref=None,
+            broker_ref=None if saida_real is None else saida_real.broker_ref,
             intent_id=self._open_intent_id,
             sent_at=trade.exit_ts.to_pydatetime(),
             note=(_SHADOW_NOTE if self.execution_mode == "shadow"

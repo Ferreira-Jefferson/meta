@@ -416,10 +416,16 @@ def detect_fractional_symbol_map(
 
     Universo vem de `universe_for_slot()` -- o MESMO `_universe_of()` que
     `run_live.py::build()` usa no slot de swing (robôs com universo largo,
-    ex. por liquidez, precisam do mapa cobrindo todo o pool) e o símbolo do
-    robô de day trade escolhido (PMAM3 -> PMAM3F, que é justamente o que
-    torna uma ordem de R$14 executável — ver
-    `mt5_fractional_execution_2026_08_21` na memória do projeto).
+    ex. por liquidez, precisam do mapa cobrindo todo o pool).
+
+    Dia trade NUNCA usa o resultado desta função (pedido explícito do dono,
+    2026-08-22, revertendo o uso anterior de PMAM3 -> PMAM3F): giro alto
+    (`gremah.sizing_rules`) paga taxa de bolsa a cada round-trip, e uma ordem
+    fracionária custaria R$1,90 fixos a mais por ordem na Rico -- uma
+    quantidade que não fecha o lote padrão tem de ser REJEITADA, nunca
+    reencaminhada ao mercado fracionário. `dashboard/app.py::operacao_iniciar`
+    só chama esta função para slot `swing`; `scripts/run_live.py::build_intraday`
+    ignora `--mt5-fractional-map` de propósito, mesmo se a flag vier setada.
 
     Devolve `None` se a corretora não responder ou se o slot não tiver
     universo -- `create_account()`/`start()` tratam isso como "sem

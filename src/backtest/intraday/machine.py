@@ -270,9 +270,28 @@ class IntradaySessionMachine:
     realizado acumulado (para marcar patrimonio).
     """
 
-    def __init__(self, strategy: IntradayStrategy, config: IntradayBacktestConfig):
+    def __init__(self, strategy: IntradayStrategy, config: IntradayBacktestConfig,
+                 execution=None):
         self.strategy = strategy
         self.config = config
+        # `None` (backtest, e tambem o modo sombra ao vivo) = os fills sao
+        # SIMULADOS a partir do OHLC da barra: uma ordem-limite preenche se a
+        # barra tocou o nivel, ao preco exato do nivel.
+        #
+        # Um objeto aqui (operacao REAL, `live/intraday_execution.py`) inverte
+        # a fonte de verdade: a barra deixa de decidir se preencheu -- quem
+        # decide e' a CORRETORA, e o preco que entra no trade e' o preco que
+        # ela de fato executou. Isso existe porque a simulacao e' otimista por
+        # construcao: ela assume que uma ordem parada no nivel X preenche
+        # sempre que o preco TOCA X, ignorando fila de ofertas. Confiar nela
+        # com dinheiro real faria o robo se achar posicionado (e comecar a
+        # contar alvo e stop) enquanto a ordem ainda esta parada no book sem
+        # ter executado nada.
+        #
+        # A logica de DECISAO nao muda entre os dois modos -- e' o mesmo
+        # `on_closed_bar`, o mesmo robo, as mesmas prioridades. So a resposta
+        # a "preencheu? a que preco?" troca de fonte.
+        self.execution = execution
         self.position: _Position | None = None
         self.pending: Enter | Exit | None = None
         self.resting_limit: EnterLimit | None = None
@@ -434,6 +453,20 @@ class IntradaySessionMachine:
                 self.pending = None
             elif isinstance(self.pending, Enter) and self.position is None:
                 pending = self.pending
+                if self.execution is not None:
+                    # Entrada A MERCADO ao vivo nao esta implementada de
+                    # proposito: nenhum robo intradiario em operacao emite
+                    # `Enter` (a familia `gremah` so' usa `EnterLimit`, que e'
+                    # o proprio ponto do desenho -- ser maker). Falhar alto
+                    # aqui e' melhor que simular o fill a mercado com o `open`
+                    # da barra e mandar dinheiro real contra um preco
+                    # inventado.
+                    raise NotImplementedError(
+                        "entrada a mercado (`Enter`) nao suportada em execucao real -- "
+                        f"o robo {self.strategy.name!r} pediu uma. So `EnterLimit` "
+                        "(ordem-limite pendente) tem caminho de execucao confirmado "
+                        "pela corretora; ver `live/intraday_execution.py`."
+                    )
                 entry_side: Literal["buy", "sell"] = "buy" if pending.side == "long" else "sell"
                 entry_px = apply_intraday_slippage(bar.open, entry_side, cfg.costs)
                 self.position = _Position(
@@ -467,12 +500,14 @@ class IntradaySessionMachine:
             # tocar, expirar por `ttl_bars`, ou a sessao acabar.
             if self.resting_limit is not None and self.position is None:
                 order = self.resting_limit
-                if _limit_touched(order, bar):
+                fill = self._resolve_limit_fill(order, bar)
+                if fill is not None:
+                    fill_price, fill_qty = fill
                     self.position = _Position(
                         side=order.side,
                         entry_ts=ts,
-                        entry_price=order.limit_price,
-                        quantity=order.quantity or cfg.default_quantity,
+                        entry_price=fill_price,
+                        quantity=fill_qty,
                         current_stop=order.initial_stop,
                         current_target=order.initial_target,
                         metadata=dict(order.metadata or {}),
@@ -480,8 +515,8 @@ class IntradaySessionMachine:
                     self.resting_limit = None
                     self.resting_limit_bars_waited = 0
                     events.append(PositionOpened(
-                        ts=ts, side=order.side, price=order.limit_price,
-                        quantity=self.position.quantity, stop=order.initial_stop,
+                        ts=ts, side=order.side, price=fill_price,
+                        quantity=fill_qty, stop=order.initial_stop,
                         target=order.initial_target, order_kind="limit",
                         reason=order.reason, bar=bar,
                     ))
@@ -546,6 +581,26 @@ class IntradaySessionMachine:
         self.flattened = True
         return eventos
 
+    # ---------- preenchimento: simulado (backtest) ou real (corretora) ------
+
+    def _resolve_limit_fill(self, order: EnterLimit, bar: Bar) -> Optional[tuple[float, int]]:
+        """`(preco, quantidade)` se a ordem-limite vigiada preencheu nesta
+        barra, `None` se continua parada. Ver `self.execution`.
+
+        Backtest/sombra: a barra decide (tocou o nivel -> preencheu no nivel).
+        Real: a CORRETORA decide, e o preco/quantidade sao os dela. Uma falha
+        em CONSULTAR a corretora nao vira `None` (isso seria ler "nao consegui
+        perguntar" como "nao preencheu", e o robo re-armaria uma ordem sobre
+        uma posicao que talvez ja exista) -- a excecao sobe."""
+        if self.execution is None:
+            if not _limit_touched(order, bar):
+                return None
+            return order.limit_price, (order.quantity or self.config.default_quantity)
+        fill = self.execution.limit_fill(order, bar)
+        if fill is None:
+            return None
+        return fill["price"], fill["quantity"]
+
     # ---------- fechamento -------------------------------------------------
 
     def _close_position(self, exit_ts: pd.Timestamp, exit_ref_price: float,
@@ -556,6 +611,22 @@ class IntradaySessionMachine:
         is_maker_target = reason == IntradayExitReason.TARGET and cfg.target_fills_as_maker
         exec_px = (exit_ref_price if is_maker_target
                    else apply_intraday_slippage(exit_ref_price, _exit_side(position), cfg.costs))
+        if self.execution is not None:
+            # Execucao real: manda a ordem de fechamento AGORA e usa o preco
+            # que a corretora executou, nao o estimado acima. Vem ANTES de
+            # qualquer mutacao de estado de proposito -- se o envio falhar, a
+            # excecao sobe com a posicao ainda aberta na maquina, coerente com
+            # a posicao que continua aberta na corretora. Marcar como fechada
+            # aqui e falhar depois deixaria as duas visoes divergentes, que e'
+            # o pior estado possivel para um robo que decide sozinho.
+            #
+            # Sai a MERCADO inclusive no alvo: `target_fills_as_maker` e' uma
+            # premissa de MODELAGEM do backtest, e uma saida por alvo que
+            # dependesse de nova ordem-limite poderia simplesmente nao
+            # preencher, deixando a posicao aberta contra o proprio stop. O
+            # custo dessa diferenca e' real e conhecido -- e' parte do que a
+            # corrida em sombra existe para medir.
+            exec_px = float(self.execution.exit_market(position, exit_ts, reason)["price"])
         fees = fees_round_trip_brl(position.quantity, position.entry_price, exec_px, cfg.costs)
         trade = IntradayTrade(
             symbol=self.strategy.symbol,

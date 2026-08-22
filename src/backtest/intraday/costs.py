@@ -39,6 +39,15 @@ B3_DAY_TRADE_FEE_PCT_PER_LEG = 0.00025
 # pode herdar em silencio a tarifa de acao — quem sabe declara no perfil.
 PMAM3_EXCHANGE_FEE_PCT_PER_LEG = B3_DAY_TRADE_FEE_PCT_PER_LEG * 2.0
 
+# Mesma tarifa de bolsa (a taxa e' do MERCADO -- B3 day trade em acoes --, nao
+# do papel), mesma margem de seguranca de 2x. Constante SEPARADA por simbolo
+# de proposito (nao um alias generico "EQUITY_FEE"): a regra deste modulo e'
+# cada perfil declarar explicitamente o custo que usa, nunca herdar em
+# silencio o de outro papel (ver comentario acima) -- mesmo quando o valor
+# numerico e' identico hoje.
+CSAN3_EXCHANGE_FEE_PCT_PER_LEG = B3_DAY_TRADE_FEE_PCT_PER_LEG * 2.0
+KLBN4_EXCHANGE_FEE_PCT_PER_LEG = B3_DAY_TRADE_FEE_PCT_PER_LEG * 2.0
+
 
 @dataclass(frozen=True)
 class IntradayCostModel:

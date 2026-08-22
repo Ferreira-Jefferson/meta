@@ -697,13 +697,23 @@ async def operacao_iniciar(request: Request, slot_id: str):
             capital = ledger
 
     mt5_fractional_map = None
-    if erro is None:
+    if erro is None and not slot.is_intraday:
         # Mapa fracionário (ver docstring de `detect_fractional_symbol_map`):
         # detectado sozinho a cada clique, igual "ações por lote" -- falha
         # aqui NUNCA bloqueia o início, só degrada para só lote padrão (mesmo
         # comportamento de antes desta detecção existir). O broker decide, a
         # cada ordem, entre lote padrão (grátis na Rico) e fracionário (paga
         # por ordem) conforme a quantidade pedida — nunca fixo por conta.
+        #
+        # Day trade NUNCA passa por aqui (pedido explícito do dono,
+        # 2026-08-22): `mt5_fractional_map` fica `None` sempre para um slot
+        # intradiário, mesmo que o terminal tenha símbolo fracionário para o
+        # papel. Não é degradação silenciosa que o robô tolera -- é política:
+        # giro alto (`gremah.sizing_rules`) paga taxa de bolsa a cada
+        # round-trip, e uma ordem fracionária custa R$1,90 fixos por ordem na
+        # Rico, inviabilizando o robô se ele algum dia cair nesse caminho.
+        # Quantidade que não fecha o lote padrão tem de ser REJEITADA
+        # (`MT5Broker._send`), nunca reencaminhada ao mercado fracionário.
         mt5_fractional_map = live_control.detect_fractional_symbol_map(slot.id, strategy_key)
 
     if erro is None and nunca_comecou and conta is not None:
@@ -718,15 +728,23 @@ async def operacao_iniciar(request: Request, slot_id: str):
             conta.initial_capital = capital
             live_store.save_account(conn, conta)
 
+    # Escolha explícita do dono na tela (pedido 2026-08-22, revertendo "sombra
+    # sempre, sem opção nenhuma"): só o slot intradiário honra este campo --
+    # swing sempre envia de verdade, nunca teve modo sombra. Um valor fora de
+    # {"shadow", "live"} (form adulterado/desatualizado) cai pro default
+    # SEGURO (shadow), nunca vira erro que bloqueia o início nem escorrega
+    # para "live" por omissão.
+    execution_mode = "live"
+    if erro is None and slot.is_intraday:
+        candidato = form.get("execution_mode")
+        execution_mode = candidato if candidato in ("shadow", "live") else "shadow"
+
     if erro is None:
         try:
             cfg = live_control.ProcessConfig(
                 mode="mt5", capital=capital, strategy=strategy_key,
                 slot=slot.id,
-                # Modo sombra é o default e NÃO é escolhível na tela: sair de
-                # sombra é uma decisão de risco que depende de medição (ver
-                # `live/intraday_runtime.py`), não de um clique.
-                execution_mode="shadow" if slot.is_intraday else "live",
+                execution_mode=execution_mode,
                 notify_min_level=form.get("notify_min_level") or "warn",
                 mt5_shares_per_lot=mt5_shares_per_lot,
                 mt5_fractional_map=mt5_fractional_map,

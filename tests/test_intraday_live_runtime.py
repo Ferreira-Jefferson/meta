@@ -25,6 +25,7 @@ import pytest
 from backtest.intraday.costs import IntradayCostModel
 from backtest.intraday.machine import IntradayBacktestConfig
 from core.config import slot_by_id
+from core.live_models import OrderSide, OrderStatus, OrderType
 from journal import live_store as store
 from live import clock as live_clock
 from live import intraday_runtime as itr_mod
@@ -222,20 +223,257 @@ def test_sombra_reporta_o_resultado_no_status_sem_misturar_com_o_caixa(tmp_path,
     assert s["daytrade"]["simbolo"] == "PMAM3"
 
 
-def test_modo_live_recusa_ordem_limite_pendente_ainda_nao_implementada(tmp_path, pregao_aberto):
-    """`MT5Broker._send` so faz `TRADE_ACTION_DEAL` (a mercado). Enquanto a
-    ordem pendente nao existir de verdade, `execution_mode="live"` tem de
-    FALHAR alto em vez de silenciosamente virar uma ordem a mercado — que
-    pagaria o spread e seria uma estrategia diferente da validada."""
+# ---------- execucao REAL: a corretora e' a fonte de verdade do fill -------
+#
+# O ponto de todos os testes desta secao: em `execution_mode="live"` a barra
+# DEIXA de decidir se a ordem preencheu. Uma barra que atravessa o nivel com
+# a corretora reportando conta zerada = nao preencheu. Ver
+# `live/intraday_execution.py`.
+
+class _FakeMT5Broker:
+    """Corretora falsa com o contrato que `MT5IntradayExecution` usa:
+    `connect`, `place_pending`, `cancel`, `open_position`, `place`.
+
+    `posicao` e' o que a corretora "tem" -- o teste escreve nela para simular
+    o fill (ou a ausencia dele) sem depender de OHLC nenhum."""
+
+    name = "fake_mt5"
+    mode = "mt5"
+
+    def __init__(self, conectado=True):
+        self.conectado = conectado
+        self.posicao = None
+        self.pendentes_enviadas: list = []
+        self.canceladas: list = []
+        self.ordens_a_mercado: list = []
+        self._ticket = 1000
+
+    def connect(self):
+        return self.conectado
+
+    def supports_automation(self):
+        return True
+
+    def cash_balance(self):
+        raise AssertionError("o caixa do slot vem do ledger manual, nao da corretora")
+
+    def poll(self, order):
+        return order
+
+    def place_pending(self, order):
+        self._ticket += 1
+        order.status = OrderStatus.SENT
+        order.broker_ref = str(self._ticket)
+        self.pendentes_enviadas.append(order)
+        return order
+
+    def cancel(self, order):
+        order.status = OrderStatus.CANCELLED
+        self.canceladas.append(order)
+        return order
+
+    def open_position(self, ticker):
+        return self.posicao
+
+    def place(self, order):
+        """Ordem a mercado (fechamento) -- preenche a `preco_de_saida`."""
+        self.ordens_a_mercado.append(order)
+        order.status = OrderStatus.FILLED
+        order.filled_qty = order.quantity
+        order.avg_price = self.preco_de_saida
+        order.broker_ref = "saida-9999"
+        self.posicao = None
+        return order
+
+    preco_de_saida = 9.90
+
+
+def _runtime_live(tmp_path, barras, broker, semente=None, **strat_kwargs):
+    from strategy.daytrade.lab.gremah import Gremah
+
+    kwargs = dict(symbol=SYMBOL, tick_size=0.01, profit_pct=0.01,
+                  spacing_multiplier=2.0, stop_multiplier=20.0)
+    kwargs.update(strat_kwargs)
+    feed = _ScriptedBarFeed(barras, barras[:1] if semente is None else semente)
+    rt = IntradayLiveRuntime(
+        slot=SLOT, strategy=Gremah(**kwargs), config=_config(),
+        bar_feed=feed, broker=broker,
+        db_path=tmp_path / "live_intraday.sqlite",
+        execution_mode="live", initial_capital=100.0,
+    )
+    rt.ensure_account()
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        acc.cash = 100.0
+        store.save_account(conn, acc)
+    return rt, feed
+
+
+def test_live_registra_ordem_limite_pendente_de_verdade_na_corretora(tmp_path, pregao_aberto):
+    """O contrario do que valia ate 2026-08-22 (o modo real levantava
+    `NotImplementedError`): a `EnterLimit` do robo vira uma ordem-limite
+    PENDENTE no terminal, com nivel e quantidade dela -- nunca uma ordem a
+    mercado, que pagaria o spread que este robo existe para capturar."""
+    broker = _FakeMT5Broker()
     barras = [
         _bar("13:00", 10.00, 10.00, 10.00, 10.00),
-        _bar("13:01", 10.00, 10.00, 9.79, 9.85),   # fill em 9.80
-        _bar("13:02", 9.85, 9.91, 9.85, 9.90),     # alvo -> fecha e RECARREGA
+        _bar("13:01", 10.00, 10.00, 10.00, 10.00),
     ]
-    rt, _feed = _runtime(tmp_path, barras, execution_mode="live")
+    rt, _feed = _runtime_live(tmp_path, barras, broker)
 
-    with pytest.raises(NotImplementedError, match="ordem-limite pendente"):
-        rt.run_once(now=_agora("13:04:00"))
+    rt.run_once(now=_agora("13:03:00"))
+
+    assert len(broker.pendentes_enviadas) >= 1
+    primeira = broker.pendentes_enviadas[0]
+    assert primeira.order_type == OrderType.LIMIT
+    assert primeira.limit_price == pytest.approx(9.80)  # 10.00 - 2 * 1% = 2 * 10 ticks
+    assert primeira.side == OrderSide.BUY
+
+
+def test_live_barra_atravessa_o_nivel_mas_corretora_nao_tem_posicao_nao_abre(tmp_path, pregao_aberto):
+    """O coracao da mudanca. A barra desce MUITO abaixo do nivel da ordem --
+    no backtest isso e' um fill garantido. Com a corretora reportando conta
+    zerada (a ordem estava atras na fila), a maquina NAO pode abrir posicao:
+    contar alvo e stop de algo que nao se tem levaria a mandar uma venda a
+    descoberto."""
+    broker = _FakeMT5Broker()
+    broker.posicao = None  # a corretora nao executou nada
+    barras = [
+        _bar("13:00", 10.00, 10.00, 10.00, 10.00),
+        _bar("13:01", 10.00, 10.00, 9.00, 9.20),   # atravessou 9.80 com folga
+        _bar("13:02", 9.20, 9.30, 9.20, 9.25),
+    ]
+    rt, _feed = _runtime_live(tmp_path, barras, broker)
+
+    rt.run_once(now=_agora("13:04:00"))
+
+    assert rt.machine.position is None
+    assert broker.ordens_a_mercado == []  # nada a fechar, nada foi aberto
+    s = rt.status()
+    assert s["daytrade"]["trades_na_sessao"] == 0
+
+
+def test_live_abre_posicao_com_preco_e_quantidade_REAIS_da_corretora(tmp_path, pregao_aberto):
+    """Quando a corretora confirma, o que entra na maquina e' o preco medio
+    DELA -- nao o nivel teorico da ordem. Aqui ela executou a 9,78 (melhor que
+    o nivel de 9,80), e e' 9,78 que tem de virar o preco de entrada."""
+    broker = _FakeMT5Broker()
+    barras = [
+        _bar("13:00", 10.00, 10.00, 10.00, 10.00),
+        _bar("13:01", 10.00, 10.00, 9.79, 9.85),
+        _bar("13:02", 9.85, 9.86, 9.85, 9.85),
+    ]
+    rt, _feed = _runtime_live(tmp_path, barras, broker)
+    # a corretora passa a reportar posicao a partir da 2a barra
+    broker.posicao = {"side": "long", "price": 9.78, "quantity": 1, "ticket": 77}
+
+    rt.run_once(now=_agora("13:04:00"))
+
+    assert rt.machine.position is not None
+    assert rt.machine.position.entry_price == pytest.approx(9.78)
+    assert rt.machine.position.quantity == 1
+
+
+def test_live_fecha_a_mercado_e_usa_o_preco_executado_pela_corretora(tmp_path, pregao_aberto):
+    """A saida por alvo sai A MERCADO em execucao real (uma limite poderia nao
+    preencher e deixar a posicao contra o proprio stop), e o P&L usa o preco
+    que a corretora executou -- 9,88, nao o nivel de alvo teorico."""
+    broker = _FakeMT5Broker()
+    broker.preco_de_saida = 9.88
+    barras = [
+        _bar("13:00", 10.00, 10.00, 10.00, 10.00),
+        _bar("13:01", 10.00, 10.00, 9.79, 9.85),   # confirma entrada
+        _bar("13:02", 9.85, 9.95, 9.85, 9.90),     # toca o alvo (9.90)
+    ]
+    rt, _feed = _runtime_live(tmp_path, barras, broker)
+    broker.posicao = {"side": "long", "price": 9.80, "quantity": 1, "ticket": 77}
+
+    rt.run_once(now=_agora("13:04:00"))
+
+    assert len(broker.ordens_a_mercado) == 1
+    saida = broker.ordens_a_mercado[0]
+    assert saida.order_type == OrderType.MARKET
+    assert saida.side == OrderSide.SELL
+    s = rt.status()
+    assert s["daytrade"]["trades_na_sessao"] == 1
+    # (9.88 - 9.80) * 1 acao = +0,08, debitado no CAIXA (nao em sombra)
+    assert s["caixa"] == pytest.approx(100.08, abs=0.01)
+    assert s["daytrade"]["resultado_sombra"] == pytest.approx(0.0)
+
+
+def test_live_sem_conexao_com_o_terminal_nao_conclui_que_nao_preencheu(tmp_path, pregao_aberto):
+    """"Nao consegui perguntar" nunca pode virar "nao preencheu" -- senao o
+    robo re-armaria ordem sobre uma posicao que talvez exista. Tem de subir
+    erro (o supervisor loga e tenta na proxima barra)."""
+    from live.intraday_execution import BrokerExecutionError
+
+    broker = _FakeMT5Broker(conectado=False)
+    barras = [
+        _bar("13:00", 10.00, 10.00, 10.00, 10.00),
+        _bar("13:01", 10.00, 10.00, 9.79, 9.85),
+    ]
+    rt, _feed = _runtime_live(tmp_path, barras, broker)
+
+    with pytest.raises(BrokerExecutionError, match="sem conexao"):
+        rt.run_once(now=_agora("13:03:00"))
+
+
+def test_live_posicao_do_lado_errado_na_corretora_falha_alto(tmp_path, pregao_aberto):
+    """Corretora reportando posicao VENDIDA enquanto a ordem vigiada era de
+    compra significa que alguma coisa fora deste robo mexeu na conta. Adotar
+    essa posicao como sua seria operar dinheiro de origem desconhecida."""
+    from live.intraday_execution import BrokerExecutionError
+
+    broker = _FakeMT5Broker()
+    broker.posicao = {"side": "short", "price": 9.78, "quantity": 1, "ticket": 77}
+    barras = [
+        _bar("13:00", 10.00, 10.00, 10.00, 10.00),
+        _bar("13:01", 10.00, 10.00, 9.79, 9.85),
+    ]
+    rt, _feed = _runtime_live(tmp_path, barras, broker)
+
+    with pytest.raises(BrokerExecutionError, match="reporta posicao short"):
+        rt.run_once(now=_agora("13:03:00"))
+
+
+def test_live_ordem_abandonada_pelo_robo_e_cancelada_no_terminal(tmp_path, pregao_aberto):
+    """Uma ordem-limite que o robo re-ancorou nao pode continuar viva na
+    corretora: ela preencheria horas depois, contra um preco que o robo ja
+    descartou."""
+    broker = _FakeMT5Broker()
+    barras = [
+        # ancora FIXA na abertura: ordem parada em 9.80, registrada no
+        # terminal pelo warm start
+        _bar("13:00", 10.00, 10.00, 10.00, 10.00),
+        # relogio ja passou de `fixed_anchor_until` (14:00) sem nunca tocar
+        # 9.80 -- o robo abandona a fixa e re-ancora no preco atual
+        _bar("14:30", 12.00, 12.00, 12.00, 12.00),
+    ]
+    rt, _feed = _runtime_live(tmp_path, barras, broker, semente=barras[:1])
+
+    rt.run_once(now=_agora("13:04:00"))
+
+    assert len(broker.pendentes_enviadas) == 2, "re-ancorou: registrou a nova"
+    assert broker.pendentes_enviadas[0].limit_price == pytest.approx(9.80)
+    assert broker.pendentes_enviadas[1].limit_price == pytest.approx(11.76)  # 12.00 - 2*12 ticks
+    assert len(broker.canceladas) == 1, "a ordem substituida tem de sair do terminal"
+    assert broker.canceladas[0].limit_price == pytest.approx(9.80)
+
+
+def test_sombra_continua_simulando_o_fill_pela_barra(tmp_path, pregao_aberto):
+    """Regressao da fronteira: sombra NAO ganha ponte de execucao -- ela
+    continua com o fill simulado pela barra, que e' justamente a premissa que
+    a fase de sombra existe para comparar contra a realidade."""
+    barras = [
+        _bar("13:00", 10.00, 10.00, 10.00, 10.00),
+        _bar("13:01", 10.00, 10.00, 9.79, 9.85),
+    ]
+    rt, _feed = _runtime(tmp_path, barras)
+
+    assert rt.executor is None
+    assert rt.machine.execution is None
+    rt.run_once(now=_agora("13:03:00"))
+    assert rt.machine.position is not None  # a barra decidiu, sem corretora
 
 
 def test_execution_mode_invalido_recusa_no_construtor():
