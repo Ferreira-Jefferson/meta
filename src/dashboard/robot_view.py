@@ -35,6 +35,22 @@ DAYTRADE = "daytrade"
 _KIND_LABEL = {SWING: "Swing", DAYTRADE: "Day trade"}
 
 
+def _formata_quantidade_em_lotes(nome: str, valor: str) -> str:
+    """`quantity` (ações por ordem) em LOTES -- "1 lote (100 ações)" em vez
+    do número cru de ações, que sozinho não diz se é 1 lote ou uma fração
+    dele. Vazio (`quantity=None`) usa o mesmo padrão que todo perfil e o
+    executor ao vivo já usam hoje (`LOTE_PADRAO_B3`) -- day trade nunca opera
+    fracionário (custaria R$1,90 fixos por ordem na Rico)."""
+    if nome != "quantity":
+        return valor
+    from strategy.daytrade.base import LOTE_PADRAO_B3
+
+    acoes = LOTE_PADRAO_B3 if valor == "—" else int(valor)
+    lotes = acoes / LOTE_PADRAO_B3
+    lotes_str = f"{lotes:g}".replace(".", ",")
+    return f"{lotes_str} lote{'' if lotes == 1 else 's'} ({acoes} ações)"
+
+
 @dataclass(frozen=True)
 class RobotAsset:
     """Um ativo operável do robô, com os números QUE MUDAM de um para outro.
@@ -345,7 +361,10 @@ def _daytrade_doc(key: str) -> RobotDoc:
             tuple(getattr(cls, "exit_rules", ()) or ()),
             tuple(getattr(cls, "sizing_rules", ()) or ()),
         ),
-        params=swing_registry.declared_params(robo),
+        params=[
+            (nome, _formata_quantidade_em_lotes(nome, valor), nota, doc)
+            for nome, valor, nota, doc in swing_registry.declared_params(robo)
+        ],
         # Day trade não roda o motor de carteira do formulário de simulação
         # (`dashboard/simulate.py` monta backtest diário sobre a watchlist). A
         # página dele mostra a ficha e manda para `/operacao`, em vez de

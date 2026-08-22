@@ -376,7 +376,7 @@ class Gremah(IntradayStrategy):
         "max_trades_per_side": "Teto de preenchimentos por lado, por sessão.",
         "session_stop_pct_capital": "Percentual do caixa mínimo do dia que define a "
                                     "perda-limite diária.",
-        "quantity": "Ações por ordem. Vazio = 1 lote inteiro (100 ações), do perfil do ativo.",
+        "quantity": "Quantidade de ações por operação.",
         # Exibido em hora de Brasília com o UTC ao lado (`param_utc_time`), então
         # a descrição não precisa mais carregar a conversão.
         "fixed_anchor_until": "Hora em que a âncora fixa vira rolante.",
