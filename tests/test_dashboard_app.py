@@ -731,19 +731,22 @@ def test_ficha_nao_anuncia_calibracao_de_UM_ativo_como_se_fosse_do_robo(client):
     assert "max_trades_per_side" in params
 
 
-def test_ficha_mostra_horario_em_brasilia_com_o_utc_ao_lado(client):
-    """Pedido do dono (2026-08-22): a hora crua e' UTC (relogio do terminal
-    MT5) e a tabela mostrava "14:00:00" na mesma pagina em que o texto fala
-    "11h de Brasilia" -- dois numeros para a mesma hora. Agora o valor e' o de
-    Brasilia e o UTC vai ao lado, em corpo menor (`Strategy.param_utc_time`)."""
+def test_ficha_mostra_o_horario_em_UTC_com_brasilia_ao_lado(client):
+    """Pedido do dono (2026-08-22): a tabela mostrava "14:00:00" cru na mesma
+    pagina em que o texto fala "11h de Brasilia" -- dois numeros para a mesma
+    hora, sem nada explicando a diferenca.
+
+    O UTC e' o valor PRINCIPAL (decisao do dono, depois de ver a primeira
+    versao com Brasilia na frente): e' o numero que `on_bar` compara e o que se
+    confere contra o codigo/log. Brasilia e' a traducao, em corpo menor."""
     from dashboard import robot_view
 
     linhas = {n: (v, nota) for n, v, nota, _ in robot_view.detail("gremah").params}
     valor, nota = linhas["fixed_anchor_until"]
 
-    assert valor == "11:00"        # Brasilia = UTC-3 fixo desde 2019
-    assert nota == "14:00 UTC"     # o cru, para conferencia
-    # e o valor cru NAO aparece mais como se fosse o numero principal
+    assert valor == "14:00 UTC"          # o que o robo usa
+    assert nota == "11:00 Brasília"      # traducao (UTC-3 fixo desde 2019)
+    # o valor cru do dataclass nao vai mais para a tela sem unidade nenhuma
     assert "14:00:00" not in client.get("/strategies/gremah").text
 
 

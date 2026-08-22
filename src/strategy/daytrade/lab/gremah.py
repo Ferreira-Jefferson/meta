@@ -309,9 +309,9 @@ class Gremah(IntradayStrategy):
     # Quem carrega os três é a tabela de ativos da ficha, alimentada por
     # `calibrated_setups()`.
     param_hidden = ("symbol", "profit_pct", "stop_multiplier")
-    # O valor cru é o relógio do terminal MT5 (UTC). A ficha mostra 11:00
-    # (Brasília) com "14:00 UTC" ao lado, em corpo menor -- ver
-    # `Strategy.param_utc_time`.
+    # O valor cru é o relógio do terminal MT5 (UTC), e é ele que `on_bar`
+    # compara. A ficha mostra "14:00 UTC" como valor e "11:00 Brasília" ao
+    # lado, em corpo menor -- ver `Strategy.param_utc_time`.
     param_utc_time = ("fixed_anchor_until",)
     param_docs = {
         "symbol": "Ativo que ele negocia.",

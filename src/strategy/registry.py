@@ -147,8 +147,13 @@ def _formata_valor(v: Any, como_pct: bool = False) -> str:
     return str(v)
 
 
-def _formata_hora_brt(v: Any) -> tuple[str, str]:
-    """Hora UTC -> ("11:00", "14:00 UTC"). Devolve ("", "") se não for hora.
+def _formata_hora_utc(v: Any) -> tuple[str, str]:
+    """Hora UTC -> ("14:00 UTC", "11:00 Brasília"). ("", "") se não for hora.
+
+    O UTC é o valor PRINCIPAL de propósito: é o número que o robô compara de
+    verdade (o relógio do terminal MT5), e portanto o que se confere contra o
+    código e contra um log. Brasília entra como tradução em corpo menor — útil
+    para pensar, mas não é o que está configurado.
 
     Brasília é UTC-3 FIXO: o horário de verão brasileiro acabou em 2019, então
     aqui não há calendário nenhum a consultar — diferente do fechamento do
@@ -159,7 +164,10 @@ def _formata_hora_brt(v: Any) -> tuple[str, str]:
     hora, minuto = getattr(v, "hour", None), getattr(v, "minute", None)
     if hora is None or minuto is None:
         return ("", "")
-    return (f"{(hora - 3) % 24:02d}:{minuto:02d}", f"{hora:02d}:{minuto:02d} UTC")
+    return (
+        f"{hora:02d}:{minuto:02d} UTC",
+        f"{(hora - 3) % 24:02d}:{minuto:02d} Brasília",
+    )
 
 
 def declared_params(obj: Any) -> list[tuple[str, str, str, str]]:
@@ -196,12 +204,12 @@ def declared_params(obj: Any) -> list[tuple[str, str, str, str]]:
         cru = getattr(obj, nome)
         nota = ""
         if nome in horas_utc:
-            brt, utc = _formata_hora_brt(cru)
+            utc, brt = _formata_hora_utc(cru)
             # Só troca a exibição se o valor REALMENTE for uma hora: um robô
             # que declare o nome e passe outro tipo cai no formato normal em
             # vez de mostrar um horário inventado.
-            if brt:
-                linhas.append((nome, brt, utc, docs.get(nome, "")))
+            if utc:
+                linhas.append((nome, utc, brt, docs.get(nome, "")))
                 continue
         valor = _formata_valor(cru, como_pct=nome in percentuais)
         linhas.append((nome, valor, nota, docs.get(nome, "")))
