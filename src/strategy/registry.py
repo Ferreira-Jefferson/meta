@@ -38,6 +38,14 @@ class StrategyInfo:
     # aqui, resolvido no import, para uma grade de catálogo não precisar
     # instanciar todo robô só para escrever "63 ativos" num cartão.
     universe_size: int = 0
+    # Texto para o DONO DO CAPITAL (ver `Strategy.tagline` em
+    # `strategy/base.py`). Vazio = este robô não tem versão para humano
+    # escrita; a página mostra isso como falta, e NUNCA cai no docstring —
+    # despejar prosa de desenvolvedor na tela do usuário foi o problema que
+    # esses três campos existem para resolver.
+    tagline: str = ""
+    plain_summary: tuple[str, ...] = ()
+    plain_example: tuple[str, ...] = ()
     watched_signals: tuple[str, ...] = ()
     entry_rules: tuple[str, ...] = ()
     exit_rules: tuple[str, ...] = ()
@@ -125,9 +133,12 @@ def _param_docs(cls: type) -> dict[str, str]:
     return docs
 
 
-def _formata_valor(v: Any) -> str:
+def _formata_valor(v: Any, como_pct: bool = False) -> str:
     if isinstance(v, bool) or v is None:
         return {True: "sim", False: "não", None: "—"}[v]
+    if como_pct and isinstance(v, (int, float)):
+        # vírgula decimal e sem zeros à direita: 0.02 -> "2%", 0.005 -> "0,5%"
+        return f"{v * 100:g}".replace(".", ",") + "%"
     if isinstance(v, float):
         return f"{v:g}"
     if isinstance(v, (list, tuple)):
@@ -146,11 +157,21 @@ def declared_params(obj: Any) -> list[tuple[str, str, str]]:
     """
     cls = type(obj)
     docs = _param_docs(cls)
+    # `param_hidden` acumula ao longo do MRO (uma classe-base pode esconder o
+    # encanamento dela sem a folha ter de repetir).
+    escondidos: set[str] = set()
+    percentuais: set[str] = set()
+    for klass in cls.__mro__:
+        escondidos.update(klass.__dict__.get("param_hidden") or ())
+        percentuais.update(klass.__dict__.get("param_pct") or ())
     linhas = []
     for nome in _param_names(cls):
+        if nome in escondidos:
+            continue
         if not hasattr(obj, nome):
             continue  # parâmetro consumido no __init__ e não guardado
-        linhas.append((nome, _formata_valor(getattr(obj, nome)), docs.get(nome, "")))
+        valor = _formata_valor(getattr(obj, nome), como_pct=nome in percentuais)
+        linhas.append((nome, valor, docs.get(nome, "")))
     return linhas
 
 
@@ -174,6 +195,9 @@ def _build_registry() -> dict[str, StrategyInfo]:
             description=short,
             long_description=long or f"<p>{inline_html(short)}</p>",
             universe_size=len(getattr(d.cls, "universe_tickers", None) or ()),
+            tagline=getattr(d.cls, "tagline", "") or "",
+            plain_summary=tuple(getattr(d.cls, "plain_summary", ()) or ()),
+            plain_example=tuple(getattr(d.cls, "plain_example", ()) or ()),
             # Ficha técnica declarada na classe (ver `Strategy.entry_rules` em
             # `strategy/base.py`) — herdada pela linhagem, então uma variante
             # que só troca um parâmetro já vem documentada.

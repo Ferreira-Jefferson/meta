@@ -54,14 +54,23 @@ class RobotCard:
 
 @dataclass(frozen=True)
 class RobotDoc:
-    """Ficha completa de um robô — o que a página `/strategies/<key>` mostra."""
+    """Ficha completa de um robô — o que a página `/strategies/<key>` mostra.
+
+    `description` e `summary`/`example` vêm dos campos escritos PARA HUMANO na
+    classe (`Strategy.tagline`/`plain_summary`/`plain_example`), nunca do
+    docstring: o docstring fala de hipótese a priori, refutação e nome de
+    parâmetro, o que é o assunto de quem mexe no código e ruído para quem só
+    quer saber o que o robô faz com o dinheiro. Robô sem esses campos escritos
+    mostra a falta na tela, em vez de cair no texto técnico.
+    """
 
     key: str
     kind: str
     kind_label: str
     version: str
     description: str
-    narrative: str  # HTML (parágrafos), vindo do docstring da classe
+    summary: tuple[str, ...] = ()   # parágrafos de prosa
+    example: tuple[str, ...] = ()   # um caso concreto, em passos
     facts: tuple[tuple[str, str], ...] = ()
     blocks: tuple[tuple[str, tuple[str, ...]], ...] = ()  # (título, itens)
     params: list[tuple[str, str, str]] = field(default_factory=list)
@@ -85,7 +94,7 @@ def _blocks(
     renderizado — a página encurta em vez de mentir que tem seções.
     """
     candidatos = (
-        ("Sinais que ele observa", signals),
+        ("O que ele olha", signals),
         ("Quando compra", entrada),
         ("Quando vende", saida),
         ("Quanto compra, e o que custa", sizing),
@@ -105,7 +114,9 @@ def _swing_card(info: swing_registry.StrategyInfo, in_ranking: bool) -> RobotCar
         kind=SWING,
         kind_label=_KIND_LABEL[SWING],
         version=info.version,
-        description=info.description,
+        # Frase humana quando o robô tem uma escrita; a do docstring só como
+        # último recurso (ver `RobotDoc`).
+        description=info.tagline or info.description,
         href=f"/strategies/{info.key}",
         # Sem instanciar o robô: a grade da home abriria todo robô do catálogo
         # só para escrever uma linha de metadata.
@@ -117,17 +128,18 @@ def _swing_card(info: swing_registry.StrategyInfo, in_ranking: bool) -> RobotCar
 def _daytrade_cards() -> list[RobotCard]:
     """Cartões de day trade no MESMO formato dos de swing.
 
-    A descrição curta é recalculada aqui com `registry.docstring_parts` em vez
-    de usar a que vem em `DaytradeRobotInfo.description`: aquela corta o
-    docstring na primeira LINHA (quebra de 72 colunas), e num catálogo lado a
-    lado a diferença aparece como um cartão com frase truncada ao lado de um
-    com frase inteira. Uma grade uniforme precisa de um texto uniforme.
+    A frase do cartão é a `tagline` humana do robô. Sem ela, cai no docstring
+    via `registry.docstring_parts` (e não na descrição de
+    `DaytradeRobotInfo`, que corta na primeira LINHA do docstring, quebra de
+    72 colunas incluída — num catálogo lado a lado isso aparece como um cartão
+    com frase truncada ao lado de um com frase inteira).
     """
     from strategy.daytrade.registry import get_daytrade_robot, list_daytrade_robots
 
     cartoes = []
     for info in list_daytrade_robots():
-        curta, _ = swing_registry.docstring_parts(type(get_daytrade_robot(info.key)))
+        cls = type(get_daytrade_robot(info.key))
+        curta = getattr(cls, "tagline", "") or swing_registry.docstring_parts(cls)[0]
         cartoes.append(RobotCard(
             key=info.key,
             kind=DAYTRADE,
@@ -167,8 +179,9 @@ def _swing_doc(key: str, in_ranking: bool) -> RobotDoc:
         kind=SWING,
         kind_label=_KIND_LABEL[SWING],
         version=info.version,
-        description=info.description,
-        narrative=info.long_description,
+        description=info.tagline or info.description,
+        summary=info.plain_summary,
+        example=info.plain_example,
         facts=(
             ("Cadência", "decide no fim do mês"),
             ("Posições", str(getattr(obj, "top_n", "—"))),
@@ -188,14 +201,15 @@ def _daytrade_doc(key: str) -> RobotDoc:
 
     robo = get_daytrade_robot(key)  # instância com os defaults da classe
     cls = type(robo)
-    curta, narrativa = swing_registry.docstring_parts(cls)
     return RobotDoc(
         key=key,
         kind=DAYTRADE,
         kind_label=_KIND_LABEL[DAYTRADE],
         version=getattr(robo, "version", "0.1"),
-        description=curta,
-        narrative=narrativa,
+        description=(getattr(cls, "tagline", "")
+                     or swing_registry.docstring_parts(cls)[0]),
+        summary=tuple(getattr(cls, "plain_summary", ()) or ()),
+        example=tuple(getattr(cls, "plain_example", ()) or ()),
         facts=(
             ("Ativo", getattr(robo, "symbol", "—")),
             ("Cadência", "barra a barra"),

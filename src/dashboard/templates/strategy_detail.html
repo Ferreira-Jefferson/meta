@@ -79,24 +79,42 @@
 </section>
 {% endif %}
 
+{#  PROSA PRIMEIRO, especificação depois. A seção antiga abria com uma linha
+    explicando que o texto vinha da classe do robô — informação sobre o
+    encanamento do sistema, que não interessa a quem quer saber o que o robô
+    faz com o dinheiro. E o texto que vinha logo abaixo era o docstring: prosa
+    de desenvolvedor (hipótese a priori, nome de parâmetro, data de promoção)
+    numa tela de usuário. Agora a página lê `plain_summary`/`plain_example`,
+    escritos para humano (ver `strategy/base.py::Strategy.tagline`). #}
+{% if robot.summary %}
+<section class="robot-story">
+  {{ ui.section_head("Como funciona", "O que ele faz, em palavras") }}
+  <div class="story-body">
+    {% for paragrafo in robot.summary %}<p>{{ paragrafo|inline_code }}</p>{% endfor %}
+  </div>
+</section>
+{% endif %}
+
+{% if robot.example %}
+<section class="robot-example">
+  {{ ui.section_head("Exemplo", "Passo a passo, com números") }}
+  <ol class="example-steps">
+    {% for passo in robot.example %}<li>{{ passo|inline_code }}</li>{% endfor %}
+  </ol>
+  <p class="example-note">
+    Números ilustrativos, calculados com as regras e os parâmetros reais deste
+    robô — não são uma operação que aconteceu.
+  </p>
+</section>
+{% endif %}
+
 <section class="robot-doc">
-  {{ ui.section_head("Regras", "Como ele opera",
-     "Texto lido da própria classe que o backtest e a operação real executam —
-      se a regra mudar no código, esta página muda com ela.") }}
+  {{ ui.section_head("Regras", "As regras, em detalhe") }}
   {#  Lista de ESPECIFICAÇÃO (rótulo à esquerda, conteúdo à direita), não
       quatro colunas lado a lado: as listas têm de 3 a 14 itens de prosa
       longa, e em colunas estreitas isso virava quatro parágrafos verticais
-      ilegíveis com um vão enorme embaixo da menor delas.
-
-      A NARRATIVA entra como primeira linha desta mesma grade, e não como um
-      bloco solto acima dela: soltando-a, ela virava uma fita de texto
-      encostada na margem esquerda, sem relação de alinhamento com nada — o
-      resto da seção começa 250px mais à direita, na coluna de conteúdo. #}
+      ilegíveis com um vão enorme embaixo da menor delas. #}
   <div class="doc-spec">
-    <article class="doc-block doc-block-resumo">
-      <h3>Em resumo</h3>
-      <div class="doc-body">{{ robot.narrative|safe }}</div>
-    </article>
     {% for titulo, itens in robot.blocks %}
     <article class="doc-block">
       <h3>{{ titulo }}</h3>
@@ -123,7 +141,11 @@
   {% if robot.params %}
   <article class="doc-block params-block">
     <h3>Parâmetros</h3>
-    <p class="dek">Valores EFETIVOS deste robô, lidos do objeto — não os defaults da classe-base, que a família reescreve por herança.</p>
+    {# Antes: "Valores EFETIVOS deste robô, lidos do objeto — não os defaults
+       da classe-base, que a família reescreve por herança." Isso explicava
+       como o SISTEMA lê o número, não o que o número significa para quem
+       opera. #}
+    <p class="dek">Os números que ele usa hoje. Mudar qualquer um deles muda o robô — o histórico medido acima vale para estes valores, não para outros.</p>
     <table class="params-table">
       <thead><tr><th>Nome</th><th class="right">Valor</th><th>O que é</th></tr></thead>
       <tbody>

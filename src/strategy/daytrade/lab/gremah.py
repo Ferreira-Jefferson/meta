@@ -63,9 +63,12 @@ class _SymbolCalibration:
 # padrao -- day trade nao usa fracionario porque cada ordem fracionaria
 # custa R$1,90 fixos na corretora, proibitivo dado o giro alto da gremah).
 #
-# IMPORTANTE: estes 3 numeros sao IN-SAMPLE APENAS -- o trecho
-# out-of-sample reservado (2026-06-13..2026-08-20) AINDA NAO foi rodado
-# com eles. Tratar como candidato, nao como resultado validado.
+# OOS reconfirmado 2026-08-22 (trecho reservado 2026-06-13..2026-08-21,
+# capital = `capital_minimo_brl` do preco no inicio do OOS): as 3 calibracoes
+# seguem positivas fora da amostra que as gerou --
+#   PMAM3: 319 trades, wr 83,1%, lucro +R$177,79, pf 2,75, MaxDD -12,91%
+#   CSAN3: 627 trades, wr 98,2%, lucro +R$347,48, pf 4,22, MaxDD -4,13%
+#   KLBN4: 671 trades, wr 98,7%, lucro +R$425,02, pf 12,15, MaxDD -1,57%
 #
 # lucro IS medido vs. o antigo default global (0.42%/20x), mesma janela:
 #   PMAM3: +R$759,08 vs +R$609,04 (+24,6%)
@@ -126,8 +129,8 @@ class Gremah(IntradayStrategy):
     GLOBAL nao transfere bem entre simbolos em faixas de preco diferentes
     -- por isso `profit_pct=None`/`stop_multiplier=None` (os defaults do
     construtor) nao sao mais um numero fixo, e' um LOOKUP por `symbol` na
-    tabela de calibracao. PMAM3, CSAN3 e KLBN4 tem numeros IN-SAMPLE
-    confirmados ali (nao OOS ainda); qualquer outro simbolo faz
+    tabela de calibracao. PMAM3, CSAN3 e KLBN4 tem numeros confirmados IS
+    e OOS (reconfirmado 2026-08-22); qualquer outro simbolo faz
     `Gremah.__init__` levantar `ValueError` em vez de herdar a calibracao
     de outro papel -- medir antes de operar, nao presumir. Acima de ~R$6-7
     o alvo (mesmo calibrado) tende a ficar pequeno demais frente ao piso de
@@ -144,54 +147,93 @@ class Gremah(IntradayStrategy):
     # quem le (`dashboard/robot_view.py`) usa `getattr` com default vazio.
     # Existe para a pagina `/strategies/gremah` poder explicar o robo em prosa
     # em vez de mostrar so' a tabela de parametros.
+    tagline = (
+        "Deixa uma ordem parada logo abaixo do preço, compra se o mercado vier até "
+        "ela e revende um centavo acima — dezenas de vezes por dia, sempre zerando "
+        "antes do fim do pregão."
+    )
+    plain_summary = (
+        "Ele não tenta adivinhar se a ação vai subir ou cair. Deixa uma ordem de "
+        "compra parada um pouco abaixo do preço do momento; se o mercado cair até "
+        "ali, ele compra e imediatamente coloca a ordem de venda um pouco acima. O "
+        "lucro de cada ida e volta é de centavos — o ganho vem da repetição, não do "
+        "tamanho.",
+        "O detalhe que sustenta o desenho: as duas ordens ficam PARADAS esperando o "
+        "preço chegar, nunca perseguem o mercado. Quem espera recebe o spread em vez "
+        "de pagá-lo, e é essa diferença que separa o robô de dar lucro ou prejuízo "
+        "com o mesmo número de operações.",
+        "Nas primeiras horas do pregão, os níveis são calculados a partir do preço de "
+        "abertura do dia. Depois das 11h de Brasília, passam a ser calculados a partir "
+        "do preço do momento, refeitos a cada ordem nova — medimos que os níveis "
+        "presos na abertura vão ficando longe demais conforme o dia avança, e param de "
+        "ser tocados.",
+        "Ele alterna os lados: depois de fechar uma compra, a próxima tentativa é uma "
+        "venda. Nunca dorme com posição aberta, e se o prejuízo acumulado do dia "
+        "chegar a R$ 30 ele fecha o que estiver aberto e não opera mais até o próximo "
+        "pregão.",
+    )
+    plain_example = (
+        "PMAM3 abre o dia a R$ 0,14. O alvo de lucro configurado é 0,32% do preço — "
+        "menos de um centavo. Como a bolsa não negocia fração de centavo, o alvo vira "
+        "o mínimo possível: 1 centavo.",
+        "Ele deixa uma ordem de compra parada a R$ 0,13, um centavo abaixo. Enquanto "
+        "o preço não tocar ali, nada acontece — nenhuma ordem enviada, nenhum custo.",
+        "O preço cai a R$ 0,13 e a ordem é executada: 100 ações, R$ 13,00 investidos. "
+        "Na mesma hora ele deixa a venda parada a R$ 0,14.",
+        "Se o preço volta a R$ 0,14, a venda sai: R$ 1,00 de lucro bruto na ida e "
+        "volta, menos a taxa da bolsa. Ele então tenta o lado oposto, uma venda a "
+        "descoberto, pelo mesmo mecanismo.",
+        "Se em vez de subir o preço cair a R$ 0,12, o stop sai com R$ 1,00 de "
+        "prejuízo. É por isso que um papel de centavos exige calibração medida: num "
+        "preço tão baixo, um único centavo já é 7% do valor da ação.",
+    )
     watched_signals = (
-        "Abertura da sessão: o `open` da primeira barra vista antes de "
-        "`fixed_anchor_until` — é a âncora de toda a fase fixa do dia.",
-        "Preço atual (`close` da barra): âncora da fase rolante, recalculada a cada "
-        "rearme de ordem.",
-        "Relógio do pregão: `fixed_anchor_until` é o que separa a fase de âncora fixa "
-        "da rolante.",
-        "P&L agregado da sessão, em reais, contra `session_stop_brl`.",
-        "Preenchimentos já feitos em cada lado (long/short), contra "
-        "`max_trades_per_side`.",
-        "Idade da ordem pendente, em barras, contra `rolling_reanchor_after_bars`.",
+        "O preço de abertura do dia, que ancora todos os níveis das primeiras horas.",
+        "O preço do momento, que passa a ancorar os níveis depois das 11h de Brasília.",
+        "O relógio do pregão — é ele que decide qual das duas âncoras vale agora.",
+        "O resultado acumulado do dia, em reais, contra o limite de R$ 30 de prejuízo.",
+        "Quantas operações já fez de cada lado, contra o teto de 15 por lado.",
+        "Há quanto tempo a ordem parada está esperando sem ser tocada.",
     )
     entry_rules = (
-        "Uma ordem-limite PARADA por vez, `spacing` ticks abaixo da âncora (long) ou "
-        "acima (short) — ele espera o preço vir até ele, nunca paga o spread para "
-        "entrar.",
-        "Os três níveis saem de `profit_pct` sobre a âncora, convertidos em ticks: "
-        "alvo = 1×, espaçamento da entrada = `spacing_multiplier`×, stop = "
-        "`stop_multiplier`×.",
-        "Antes de `fixed_anchor_until`, a âncora é a ABERTURA do dia; depois, é o "
-        "PREÇO ATUAL. O corte não foi otimizado — é o ponto médio observável entre "
-        "\"13:00 ainda positivo\" e \"15:00 já negativo\" na medição que motivou o "
-        "desenho.",
-        "Alterna de lado: depois de fechar um long tenta o short primeiro, e só "
-        "insiste no mesmo lado quando o outro estourou `max_trades_per_side`.",
-        "Ordem parada obsoleta é abandonada e rearmada no preço/modo atuais — a que "
-        "foi armada na fase fixa quando o relógio já virou, e a rolante que esperou "
-        "`rolling_reanchor_after_bars` barras sem ser tocada.",
+        "Uma ordem parada por vez, um pouco abaixo do preço de referência para "
+        "comprar (ou acima, para vender a descoberto). Ele espera o preço vir até "
+        "ele — nunca paga o spread para entrar.",
+        "Os três níveis (entrada, alvo e stop) saem de um percentual do preço de "
+        "referência, arredondado para centavos inteiros. Em ações de centavos, esse "
+        "arredondamento é o que manda: tudo tende a virar 1 centavo.",
+        "Até as 11h de Brasília a referência é a abertura do dia; depois, é o preço "
+        "do momento. Esse corte não foi otimizado — é o meio entre o horário em que a "
+        "medição ainda dava lucro e o em que já dava prejuízo.",
+        "Alterna os lados: depois de fechar uma compra, tenta uma venda, e só insiste "
+        "no mesmo lado quando o outro já bateu o teto de 15 operações.",
+        "Ordem parada que ficou velha é cancelada e refeita no preço atual — tanto a "
+        "que sobrou da fase da abertura quanto a que esperou tempo demais sem ser "
+        "tocada.",
     )
     exit_rules = (
-        "Alvo: ordem-limite parada a `profit_pct` do preço de entrada. Sair como MAKER "
-        "é o centro do desenho (`target_fills_as_maker`) — capturar o spread em vez de "
-        "pagá-lo —, não um detalhe de modelagem.",
-        "Stop: `stop_multiplier`× a distância do alvo, na direção contrária.",
-        "Stop agregado da sessão: perda acumulada de `session_stop_brl` fecha a posição "
-        "aberta e encerra o dia — nada mais é armado até o próximo pregão.",
-        "Nunca carrega posição overnight: o motor achata no fim da sessão, pelo "
-        "calendário da B3 (`session_end_policy`), não por um horário fixo.",
+        "Vende com uma ordem parada no alvo, também sem perseguir o preço: sair como "
+        "quem espera, e não como quem paga o spread, é o centro do desenho.",
+        "Se o preço vai contra, o stop fecha a posição na direção oposta ao alvo.",
+        "Se o prejuízo acumulado do dia chega a R$ 30, fecha o que estiver aberto e "
+        "encerra: nada mais é enviado até o próximo pregão.",
+        "Nunca carrega posição para o dia seguinte. O fechamento segue o calendário "
+        "real da B3, não um horário fixo — o pregão muda de hora com o horário de "
+        "verão americano.",
     )
     sizing_rules = (
-        "`quantity` fixa por ordem. `None` = usa o `default_quantity` do perfil do "
-        "símbolo (PMAM3: 100 ações, um lote padrão).",
-        "Custo do perfil congelado do símbolo (`backtest/intraday/profiles.py`): "
-        "corretagem zero em lote padrão na Rico, mais taxa de bolsa por perna — "
-        "assumida ao DOBRO da real, de propósito, como margem de segurança.",
-        "Giro alto é o risco econômico do desenho: cada round-trip paga taxa de bolsa "
-        "duas vezes, e `max_trades_per_side` é o teto que limita isso por sessão.",
+        "Lote padrão de 100 ações por ordem. Day trade não usa mercado fracionário: "
+        "cada ordem fracionária custa R$ 1,90 fixos, proibitivo para um robô que faz "
+        "dezenas de operações por dia.",
+        "Em lote padrão a corretagem é zero na Rico. O que sobra é a taxa da bolsa, e "
+        "o backtest assume o DOBRO da taxa real, de propósito, como margem de "
+        "segurança.",
+        "O giro alto é o risco econômico do desenho: cada ida e volta paga a taxa duas "
+        "vezes. O teto de 15 operações por lado é o que limita isso por dia.",
     )
+    # Fração mostrada como percentual na ficha (ver `Strategy.param_pct` --
+    # `IntradayStrategy` não herda de `Strategy`, mas quem lê usa `getattr`).
+    param_pct = ("profit_pct",)
     param_docs = {
         "symbol": "Ativo que ele negocia.",
         "tick_size": "Variação mínima de preço do ativo.",

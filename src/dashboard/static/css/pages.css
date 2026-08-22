@@ -1099,21 +1099,78 @@
   padding-bottom: var(--s-3);
   border-bottom: 1px solid var(--grid-strong);
 }
-.doc-body {
+/* PROSA -- a explicação do robô em palavras, a primeira coisa que se lê na
+   ficha. Duas colunas balanceadas: são 3-4 parágrafos curtos, e em uma coluna
+   só eles ficariam uma fita estreita num lado da tela (a medida legível de
+   prosa é ~72 caracteres, e a página tem espaço para duas dessas).
+   Medida em `ch` porque é o que mede LINHA (largura do glifo): isso só passou
+   a valer de verdade depois do bug de `font-size` duplicado em `base.css` —
+   antes, `ch` era medido sobre 10,56px. */
+.robot-story { margin-bottom: var(--s-8); }
+.story-body {
+  font-family: var(--font-serif);
+  font-size: var(--fs-h3);
+  line-height: 1.6;
+  color: var(--fg);
+  columns: 2;
+  column-gap: var(--s-8);
+}
+.story-body p { margin: 0 0 var(--s-5); break-inside: avoid; }
+.story-body p:last-child { margin-bottom: 0; }
+@media (max-width: 1000px) {
+  .story-body { columns: 1; max-width: 68ch; font-size: var(--fs-body-lg); }
+}
+
+/* EXEMPLO -- passos numerados, uma coluna (a ordem importa: em duas colunas a
+   leitura salta do passo 3 para o 1 do lado). Régua âmbar à esquerda, mesmo
+   vocabulário da faixa de "modo sombra" em `/operacao`: é uma nota
+   editorial, não um dado. */
+.robot-example { margin-bottom: var(--s-8); }
+.example-steps {
+  list-style: none;
+  counter-reset: passo;
+  margin: 0;
+  padding: 0;
+  max-width: 92ch;
+}
+.example-steps li {
+  counter-increment: passo;
+  position: relative;
+  padding: 0 0 var(--s-4) var(--s-7);
   font-family: var(--font-serif);
   font-size: var(--fs-body-lg);
-  line-height: 1.7;
-  color: var(--fg);
-  /* Medida em `ch` porque é o que mede LINHA (largura do glifo), não pixel
-     arbitrário: ~72 caracteres é a faixa legível para prosa. Isso só passou
-     a valer de verdade depois do bug de `font-size` duplicado em `base.css`
-     — antes, `ch` era medido sobre 10,56px e a mesma declaração produzia uma
-     coluna de 403px. */
-  max-width: 72ch;
+  line-height: 1.65;
 }
-.doc-body p { margin: 0 0 var(--s-4); }
-.doc-body p:last-child { margin-bottom: 0; }
+.example-steps li::before {
+  content: counter(passo);
+  position: absolute;
+  left: 0;
+  top: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-metadata);
+  font-variant-numeric: tabular-nums;
+  color: var(--accent-amber);
+  border: 1px solid var(--grid-strong);
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+}
+.example-steps li:last-child { padding-bottom: 0; }
+.example-note {
+  margin: var(--s-5) 0 0;
+  padding-top: var(--s-3);
+  border-top: 1px solid var(--grid);
+  font-family: var(--font-mono);
+  font-size: var(--fs-metadata);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--fg-muted);
+}
+
 .doc-body code,
+.story-body code,
+.example-steps code,
 .doc-list code {
   font-family: var(--font-mono);
   font-size: 0.85em;
@@ -1149,7 +1206,6 @@
   border: none;
   line-height: 1.6;
 }
-.doc-block-resumo { align-items: baseline; }
 
 /* As regras em DUAS colunas balanceadas dentro da coluna de conteúdo.
    `columns` (multi-coluna) e não grid: ele equilibra a altura sozinho, então

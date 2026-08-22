@@ -186,6 +186,28 @@ def test_operacao_iniciar_sem_shares_per_lot_detectavel_pede_campo_sem_iniciar(
     assert called == []
 
 
+def test_operacao_iniciar_swing_ignora_execution_mode_do_form_sempre_live(
+    isolated_journal, client, monkeypatch,
+):
+    """O toggle sombra/real (2026-08-22) é só do slot intradiário -- swing
+    nunca teve modo sombra, então mesmo que um form adulterado mande
+    `execution_mode=shadow`, a conta continua indo pra "live"."""
+    captured: list = []
+    monkeypatch.setattr(live_control, "start", lambda cfg: captured.append(cfg))
+    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot, robot_key=None: 1.0)
+    monkeypatch.setattr(live_control, "detect_fractional_symbol_map", lambda slot, robot_key=None: None)
+    monkeypatch.setattr(dashboard_app.reader, "top_strategies_by_final_capital",
+                        lambda **kw: [{"strategy_name": "portfolio_dip2_hw40", "final_capital": 5_000.0}])
+
+    client.post(f"/operacao/{SWING}/caixa", data={"caixa": "100.00"})
+    resp = client.post(f"/operacao/{SWING}/iniciar",
+                       data={"robo": "portfolio_dip2_hw40", "execution_mode": "shadow"})
+
+    assert resp.status_code == 200
+    assert len(captured) == 1
+    assert captured[0].execution_mode == "live"
+
+
 def test_operacao_iniciar_primeira_vez_usa_caixa_do_ledger_como_capital(
     isolated_journal, client, monkeypatch,
 ):
@@ -589,7 +611,7 @@ def test_ficha_do_robo_de_day_trade_existe_e_explica_o_robo(client):
 
     assert resp.status_code == 200
     html = resp.text
-    assert "Sinais que ele observa" in html
+    assert "O que ele olha" in html
     assert "Quando compra" in html
     assert "Quando vende" in html
     # Motor incomparavel: a ficha dele NAO oferece o formulario de simulacao
@@ -613,17 +635,49 @@ def test_ficha_nunca_renderiza_bloco_de_regra_vazio(client):
         assert "<li>" in bloco, f"bloco de regra sem nenhum item: {bloco[:120]}"
 
 
+def test_ficha_nao_mostra_docstring_de_desenvolvedor_ao_usuario(client):
+    """A ficha e' a tela do DONO DO CAPITAL. A primeira versao dela
+    reaproveitava o docstring da classe, que e escrito para outra audiencia:
+    hipotese a priori, refutacao, nome de parametro, data de promocao. O texto
+    da tela vem de `plain_summary`/`plain_example` (ver `strategy/base.py`), e
+    o docstring nao pode vazar para la."""
+    html = client.get("/strategies/liqflop").text
+
+    # frases que so existem no docstring/comentario tecnico do robo
+    for vazamento in ("Hipotese a priori", "hipótese a priori", "kwargs.setdefault",
+                      "PROMOVIDO ao ranking", "docstring"):
+        assert vazamento not in html, f"texto de desenvolvedor na tela: {vazamento!r}"
+    # e o texto humano ESTA la
+    assert "Ele carrega uma ação por vez" in html
+    assert "Passo a passo" in html
+
+
+def test_ficha_esconde_o_encanamento_da_tabela_de_parametros(client):
+    """Caminho de arquivo e chave de modo interno nao sao decisao de
+    investimento -- `selic_path` e `redist_mode` saem da ficha via
+    `Strategy.param_hidden`. Continuam existindo e configuraveis; so nao sao
+    oferecidos ao dono como se fossem um botao dele."""
+    html = client.get("/strategies/liqflop").text
+
+    assert "selic_path" not in html
+    assert "redist_mode" not in html
+    assert "dip_pct" in html  # este SIM e uma decisao, e continua na tabela
+
+
 def test_ficha_mostra_o_valor_EFETIVO_do_parametro_nao_o_default_da_base(client):
     """`liqflop` opera `dip_pct=0.02`/`high_window=40` (postos por
     `DipTop1Portfolio` via `kwargs.setdefault`), nao o 0.03/20 da assinatura de
     `BuyTheDip`. A ficha le do OBJETO -- um numero errado na tela e' pior que
     numero nenhum, porque parece conferido."""
-    html = client.get("/strategies/liqflop").text
+    from dashboard import robot_view
 
-    assert "dip_pct" in html and "high_window" in html
-    # os defaults da raiz da familia nao podem aparecer como se fossem dele
-    linha_dip = [l for l in html.splitlines() if "dip_pct" in l]
-    assert linha_dip and "0.02" in html
+    params = dict((n, v) for n, v, _ in robot_view.detail("liqflop").params)
+
+    # 2% e 40 pregoes sao os EFETIVOS; 3% e 20 sao os defaults de `BuyTheDip`
+    assert params["dip_pct"] == "2%"
+    assert params["high_window"] == "40"
+    # e a fracao chega na tela como percentual, nao como "0.02" cru
+    assert "2%" in client.get("/strategies/liqflop").text
 
 
 def test_menu_nao_marca_a_home_como_pagina_atual_na_ficha_do_robo(client):

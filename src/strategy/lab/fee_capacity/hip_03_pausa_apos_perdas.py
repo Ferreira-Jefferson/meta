@@ -94,32 +94,118 @@ class LiquidFocusLossStreakPause(LiquidFocus):
     version = "1.0"
     candidate = True  # UNICO candidato do podio desde 2026-08-21 -- ver docstring do modulo
 
-    # Ficha: o que este arquivo acrescenta e a PAUSA, e so ela (ver `Strategy`
-    # em `strategy/base.py`).
-    watched_signals = LiquidFocus.watched_signals + (
-        "Sequência de perdas: compara o snapshot de posições entre pregões para "
-        "descobrir toda saída — inclusive a que o engine decidiu por stop, que nunca "
-        "aparece nas ações devolvidas por `on_bar`. Saída abaixo do preço de entrada "
-        "conta como perda; qualquer ganho zera a contagem.",
+    # ---------------------------------------------------------------- ficha
+    # TEXTO PARA O DONO DO CAPITAL (nao para quem le codigo) -- ver a
+    # convencao em `strategy/base.py`. Os numeros abaixo sao os EFETIVOS
+    # deste robo, conferidos em `registry.declared_params`: 1 posicao,
+    # universo top-20 por liquidez, momentum 12-1, dip 2%, janela de 40
+    # pregoes (~8 semanas), histerese 15%, stop 15%, pausa de 21 pregoes
+    # depois de 2 perdas seguidas.
+    tagline = (
+        "Compra uma ação por mês — a de melhor desempenho no ano que estiver em "
+        "queda recente — e para de comprar por um mês depois de duas vendas no "
+        "prejuízo seguidas."
     )
-    entry_rules = LiquidFocus.entry_rules + (
-        "Depois de `loss_streak_threshold` saídas negativas SEGUIDAS, para de abrir "
-        "posição nova por `pause_bars` pregões e fica em caixa (rendendo Selic, se "
-        "ligado).",
-        "A pausa é de CALENDÁRIO, não de sinal: ela não espera o momentum virar. É a "
-        "simplificação declarada da hipótese — acoplar a liberação ao ranking interno "
-        "do sleeve deixaria o robô frágil a qualquer mudança de como ele pontua.",
-        "Risco declarado da aposta: ficar de fora `pause_bars` pregões pode atrasar a "
-        "entrada bem no início de uma recuperação.",
+    plain_summary = (
+        "Ele carrega uma ação por vez e decide uma vez por mês. No último dia útil, "
+        "olha as 20 ações mais negociadas da bolsa, escolhe a que subiu mais nos "
+        "últimos 12 meses — ignorando o mês mais recente, para não comprar o que "
+        "acabou de disparar — e compra. Mas só compra se essa ação estiver pelo "
+        "menos 2% abaixo da máxima das últimas 8 semanas: ele não paga o topo. Se "
+        "nenhuma candidata estiver em queda, o mês passa sem compra nenhuma, e isso "
+        "é regra, não falha.",
+        "No mês seguinte ele refaz a conta. Só troca de ação se a nova candidata "
+        "estiver pelo menos 15% melhor que a que ele já tem — trocar por pouco só "
+        "paga corretagem. Fora dessa data mensal ele não faz nada, com uma exceção: "
+        "se a ação cair 15% abaixo do preço que ele pagou, ele vende no mesmo dia, "
+        "sem esperar o fim do mês.",
+        "A parte que dá nome ao robô: depois de duas vendas no prejuízo seguidas, "
+        "ele para de comprar por um mês inteiro e fica no caixa, rendendo Selic. "
+        "Passado esse mês, volta a operar normalmente — a pausa é de calendário, "
+        "não uma opinião sobre o mercado. Ela existe porque as piores quedas do "
+        "histórico dele não foram um tombo isolado, foram uma sequência de perdas "
+        "encadeadas.",
     )
-    exit_rules = LiquidFocus.exit_rules + (
-        "A pausa NUNCA bloqueia uma saída. Só `Enter` é filtrado — controle de risco "
-        "real não espera pausa nenhuma.",
+    plain_example = (
+        "Último dia útil de março. Entre as 20 ações mais negociadas, WEGE3 é a que "
+        "mais subiu em 12 meses e está 3% abaixo da máxima das últimas 8 semanas — "
+        "ele compra WEGE3 com todo o caixa, na abertura do dia seguinte.",
+        "Abril e maio: WEGE3 continua sendo a melhor da lista. Ele não faz nada. "
+        "Nenhuma ordem, nenhuma taxa.",
+        "Junho: RADL3 aparece 8% melhor que WEGE3. Oito é menos que os 15% exigidos "
+        "para justificar a troca, então ele fica onde está.",
+        "Julho: RADL3 está 20% melhor. Aí sim ele vende WEGE3 e compra RADL3.",
+        "Agosto: RADL3 é vendida com prejuízo. Setembro: a próxima também. Duas "
+        "perdas seguidas — ele fica em caixa em outubro inteiro, sem comprar nada, "
+        "e volta a decidir no fim de outubro.",
+    )
+
+    # Regras em linguagem de DONO, escritas de novo (nao herdadas da familia,
+    # que as escreve com nome de parametro): a folha e o unico lugar que sabe
+    # os numeros de verdade. O detalhe tecnico continua no docstring do
+    # modulo e nas classes-base.
+    watched_signals = (
+        "O quanto cada ação subiu nos últimos 12 meses, sem contar o mês mais "
+        "recente. É o que define a “melhor da lista”.",
+        "A que distância cada ação está da máxima das últimas 8 semanas — é a queda "
+        "recente que ele exige para comprar.",
+        "O quanto cada ação é negociada por dia, para só olhar as 20 mais líquidas. "
+        "Papel que não gira não entra, por mais atraente que pareça.",
+        "A Selic: uma alta forte em três meses faz ele zerar a carteira.",
+        "O calendário: o último dia útil do mês (a única data em que ele decide) e a "
+        "semana de divulgação de balanços.",
+        "As duas últimas vendas: se as duas deram prejuízo, a pausa dispara.",
+    )
+    entry_rules = (
+        "Decide uma vez por mês, no último dia útil. Em qualquer outro dia ele não "
+        "olha preço nem manda ordem.",
+        "Compra a ação de melhor desempenho em 12 meses entre as 20 mais líquidas — "
+        "uma ação só, com todo o caixa disponível.",
+        "Só compra se a ação estiver pelo menos 2% abaixo da máxima das últimas 8 "
+        "semanas. Se nenhuma estiver, o mês passa sem compra.",
+        "Só troca a ação que já tem se a nova candidata estiver 15% melhor. Troca "
+        "por pouco só paga corretagem.",
+        "Depois de duas vendas no prejuízo seguidas, para de comprar por um mês e "
+        "fica no caixa, rendendo Selic. É pausa de calendário: passado o mês, ele "
+        "volta a comprar mesmo que o mercado ainda pareça ruim.",
+        "Na semana de balanços ele adia a decisão em vez de forçá-la, e refaz a "
+        "conta do zero no primeiro dia livre.",
+        "O que ele decide no fechamento de um dia é executado na abertura do dia "
+        "seguinte — nunca no mesmo dia.",
+    )
+    exit_rules = (
+        "Vende quando a ação deixa de ser a melhor da lista por uma margem de 15% — "
+        "na virada do mês.",
+        "Vende no mesmo dia, sem esperar o fim do mês, se a ação cair 15% abaixo do "
+        "preço que ele pagou. Esse limite é fixo no preço de compra: ele não sobe "
+        "junto com o lucro.",
+        "Zera a carteira inteira se a Selic subir forte em três meses. É a única "
+        "defesa macro que ele tem.",
+        "Vende também a ação que saiu das 20 mais líquidas — deixar de girar é "
+        "motivo de saída, mesmo que o desempenho esteja bom.",
+        "A pausa depois das duas perdas nunca bloqueia uma venda: ela só impede "
+        "compra nova. Controle de risco não espera pausa.",
+    )
+    sizing_rules = (
+        "Uma posição por vez, com todo o caixa livre. Concentrar não é agressividade: "
+        "é o que faz a corretagem fixa de R$ 1,90 por ordem virar uma fração pequena "
+        "da posição, em vez de comer 20% dela.",
+        "O preço disso está declarado: uma ação ruim pesa o capital inteiro. Isso "
+        "aparece na queda máxima medida, não é de graça.",
+        "Toda compra e venda já vem com custo descontado — corretagem, taxas da bolsa "
+        "e o deslize de preço da execução.",
+        "Enquanto está fora do mercado, o caixa rende Selic. Ficar parado é uma "
+        "posição, não uma pausa.",
     )
     param_docs = {
-        "loss_streak_threshold": "Saídas negativas seguidas que disparam a pausa.",
-        "pause_bars": "Pregões sem comprar depois do gatilho (21 ≈ 1 mês).",
+        "loss_streak_threshold": "Vendas no prejuízo seguidas que disparam a pausa.",
+        "pause_bars": "Dias de bolsa sem comprar depois do gatilho (21 ≈ 1 mês).",
     }
+    # Encanamento, fora da ficha (ver `Strategy.param_hidden`): `selic_path` é
+    # caminho de arquivo, `redist_mode` só existe para os satélites (que este
+    # robô não usa) e `sleeve_count` é o nome interno da mesma coisa que
+    # `top_n` já diz -- uma posição por vez.
+    param_hidden = ("selic_path", "redist_mode", "sleeve_count")
 
     def __init__(self, loss_streak_threshold: int = 2, pause_bars: int = 21, **kwargs):
         super().__init__(**kwargs)

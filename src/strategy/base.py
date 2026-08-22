@@ -141,6 +141,31 @@ class Strategy(ABC):
     #
     # Convenção de texto: uma frase por item, `crase` para nome de
     # parâmetro/arquivo (virá `<code>` na tela). Sem HTML cru.
+    #
+    # TEXTO PARA HUMANO, NÃO PARA QUEM LÊ CÓDIGO
+    # ------------------------------------------
+    # `tagline`/`plain_summary`/`plain_example` são a versão que o DONO DO
+    # CAPITAL lê na página do robô. Existem porque a primeira versão desta
+    # ficha reaproveitava o docstring da classe, e o docstring é escrito para
+    # outra audiência: ele fala de hipótese a priori, de refutação, de
+    # `kwargs.setdefault`, de datas de promoção. Tudo isso importa para quem
+    # mexe no código e é ruído para quem só quer saber o que o robô faz com o
+    # dinheiro dele.
+    #
+    # Regras de escrita (o docstring continua livre para ser técnico):
+    #   - sem nome de parâmetro, de classe ou de arquivo — números e prazos
+    #     de verdade no lugar ("2% abaixo da máxima de 8 semanas", não
+    #     "`dip_pct` abaixo da máxima de `high_window`");
+    #   - números REAIS deste robô, conferidos, não os da classe-base;
+    #   - `plain_example` é um caso concreto em passos, com valores que o
+    #     robô produziria de fato.
+    # Declarar na FOLHA (o robô operável), nunca numa classe-base: uma
+    # classe-base não sabe com que números a folha vai rodar, e um número
+    # errado na tela é pior que número nenhum.
+    tagline: str = ""                       # uma frase: o que ele faz
+    plain_summary: tuple[str, ...] = ()     # parágrafos de prosa
+    plain_example: tuple[str, ...] = ()     # um caso concreto, em passos
+
     watched_signals: tuple[str, ...] = ()   # o que o robô calcula e observa
     entry_rules: tuple[str, ...] = ()       # quando e por que compra
     exit_rules: tuple[str, ...] = ()        # quando e por que vende
@@ -148,6 +173,17 @@ class Strategy(ABC):
     # Descrição de um parâmetro do `__init__`, por nome. Mesclado ao longo do
     # MRO (a classe mais derivada ganha) por `registry.declared_params()`.
     param_docs: dict[str, str] = {}
+    # Parâmetros que NÃO aparecem na ficha. Para encanamento: caminho de
+    # arquivo, chave de modo interno, nome que só faz sentido para quem leu a
+    # classe. Continuam existindo e continuam configuráveis — só não são
+    # oferecidos como se fossem uma decisão de investimento.
+    param_hidden: tuple[str, ...] = ()
+    # Parâmetros cujo valor é FRAÇÃO e deve ser lido como percentual na ficha
+    # (`0.02` -> "2%"). É propriedade da UNIDADE do parâmetro, não do valor,
+    # então pode ser declarado na classe-base sem risco de mentir numa
+    # subclasse. Sem isto, a ficha mostrava "0.02" e deixava para o leitor
+    # adivinhar se eram 2% ou 0,02%.
+    param_pct: tuple[str, ...] = ()
 
     def initialize(self, panels: dict[str, pd.DataFrame], ibov: pd.DataFrame) -> None:
         """Pré-calcula indicadores sobre o histórico completo.

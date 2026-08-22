@@ -68,6 +68,8 @@ class BuyTheDip(Strategy):
         "corretagem FIXA de `fractional_fixed_fee` por perna — o que decide se um "
         "capital pequeno sobrevive ao giro.",
     )
+    # Frações que a ficha mostra como percentual (ver `Strategy.param_pct`).
+    param_pct = ("dip_pct", "selic_threshold")
     param_docs = {
         "lookback": "Pregões do início da janela de momentum (252 ≈ 1 ano).",
         "skip_recent": "Pregões recentes ignorados no momentum (21 ≈ 1 mês).",
