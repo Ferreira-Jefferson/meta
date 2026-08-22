@@ -25,6 +25,7 @@ classes que o backtest e a operação real rodam.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from functools import lru_cache
 
 from strategy import registry as swing_registry
 
@@ -32,6 +33,30 @@ SWING = "swing"
 DAYTRADE = "daytrade"
 
 _KIND_LABEL = {SWING: "Swing", DAYTRADE: "Day trade"}
+
+
+@dataclass(frozen=True)
+class RobotAsset:
+    """Um ativo operável do robô, com os números QUE MUDAM de um para outro.
+
+    Existe por causa de um erro que a ficha do `gremah` cometia: ele aceita
+    três ativos, cada um com alvo, stop e caixa mínimo próprios (a calibração
+    não transfere entre símbolos — ver `strategy/daytrade/lab/gremah.py`), mas
+    a página mostrava um só. A tabela de parâmetros, que exibe UMA instância,
+    anunciava o alvo da PMAM3 como se fosse "o alvo do robô".
+
+    `price`/`lot_cost`/`min_capital` são `None` quando não há dado de minuto
+    salvo para o ativo: o caixa mínimo depende do preço de hoje, e a página
+    mostra a falta em vez de inventar um número.
+    """
+
+    symbol: str
+    profit_pct: float
+    stop_multiplier: float
+    price: float | None = None
+    price_date: str = ""
+    lot_cost: float | None = None
+    min_capital: float | None = None
 
 
 @dataclass(frozen=True)
@@ -73,7 +98,12 @@ class RobotDoc:
     example: tuple[str, ...] = ()   # um caso concreto, em passos
     facts: tuple[tuple[str, str], ...] = ()
     blocks: tuple[tuple[str, tuple[str, ...]], ...] = ()  # (título, itens)
-    params: list[tuple[str, str, str]] = field(default_factory=list)
+    # (nome, valor, nota, descrição) — ver `registry.declared_params`.
+    params: list[tuple[str, str, str, str]] = field(default_factory=list)
+    # Ativos com números PRÓPRIOS por ativo (ver `RobotAsset`). Vazio para os
+    # robôs de swing: eles decidem sobre uma lista inteira e o que caracteriza
+    # o universo deles já está em `facts`.
+    assets: tuple[RobotAsset, ...] = ()
     can_simulate: bool = False
     in_ranking: bool = False
     symbol: str = ""
@@ -100,6 +130,81 @@ def _blocks(
         ("Quanto compra, e o que custa", sizing),
     )
     return tuple((titulo, itens) for titulo, itens in candidatos if itens)
+
+
+def _preco_key(symbol: str) -> tuple[str, float, int]:
+    """Chave de cache do preço: identidade do ARQUIVO, não só o símbolo.
+
+    Sem o `mtime` no meio, o cache serviria o preço da primeira renderização
+    para sempre e o caixa mínimo da página envelheceria calado enquanto o
+    download de minuto continuasse rodando.
+    """
+    from core.config import INTRADAY_DATA_DIR
+
+    caminho = INTRADAY_DATA_DIR / f"{symbol}.parquet"
+    try:
+        st = caminho.stat()
+        return (symbol, st.st_mtime, st.st_size)
+    except OSError:
+        return (symbol, 0.0, 0)
+
+
+@lru_cache(maxsize=64)
+def _ultimo_preco_cached(key: tuple[str, float, int]) -> tuple[float | None, str]:
+    symbol, mtime, _ = key
+    if not mtime:
+        return (None, "")
+    from market_data_intraday.storage import load_m1
+
+    try:
+        df = load_m1(symbol)
+        if df.empty or "close" not in df.columns:
+            return (None, "")
+        return (float(df["close"].iloc[-1]), str(df.index[-1].date()))
+    except Exception:
+        # A ficha é uma página de leitura: parquet corrompido/ilegível vira
+        # "sem preço" na tela, nunca um 500 que esconde o resto do robô.
+        return (None, "")
+
+
+def _ultimo_preco(symbol: str) -> tuple[float | None, str]:
+    """(último fechamento de minuto salvo, data) — `(None, "")` se não houver."""
+    return _ultimo_preco_cached(_preco_key(symbol))
+
+
+def _daytrade_assets(cls, robo) -> tuple[RobotAsset, ...]:
+    """Os ativos do robô: os calibrados, se ele declarar; senão o único dele.
+
+    Descoberto por `getattr` (ver `Gremah.calibrated_setups`) para esta função
+    não precisar saber qual robô de day trade está sendo exibido.
+    """
+    setups = getattr(cls, "calibrated_setups", None)
+    if setups is None:
+        symbol = getattr(robo, "symbol", "")
+        if not symbol:
+            return ()
+        preco, data = _ultimo_preco(symbol)
+        return (_asset(symbol, getattr(robo, "profit_pct", 0.0),
+                       getattr(robo, "stop_multiplier", 0.0), preco, data),)
+    return tuple(
+        _asset(s.symbol, s.profit_pct, s.stop_multiplier, *_ultimo_preco(s.symbol))
+        for s in setups()
+    )
+
+
+def _asset(symbol, profit_pct, stop_multiplier, preco, data) -> RobotAsset:
+    from strategy.daytrade.lab.gremah import capital_minimo_brl
+
+    lote = preco * 100 if preco is not None else None
+    return RobotAsset(
+        symbol=symbol,
+        profit_pct=profit_pct,
+        stop_multiplier=stop_multiplier,
+        price=preco,
+        price_date=data,
+        lot_cost=lote,
+        min_capital=capital_minimo_brl(preco) if preco is not None else None,
+    )
 
 
 def _universo_label(tamanho: int) -> str:
@@ -138,8 +243,15 @@ def _daytrade_cards() -> list[RobotCard]:
 
     cartoes = []
     for info in list_daytrade_robots():
-        cls = type(get_daytrade_robot(info.key))
+        robo = get_daytrade_robot(info.key)
+        cls = type(robo)
         curta = getattr(cls, "tagline", "") or swing_registry.docstring_parts(cls)[0]
+        # Conta os ativos calibrados SEM buscar preço (o cartão não mostra
+        # caixa mínimo, e a home renderiza todo robô do catálogo).
+        setups = getattr(cls, "calibrated_setups", None)
+        quantos = len(setups()) if setups is not None else 1
+        fato_ativo = (("Ativos", f"{quantos} calibrados") if quantos > 1
+                      else ("Ativo", info.symbol))
         cartoes.append(RobotCard(
             key=info.key,
             kind=DAYTRADE,
@@ -147,7 +259,7 @@ def _daytrade_cards() -> list[RobotCard]:
             version=info.version,
             description=curta,
             href=f"/strategies/{info.key}",
-            facts=(("Ativo", info.symbol), ("Cadência", "intradiária")),
+            facts=(fato_ativo, ("Cadência", "intradiária")),
             in_ranking=False,
         ))
     return cartoes
@@ -201,6 +313,14 @@ def _daytrade_doc(key: str) -> RobotDoc:
 
     robo = get_daytrade_robot(key)  # instância com os defaults da classe
     cls = type(robo)
+    assets = _daytrade_assets(cls, robo)
+    # "Ativo: PMAM3" era uma afirmação FALSA num robô de três ativos — a
+    # instância default é PMAM3, mas o robô opera qualquer um dos calibrados
+    # (um por conta). Com um ativo só, volta a nomear o ativo.
+    fato_ativo = (
+        ("Ativos", f"{len(assets)} calibrados") if len(assets) > 1
+        else ("Ativo", assets[0].symbol if assets else "—")
+    )
     return RobotDoc(
         key=key,
         kind=DAYTRADE,
@@ -211,10 +331,11 @@ def _daytrade_doc(key: str) -> RobotDoc:
         summary=tuple(getattr(cls, "plain_summary", ()) or ()),
         example=tuple(getattr(cls, "plain_example", ()) or ()),
         facts=(
-            ("Ativo", getattr(robo, "symbol", "—")),
+            fato_ativo,
             ("Cadência", "barra a barra"),
             ("Overnight", "nunca"),
         ),
+        assets=assets,
         blocks=_blocks(
             tuple(getattr(cls, "watched_signals", ()) or ()),
             tuple(getattr(cls, "entry_rules", ()) or ()),

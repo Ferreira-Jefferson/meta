@@ -96,11 +96,29 @@ class LiquidFocusLossStreakPause(LiquidFocus):
 
     # ---------------------------------------------------------------- ficha
     # TEXTO PARA O DONO DO CAPITAL (nao para quem le codigo) -- ver a
-    # convencao em `strategy/base.py`. Os numeros abaixo sao os EFETIVOS
-    # deste robo, conferidos em `registry.declared_params`: 1 posicao,
-    # universo top-20 por liquidez, momentum 12-1, dip 2%, janela de 40
-    # pregoes (~8 semanas), histerese 15%, stop 15%, pausa de 21 pregoes
+    # convencao em `strategy/base.py`. Os numeros abaixo foram CONFERIDOS
+    # contra a instancia real (2026-08-22), nao contra a assinatura das
+    # classes-base: 1 posicao (`top_n`/`sleeve_count`), universo top-20 por
+    # liquidez (`universe_n=20`) tirado de um pool FIXO de 63 tickers
+    # (`liquid_sleeve.POOL`) e reranqueado a cada 12 meses
+    # (`refresh_months=12`, mediana de giro de `liquidity_window=252`
+    # pregoes), momentum 12-1 (`lookback=252`/`skip_recent=21`), dip 2%,
+    # janela de 40 pregoes (~8 semanas), histerese 15% (`_hysteresis`,
+    # privado -- por isso nao aparece na tabela de parametros), Selic
+    # (`selic_threshold=0,5%` em `selic_window=63`), pausa de 21 pregoes
     # depois de 2 perdas seguidas.
+    #
+    # Tres coisas que a versao anterior desta ficha errava, todas corrigidas
+    # aqui (2026-08-22) -- registradas para nao voltarem:
+    #   1. dizia "as 20 acoes mais negociadas da BOLSA", sugerindo re-selecao
+    #      mensal em todo o mercado. E' top-20 de um pool fixo de 63, revisto
+    #      1x por ano.
+    #   2. afirmava que papel que sai do top-20 e VENDIDO. E' o oposto:
+    #      `evict_on_refresh=False` neste robo (grandfathering) -- o refresh
+    #      proibe COMPRAR fora da lista, nao segurar o que ja se tem.
+    #   3. anunciava o stop de 15% como regra do robo. Ele e' do ENGINE
+    #      (`BacktestConfig.stop_loss_pct`), nao um parametro desta classe --
+    #      por isso nao esta (e nao pode estar) na tabela de parametros.
     tagline = (
         "Compra uma ação por mês — a de melhor desempenho no ano que estiver em "
         "queda recente — e para de comprar por um mês depois de duas vendas no "
@@ -108,17 +126,23 @@ class LiquidFocusLossStreakPause(LiquidFocus):
     )
     plain_summary = (
         "Ele carrega uma ação por vez e decide uma vez por mês. No último dia útil, "
-        "olha as 20 ações mais negociadas da bolsa, escolhe a que subiu mais nos "
-        "últimos 12 meses — ignorando o mês mais recente, para não comprar o que "
-        "acabou de disparar — e compra. Mas só compra se essa ação estiver pelo "
-        "menos 2% abaixo da máxima das últimas 8 semanas: ele não paga o topo. Se "
-        "nenhuma candidata estiver em queda, o mês passa sem compra nenhuma, e isso "
-        "é regra, não falha.",
+        "olha a sua lista de 20 ações, escolhe a que subiu mais nos últimos 12 "
+        "meses — ignorando o mês mais recente, para não comprar o que acabou de "
+        "disparar — e compra. Mas só compra se essa ação estiver pelo menos 2% "
+        "abaixo da máxima das últimas 8 semanas: ele não paga o topo. Se nenhuma "
+        "candidata estiver em queda, o mês passa sem compra nenhuma, e isso é "
+        "regra, não falha.",
+        "Essa lista de 20 não é escolhida a dedo nem refeita todo mês. Uma vez por "
+        "ano ele pega um conjunto fixo de 63 ações da bolsa e fica com as 20 mais "
+        "negociadas do último ano — só volume, nenhum olhar sobre retorno. É o que "
+        "impede o robô de operar papel que não gira, onde o próprio dinheiro dele "
+        "moveria o preço.",
         "No mês seguinte ele refaz a conta. Só troca de ação se a nova candidata "
         "estiver pelo menos 15% melhor que a que ele já tem — trocar por pouco só "
         "paga corretagem. Fora dessa data mensal ele não faz nada, com uma exceção: "
-        "se a ação cair 15% abaixo do preço que ele pagou, ele vende no mesmo dia, "
-        "sem esperar o fim do mês.",
+        "se a ação cair 15% abaixo do preço que ele pagou, ela é vendida no mesmo "
+        "dia, sem esperar o fim do mês. Esse limite de 15% é do backtest, não um "
+        "botão do robô: quem o aplica é o motor que executa as ordens.",
         "A parte que dá nome ao robô: depois de duas vendas no prejuízo seguidas, "
         "ele para de comprar por um mês inteiro e fica no caixa, rendendo Selic. "
         "Passado esse mês, volta a operar normalmente — a pausa é de calendário, "
@@ -127,9 +151,9 @@ class LiquidFocusLossStreakPause(LiquidFocus):
         "encadeadas.",
     )
     plain_example = (
-        "Último dia útil de março. Entre as 20 ações mais negociadas, WEGE3 é a que "
-        "mais subiu em 12 meses e está 3% abaixo da máxima das últimas 8 semanas — "
-        "ele compra WEGE3 com todo o caixa, na abertura do dia seguinte.",
+        "Último dia útil de março. Entre as 20 ações da lista, WEGE3 é a que mais "
+        "subiu em 12 meses e está 3% abaixo da máxima das últimas 8 semanas — ele "
+        "compra WEGE3 com todo o caixa, na abertura do dia seguinte.",
         "Abril e maio: WEGE3 continua sendo a melhor da lista. Ele não faz nada. "
         "Nenhuma ordem, nenhuma taxa.",
         "Junho: RADL3 aparece 8% melhor que WEGE3. Oito é menos que os 15% exigidos "
@@ -149,8 +173,9 @@ class LiquidFocusLossStreakPause(LiquidFocus):
         "recente. É o que define a “melhor da lista”.",
         "A que distância cada ação está da máxima das últimas 8 semanas — é a queda "
         "recente que ele exige para comprar.",
-        "O quanto cada ação é negociada por dia, para só olhar as 20 mais líquidas. "
-        "Papel que não gira não entra, por mais atraente que pareça.",
+        "Quanto dinheiro cada ação negocia por dia, medido pela mediana do último "
+        "ano. É o que define a lista de 20, revista uma vez por ano. Papel que não "
+        "gira não entra, por mais atraente que pareça.",
         "A Selic: uma alta forte em três meses faz ele zerar a carteira.",
         "O calendário: o último dia útil do mês (a única data em que ele decide) e a "
         "semana de divulgação de balanços.",
@@ -159,8 +184,10 @@ class LiquidFocusLossStreakPause(LiquidFocus):
     entry_rules = (
         "Decide uma vez por mês, no último dia útil. Em qualquer outro dia ele não "
         "olha preço nem manda ordem.",
-        "Compra a ação de melhor desempenho em 12 meses entre as 20 mais líquidas — "
+        "Compra a ação de melhor desempenho em 12 meses entre as 20 da sua lista — "
         "uma ação só, com todo o caixa disponível.",
+        "A lista de 20 é refeita uma vez por ano, pelas mais negociadas do último "
+        "ano dentro de um conjunto fixo de 63 ações. Ele nunca compra fora dela.",
         "Só compra se a ação estiver pelo menos 2% abaixo da máxima das últimas 8 "
         "semanas. Se nenhuma estiver, o mês passa sem compra.",
         "Só troca a ação que já tem se a nova candidata estiver 15% melhor. Troca "
@@ -181,17 +208,25 @@ class LiquidFocusLossStreakPause(LiquidFocus):
         "junto com o lucro.",
         "Zera a carteira inteira se a Selic subir forte em três meses. É a única "
         "defesa macro que ele tem.",
-        "Vende também a ação que saiu das 20 mais líquidas — deixar de girar é "
-        "motivo de saída, mesmo que o desempenho esteja bom.",
+        "Ação que ele já tem e que sai da lista das 20 NÃO é vendida por isso. Ela "
+        "continua sendo julgada pelo desempenho, como qualquer outra — o que a "
+        "revisão anual da lista proíbe é COMPRAR fora dela, não segurar o que já "
+        "está na carteira. Vender por causa do calendário custaria corretagem e "
+        "imposto num dia que não foi escolhido pelo sinal.",
         "A pausa depois das duas perdas nunca bloqueia uma venda: ela só impede "
         "compra nova. Controle de risco não espera pausa.",
     )
     sizing_rules = (
         "Uma posição por vez, com todo o caixa livre. Concentrar não é agressividade: "
-        "é o que faz a corretagem fixa de R$ 1,90 por ordem virar uma fração pequena "
-        "da posição, em vez de comer 20% dela.",
+        "no mercado fracionário a corretagem é de R$ 1,90 fixos POR ORDEM, então "
+        "dividir o mesmo dinheiro em cinco ações multiplica a taxa por cinco sem "
+        "multiplicar nada mais. Numa posição de R$ 20, R$ 1,90 é quase 10% só de "
+        "corretagem; numa de R$ 100, é 1,9%.",
         "O preço disso está declarado: uma ação ruim pesa o capital inteiro. Isso "
         "aparece na queda máxima medida, não é de graça.",
+        "Capital de operação medido: R$ 500 é o piso em que ele passa todos os "
+        "portões de risco; de R$ 2.000 a R$ 3.000 a corretagem deixa de distorcer o "
+        "resultado. Abaixo disso o desenho ainda funciona, mas a taxa é que manda.",
         "Toda compra e venda já vem com custo descontado — corretagem, taxas da bolsa "
         "e o deslize de preço da execução.",
         "Enquanto está fora do mercado, o caixa rende Selic. Ficar parado é uma "

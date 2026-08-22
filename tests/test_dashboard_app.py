@@ -671,13 +671,114 @@ def test_ficha_mostra_o_valor_EFETIVO_do_parametro_nao_o_default_da_base(client)
     numero nenhum, porque parece conferido."""
     from dashboard import robot_view
 
-    params = dict((n, v) for n, v, _ in robot_view.detail("liqflop").params)
+    params = dict((n, v) for n, v, _, _ in robot_view.detail("liqflop").params)
 
     # 2% e 40 pregoes sao os EFETIVOS; 3% e 20 sao os defaults de `BuyTheDip`
     assert params["dip_pct"] == "2%"
     assert params["high_window"] == "40"
     # e a fracao chega na tela como percentual, nao como "0.02" cru
     assert "2%" in client.get("/strategies/liqflop").text
+
+
+def test_ficha_de_day_trade_mostra_TODOS_os_ativos_calibrados(client):
+    """Erro reportado pelo dono (2026-08-22): a ficha do `gremah` citava UM
+    ativo quando ele aceita tres, "cada um com seus parametros e capital
+    minimo". A causa era o registry instanciar o robo com os defaults (PMAM3) e
+    a pagina tratar `robo.symbol` como "o ativo do robo"."""
+    html = client.get("/strategies/gremah").text
+
+    for symbol in ("PMAM3", "CSAN3", "KLBN4"):
+        assert symbol in html, f"ativo calibrado ausente da ficha: {symbol}"
+    # o fato do topo conta TRES, nao nomeia um
+    assert "3 calibrados" in html
+
+
+def test_ficha_de_day_trade_mostra_capital_minimo_POR_ativo(client):
+    """A segunda metade da reclamacao: cada ativo exige um caixa minimo
+    diferente (lote inteiro de 100 acoes), e e' isso que decide se ele e'
+    operavel com o dinheiro que existe. PMAM3 (~R$0,14) pede ~R$50; CSAN3
+    (~R$3,64) pede ~R$400 -- se os dois aparecerem com o MESMO numero, a
+    coluna esta lendo o preco de um ativo so."""
+    from dashboard import robot_view
+
+    porto = {a.symbol: a for a in robot_view.detail("gremah").assets}
+
+    assert len(porto) == 3
+    # preco vem do parquet local; sem dado salvo o caixa minimo e' None (a
+    # pagina mostra a falta) -- entao a comparacao so vale com os dois presentes
+    if porto["PMAM3"].min_capital and porto["CSAN3"].min_capital:
+        assert porto["PMAM3"].min_capital < porto["CSAN3"].min_capital
+        # multiplo de R$50, arredondado PARA CIMA (ver `capital_minimo_brl`)
+        for a in porto.values():
+            assert a.min_capital % 50 == 0
+            assert a.min_capital >= a.lot_cost
+
+
+def test_ficha_nao_anuncia_calibracao_de_UM_ativo_como_se_fosse_do_robo(client):
+    """`profit_pct`/`stop_multiplier`/`symbol` valem POR ATIVO. A tabela plana
+    de parametros mostra UMA instancia (a default, PMAM3), entao exibi-los la
+    afirmava "o robo usa alvo de 0,32%" -- que e' o alvo da PMAM3 e nao vale
+    para os outros dois. Quem carrega os tres e' a tabela de ativos."""
+    from dashboard import robot_view
+
+    params = dict((n, v) for n, v, _, _ in robot_view.detail("gremah").params)
+
+    for por_ativo in ("profit_pct", "stop_multiplier", "symbol"):
+        assert por_ativo not in params, (
+            f"{por_ativo} e' por ativo e nao pode aparecer como parametro do robo"
+        )
+    # e um parametro que E' do robo continua na tabela
+    assert "max_trades_per_side" in params
+
+
+def test_ficha_mostra_horario_em_brasilia_com_o_utc_ao_lado(client):
+    """Pedido do dono (2026-08-22): a hora crua e' UTC (relogio do terminal
+    MT5) e a tabela mostrava "14:00:00" na mesma pagina em que o texto fala
+    "11h de Brasilia" -- dois numeros para a mesma hora. Agora o valor e' o de
+    Brasilia e o UTC vai ao lado, em corpo menor (`Strategy.param_utc_time`)."""
+    from dashboard import robot_view
+
+    linhas = {n: (v, nota) for n, v, nota, _ in robot_view.detail("gremah").params}
+    valor, nota = linhas["fixed_anchor_until"]
+
+    assert valor == "11:00"        # Brasilia = UTC-3 fixo desde 2019
+    assert nota == "14:00 UTC"     # o cru, para conferencia
+    # e o valor cru NAO aparece mais como se fosse o numero principal
+    assert "14:00:00" not in client.get("/strategies/gremah").text
+
+
+def test_ficha_do_liqflop_nao_inverte_a_regra_de_saida_da_lista(client):
+    """Erro encontrado ao revisar (2026-08-22): a ficha afirmava que papel que
+    sai do top-20 liquido e' VENDIDO. Este robo roda `evict_on_refresh=False`
+    (grandfathering, ver `strategy/liquid_sleeve.py`) -- o refresh proibe
+    COMPRAR fora da lista, nao segurar o que ja se tem. Uma regra invertida na
+    tela e' pior que regra nenhuma."""
+    from strategy.registry import get_strategy
+
+    robo = get_strategy("liqflop").factory()
+    # o comportamento REAL que o texto tem de descrever
+    assert robo._sleeves[0].evict_on_refresh is False
+
+    html = client.get("/strategies/liqflop").text
+    assert "NÃO é vendida por isso" in html
+    # a frase antiga, que afirmava o oposto, nao pode voltar
+    assert "deixar de girar é motivo de saída" not in html
+
+
+def test_ficha_do_liqflop_nao_diz_que_reranqueia_a_bolsa_todo_mes(client):
+    """A lista de 20 sai de um pool FIXO de 63 tickers e e' revista a cada 12
+    meses (`universe_n=20`, `refresh_months=12`). "As 20 mais negociadas da
+    bolsa" sugeria re-selecao mensal em todo o mercado -- duas afirmacoes
+    erradas numa frase."""
+    from strategy.registry import get_strategy
+
+    sleeve = get_strategy("liqflop").factory()._sleeves[0]
+    assert sleeve.universe_n == 20
+    assert sleeve.refresh_months == 12
+
+    html = client.get("/strategies/liqflop").text
+    assert "mais negociadas da bolsa" not in html
+    assert "uma vez por ano" in html
 
 
 def test_menu_nao_marca_a_home_como_pagina_atual_na_ficha_do_robo(client):

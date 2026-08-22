@@ -63,6 +63,19 @@ class _SymbolCalibration:
 # padrao -- day trade nao usa fracionario porque cada ordem fracionaria
 # custa R$1,90 fixos na corretora, proibitivo dado o giro alto da gremah).
 #
+# CONFIRMADO pelo dono do capital em 2026-08-22: "frac tem sim a taxa". O
+# fracionario COBRA R$1,90 fixos por ordem. Houve uma contradicao no repo por
+# um dia -- `backtest/intraday/profiles.py` afirmava que a Rico zerava tambem
+# o fracionario e que o R$1,90 era "leitura superada"; essa frase estava
+# ERRADA e foi corrigida na fonte. A justificativa acima (day trade em lote
+# inteiro para nao pagar taxa fixa num robo de giro alto) segue VALIDA.
+#
+# Buraco que continua aberto, e este e' de MEDICAO, nao de leitura:
+# `core/config.py::CostModel.fractional_fixed_fee` e' 0.0 no default, ou seja
+# o ranking oficial de swing roda SEM cobrar a taxa que existe de verdade --
+# nenhum robo do podio foi re-simulado com ela. Ver a memoria
+# `rico_fractional_fee_2026_08_21`.
+#
 # OOS reconfirmado 2026-08-22 (trecho reservado 2026-06-13..2026-08-21,
 # capital = `capital_minimo_brl` do preco no inicio do OOS): as 3 calibracoes
 # seguem positivas fora da amostra que as gerou --
@@ -84,6 +97,41 @@ _CALIBRATION_BY_SYMBOL: dict[str, _SymbolCalibration] = {
     "CSAN3": _SymbolCalibration(profit_pct=0.0021, stop_multiplier=20.0),
     "KLBN4": _SymbolCalibration(profit_pct=0.0021, stop_multiplier=5.0),
 }
+
+
+@dataclass(frozen=True)
+class SymbolSetup:
+    """Um ativo calibrado, como a FICHA do robô o mostra.
+
+    Existe porque `_CALIBRATION_BY_SYMBOL` é o encanamento (dict privado de
+    `_SymbolCalibration`, lido pelo `__init__`) e a página do robô precisa dos
+    MESMOS números numa forma estável de ler: uma instância de `Gremah` opera
+    UM símbolo, então a tabela de parâmetros dela mostra o alvo/stop de um
+    ativo só — e mostrar esse número solto anunciava "o robô usa 0,32%" quando
+    0,32% é a calibração da PMAM3 e não vale para os outros dois.
+
+    `capital_minimo_brl` fica de fora de propósito: ele depende do preço de
+    hoje, e buscar preço não é assunto de `strategy/` (AGENTS.md #1) — quem
+    exibe busca o preço e chama a função.
+    """
+
+    symbol: str
+    profit_pct: float
+    stop_multiplier: float
+
+
+def calibrated_setups() -> tuple[SymbolSetup, ...]:
+    """Os ativos que este robô pode operar hoje, na ordem em que foram medidos.
+
+    São TRÊS, cada um com alvo e stop próprios: `profit_pct`/`stop_multiplier`
+    não transferem entre símbolos (medido 2026-08-21), e é por isso que
+    `Gremah.__init__` falha alto num símbolo ausente em vez de herdar a
+    calibração de outro papel.
+    """
+    return tuple(
+        SymbolSetup(symbol=s, profit_pct=c.profit_pct, stop_multiplier=c.stop_multiplier)
+        for s, c in _CALIBRATION_BY_SYMBOL.items()
+    )
 
 
 def capital_minimo_brl(preco_atual: float) -> float:
@@ -149,8 +197,9 @@ class Gremah(IntradayStrategy):
     # em vez de mostrar so' a tabela de parametros.
     tagline = (
         "Deixa uma ordem parada logo abaixo do preço, compra se o mercado vier até "
-        "ela e revende um centavo acima — dezenas de vezes por dia, sempre zerando "
-        "antes do fim do pregão."
+        "ela e revende poucos centavos acima — dezenas de vezes por dia, sempre "
+        "zerando antes do fim do pregão. Opera um ativo por conta, entre três já "
+        "calibrados."
     )
     plain_summary = (
         "Ele não tenta adivinhar se a ação vai subir ou cair. Deixa uma ordem de "
@@ -162,6 +211,16 @@ class Gremah(IntradayStrategy):
         "preço chegar, nunca perseguem o mercado. Quem espera recebe o spread em vez "
         "de pagá-lo, e é essa diferença que separa o robô de dar lucro ou prejuízo "
         "com o mesmo número de operações.",
+        "Ele opera UM ativo por conta, e hoje há três liberados: PMAM3, CSAN3 e "
+        "KLBN4. Cada um tem alvo de lucro e stop próprios, medidos separadamente — "
+        "o que funciona numa ação de centavos não funciona numa de três reais, e "
+        "isso não é uma preferência, é medição. Pedir um ativo fora dessa lista faz "
+        "o robô se recusar a ligar em vez de reaproveitar a calibração de outro "
+        "papel. A tabela de ativos abaixo mostra os números de cada um.",
+        "Cada ativo também exige um caixa mínimo diferente, e é aí que a escolha "
+        "aperta: day trade compra em lote inteiro de 100 ações, então o piso é o "
+        "custo de um lote. Uma ação de R$ 0,14 pede cerca de R$ 50; uma de R$ 3,64 "
+        "pede cerca de R$ 400. O mesmo robô, o mesmo desenho, oito vezes o capital.",
         "Nas primeiras horas do pregão, os níveis são calculados a partir do preço de "
         "abertura do dia. Depois das 11h de Brasília, passam a ser calculados a partir "
         "do preço do momento, refeitos a cada ordem nova — medimos que os níveis "
@@ -173,9 +232,12 @@ class Gremah(IntradayStrategy):
         "pregão.",
     )
     plain_example = (
-        "PMAM3 abre o dia a R$ 0,14. O alvo de lucro configurado é 0,32% do preço — "
-        "menos de um centavo. Como a bolsa não negocia fração de centavo, o alvo vira "
-        "o mínimo possível: 1 centavo.",
+        "O exemplo abaixo usa PMAM3, um dos três ativos calibrados. Com CSAN3 ou "
+        "KLBN4 a mecânica é idêntica, mas os números mudam — alvo, stop e caixa "
+        "mínimo são próprios de cada ativo.",
+        "PMAM3 abre o dia a R$ 0,14. O alvo de lucro dela é 0,32% do preço — menos "
+        "de um centavo. Como a bolsa não negocia fração de centavo, o alvo vira o "
+        "mínimo possível: 1 centavo.",
         "Ele deixa uma ordem de compra parada a R$ 0,13, um centavo abaixo. Enquanto "
         "o preço não tocar ali, nada acontece — nenhuma ordem enviada, nenhum custo.",
         "O preço cai a R$ 0,13 e a ordem é executada: 100 ações, R$ 13,00 investidos. "
@@ -185,7 +247,8 @@ class Gremah(IntradayStrategy):
         "descoberto, pelo mesmo mecanismo.",
         "Se em vez de subir o preço cair a R$ 0,12, o stop sai com R$ 1,00 de "
         "prejuízo. É por isso que um papel de centavos exige calibração medida: num "
-        "preço tão baixo, um único centavo já é 7% do valor da ação.",
+        "preço tão baixo, um único centavo já é 7% do valor da ação — e é por isso "
+        "que a CSAN3, a R$ 3,64, usa um alvo menor (0,21%) e um stop bem mais largo.",
     )
     watched_signals = (
         "O preço de abertura do dia, que ancora todos os níveis das primeiras horas.",
@@ -202,6 +265,9 @@ class Gremah(IntradayStrategy):
         "Os três níveis (entrada, alvo e stop) saem de um percentual do preço de "
         "referência, arredondado para centavos inteiros. Em ações de centavos, esse "
         "arredondamento é o que manda: tudo tende a virar 1 centavo.",
+        "Esse percentual é do ATIVO, não do robô: cada um dos três ativos liberados "
+        "tem alvo e stop próprios, medidos separadamente. Trocar de ativo troca os "
+        "dois números junto — ver a tabela de ativos.",
         "Até as 11h de Brasília a referência é a abertura do dia; depois, é o preço "
         "do momento. Esse corte não foi otimizado — é o meio entre o horário em que a "
         "medição ainda dava lucro e o em que já dava prejuízo.",
@@ -222,11 +288,13 @@ class Gremah(IntradayStrategy):
         "verão americano.",
     )
     sizing_rules = (
-        "Lote padrão de 100 ações por ordem. Day trade não usa mercado fracionário: "
-        "cada ordem fracionária custa R$ 1,90 fixos, proibitivo para um robô que faz "
-        "dezenas de operações por dia.",
-        "Em lote padrão a corretagem é zero na Rico. O que sobra é a taxa da bolsa, e "
-        "o backtest assume o DOBRO da taxa real, de propósito, como margem de "
+        "Lote inteiro de 100 ações por ordem, sempre — day trade aqui não usa o "
+        "mercado fracionário. Foi assim que os três ativos foram medidos.",
+        "Por isso cada ativo tem um caixa mínimo próprio: o piso é o custo de um "
+        "lote de 100 ações, arredondado para cima ao próximo múltiplo de R$ 50. É a "
+        "diferença entre poder operar um ativo e não poder — ver a tabela de ativos.",
+        "Em lote inteiro a corretagem é zero na Rico. O que sobra é a taxa da bolsa, "
+        "e o backtest assume o DOBRO da taxa real, de propósito, como margem de "
         "segurança.",
         "O giro alto é o risco econômico do desenho: cada ida e volta paga a taxa duas "
         "vezes. O teto de 15 operações por lado é o que limita isso por dia.",
@@ -234,6 +302,17 @@ class Gremah(IntradayStrategy):
     # Fração mostrada como percentual na ficha (ver `Strategy.param_pct` --
     # `IntradayStrategy` não herda de `Strategy`, mas quem lê usa `getattr`).
     param_pct = ("profit_pct",)
+    # Fora da tabela PLANA de parâmetros porque o valor deles é POR ATIVO, e a
+    # tabela mostra uma instância só (a default, PMAM3). Ela anunciava
+    # "symbol=PMAM3, profit_pct=0,32%, stop_multiplier=10" como se fossem os
+    # números DO ROBÔ -- são os da PMAM3, e não valem para CSAN3 nem KLBN4.
+    # Quem carrega os três é a tabela de ativos da ficha, alimentada por
+    # `calibrated_setups()`.
+    param_hidden = ("symbol", "profit_pct", "stop_multiplier")
+    # O valor cru é o relógio do terminal MT5 (UTC). A ficha mostra 11:00
+    # (Brasília) com "14:00 UTC" ao lado, em corpo menor -- ver
+    # `Strategy.param_utc_time`.
+    param_utc_time = ("fixed_anchor_until",)
     param_docs = {
         "symbol": "Ativo que ele negocia.",
         "tick_size": "Variação mínima de preço do ativo.",
@@ -244,10 +323,24 @@ class Gremah(IntradayStrategy):
                            "`profit_pct`.",
         "max_trades_per_side": "Teto de preenchimentos por lado, por sessão.",
         "session_stop_brl": "Perda acumulada, em reais, que encerra o dia.",
-        "quantity": "Quantidade por ordem. Vazio = default do perfil do símbolo.",
-        "fixed_anchor_until": "Hora (UTC) em que a âncora fixa vira rolante.",
+        "quantity": "Ações por ordem. Vazio = 1 lote inteiro (100 ações), do perfil do ativo.",
+        # Exibido em hora de Brasília com o UTC ao lado (`param_utc_time`), então
+        # a descrição não precisa mais carregar a conversão.
+        "fixed_anchor_until": "Hora em que a âncora fixa vira rolante.",
         "rolling_reanchor_after_bars": "Barras que uma ordem rolante espera antes de rearmar.",
     }
+    @staticmethod
+    def calibrated_setups() -> tuple[SymbolSetup, ...]:
+        """Os ativos calibrados, alcançáveis a partir da CLASSE.
+
+        Espelho fino de `calibrated_setups()` (módulo) de propósito: quem
+        monta a ficha (`dashboard/robot_view.py`) recebe a classe do robô e
+        procura este nome com `getattr`, sem saber de que módulo ela veio. Um
+        robô de day trade de um símbolo só simplesmente não define o método, e
+        a ficha dele cai no caminho de ativo único.
+        """
+        return calibrated_setups()
+
     # A saida por alvo deste robo e uma ordem-limite parada no nivel: e o
     # centro do desenho (capturar o spread em vez de paga-lo), nao um
     # detalhe de modelagem. Ver `IntradayStrategy.target_fills_as_maker`.

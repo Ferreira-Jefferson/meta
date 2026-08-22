@@ -1254,37 +1254,62 @@
   margin: 0 0 var(--s-4);
   max-width: 72ch;
 }
-.params-table {
+/* `.assets-table` (ativos do robô, um por linha) compartilha a folha com
+   `.params-table` de propósito: as duas são "nome à esquerda, números à
+   direita" na mesma página, e estilizá-las separado foi como a home ganhou
+   duas anatomias de cartão para a mesma coisa. */
+.params-table,
+.assets-table {
   width: 100%;
   border-collapse: collapse;
   font-size: var(--fs-body);
   margin-top: var(--s-2);
 }
-.params-table th, .params-table td {
+.params-table th, .params-table td,
+.assets-table th, .assets-table td {
   padding: var(--s-3) var(--s-4);
   border-bottom: 1px solid var(--grid);
   text-align: left;
 }
-.params-table th {
+.params-table th,
+.assets-table th {
   font-weight: 400;
   font-size: var(--fs-metadata);
   text-transform: uppercase;
   letter-spacing: 0.14em;
   color: var(--fg-muted);
 }
-.params-table th.right, .params-table td.right { text-align: right; }
-.params-table td.pname {
+.params-table th.right, .params-table td.right,
+.assets-table th.right, .assets-table td.right { text-align: right; }
+.params-table td.pname,
+.assets-table td.pname {
   font-family: var(--font-mono);
   color: var(--fg-strong);
 }
-.params-table td.num {
+.params-table td.num,
+.assets-table td.num {
   font-family: var(--font-mono);
   color: var(--accent-amber);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 .params-table td.dim { color: var(--fg-muted); }
-.params-table tbody tr:hover { background: var(--bg-elevated); }
+.params-table tbody tr:hover,
+.assets-table tbody tr:hover { background: var(--bg-elevated); }
+
+.robot-assets { margin-bottom: var(--s-8); }
+/* O caixa mínimo é a coluna que decide se o ativo é operável com o dinheiro
+   que existe — é a resposta que o dono do capital vem buscar aqui. */
+.assets-table td.strong { color: var(--fg-strong); font-weight: 500; }
+/* Data do preço colada no número, em corpo menor: o preço sem a data não diz
+   se o caixa mínimo é de hoje ou de um download velho. */
+.asset-when {
+  display: block;
+  font-size: var(--fs-metadata);
+  letter-spacing: 0.06em;
+}
+/* Numa tela estreita a tabela rola dentro de si, nunca empurra a página. */
+.robot-assets { overflow-x: auto; }
 
 .run-form {
   border: 1px solid var(--grid);

@@ -55,10 +55,20 @@ PROFILES: dict[str, SymbolProfile] = {
             "~2,6 anos IS (2023-04-11..2025-11-30), ~8,7 meses OOS travado"
         ),
         # Lote PADRAO (100 acoes, nao fracionario): corretagem confirmada
-        # R$0 em multiplas fontes pesquisadas 2026-08-21 (Rico zera
-        # corretagem de acoes tanto lote padrao quanto fracionario — a
-        # tarifa de R$1,90 encontrada antes era de uma leitura mais antiga/
-        # especifica, superada). A taxa de BOLSA (B3, emolumentos+
+        # R$0 em multiplas fontes pesquisadas 2026-08-21.
+        #
+        # CORRECAO 2026-08-22 (dono do capital, direto): a frase que estava
+        # aqui afirmava que a Rico zera corretagem "tanto lote padrao quanto
+        # fracionario" e que o R$1,90 seria uma leitura superada. ERRADO -- o
+        # FRACIONARIO COBRA a taxa. R$0 vale so' para LOTE PADRAO, que e' o
+        # unico regime deste perfil (day trade aqui e' sempre lote inteiro),
+        # entao `fee_round_trip_brl=0.0` abaixo continua correto. Quem opera
+        # fracionario (a familia de swing, capital pequeno) paga R$1,90 fixos
+        # por ordem -- ver `strategy/lab/fee_capacity/hip_01_concentracao.py`,
+        # cujo desenho inteiro existe por causa dessa taxa, e
+        # `core/config.py::CostModel.fractional_fixed_fee`.
+        #
+        # A taxa de BOLSA (B3, emolumentos+
         # liquidacao day trade) NAO e' zero: ~0,025% do notional por perna,
         # pesquisada 2026-08-21. Por pedido explicito do usuario, toda
         # compra/venda desta acao assume 2x essa taxa real como margem de

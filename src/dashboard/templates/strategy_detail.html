@@ -95,6 +95,56 @@
 </section>
 {% endif %}
 
+{#  Ativos com números PRÓPRIOS por ativo. Existe porque a ficha do `gremah`
+    afirmava operar UM ativo (a instância default, PMAM3) quando ele aceita
+    três, cada um com alvo, stop e caixa mínimo diferentes — e a tabela de
+    parâmetros, que mostra uma instância só, anunciava o alvo da PMAM3 como se
+    fosse o do robô. Robô de swing não tem esta seção: ele decide sobre uma
+    lista inteira, não sobre um ativo por conta. #}
+{% if robot.assets and robot.assets|length > 1 %}
+<section class="robot-assets">
+  {{ ui.section_head("Ativos", "O que ele pode operar",
+     "Um ativo por conta. Cada um foi medido separadamente e tem alvo, stop e
+      caixa mínimo próprios — a calibração de um não vale para o outro, e pedir
+      um ativo fora desta lista faz o robô se recusar a ligar.") }}
+  <table class="assets-table">
+    <thead>
+      <tr>
+        <th>Ativo</th>
+        <th class="right">Alvo de lucro</th>
+        <th class="right">Stop</th>
+        <th class="right">Preço</th>
+        <th class="right">Lote (100)</th>
+        <th class="right">Caixa mínimo</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for a in robot.assets %}
+      <tr>
+        <td class="pname">{{ a.symbol }}</td>
+        <td class="right num">{{ (a.profit_pct * 100) | num_br(None) }}%</td>
+        <td class="right num">{{ a.stop_multiplier | num_br(None) }}× o alvo</td>
+        {# Sem dado de minuto salvo não há preço, e sem preço não há caixa
+           mínimo: a célula mostra a falta em vez de um número inventado. #}
+        <td class="right num">
+          {% if a.price is not none %}R$ {{ a.price | num_br }}
+          <span class="dim asset-when">{{ a.price_date }}</span>
+          {% else %}<span class="dim">—</span>{% endif %}
+        </td>
+        <td class="right num">{% if a.lot_cost is not none %}R$ {{ a.lot_cost | num_br }}{% else %}<span class="dim">—</span>{% endif %}</td>
+        <td class="right num strong">{% if a.min_capital is not none %}R$ {{ a.min_capital | num_br(0) }}{% else %}<span class="dim">—</span>{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="example-note">
+    O caixa mínimo é o custo de um lote de 100 ações no último preço, arredondado
+    para cima ao próximo múltiplo de R$ 50. Ele acompanha o preço: sobe e desce
+    com o ativo.
+  </p>
+</section>
+{% endif %}
+
 {% if robot.example %}
 <section class="robot-example">
   {{ ui.section_head("Exemplo", "Passo a passo, com números") }}
@@ -149,10 +199,15 @@
     <table class="params-table">
       <thead><tr><th>Nome</th><th class="right">Valor</th><th>O que é</th></tr></thead>
       <tbody>
-        {% for nome, valor, descricao in robot.params %}
+        {% for nome, valor, nota, descricao in robot.params %}
         <tr>
           <td class="pname">{{ nome }}</td>
-          <td class="right num">{{ valor }}</td>
+          {# `nota` é o qualificador secundário do valor (hoje, o UTC de um
+             horário mostrado em hora de Brasília). Corpo menor e apagado: é
+             para conferência, não é o número que se lê primeiro. #}
+          <td class="right num">
+            {{ valor }}{% if nota %} <span class="dim asset-when">{{ nota }}</span>{% endif %}
+          </td>
           <td class="dim">{{ descricao or "—" }}</td>
         </tr>
         {% endfor %}

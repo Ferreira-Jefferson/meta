@@ -50,7 +50,8 @@ class StrategyInfo:
     entry_rules: tuple[str, ...] = ()
     exit_rules: tuple[str, ...] = ()
     sizing_rules: tuple[str, ...] = ()
-    params: list[tuple[str, str, str]] = field(default_factory=list)
+    # (nome, valor, nota, descrição) — ver `declared_params`.
+    params: list[tuple[str, str, str, str]] = field(default_factory=list)
 
 
 _INLINE_CODE = re.compile(r"`([^`\n]+)`")
@@ -146,8 +147,28 @@ def _formata_valor(v: Any, como_pct: bool = False) -> str:
     return str(v)
 
 
-def declared_params(obj: Any) -> list[tuple[str, str, str]]:
-    """(nome, valor EFETIVO, descrição) de uma INSTÂNCIA já construída.
+def _formata_hora_brt(v: Any) -> tuple[str, str]:
+    """Hora UTC -> ("11:00", "14:00 UTC"). Devolve ("", "") se não for hora.
+
+    Brasília é UTC-3 FIXO: o horário de verão brasileiro acabou em 2019, então
+    aqui não há calendário nenhum a consultar — diferente do fechamento do
+    pregão, que anda com o DST *americano* e por isso vive em
+    `core/b3_session.py`. Um `timedelta` sobre data seria mais cerimônia para
+    o mesmo resultado, e este valor não tem data.
+    """
+    hora, minuto = getattr(v, "hour", None), getattr(v, "minute", None)
+    if hora is None or minuto is None:
+        return ("", "")
+    return (f"{(hora - 3) % 24:02d}:{minuto:02d}", f"{hora:02d}:{minuto:02d} UTC")
+
+
+def declared_params(obj: Any) -> list[tuple[str, str, str, str]]:
+    """(nome, valor EFETIVO, nota, descrição) de uma INSTÂNCIA já construída.
+
+    `nota` é o qualificador em corpo menor ao lado do valor — hoje só o UTC de
+    um horário (ver `Strategy.param_utc_time`). Fica num campo próprio, e não
+    emendado no valor, para a tabela poder estilizá-lo como secundário sem ter
+    de partir a string de novo no template.
 
     Lê o valor do objeto, não da assinatura, e é por isso que recebe instância
     em vez de classe: nesta família a folha reescreve o default da raiz por
@@ -161,17 +182,29 @@ def declared_params(obj: Any) -> list[tuple[str, str, str]]:
     # encanamento dela sem a folha ter de repetir).
     escondidos: set[str] = set()
     percentuais: set[str] = set()
+    horas_utc: set[str] = set()
     for klass in cls.__mro__:
         escondidos.update(klass.__dict__.get("param_hidden") or ())
         percentuais.update(klass.__dict__.get("param_pct") or ())
+        horas_utc.update(klass.__dict__.get("param_utc_time") or ())
     linhas = []
     for nome in _param_names(cls):
         if nome in escondidos:
             continue
         if not hasattr(obj, nome):
             continue  # parâmetro consumido no __init__ e não guardado
-        valor = _formata_valor(getattr(obj, nome), como_pct=nome in percentuais)
-        linhas.append((nome, valor, docs.get(nome, "")))
+        cru = getattr(obj, nome)
+        nota = ""
+        if nome in horas_utc:
+            brt, utc = _formata_hora_brt(cru)
+            # Só troca a exibição se o valor REALMENTE for uma hora: um robô
+            # que declare o nome e passe outro tipo cai no formato normal em
+            # vez de mostrar um horário inventado.
+            if brt:
+                linhas.append((nome, brt, utc, docs.get(nome, "")))
+                continue
+        valor = _formata_valor(cru, como_pct=nome in percentuais)
+        linhas.append((nome, valor, nota, docs.get(nome, "")))
     return linhas
 
 
@@ -209,7 +242,7 @@ def _build_registry() -> dict[str, StrategyInfo]:
             # todo robô do catálogo). A ficha da página usa
             # `declared_params(instância)`, que é exata mas precisa construir
             # o objeto — ver a docstring de lá.
-            params=[(n, "", "") for n in _param_names(d.cls)],
+            params=[(n, "", "", "") for n in _param_names(d.cls)],
             factory=d.factory,
         )
     return reg

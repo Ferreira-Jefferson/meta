@@ -184,6 +184,12 @@ class Strategy(ABC):
     # subclasse. Sem isto, a ficha mostrava "0.02" e deixava para o leitor
     # adivinhar se eram 2% ou 0,02%.
     param_pct: tuple[str, ...] = ()
+    # Parâmetros cujo valor é um HORÁRIO EM UTC. A ficha mostra a hora de
+    # Brasília (o fuso em que o dono do capital pensa) e o UTC em corpo menor
+    # ao lado, em vez do valor cru. Sem isto, a tabela exibia "14:00:00" na
+    # mesma página em que o texto falava "11h de Brasília" — dois números para
+    # a mesma hora, sem nada explicando a diferença.
+    param_utc_time: tuple[str, ...] = ()
 
     def initialize(self, panels: dict[str, pd.DataFrame], ibov: pd.DataFrame) -> None:
         """Pré-calcula indicadores sobre o histórico completo.
