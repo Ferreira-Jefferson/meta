@@ -119,10 +119,17 @@ class LiquidFocusLossStreakPause(LiquidFocus):
     #   3. anunciava o stop de 15% como regra do robo. Ele e' do ENGINE
     #      (`BacktestConfig.stop_loss_pct`), nao um parametro desta classe --
     #      por isso nao esta (e nao pode estar) na tabela de parametros.
+    # A frase de abertura explica o NOME, porque o nome é a descrição do
+    # desenho: cada pedaço de "liqflop" é uma das quatro decisões listadas no
+    # comentário do `name` acima, e explicar a sigla explica a estratégia de
+    # uma vez. Mesma convenção da ficha do `gremah`.
     tagline = (
-        "Compra uma ação por mês — a de melhor desempenho no ano que estiver em "
-        "queda recente — e para de comprar por um mês depois de duas vendas no "
-        "prejuízo seguidas."
+        "LIQuid + Focus + LOss + Pause — as quatro decisões, na ordem em "
+        "que foram tomadas: só olha as ações mais LÍQUIDAS de um grupo fixo (liq), "
+        "carrega uma por vez em vez de espalhar (focus), conta as vendas no "
+        "PREJUÍZO seguidas (loss) e, depois de duas, para de comprar por um mês "
+        "(pause). Decide uma vez por mês: leva a que mais subiu no ano, e só se ela "
+        "estiver em queda recente."
     )
     plain_summary = (
         "Ele carrega uma ação por vez e decide uma vez por mês. No último dia útil, "
