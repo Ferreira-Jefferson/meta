@@ -82,9 +82,12 @@
 .filters {
   display: flex; flex-wrap: wrap;
   gap: var(--s-3);
-  padding: var(--s-4) 0;
+  padding: 0 0 var(--s-4);
   margin-bottom: var(--s-4);
-  border-top: 1px solid var(--grid);
+  /* Só a régua de BAIXO, que fecha a faixa de filtros. A de cima saiu: em
+     `/trades` esta faixa vem logo depois de `.page-head`, que já desenha uma
+     — e duas paralelas separadas por um vão leem como conteúdo faltando no
+     meio. Mesma correção de `.doc-spec`. */
   border-bottom: 1px solid var(--grid);
 }
 .filters label {
@@ -741,10 +744,11 @@
    fantasma. Assim funciona com qualquer quantidade de robôs. */
 
 .catalog { margin-bottom: var(--s-8); }
+/* Mesma correção de régua dupla de `.measure-grid` — ver o comentário lá. */
+.catalog .section-head { margin-bottom: 0; }
 .robots-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr));
-  border-top: 1px solid var(--grid);
   border-left: 1px solid var(--grid);
 }
 .robot-card {
@@ -1034,10 +1038,15 @@
 
 /* Medições oficiais — mesma fonte do pódio, uma coluna por janela. */
 .robot-metrics { margin-bottom: var(--s-8); }
+/* Grade de CÉLULA: o fio de 1px vem de container(top+left) + célula
+   (right+bottom), então a linha de cima é a borda da primeira fileira, não
+   decoração — não pode simplesmente sair. O que sai é o VÃO: com
+   `margin-bottom: 0` no cabeçalho, a régua dele passa a SER a borda de cima da
+   grade, e fica uma linha só em vez de duas paralelas. */
+.robot-metrics .section-head { margin-bottom: 0; }
 .measure-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
-  border-top: 1px solid var(--grid);
   border-left: 1px solid var(--grid);
 }
 .measure {
@@ -1201,7 +1210,10 @@
    direita, uma régua de 1px entre blocos. Aguenta bloco de 3 e de 14 itens
    sem deixar buraco — o que uma grade de colunas não aguenta. */
 .doc-spec {
-  border-top: 1px solid var(--grid-strong);
+  /* SEM régua de cima. `.section-head` já desenha uma logo acima, e as duas
+     paralelas separadas por um vão liam como um texto que faltou carregar no
+     meio. Aqui era redundância pura: `.doc-spec` é uma LISTA, e cada bloco
+     dela já traz a própria régua embaixo. */
   margin-bottom: var(--s-6);
 }
 .doc-spec .doc-block {
