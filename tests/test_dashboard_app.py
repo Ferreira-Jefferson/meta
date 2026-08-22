@@ -667,6 +667,31 @@ def test_operacao_nunca_resolve_o_robo_de_day_trade_pelo_registry_de_swing(
     assert "gremah" not in chamado
 
 
+def test_operacao_poe_os_robos_antes_das_credenciais(isolated_journal, client):
+    """Hierarquia da tela (2026-08-21): o painel e' para ver os ROBOS. O bloco
+    "Acesso e credenciais" -- um form de senha que se preenche uma vez na vida
+    -- abria a pagina, entao quem chegava para olhar a operacao encontrava
+    configuracao primeiro. Configuracao vem DEPOIS do que ela configura."""
+    html = client.get("/operacao").text
+
+    assert html.index("Day trade") < html.index("Acesso e credenciais")
+    assert html.index("Swing") < html.index("Acesso e credenciais")
+
+
+def test_painel_ao_vivo_linka_a_ficha_do_robo_da_conta(isolated_journal, client):
+    """Ciclo de navegacao fechado: a ficha de um robo de day trade manda para
+    `/operacao`, e daqui se chega as REGRAS que o robo esta executando com
+    dinheiro real. O link usa o robo GRAVADO na conta, nunca o default do
+    slot -- apontar para o default seria oferecer a ficha de um robo que
+    talvez nao seja o que esta rodando."""
+    _create_mt5_account(isolated_journal, capital=1_000.0, slot=SWING,
+                        investment_robot="liqflop")
+
+    html = client.get(f"/operacao/{SWING}/fragment").text
+
+    assert 'href="/strategies/liqflop"' in html
+
+
 def test_fragmento_de_um_slot_nao_renderiza_o_outro(isolated_journal, client):
     """Um poll por slot: o refresh de fundo de um robo nao pode recriar o DOM
     do outro (nem reabrir/fechar nada do outro cartao)."""

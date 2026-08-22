@@ -115,8 +115,8 @@
       <tr>
         <td class="ticker">{{ p.ticker.replace(".SA", "") }}</td>
         <td class="right num">{{ p.qtd }}</td>
-        <td class="right num">R$ {{ "%.2f"|format(p.entrada) }}</td>
-        <td class="right num">{% if p.stop %}R$ {{ "%.2f"|format(p.stop) }}{% else %}<span class="dim">—</span>{% endif %}</td>
+        <td class="right num">R$ {{ p.entrada | num_br }}</td>
+        <td class="right num">{% if p.stop %}R$ {{ p.stop | num_br }}{% else %}<span class="dim">—</span>{% endif %}</td>
         <td class="right num dim">{{ p.barras }}</td>
         <td class="right num">R$ {{ p.valor | num_br }}</td>
       </tr>

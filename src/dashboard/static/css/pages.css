@@ -300,9 +300,6 @@
   margin: 0 0 var(--s-2);
 }
 .insight .dek {
-  font-family: var(--font-serif);
-  font-style: italic;
-  color: var(--fg-muted);
   font-size: var(--fs-body-lg);
   margin-bottom: var(--s-5);
   max-width: 60ch;
@@ -378,9 +375,6 @@
   vertical-align: middle;
 }
 .strategy-card .dek {
-  font-family: var(--font-serif);
-  font-style: italic;
-  color: var(--fg-muted);
   max-width: 62ch;
   margin: 0 0 var(--s-5);
 }
@@ -564,9 +558,6 @@
   margin: 0 0 var(--s-3);
 }
 .sim-done .dek {
-  font-family: var(--font-serif);
-  font-style: italic;
-  color: var(--fg-muted);
   max-width: 60ch;
   margin: 0 0 var(--s-5);
 }
@@ -604,15 +595,10 @@
   color: var(--accent-amber);
 }
 .section-head .dek {
-  font-family: var(--font-serif);
-  font-style: italic;
   font-size: var(--fs-body-lg);
-  color: var(--fg-muted);
   max-width: 72ch;
   margin: var(--s-2) 0 0;
 }
-.section-head .dek code,
-.section-head .dek strong { font-style: normal; }
 .section-head-aside {
   font-family: var(--font-mono);
   font-size: var(--fs-metadata);
@@ -780,14 +766,11 @@
   color: var(--fg-strong);
 }
 .robot-card .dek {
-  font-family: var(--font-serif);
-  font-style: italic;
   font-size: var(--fs-body-lg);
-  color: var(--fg-muted);
   max-width: 46ch;
   margin: 0 0 var(--s-5);
 }
-.robot-card .dek code { font-style: normal; font-size: 0.9em; }
+.robot-card .dek code { font-size: 0.9em; }
 
 /* Etiqueta de TIPO — o que antes era uma seção separada da página. Diferença
    de tipo é diferença de cor de traço, não de arquitetura de tela. */
@@ -1188,9 +1171,6 @@
 
 .params-block { border-top: 1px solid var(--grid); padding-top: var(--s-5); }
 .params-block .dek {
-  font-family: var(--font-serif);
-  font-style: italic;
-  color: var(--fg-muted);
   margin: 0 0 var(--s-4);
   max-width: 72ch;
 }
@@ -1381,6 +1361,16 @@
   background: var(--accent-green);
   flex-shrink: 0;
 }
+/* Etiqueta que é LINK (a do robô, que abre a ficha dele). Mesma caixa das
+   outras — a diferença é a seta e o âmbar no hover: uma etiqueta clicável não
+   pode parecer um botão no meio de seis rótulos de status, mas também não
+   pode parecer inerte. */
+.ops-badge.is-link { text-decoration: none; transition: border-color 120ms linear; }
+.ops-badge.is-link .arrow { color: var(--fg-faint); transition: color 120ms linear; }
+.ops-badge.is-link:hover { border-color: var(--accent-amber); }
+.ops-badge.is-link:hover .arrow,
+.ops-badge.is-link:hover strong { color: var(--accent-amber); }
+
 .ops-badge.warn .dot { background: var(--accent-amber); }
 .ops-badge.warn strong { color: var(--accent-amber); }
 /* `err` existe separado de `warn` porque a diferença é operacional, não de
@@ -1411,9 +1401,6 @@
   color: var(--fg-strong);
 }
 .ops-panel .dek {
-  font-family: var(--font-serif);
-  font-style: italic;
-  color: var(--fg-muted);
   margin: 0 0 var(--s-4);
 }
 
@@ -1456,6 +1443,12 @@
   min-height: 0;
   border-top: 1px solid var(--grid);
   padding: var(--s-5) 0 var(--s-2);
+  /* `.empty` global também CENTRALIZA (`place-items: center; text-align:
+     center`), o que faz sentido numa página inteira de estado vazio e não
+     faz nenhum dentro de um cartão onde todo o resto — cabeçalho, caixa,
+     dica de início — está alinhado à esquerda. */
+  justify-items: start;
+  text-align: left;
 }
 .ops-slot .ops-empty h3 {
   font-family: var(--font-serif);

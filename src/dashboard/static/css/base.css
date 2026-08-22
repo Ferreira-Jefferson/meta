@@ -173,6 +173,22 @@ a:hover { color: var(--accent-amber); }
   letter-spacing: 0.1em;
 }
 
+/* --- Prosa (dek) --------------------------------------------------------
+   `.dek` é a linha de apoio de um título: prosa, logo SERIFA itálica. Era
+   declarada oito vezes, uma por contexto (`.page-head .dek`, `.ops-panel
+   .dek`, ...), e dois contextos esqueceram de declarar — o texto de apoio
+   dos cartões de `/operacao` caía em mono, ao lado de irmãos em serifa, sem
+   nenhuma razão visível. Agora a fonte é definida UMA vez aqui e cada
+   contexto só ajusta tamanho, margem e medida. */
+.dek {
+  font-family: var(--font-serif);
+  font-style: italic;
+  color: var(--fg-muted);
+}
+/* Nome de parâmetro/arquivo dentro da prosa volta ao mono, sem itálico —
+   é código citado, não ênfase. */
+.dek code, .dek strong { font-style: normal; }
+
 /* --- Labels & meta ------------------------------------------------------ */
 .label {
   font-size: var(--fs-metadata);

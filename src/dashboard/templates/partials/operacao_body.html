@@ -41,14 +41,18 @@
       <span class="v num">R$ {{ bloco.caixa_ledger | num_br }}</span>
       <span class="sub{% if not bloco.caixa_ok %} is-blocked{% endif %}">
         {% if bloco.caixa_ok %}
-          Acima do mínimo de R$ {{ "%.2f"|format(slot.min_cash_brl) }}
+          Acima do mínimo de R$ {{ slot.min_cash_brl | num_br }}
         {% else %}
-          Abaixo do mínimo de R$ {{ "%.2f"|format(slot.min_cash_brl) }} — não opera
+          Abaixo do mínimo de R$ {{ slot.min_cash_brl | num_br }} — não opera
         {% endif %}
       </span>
     </div>
     <form class="ops-cash-form" hx-post="/operacao/{{ slot.id }}/caixa"
           hx-target="#ops-body" hx-swap="outerHTML">
+      {# Ponto decimal aqui NÃO é inconsistência com o `num_br` do texto ao
+         lado: é `<input type="number">`, cujo `value` só é válido em formato
+         canônico (ponto). Com vírgula o navegador descarta o valor e o campo
+         aparece vazio. #}
       <label><span class="k">Definir caixa (R$)</span>
         <input type="number" name="caixa" step="0.01" min="0"
                value="{{ "%.2f"|format(bloco.caixa_ledger) }}" required />
@@ -80,6 +84,19 @@
 <div class="ops-alert ops-alert-ok stagger">{{ caixa_msg }}</div>
 {% endif %}
 
+{# Ordem dos cartões vem de `core.config.ordered_slots()` — day trade em
+   cima, por ser a primeira opção operável no capital atual, não por ser
+   melhor (decisão do dono, 2026-08-21). #}
+{% for bloco in slots %}
+  {{ slot_card(bloco, creds_status, poll_seconds) }}
+{% endfor %}
+
+{# CONFIGURAÇÃO DEPOIS DA OPERAÇÃO. Este bloco abria a página até
+   2026-08-21: quem chegava no painel para ver os robôs encontrava primeiro
+   um formulário de senhas que se preenche uma vez na vida. O conteúdo é o
+   mesmo; o que mudou é que ele deixou de ser a primeira coisa da tela. O
+   <details> continua fechado por default e continua FORA do nó com polling
+   (ver a nota no fim deste arquivo). #}
 <section class="ops-credentials stagger">
   <details{% if creds_msg %} open{% endif %}>
     <summary>Acesso e credenciais</summary>
@@ -183,11 +200,4 @@
     </form>
   </details>
 </section>
-
-{# Ordem dos cartões vem de `core.config.ordered_slots()` — day trade em
-   cima, por ser a primeira opção operável no capital atual, não por ser
-   melhor (decisão do dono, 2026-08-21). #}
-{% for bloco in slots %}
-  {{ slot_card(bloco, creds_status, poll_seconds) }}
-{% endfor %}
 </div>

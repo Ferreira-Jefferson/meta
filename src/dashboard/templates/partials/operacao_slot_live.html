@@ -60,7 +60,7 @@
 {% elif not caixa_ok %}
 <p class="ops-start-hint">
   Informe acima o caixa destinado a este robô — mínimo
-  R$ {{ "%.2f"|format(slot.min_cash_brl) }} para operar.
+  R$ {{ slot.min_cash_brl | num_br }} para operar.
 </p>
 {% endif %}
 
@@ -101,9 +101,16 @@
       <span class="dim">· atraso {{ (s.feed.atraso_s / 60) | round(0, 'floor') | int }} min</span>
     {% endif %}
   </span>
-  <span class="ops-badge">
+  {# Link para a FICHA do robô: daqui se chega às regras que ele está
+     executando com dinheiro real (`/strategies/<key>` resolve robô de swing
+     E de day trade desde 2026-08-21). É o robô GRAVADO na conta, não o
+     default do slot — mostrar o default seria mostrar um robô que talvez não
+     seja o que está rodando. #}
+  <a class="ops-badge is-link" href="/strategies/{{ s.robo_investimento }}"
+     title="Abrir a ficha deste robô">
     <span class="dot"></span> Robô · <strong>{{ s.robo_investimento }}</strong>
-  </span>
+    <span class="arrow">→</span>
+  </a>
   {% if s.daytrade %}
   {# O ativo é propriedade do ROBÔ escolhido, não do slot (desde
      2026-08-21) — precisa aparecer aqui porque dois robôs registrados podem
