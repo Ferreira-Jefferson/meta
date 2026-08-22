@@ -389,7 +389,14 @@ class Gremah(IntradayStrategy):
     # números DO ROBÔ -- são os da PMAM3, e não valem para nenhum outro papel.
     # Quem carrega todos é a tabela de ativos da ficha, alimentada por
     # `calibrated_setups()`.
-    param_hidden = ("symbol", "profit_pct", "stop_multiplier")
+    # `quantity` some' da tabela pelo MESMO motivo que profit_pct/stop_multiplier:
+    # nao e' mais um parametro de verdade. Passar um valor explicito no
+    # construtor NAO tem efeito -- `_build_entry` sempre recalcula
+    # `self.quantity` via `_lotes_por_realocacao` antes de cada entrada.
+    # Mostrar "1 lote (100 acoes)" (o "—" formatado) seria uma MENTIRA
+    # especifica: o tamanho de verdade varia de 1 ate' `max_lotes_dia` lotes
+    # conforme o caixa acumulado, explicado em prosa em `sizing_rules`.
+    param_hidden = ("symbol", "profit_pct", "stop_multiplier", "quantity")
     # O valor cru é o relógio do terminal MT5 (UTC), e é ele que `on_bar`
     # compara. A ficha mostra "14:00 UTC" como valor e "11:00 Brasília" ao
     # lado, em corpo menor -- ver `Strategy.param_utc_time`.
@@ -405,7 +412,6 @@ class Gremah(IntradayStrategy):
         "max_trades_per_side": "Teto de preenchimentos por lado, por sessão.",
         "session_stop_pct_capital": "Percentual do caixa mínimo do dia que define a "
                                     "perda-limite diária.",
-        "quantity": "Quantidade de ações por operação.",
         "realocacao_limiar_caixa": "Quantas vezes o custo de 1 lote o caixa acumulado precisa "
                                    "ter para a próxima entrada usar mais um lote (encolhe de volta "
                                    "se o caixa cair).",
