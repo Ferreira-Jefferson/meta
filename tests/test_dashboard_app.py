@@ -872,13 +872,20 @@ def test_fragmento_de_um_slot_nao_renderiza_o_outro(isolated_journal, client):
 
 
 def test_botao_iniciar_desabilitado_sem_caixa_no_ledger(isolated_journal, client, monkeypatch):
-    """O piso de R$50 tambem aparece na tela: botao desabilitado + a dica que
-    diz o numero. (O servidor recusa de qualquer forma -- ver
-    `tests/test_live_control.py`.)"""
+    """O piso tambem aparece na tela: botao desabilitado + a dica que diz o
+    numero. (O servidor recusa de qualquer forma -- ver
+    `tests/test_live_control.py`.)
+
+    `min_cash_for` e' mockado (nao lido do parquet real) porque, desde
+    2026-08-22, o piso do slot de day trade e' `capital_minimo_brl` do robo
+    -- varia com o PRECO do papel, e um teste que dependesse do preco real da
+    PMAM3 quebraria sozinho quando ela mudasse de faixa (ja aconteceu: caiu
+    de R$1,31 pra R$0,14 no periodo desta pesquisa)."""
     monkeypatch.setattr(live_control, "credential_status",
                         lambda: {"telegram": False, "smtp": False, "mt5": True})
+    monkeypatch.setattr(live_control, "min_cash_for", lambda slot, robot_key=None: 777.0)
 
     html = client.get("/operacao/daytrade/fragment").text
 
     assert "disabled" in html
-    assert "50" in html
+    assert "777" in html

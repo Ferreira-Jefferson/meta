@@ -556,6 +556,54 @@ def available_cash(slot_id: str) -> Optional[float]:
     return None if conta is None else round(conta.cash, 2)
 
 
+def _intraday_capital_minimo(robot_key: str) -> Optional[float]:
+    """Piso de caixa para operar HOJE o robô `robot_key` — `capital_minimo_brl`
+    (`strategy.daytrade.base`) do símbolo dele, no último preço salvo
+    localmente. `None` se o robô não existir no catálogo, o símbolo não tiver
+    perfil (`backtest.intraday.profiles.PROFILES`) ou não houver preço salvo
+    ainda (parquet ausente) — quem chama decide o degrade, nunca bloqueia por
+    falta de dado que não é culpa do dono."""
+    from backtest.intraday.profiles import PROFILES
+    from dashboard.robot_view import _ultimo_preco
+    from strategy.daytrade.base import capital_minimo_brl
+    from strategy.daytrade.registry import get_daytrade_robot
+
+    try:
+        robo = get_daytrade_robot(robot_key)
+    except KeyError:
+        return None
+    perfil = PROFILES.get(robo.symbol)
+    if perfil is None:
+        return None
+    preco, _data = _ultimo_preco(robo.symbol)
+    if preco is None:
+        return None
+    return capital_minimo_brl(preco, perfil.default_quantity)
+
+
+def min_cash_for(slot, robot_key: Optional[str] = None) -> float:
+    """Piso de caixa para iniciar operação neste slot (pedido do dono,
+    2026-08-22, ao perceber que `Slot.min_cash_brl` continuava fixo depois de
+    `capital_minimo_brl` existir por símbolo).
+
+    Swing usa `Slot.min_cash_brl` — não há conceito de "lote" pro swing,
+    então o piso genérico é o único que existe. Day trade usa
+    `capital_minimo_brl` do robô que vai rodar de fato: `robot_key` explícito
+    (conta já existente, ou robô escolhido no form) ou `slot.robot_key` (o
+    sugerido pra conta nova, ainda sem robô fixado — é o que o `<select>` do
+    template mostra pré-selecionado).
+
+    Antes desta função, PMAM3 (mínimo real R$28) era bloqueada por um piso de
+    R$50 mais rígido que o necessário, e CLSC4 (mínimo real R$30.390) passava
+    o piso de R$50 pra só descobrir que faltava caixa no primeiro pregão,
+    dentro do processo já rodando — os dois casos evaporam usando o piso do
+    ROBÔ escolhido em vez de um número cego ao símbolo."""
+    if not slot.is_intraday:
+        return slot.min_cash_brl
+    minimo = _intraday_capital_minimo(robot_key or slot.robot_key)
+    return slot.min_cash_brl if minimo is None else minimo
+
+
 def start(config: ProcessConfig) -> dict:
     """Cria a conta se preciso e sobe `scripts/run_live.py loop` como
     processo próprio DESTE SLOT, sobrevivendo ao dashboard fechar.
@@ -574,10 +622,12 @@ def start(config: ProcessConfig) -> dict:
     estado. O lock é único (não por slot) porque o arquivo de estado é
     compartilhado — ver docstring do módulo.
 
-    Piso de caixa (2026-08-21): recusa se o ledger manual do slot tiver
-    menos que `Slot.min_cash_brl`. Isto é checado AQUI, e não só no
-    template, porque o botão desabilitado não cobre um POST repetido, um
-    fragmento HTMX velho, nem a linha de comando."""
+    Piso de caixa (2026-08-21, refinado por robô em 2026-08-22): recusa se o
+    ledger manual do slot tiver menos que `min_cash_for(slot, config.strategy)`
+    — `Slot.min_cash_brl` pro swing, `capital_minimo_brl` do robô ESCOLHIDO
+    pro day trade. Isto é checado AQUI, e não só no template, porque o botão
+    desabilitado não cobre um POST repetido, um fragmento HTMX velho, nem a
+    linha de comando."""
     from core.config import slot_by_id
 
     slot = slot_by_id(config.slot)
@@ -611,11 +661,12 @@ def start(config: ProcessConfig) -> dict:
 
         create_account(config)
 
+        piso = min_cash_for(slot, config.strategy)
         caixa = available_cash(config.slot)
-        if caixa is None or caixa < slot.min_cash_brl:
+        if caixa is None or caixa < piso:
             raise RuntimeError(
                 f"caixa do slot '{slot.label}' é R$ {0.0 if caixa is None else caixa:.2f}, "
-                f"abaixo do mínimo de R$ {slot.min_cash_brl:.2f} para operar — "
+                f"abaixo do mínimo de R$ {piso:.2f} para operar — "
                 "informe o caixa destinado a este robô no painel antes de iniciar."
             )
 

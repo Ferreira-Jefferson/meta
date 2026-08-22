@@ -478,13 +478,20 @@ def _slot_ctx(slot) -> dict:
         erro = str(e)
     caixa = live_control.available_cash(slot.id) or 0.0
     proc = live_control.status(slot.id)
+    # Robô que vai de fato rodar: o da conta já existente, ou o default
+    # sugerido pra conta nova (o mesmo pré-selecionado no `<select>` do
+    # template) — `min_cash_for` usa isso pra achar o piso de caixa DESTE
+    # robô, não um número cego ao símbolo (ver docstring de `min_cash_for`).
+    robo_previsto = status_payload.get("robo_investimento") or None
+    piso = live_control.min_cash_for(slot, robo_previsto)
     return {
         "slot": slot,
         "status": status_payload,
         "proc": proc,
         "config_anterior": live_control.last_config(slot.id),
         "caixa_ledger": caixa,
-        "caixa_ok": caixa >= slot.min_cash_brl,
+        "caixa_minima": piso,
+        "caixa_ok": caixa >= piso,
         "erro_slot": erro,
     }
 
@@ -680,11 +687,17 @@ async def operacao_iniciar(request: Request, slot_id: str):
         # desabilitado no template não cobre um POST repetido, um fragmento
         # HTMX velho nem a linha de comando; `live_control.start()` checa de
         # novo, mas aqui a mensagem pode dizer o número em vez de só falhar.
+        #
+        # `strategy_key` já está resolvido aqui (robô ESCOLHIDO, não o
+        # default do slot) — `min_cash_for` usa o piso daquele robô
+        # especificamente, não `slot.min_cash_brl` cego ao símbolo (ver
+        # docstring de `min_cash_for`, 2026-08-22).
+        piso = live_control.min_cash_for(slot, strategy_key)
         ledger = live_control.available_cash(slot.id) or 0.0
-        if ledger < slot.min_cash_brl:
+        if ledger < piso:
             erro = (
                 f"Informe o caixa destinado a este robô (mínimo R$ "
-                f"{slot.min_cash_brl:.2f}) antes de iniciar — o valor atual é "
+                f"{piso:.2f}) antes de iniciar — o valor atual é "
                 f"R$ {ledger:.2f}."
             )
         elif nunca_comecou:

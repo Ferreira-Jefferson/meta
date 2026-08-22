@@ -346,6 +346,74 @@ def test_start_aceita_caixa_exatamente_no_piso(isolated, monkeypatch):
     assert live_control.start(_cfg())["pid"] == 99999
 
 
+# ---------- piso de caixa POR ROBÔ no day trade (decisão do dono, 2026-08-22) -
+
+def test_min_cash_for_swing_usa_o_piso_generico_do_slot():
+    """Swing não tem conceito de "lote" — o piso é sempre `Slot.min_cash_brl`,
+    não importa o robô."""
+    from core.config import slot_by_id
+
+    slot = slot_by_id("swing")
+    assert live_control.min_cash_for(slot) == pytest.approx(slot.min_cash_brl)
+    assert live_control.min_cash_for(slot, "portfolio_dip2_hw40") == pytest.approx(slot.min_cash_brl)
+
+
+def test_min_cash_for_daytrade_usa_capital_minimo_do_robo(monkeypatch):
+    """O ponto central da mudança: o piso do day trade vem do PREÇO do
+    símbolo do robô, não de um número cego (`Slot.min_cash_brl`)."""
+    from core.config import slot_by_id
+
+    monkeypatch.setattr(live_control, "_intraday_capital_minimo", lambda robot_key: 123.45)
+    slot = slot_by_id("daytrade")
+
+    assert live_control.min_cash_for(slot, "gremah") == pytest.approx(123.45)
+
+
+def test_min_cash_for_daytrade_sem_robot_key_usa_o_default_do_slot(monkeypatch):
+    """Conta NOVA, ainda sem robô escolhido: usa `slot.robot_key` (o mesmo
+    pré-selecionado no `<select>` do template) para achar o piso."""
+    from core.config import slot_by_id
+
+    capturado = []
+    monkeypatch.setattr(live_control, "_intraday_capital_minimo",
+                        lambda robot_key: capturado.append(robot_key) or 50.0)
+    slot = slot_by_id("daytrade")
+
+    live_control.min_cash_for(slot)
+
+    assert capturado == [slot.robot_key]
+
+
+def test_min_cash_for_daytrade_sem_preco_local_cai_no_piso_generico(monkeypatch):
+    """Parquet ausente/robô fora do catálogo: `_intraday_capital_minimo`
+    devolve `None`, e isso NUNCA pode travar o "Iniciar" por falta de dado
+    que não é culpa do dono — degrada para `Slot.min_cash_brl`."""
+    from core.config import slot_by_id
+
+    monkeypatch.setattr(live_control, "_intraday_capital_minimo", lambda robot_key: None)
+    slot = slot_by_id("daytrade")
+
+    assert live_control.min_cash_for(slot, "gremah") == pytest.approx(slot.min_cash_brl)
+
+
+def test_start_daytrade_recusa_caixa_abaixo_do_piso_do_robo(isolated, monkeypatch):
+    """O ponto central do pedido, de ponta a ponta pelo `start()`: caixa que
+    cobriria o piso genérico de R$50 mas não cobre o piso REAL do robô
+    escolhido tem de ser recusado."""
+    _seed_cash(isolated["db"], "daytrade", 100.0)
+    monkeypatch.setattr(live_control, "min_cash_for", lambda slot, robot_key=None: 200.0)
+    called = []
+    monkeypatch.setattr(
+        live_control.subprocess, "Popen",
+        lambda *a, **k: called.append((a, k)) or _FakeProc(pid=1, poll_value=None),
+    )
+
+    with pytest.raises(RuntimeError, match="abaixo do mínimo de R\\$ 200"):
+        live_control.start(_cfg(slot="daytrade", strategy="gremah"))
+
+    assert called == []
+
+
 def test_available_cash_sem_conta_devolve_none(isolated):
     assert live_control.available_cash("swing") is None
 

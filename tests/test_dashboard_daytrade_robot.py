@@ -180,6 +180,28 @@ def test_operacao_iniciar_daytrade_nunca_repassa_mapa_fracionario(
     assert captured[0].mt5_fractional_map is None
 
 
+def test_operacao_iniciar_daytrade_usa_piso_do_robo_nao_o_piso_generico_do_slot(
+    isolated_journal, client, monkeypatch,
+):
+    """Pedido do dono (2026-08-22): `Slot.min_cash_brl` (R$50) parou de valer
+    pro day trade -- o piso e' `capital_minimo_brl` do robo ESCOLHIDO. Caixa
+    de R$100 cobre o piso generico antigo mas nao cobre um robo cujo lote
+    custe mais que isso -- tem de bloquear, e a mensagem tem de citar o piso
+    REAL, nao R$50."""
+    called: list = []
+    monkeypatch.setattr(live_control, "start", lambda cfg: called.append(cfg))
+    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot, robot_key=None: 1.0)
+    monkeypatch.setattr(live_control, "detect_fractional_symbol_map", lambda slot, robot_key=None: None)
+    monkeypatch.setattr(live_control, "min_cash_for", lambda slot, robot_key=None: 900.0)
+
+    client.post(f"/operacao/{DAYTRADE}/caixa", data={"caixa": "100.00"})
+    resp = client.post(f"/operacao/{DAYTRADE}/iniciar", data={"robo": "gremah"})
+
+    assert resp.status_code == 200
+    assert "900" in resp.text
+    assert called == []
+
+
 def test_operacao_iniciar_daytrade_sem_escolha_no_form_cai_no_shadow(
     isolated_journal, client, monkeypatch,
 ):

@@ -82,7 +82,7 @@
 {% elif not caixa_ok %}
 <p class="ops-start-hint">
   Informe acima o caixa destinado a este robô — mínimo
-  R$ {{ slot.min_cash_brl | num_br }} para operar.
+  R$ {{ caixa_minima | num_br }} para operar.
 </p>
 {% endif %}
 

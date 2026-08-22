@@ -41,9 +41,9 @@
       <span class="v num">R$ {{ bloco.caixa_ledger | num_br }}</span>
       <span class="sub{% if not bloco.caixa_ok %} is-blocked{% endif %}">
         {% if bloco.caixa_ok %}
-          Acima do mínimo de R$ {{ slot.min_cash_brl | num_br }}
+          Acima do mínimo de R$ {{ bloco.caixa_minima | num_br }}
         {% else %}
-          Abaixo do mínimo de R$ {{ slot.min_cash_brl | num_br }} — não opera
+          Abaixo do mínimo de R$ {{ bloco.caixa_minima | num_br }} — não opera
         {% endif %}
       </span>
     </div>
@@ -63,6 +63,7 @@
 
   {% with slot = slot, status = bloco.status, proc = bloco.proc,
           config_anterior = bloco.config_anterior, caixa_ok = bloco.caixa_ok,
+          caixa_minima = bloco.caixa_minima,
           robot_options = bloco.robot_options, creds_status = creds_status, poll_seconds = poll_seconds %}
     {% include "partials/operacao_slot_live.html" %}
   {% endwith %}
