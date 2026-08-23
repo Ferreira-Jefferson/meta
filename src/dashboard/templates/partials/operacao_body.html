@@ -66,13 +66,32 @@
      grande, o mesmo valor dentro de um campo e um botão âmbar do tamanho de
      uma ação primária. Agora o valor É o campo. #}
   <div class="ops-bar">
+  {# `hx-include` manda junto o `<select name=execution_mode>` do form de
+     controle (form IRMÃO, outro endpoint) -- não porque este POST precise
+     dele, mas para ECOAR de volta a escolha ainda-não-salva do dono. Sem
+     isto, "atualizar saldo" troca `#ops-body` inteiro e o select recém-
+     escolhido (mas nunca iniciado) volta pro último modo REALMENTE
+     iniciado -- ver `app.py::operacao_caixa` e a docstring de
+     `_operacao_ctx` (dono, 2026-08-23). Seletor por id porque `closest`/
+     `next` não alcançam um irmão que não é adjacente no DOM. #}
   <form class="ops-cash" hx-post="/operacao/{{ slot.id }}/caixa"
-        hx-target="#ops-body" hx-swap="outerHTML">
+        hx-target="#ops-body" hx-swap="outerHTML"
+        hx-include="#ops-exec-{{ slot.id }}">
     {# Rótulo ACIMA do campo, mesmo par `.ops-inline-field` usado em
        "Robô"/"Execução" ao lado (dono, 2026-08-22) — um só padrão de campo na
        barra inteira, e não um rótulo ao lado aqui e em cima ali. #}
     <label class="ops-inline-field">
-      <span class="k">Caixa</span>
+      <span class="k">
+        Caixa
+        {% if slot.is_intraday %}
+        {# Etiqueta troca com o `<select execution_mode>` ao lado -- ver
+           `static/js/operacao.js::sincronizaCaixaComExecucao`. Servidor
+           desenha o valor inicial já certo (`bloco.caixa_ledger`, que
+           `_slot_ctx` já resolveu pro modo efetivo); sem JS ela nunca
+           muda, mas também nunca mente, porque nasce correta. #}
+        <em data-ops-cash-hint>{{ "sombra" if (bloco.config_anterior.execution_mode or "shadow") == "shadow" else "real" }}</em>
+        {% endif %}
+      </span>
       <span class="ops-cash-field">
         <span class="prefix">R$</span>
         {# `type="text"` e NÃO `type="number"` (dono, 2026-08-22): o campo
@@ -87,9 +106,21 @@
            acusar. O `inputmode` traz o teclado numérico no celular.
 
            Sem JS o campo aceita "1234,56" ou "1.234,56" digitado à mão: quem
-           valida e converte é o servidor (`app.py::_valor_brl`). #}
+           valida e converte é o servidor (`app.py::_valor_brl`).
+
+           `data-cash-live`/`data-cash-sombra` (2026-08-23): os DOIS saldos
+           crus, pro JS trocar o `value` exibido quando o dono muda o
+           `<select execution_mode>` ao lado -- sem round-trip ao servidor,
+           mesmo espírito do filtro de ativos por robô
+           (`static/js/operacao.js::filtraAtivos`). Sem JS o campo mostra e
+           edita só o saldo do modo com que a página nasceu (o efetivo,
+           `bloco.caixa_ledger`) -- quem quer o outro troca o `<select>` e dá
+           F5, que já chega certo (`_slot_ctx` resolve o modo ANTES de
+           escolher qual saldo mandar). #}
         <input type="text" name="caixa" inputmode="decimal" autocomplete="off"
                data-ops-money value="{{ bloco.caixa_ledger | num_br }}" required
+               data-cash-live="{{ bloco.caixa_real_ledger | num_br }}"
+               data-cash-sombra="{{ bloco.caixa_sombra_ledger | num_br }}"
                aria-label="Caixa deste robô em reais" />
         {# Confirmar/cancelar aparecem só com o campo em foco (pedido do dono,
            2026-08-22): um "Salvar" permanente é um chamariz ao lado de um
@@ -126,6 +157,8 @@
   {% with slot = slot, status = bloco.status, proc = bloco.proc,
           config_anterior = bloco.config_anterior, caixa_ok = bloco.caixa_ok,
           caixa_minima = bloco.caixa_minima, caixa_ledger = bloco.caixa_ledger,
+          caixa_real_ledger = bloco.caixa_real_ledger, caixa_sombra_ledger = bloco.caixa_sombra_ledger,
+          caixa_ok_real = bloco.caixa_ok_real, caixa_ok_sombra = bloco.caixa_ok_sombra,
           robot_options = bloco.robot_options, creds_status = creds_status,
           poll_seconds = poll_seconds %}
     {% include "partials/operacao_slot_live.html" %}
@@ -457,7 +490,9 @@
         <span class="ops-slot-sym">{{ bloco.slot.symbol }}</span>
         <span class="ops-slot-name">{{ bloco.slot.robot_key }}</span>
         {{ r.resumo(bloco.slot.id, bloco.caixa_ledger, bloco.proc,
-                    bloco.caixa_minima, bloco.caixa_ok) }}
+                    bloco.caixa_minima, bloco.caixa_ok,
+                    cash_live=bloco.caixa_real_ledger, cash_sombra=bloco.caixa_sombra_ledger,
+                    caixa_ok_live=bloco.caixa_ok_real, caixa_ok_sombra=bloco.caixa_ok_sombra) }}
         <span class="ops-sec-caret" aria-hidden="true"></span>
       </summary>
       <div class="ops-slot-body">

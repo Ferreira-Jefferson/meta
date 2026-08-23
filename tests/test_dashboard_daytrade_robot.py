@@ -264,6 +264,91 @@ def test_operacao_iniciar_daytrade_valor_invalido_no_form_cai_no_shadow(
     assert captured[0].execution_mode == "shadow"
 
 
+def test_operacao_iniciar_daytrade_sombra_usa_cash_sombra_para_piso_e_capital(
+    isolated_journal, client, monkeypatch,
+):
+    """O pedido do dono (2026-08-23): "o backend deve ser capaz de rodar com
+    o seu saldo". Caixa REAL insuficiente para o piso do robô não pode
+    bloquear um início em SOMBRA se o saldo de sombra cobre -- e o capital
+    que dimensiona a posição tem de vir desse mesmo saldo de sombra, não do
+    caixa real (nem de `initial_capital` congelado)."""
+    _create_daytrade_account(isolated_journal, capital=10.0)  # cash=cash_sombra=10
+    with live_store.live_journal(isolated_journal) as conn:
+        conta = live_store.load_account(conn, DAYTRADE)
+        conta.cash_sombra = 500.0  # so' o saldo de sombra sobe
+        live_store.save_account(conn, conta)
+    monkeypatch.setattr(live_control, "min_cash_for", lambda slot, robot_key=None: 100.0)
+    captured: list = []
+    monkeypatch.setattr(live_control, "start", lambda cfg: captured.append(cfg))
+    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot, robot_key=None: 1.0)
+    monkeypatch.setattr(live_control, "detect_fractional_symbol_map", lambda slot, robot_key=None: None)
+
+    resp = client.post(f"/operacao/{DAYTRADE}/iniciar",
+                       data={"robo": "gremah", "execution_mode": "shadow"})
+
+    assert resp.status_code == 200
+    assert len(captured) == 1, resp.text
+    assert captured[0].capital == pytest.approx(500.0)
+    with live_store.live_journal(isolated_journal) as conn:
+        conta = live_store.load_account(conn, DAYTRADE)
+    assert conta.cash == pytest.approx(10.0)  # caixa real nunca mexido
+
+
+def test_operacao_iniciar_daytrade_live_usa_cash_real_mesmo_com_sombra_alto(
+    isolated_journal, client, monkeypatch,
+):
+    """Contraprova: em LIVE, o saldo de sombra generoso é irrelevante -- o
+    piso e o capital continuam vindo do caixa real."""
+    _create_daytrade_account(isolated_journal, capital=10.0)  # cash=cash_sombra=10
+    with live_store.live_journal(isolated_journal) as conn:
+        conta = live_store.load_account(conn, DAYTRADE)
+        conta.cash_sombra = 500.0
+        live_store.save_account(conn, conta)
+    monkeypatch.setattr(live_control, "min_cash_for", lambda slot, robot_key=None: 100.0)
+    called: list = []
+    monkeypatch.setattr(live_control, "start", lambda cfg: called.append(cfg))
+    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot, robot_key=None: 1.0)
+    monkeypatch.setattr(live_control, "detect_fractional_symbol_map", lambda slot, robot_key=None: None)
+
+    resp = client.post(f"/operacao/{DAYTRADE}/iniciar",
+                       data={"robo": "gremah", "execution_mode": "live"})
+
+    assert resp.status_code == 200
+    assert "100" in resp.text
+    assert called == []
+
+
+def test_operacao_iniciar_daytrade_primeira_vez_em_sombra_nao_infla_initial_capital(
+    isolated_journal, client, monkeypatch,
+):
+    """`conta.initial_capital` alimenta `ja_aportado_brl` em
+    `_avaliar_sugestao_de_capital` -- quanto o dono JÁ PÔS de dinheiro DE
+    VERDADE nos robôs, usado para não sugerir um aporte novo maior do que o
+    que sobra de verdade. Um robô testado pela primeira vez em SOMBRA com um
+    saldo de sombra bem maior que o caixa real não pode gravar esse número
+    de sombra ali -- só o capital de SIZING (`ProcessConfig.capital`) segue
+    o saldo do modo escolhido."""
+    client.post(f"/operacao/{DAYTRADE}/caixa", data={"caixa": "100.00"})
+    client.post(f"/operacao/{DAYTRADE}/caixa",
+               data={"caixa": "500.00", "execution_mode": "shadow"})
+    captured: list = []
+    monkeypatch.setattr(live_control, "start", lambda cfg: captured.append(cfg))
+    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot, robot_key=None: 1.0)
+    monkeypatch.setattr(live_control, "detect_fractional_symbol_map", lambda slot, robot_key=None: None)
+
+    resp = client.post(f"/operacao/{DAYTRADE}/iniciar",
+                       data={"robo": "gremah", "execution_mode": "shadow"})
+
+    assert resp.status_code == 200
+    assert len(captured) == 1, resp.text
+    assert captured[0].capital == pytest.approx(500.0)  # sizing: saldo de sombra
+    with live_store.live_journal(isolated_journal) as conn:
+        conta = live_store.load_account(conn, DAYTRADE)
+    assert conta.initial_capital == pytest.approx(100.0)  # persistido: caixa real
+    assert conta.cash == pytest.approx(100.0)
+    assert conta.cash_sombra == pytest.approx(500.0)
+
+
 def test_novo_robo_fora_do_registry_nao_cria_conta(isolated_journal, client):
     """Mesmo espírito da checagem do lado swing: um form adulterado mandando
     uma chave que não está no catálogo de day trade não pode colar. A checagem
@@ -406,3 +491,28 @@ def test_fragmento_daytrade_com_conta_mostra_badge_de_ativo(
 
     assert "Ativo" in html
     assert "PMAM3" in html
+
+
+def test_fragmento_daytrade_caixa_carteira_patrimonio_carregam_os_dois_saldos(
+    isolated_journal, client,
+):
+    """Reclamação do dono (2026-08-23, segunda volta): a primeira correção só
+    trocava o card "Caixa" com o `<select execution_mode>` -- "Carteira" e
+    "Patrimônio" continuavam presos no caixa real mesmo com "Sombra"
+    selecionado. Os TRÊS cards que derivam do caixa têm de carregar
+    `data-cash-live`/`data-cash-sombra` (o JS troca os três juntos, ver
+    `static/js/operacao.js::sincronizaCaixaComExecucao`)."""
+    _create_daytrade_account(isolated_journal, capital=20.0)  # cash=cash_sombra=20
+    with live_store.live_journal(isolated_journal) as conn:
+        conta = live_store.load_account(conn, DAYTRADE)
+        conta.cash_sombra = 500.0  # so' o saldo de sombra diverge do real
+        live_store.save_account(conn, conta)
+
+    html = client.get(f"/operacao/{DAYTRADE}/fragment").text
+
+    # Sem posição aberta (`investido`=0) e sem caixa externo, Carteira e
+    # Patrimônio espelham exatamente o Caixa de cada modo -- 4 ocorrências
+    # do MESMO par de saldos brutos: os 3 cards (Caixa/Carteira/Patrimônio)
+    # mais o resumo do cabeçalho (`ops-sum-cash`, swap fora-de-banda deste
+    # mesmo fragmento).
+    assert html.count('data-cash-live="20,00" data-cash-sombra="500,00"') == 4

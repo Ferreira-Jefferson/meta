@@ -580,6 +580,63 @@ def test_operacao_caixa_valor_negativo_bloqueia(isolated_journal, client):
         conta = live_store.load_account(conn, SWING)
     assert conta.cash == pytest.approx(1_000.0)  # nao mexeu
 
+
+def test_operacao_caixa_ecoa_execution_mode_ainda_nao_salvo(isolated_journal, client):
+    """Reclamacao do dono (2026-08-23): com "Real" escolhido no `<select>`
+    (mas o robo nunca foi de fato iniciado nesse modo), digitar um novo caixa
+    e confirmar recarregava `#ops-body` inteiro e o select voltava para
+    "Sombra" -- o unico modo gravado em `live_control.last_config`. O form
+    de caixa manda `execution_mode` junto (via `hx-include` no template) e a
+    rota tem de devolver o MESMO valor selecionado, nao o ultimo config
+    realmente iniciado."""
+    _create_mt5_account(isolated_journal, capital=10.0, slot=DAYTRADE)
+
+    resp = client.post(f"/operacao/{DAYTRADE}/caixa",
+                        data={"caixa": "80", "execution_mode": "live"})
+
+    assert resp.status_code == 200
+    exec_select = resp.text[resp.text.index(f'id="ops-exec-{DAYTRADE}"'):]
+    exec_select = exec_select[:exec_select.index("</select>")]
+    assert 'value="live" selected' in exec_select
+    assert 'value="shadow" selected' not in exec_select
+
+
+def test_operacao_caixa_com_execution_mode_shadow_mexe_so_no_cash_sombra(
+    isolated_journal, client,
+):
+    """O pedido do dono (2026-08-23): "separação dos campos de saldo, pra o
+    sombra ter seu saldo e o real o seu". Com "Sombra" selecionado no form de
+    caixa, o valor digitado tem de ir para `cash_sombra` -- `cash` (o
+    dinheiro real) fica intocado."""
+    _create_mt5_account(isolated_journal, capital=10.0, slot=DAYTRADE)  # cash=cash_sombra=10
+
+    resp = client.post(f"/operacao/{DAYTRADE}/caixa",
+                        data={"caixa": "500", "execution_mode": "shadow"})
+
+    assert resp.status_code == 200
+    with live_store.live_journal(isolated_journal) as conn:
+        conta = live_store.load_account(conn, DAYTRADE)
+    assert conta.cash_sombra == pytest.approx(500.0)
+    assert conta.cash == pytest.approx(10.0)  # real intacto
+
+
+def test_operacao_caixa_com_execution_mode_live_mexe_so_no_cash_real(
+    isolated_journal, client,
+):
+    """Contraprova: com "Real" selecionado, o de sempre -- só `cash` muda,
+    `cash_sombra` fica intocado."""
+    _create_mt5_account(isolated_journal, capital=10.0, slot=DAYTRADE)  # cash=cash_sombra=10
+
+    resp = client.post(f"/operacao/{DAYTRADE}/caixa",
+                        data={"caixa": "500", "execution_mode": "live"})
+
+    assert resp.status_code == 200
+    with live_store.live_journal(isolated_journal) as conn:
+        conta = live_store.load_account(conn, DAYTRADE)
+    assert conta.cash == pytest.approx(500.0)
+    assert conta.cash_sombra == pytest.approx(10.0)  # sombra intacto
+
+
 # ---------- ordem e independencia dos cartoes (pedido do dono, 2026-08-21) --
 
 def test_operacao_mostra_os_cartoes_na_ordem_pedida(isolated_journal, client):

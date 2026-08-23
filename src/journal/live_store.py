@@ -308,6 +308,7 @@ def ensure_tables(conn: sqlite3.Connection, schema_path: Path = SCHEMA_PATH) -> 
 #: coluna com default.
 _ACCOUNT_COLUMNS_ADICIONADAS = (
     ("symbol", "TEXT NOT NULL DEFAULT ''"),
+    ("cash_sombra", "REAL NOT NULL DEFAULT 0"),
 )
 
 
@@ -326,6 +327,17 @@ def _add_missing_account_columns(conn: sqlite3.Connection) -> None:
         return
     for nome, ddl in novas:
         conn.execute(f"ALTER TABLE live_accounts ADD COLUMN {nome} {ddl}")
+    if any(nome == "cash_sombra" for nome, _ in novas):
+        # Semeia com `cash` (o saldo REAL de agora), não `initial_capital` --
+        # para uma conta que já rodou e teve `cash` ajustado por depósito/
+        # trade real, `initial_capital` pode estar bem defasado (visto na
+        # prática: conta com cash=30 e initial_capital=0). Sem isto, toda
+        # conta que já existia antes desta coluna nascer mostraria "saldo
+        # sombra R$0" mesmo sem nunca ter rodado sombra, o que parece bug em
+        # vez de "ainda não simulou nada". Seguro rodar incondicional: este
+        # ramo só executa UMA vez, no instante em que a coluna acaba de ser
+        # criada (`novas` só contém "cash_sombra" nessa mesma passada).
+        conn.execute("UPDATE live_accounts SET cash_sombra = cash")
     conn.commit()
 
 
@@ -403,10 +415,10 @@ def ensure_account(
     """
     conn.execute(
         """INSERT INTO live_accounts
-            (name, mode, initial_capital, cash, investment_robot, withdrawal_robot, symbol)
-           VALUES (?, ?, ?, ?, ?, ?, ?)
+            (name, mode, initial_capital, cash, cash_sombra, investment_robot, withdrawal_robot, symbol)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(name) DO NOTHING""",
-        (name, mode, initial_capital, initial_capital, investment_robot,
+        (name, mode, initial_capital, initial_capital, initial_capital, investment_robot,
          withdrawal_robot, symbol),
     )
     account = load_account(conn, name)
@@ -442,6 +454,7 @@ def load_account(conn: sqlite3.Connection, name: str) -> Optional[AccountState]:
         mode=row["mode"],
         initial_capital=row["initial_capital"],
         cash=row["cash"],
+        cash_sombra=(row["cash_sombra"] if "cash_sombra" in row.keys() else 0.0),
         investment_robot=row["investment_robot"] or "",
         withdrawal_robot=row["withdrawal_robot"] or "",
         symbol=(row["symbol"] or "") if "symbol" in row.keys() else "",
@@ -479,12 +492,13 @@ def save_account(conn: sqlite3.Connection, account: AccountState) -> None:
     """
     conn.execute(
         """UPDATE live_accounts
-           SET cash = ?, withdrawn_total = ?, external_cash = ?, policy_state = ?,
+           SET cash = ?, cash_sombra = ?, withdrawn_total = ?, external_cash = ?, policy_state = ?,
                investment_robot = ?, initial_capital = ?, symbol = ?,
                updated_at = datetime('now')
            WHERE id = ?""",
         (
             account.cash,
+            account.cash_sombra,
             account.withdrawn_total,
             account.external_cash,
             _dumps(account.policy_state),
@@ -1241,6 +1255,29 @@ def reconcile_cash(
     save_account(conn, account)
     record_deposit(conn, account.id, day, diff, origin=origin,
                     note=note or f"caixa anterior {anterior:.2f} -> {target_balance:.2f}")
+    return diff, True
+
+
+def reconcile_cash_sombra(
+    conn: sqlite3.Connection,
+    account: AccountState,
+    target_balance: float,
+    tolerance: float = 1.0,
+) -> tuple[float, bool]:
+    """Irmã de `reconcile_cash`, mas para `account.cash_sombra` -- pedido do
+    dono (2026-08-23): poder digitar/resetar o saldo de um teste em sombra
+    sem tocar `cash`, o mesmo jeito que já podia com o caixa real.
+
+    NÃO grava em `live_deposits`: aquela tabela é a auditoria de depósito de
+    dinheiro DE VERDADE (lida por `available_cash`/relatórios de aporte, ver
+    `live.intraday_runtime._avaliar_sugestao_de_capital`), e uma linha ali
+    para um número simulado corromperia essa leitura. Um `log_event`
+    informativo já basta para o histórico do slot."""
+    diff = round(target_balance - account.cash_sombra, 2)
+    if abs(diff) <= tolerance:
+        return diff, False
+    account.cash_sombra = target_balance
+    save_account(conn, account)
     return diff, True
 
 

@@ -477,7 +477,10 @@ OPS_PAGINA = 10
 OPS_PAGINA_MAX = 500
 
 
-def _slot_ctx(slot, eventos_limit: int = OPS_PAGINA, posicoes_limit: int = OPS_PAGINA) -> dict:
+def _slot_ctx(
+    slot, eventos_limit: int = OPS_PAGINA, posicoes_limit: int = OPS_PAGINA,
+    exec_mode_override: str | None = None,
+) -> dict:
     """Tudo o que UM cartão de slot precisa: status da conta, processo,
     caixa do ledger manual e se o botão "Iniciar" pode estar habilitado.
 
@@ -496,7 +499,16 @@ def _slot_ctx(slot, eventos_limit: int = OPS_PAGINA, posicoes_limit: int = OPS_P
     corrompida) não pode virar 500 — degrada com a mensagem do próprio
     `KeyError` (ver `strategy.daytrade.registry.get_daytrade_robot`/
     `strategy.registry.get_strategy`, os dois levantam `KeyError` com o
-    motivo em texto)."""
+    motivo em texto).
+
+    `exec_mode_override`: eco do `<select execution_mode>` ainda não salvo
+    (ver `_operacao_ctx`) -- SEM ele, o modo efetivo usado para escolher qual
+    caixa mostrar/checar é o do último `config_anterior` (a config do último
+    START de verdade, ou `None`/"shadow" se o robô nunca rodou). `caixa`/
+    `caixa_ok` (piso do botão "Iniciar") passam a ser DESTE saldo -- pedido
+    do dono 2026-08-23: "quando mudar a execução, quero que o frontend mude
+    o saldo para o saldo da execução selecionada e o backend deve ser capaz
+    de rodar com o seu saldo"."""
     from journal import live_store
 
     erro = None
@@ -508,7 +520,19 @@ def _slot_ctx(slot, eventos_limit: int = OPS_PAGINA, posicoes_limit: int = OPS_P
     except KeyError as e:
         status_payload = {"conta": slot.id, "existe": False, "kind": slot.kind}
         erro = str(e)
-    caixa = live_control.available_cash(slot.id) or 0.0
+    config_anterior = live_control.last_config(slot.id)
+    if exec_mode_override is not None:
+        config_anterior = {**(config_anterior or {}), "execution_mode": exec_mode_override}
+    # Swing nunca teve modo sombra (`slot.is_intraday` guarda isso em todo
+    # outro lugar que decide "live" vs "shadow" -- ver `operacao_iniciar`,
+    # `live_control.start`); aqui repete a mesma regra para não deixar um
+    # `config_anterior` de outro slot (ou um form adulterado) fazer o caixa
+    # do swing mostrar `cash_sombra`, que ele nem tem.
+    execution_mode = (
+        ((config_anterior or {}).get("execution_mode") or "shadow")
+        if slot.is_intraday else "live"
+    )
+    caixa = live_control.available_cash(slot.id, execution_mode) or 0.0
     proc = live_control.status(slot.id)
     # Robô que vai de fato rodar: o da conta já existente, ou o default
     # sugerido pra conta nova (o mesmo pré-selecionado no `<select>` do
@@ -524,14 +548,31 @@ def _slot_ctx(slot, eventos_limit: int = OPS_PAGINA, posicoes_limit: int = OPS_P
     status_payload["posicoes_total"] = len(posicoes)
     status_payload["posicoes_ha_mais"] = len(posicoes) > posicoes_limit
     status_payload["posicoes"] = posicoes[:posicoes_limit]
+    caixa_real = live_control.available_cash(slot.id, "live") or 0.0
+    caixa_sombra = (
+        live_control.available_cash(slot.id, "shadow") or 0.0
+        if slot.is_intraday else 0.0
+    )
     return {
         "slot": slot,
         "status": status_payload,
         "proc": proc,
         "eventos_limit": eventos_limit,
         "posicoes_limit": posicoes_limit,
-        "config_anterior": live_control.last_config(slot.id),
+        "config_anterior": config_anterior,
         "caixa_ledger": caixa,
+        # Os dois saldos crus (2026-08-23): o template usa para o `<input>`
+        # de caixa E o resumo do cabeçalho (`partials/operacao_resumo.html`)
+        # trocarem de valor no cliente, sem round-trip, quando o dono muda o
+        # `<select execution_mode>` -- ver `operacao_body.html` e
+        # `static/js/operacao.js`. `caixa_ok_*` acompanha, para o resumo
+        # também trocar o destaque vermelho de "abaixo do mínimo" — o piso
+        # (`caixa_minima`) não muda com o modo, só qual saldo é comparado a
+        # ele.
+        "caixa_real_ledger": caixa_real,
+        "caixa_sombra_ledger": caixa_sombra,
+        "caixa_ok_real": caixa_real >= piso,
+        "caixa_ok_sombra": caixa_sombra >= piso,
         "caixa_minima": piso,
         "caixa_ok": caixa >= piso,
         "erro_slot": erro,
@@ -614,11 +655,28 @@ def _novo_robo_ctx(conn) -> dict:
         1 for r in robos for a in r["ativos"] if not a["em_uso"])}
 
 
-def _operacao_ctx(**extra) -> dict:
+def _operacao_ctx(exec_mode_override: dict[str, str] | None = None, **extra) -> dict:
     """Contexto comum a toda rota que renderiza `operacao.html`/
     `operacao_body.html`: um bloco por slot existente (day trade em cima),
     o formulário de robô novo, os avisos de capital, e o que é global
-    (credenciais, poll)."""
+    (credenciais, poll).
+
+    `exec_mode_override`: eco da escolha AINDA NÃO SALVA do `<select
+    name=execution_mode>` do slot (dono, 2026-08-23) -- só usado por
+    `POST /operacao/{slot}/caixa`, que troca o `#ops-body` inteiro por um
+    endpoint que não tem nada a ver com modo de execução. Sem isto, o select
+    voltava para `config_anterior.execution_mode` (a config do último START
+    de verdade) a cada clique em "atualizar saldo", fazendo "Real"
+    selecionado sumir e reaparecer como "Sombra" -- vide reclamação do dono
+    2026-08-23. O valor não é PERSISTIDO em lugar nenhum: é só o que o
+    formulário de caixa recebeu de volta do próprio `<select>` (via
+    `hx-include` no template) e devolve ecoado na resposta.
+
+    Passado para `_slot_ctx` (não aplicado depois, por cima do resultado
+    dela): `caixa_ledger`/`caixa_ok` daquele bloco DEPENDEM do modo efetivo
+    (ver a docstring de `_slot_ctx`), então o eco precisa entrar ANTES da
+    escolha de qual saldo (`cash`/`cash_sombra`) mostrar, não só no `<select>`
+    renderizado depois."""
     from core.config import ordered_slots
     from dashboard import slots as slots_mod
     from journal import live_store
@@ -640,7 +698,10 @@ def _operacao_ctx(**extra) -> dict:
         novo_robo = {"robos": [], "livres": 0}
         avisos = []
 
-    slots = [_slot_ctx(s) for s in todos]
+    slots = [
+        _slot_ctx(s, exec_mode_override=(exec_mode_override or {}).get(s.id))
+        for s in todos
+    ]
     for bloco in slots:
         if bloco["erro_slot"]:
             extra.setdefault("erro", bloco["erro_slot"])
@@ -886,6 +947,21 @@ async def operacao_iniciar(request: Request, slot_id: str):
         elif strategy_key not in valid_keys:
             erro = "Escolha um robô da lista antes de iniciar."
 
+    # Escolha explícita do dono na tela (pedido 2026-08-22, revertendo "sombra
+    # sempre, sem opção nenhuma"): só o slot intradiário honra este campo --
+    # swing sempre envia de verdade, nunca teve modo sombra. Um valor fora de
+    # {"shadow", "live"} (form adulterado/desatualizado) cai pro default
+    # SEGURO (shadow), nunca vira erro que bloqueia o início nem escorrega
+    # para "live" por omissão.
+    #
+    # Calculado AQUI (e não mais logo antes do `ProcessConfig`, ver histórico
+    # git): o piso de caixa abaixo precisa saber o modo ANTES de escolher
+    # qual saldo (`cash`/`cash_sombra`) checar (dono, 2026-08-23).
+    execution_mode = "live"
+    if erro is None and slot.is_intraday:
+        candidato = form.get("execution_mode")
+        execution_mode = candidato if candidato in ("shadow", "live") else "shadow"
+
     # "Ações por lote" é parâmetro do TERMINAL MT5 do usuário, não da
     # estratégia nem da sessão -- detectado sozinho a cada clique em
     # "Iniciar operação" via `detect_shares_per_lot()` (consulta o
@@ -916,16 +992,29 @@ async def operacao_iniciar(request: Request, slot_id: str):
         # especificamente, não `slot.min_cash_brl` cego ao símbolo (ver
         # docstring de `min_cash_for`, 2026-08-22).
         piso = live_control.min_cash_for(slot, strategy_key)
-        ledger = live_control.available_cash(slot.id) or 0.0
+        # Mode-aware (dono, 2026-08-23): em sombra, o piso é conferido contra
+        # `cash_sombra`, não `cash` -- sem isto, um robô com saldo de sombra
+        # de sobra continuava bloqueado por um caixa real insuficiente, só
+        # para (se o gate fosse burlado) parar de operar no primeiro pregão
+        # de qualquer jeito, porque `IntradayLiveRuntime._check_capital` já
+        # confere o mesmo saldo (ver `AccountState.cash_for`).
+        ledger = live_control.available_cash(slot.id, execution_mode) or 0.0
         if ledger < piso:
+            rotulo_saldo = "sombra" if execution_mode == "shadow" else "real"
             erro = (
-                f"Informe o caixa destinado a este robô (mínimo R$ "
-                f"{piso:.2f}) antes de iniciar — o valor atual é "
+                f"Informe o caixa {rotulo_saldo} destinado a este robô (mínimo "
+                f"R$ {piso:.2f}) antes de iniciar — o valor atual é "
                 f"R$ {ledger:.2f}."
             )
-        elif nunca_comecou:
-            # Capital inicial de um robô que nunca começou = o caixa que o dono
-            # destinou a ELE no ledger manual. Não é lido da corretora (ver o
+        else:
+            # Capital que dimensiona a posição (`ProcessConfig.capital` ->
+            # `IntradayLiveRuntime.initial_capital`) = o saldo ATUAL do modo
+            # escolhido, sempre -- não só na primeira vez. Antes disto, uma
+            # conta já existente sizava contra `conta.initial_capital`
+            # congelado na criação (podendo estar bem defasado do ledger
+            # atual, achado ao vivo em `dt-gremah-pmam3`: cash=30,
+            # initial_capital=0) em vez do caixa que o dono efetivamente
+            # destinou ao robô agora. Não é lido da corretora (ver o
             # comentário no lugar de `live_control.detect_broker_capital`,
             # removida em 2026-08-21): o saldo do MT5 atrasa em relação ao da
             # Rico, e com dois robôs disputando a mesma conta um número
@@ -958,22 +1047,19 @@ async def operacao_iniciar(request: Request, slot_id: str):
         # AGORA. `live_store.ensure_account` é `ON CONFLICT DO NOTHING` —
         # sozinho, ele deixaria `investment_robot` vazio para sempre e o
         # painel não teria como montar o runtime de leitura.
+        #
+        # `conta.initial_capital` grava sempre o caixa REAL (nunca `capital`,
+        # que pode ser o saldo de SOMBRA quando `execution_mode="shadow"`):
+        # este campo alimenta `ja_aportado_brl` em `_avaliar_sugestao_de_
+        # capital` (quanto o dono JÁ pôs de dinheiro de verdade nos robôs), e
+        # um robô testado só em sombra ainda não recebeu nenhum aporte real
+        # -- gravar o saldo de sombra ali inflaria essa conta com dinheiro
+        # que não existe.
         with live_store.live_journal() as conn:
             conta = live_store.load_account(conn, slot.id)
             conta.investment_robot = strategy_key
-            conta.initial_capital = capital
+            conta.initial_capital = live_control.available_cash(slot.id, "live") or 0.0
             live_store.save_account(conn, conta)
-
-    # Escolha explícita do dono na tela (pedido 2026-08-22, revertendo "sombra
-    # sempre, sem opção nenhuma"): só o slot intradiário honra este campo --
-    # swing sempre envia de verdade, nunca teve modo sombra. Um valor fora de
-    # {"shadow", "live"} (form adulterado/desatualizado) cai pro default
-    # SEGURO (shadow), nunca vira erro que bloqueia o início nem escorrega
-    # para "live" por omissão.
-    execution_mode = "live"
-    if erro is None and slot.is_intraday:
-        candidato = form.get("execution_mode")
-        execution_mode = candidato if candidato in ("shadow", "live") else "shadow"
 
     if erro is None:
         try:
@@ -1136,6 +1222,15 @@ async def operacao_caixa(request: Request, slot_id: str):
 
     erro = None
     caixa_msg = None
+    # Eco do `<select name=execution_mode>` deste slot (via `hx-include` no
+    # form de caixa) -- este endpoint não decide nada com isso, só devolve
+    # pro template pra a escolha ainda-não-salva do dono sobreviver ao
+    # outerHTML que este POST provoca em `#ops-body`. Ver docstring de
+    # `_operacao_ctx`.
+    exec_mode_override = {}
+    exec_mode_form = form.get("execution_mode")
+    if slot.is_intraday and exec_mode_form in ("shadow", "live"):
+        exec_mode_override[slot.id] = exec_mode_form
     valor = _valor_brl(form.get("caixa", ""))
     if valor is None or valor < 0:
         erro = "Informe o caixa destinado a este robô (maior ou igual a zero)."
@@ -1167,28 +1262,42 @@ async def operacao_caixa(request: Request, slot_id: str):
                         withdrawal_robot="",
                         symbol=slot.symbol if slot.is_dynamic else "",
                     )
-                diff, aplicado = live_store.reconcile_cash(
-                    conn, conta, valor, clock.session_date(), origin="manual_ledger",
-                    note=(f"caixa destinado ao robô do slot '{slot.id}', informado "
-                          "manualmente pelo dono"),
-                    tolerance=0.005,
-                )
+                # Modo "shadow" edita `cash_sombra`, nunca `cash` -- pedido do
+                # dono (2026-08-23): "separação dos campos de saldo, pra o
+                # sombra ter seu saldo e o real o seu". So' para slot
+                # intradiário: swing não tem `cash_sombra` nem seleção de
+                # modo (ver `exec_mode_override` acima, que já ignora o
+                # campo do form pra quem não é intradiário).
+                editando_sombra = slot.is_intraday and exec_mode_form == "shadow"
+                if editando_sombra:
+                    diff, aplicado = live_store.reconcile_cash_sombra(
+                        conn, conta, valor, tolerance=0.005,
+                    )
+                else:
+                    diff, aplicado = live_store.reconcile_cash(
+                        conn, conta, valor, clock.session_date(), origin="manual_ledger",
+                        note=(f"caixa destinado ao robô do slot '{slot.id}', informado "
+                              "manualmente pelo dono"),
+                        tolerance=0.005,
+                    )
                 if aplicado:
+                    saldo_novo = conta.cash_sombra if editando_sombra else conta.cash
+                    descricao = "caixa sombra" if editando_sombra else "caixa"
                     live_store.log_event(
                         conn, conta.id, "info" if diff > 0 else "warn", "operacao",
-                        f"caixa do slot '{slot.id}' definido manualmente: "
-                        f"{conta.cash - diff:.2f} -> {conta.cash:.2f} "
+                        f"{descricao} do slot '{slot.id}' definido manualmente: "
+                        f"{saldo_novo - diff:.2f} -> {saldo_novo:.2f} "
                         f"(diferença R$ {diff:.2f}) -- ledger manual, não veio do MT5.",
-                        {"diferenca": diff, "slot": slot.id},
+                        {"diferenca": diff, "slot": slot.id, "sombra": editando_sombra},
                     )
-                    caixa_msg = (f"Caixa de '{slot.label}' atualizado para R$ {valor:.2f} "
-                                 f"(diferença R$ {diff:+.2f}).")
+                    caixa_msg = (f"{descricao.capitalize()} de '{slot.label}' atualizado "
+                                 f"para R$ {valor:.2f} (diferença R$ {diff:+.2f}).")
                 else:
                     caixa_msg = "O valor informado já é o caixa atual — nada para atualizar."
         except (live_store.LegacyPaperAccountError, live_store.LegacyManualAccountError) as e:
             erro = str(e)
 
-    ctx = _operacao_ctx(erro=erro, caixa_msg=caixa_msg)
+    ctx = _operacao_ctx(erro=erro, caixa_msg=caixa_msg, exec_mode_override=exec_mode_override)
     return TEMPLATES.TemplateResponse(request, "partials/operacao_body.html", ctx)
 
 

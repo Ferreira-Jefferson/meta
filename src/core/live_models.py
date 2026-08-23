@@ -329,6 +329,16 @@ class AccountState:
     mode: str                            # 'mt5' (ver BrokerMode)
     initial_capital: float
     cash: float
+    # Saldo PARALELO, só atualizado por trade em `execution_mode="shadow"`
+    # (ver `IntradayLiveRuntime._on_closed`/`_on_closed_partial`) -- nunca
+    # `cash` (dinheiro real) e nunca o inverso. Existe pra medir "o que teria
+    # acontecido rodando em sombra" como um SALDO de verdade (persiste entre
+    # dias, ao contrário de `_SessionSnapshot.shadow_pnl_brl`, que é só o
+    # resultado de HOJE) sem qualquer risco de um número simulado vazar pro
+    # caixa real quando a conta troca de sombra pra live (2026-08-23, pedido
+    # do dono: "separe os dois valores"). Semeado com `initial_capital` na
+    # criação da conta, nunca sincronizado com depósito/saque real depois.
+    cash_sombra: float = 0.0
     investment_robot: str = ""
     withdrawal_robot: str = ""
     # Ativo que ESTA conta negocia. Vazio para swing (o robo diario escolhe o
@@ -348,6 +358,21 @@ class AccountState:
     external_cash: float = 0.0           # caixa fora do risco (com juros)
     policy_state: dict = field(default_factory=dict)
     id: Optional[int] = None
+
+    def cash_for(self, execution_mode: str) -> float:
+        """Qual dos dois saldos rege esta EXECUÇÃO -- `cash_sombra` em
+        `"shadow"`, `cash` em qualquer outro valor (`"live"`).
+
+        Ponto único da regra "sombra tem o saldo dela, real tem o dele"
+        (pedido do dono, 2026-08-23, depois de perceber que o gate de início
+        e o de caixa-do-dia continuavam lendo `cash` mesmo com o robô
+        selecionado para rodar em sombra): quem decide se um robô PODE
+        operar hoje (`live.intraday_runtime.IntradayLiveRuntime._check_capital`)
+        e quem decide se ele PODE COMEÇAR (`dashboard.live_control.start`,
+        `dashboard.app.operacao_iniciar`) chamam este método em vez de ler
+        `cash` direto -- um lugar só para a regra, não um `if` repetido (e
+        potencialmente divergente) em cada chamador."""
+        return self.cash_sombra if execution_mode == "shadow" else self.cash
 
     def invested(self, marks: dict[str, float]) -> float:
         """Valor a mercado das posicoes. `marks` = ultimo preco por ticker."""

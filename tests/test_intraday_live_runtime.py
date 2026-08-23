@@ -208,6 +208,11 @@ def test_sombra_nao_debita_o_caixa_do_dono(tmp_path, pregao_aberto):
         acc = store.load_account(conn, SLOT.id)
     assert acc.cash == pytest.approx(100.0)                     # intacto
     assert acc.policy_state["intraday"]["shadow_pnl_brl"] > 0    # o resultado foi para ca
+    # `cash_sombra` (saldo PARALELO, separado do caixa real) e' quem recebe o
+    # resultado sombra como SALDO -- pedido do dono 2026-08-23 ("separe os
+    # dois valores"), pra nunca arriscar o numero simulado vazar pro caixa
+    # real quando a conta troca de sombra pra live.
+    assert acc.cash_sombra == pytest.approx(100.0 + acc.policy_state["intraday"]["shadow_pnl_brl"])
 
 
 def test_sombra_reporta_o_resultado_no_status_sem_misturar_com_o_caixa(tmp_path, pregao_aberto):
@@ -227,6 +232,7 @@ def test_sombra_reporta_o_resultado_no_status_sem_misturar_com_o_caixa(tmp_path,
     assert s["caixa"] == pytest.approx(100.0)
     assert s["daytrade"]["execution_mode"] == "shadow"
     assert s["daytrade"]["resultado_sombra"] > 0
+    assert s["daytrade"]["caixa_sombra"] == pytest.approx(100.0 + s["daytrade"]["resultado_sombra"])
     assert s["daytrade"]["trades_na_sessao"] == 1
     assert s["daytrade"]["simbolo"] == "PMAM3"
 
@@ -300,7 +306,15 @@ def _runtime_live(tmp_path, barras, broker, semente=None, **strat_kwargs):
     from strategy.daytrade.lab.gremah import Gremah
 
     kwargs = dict(symbol=SYMBOL, tick_size=0.01, profit_pct=0.01,
-                  spacing_multiplier=2.0, stop_multiplier=20.0)
+                  spacing_multiplier=2.0, stop_multiplier=20.0,
+                  # Estes testes exercitam a mecanica SIMPLES de entrada/saida
+                  # ao vivo (preco/quantidade REAIS da corretora), nao a saida
+                  # dividida -- `dividir_entrada` virou padrao `True` na
+                  # `Gremah` 2026-08-23, e sem `exit_ttl_bars` declarado a
+                  # execucao real recusa operar dividida (por desenho). Quem
+                  # quiser testar a divisao de verdade passa
+                  # `dividir_entrada=True, exit_ttl_bars=N` via `strat_kwargs`.
+                  dividir_entrada=False)
     kwargs.update(strat_kwargs)
     feed = _ScriptedBarFeed(barras, barras[:1] if semente is None else semente)
     rt = IntradayLiveRuntime(
@@ -407,6 +421,9 @@ def test_live_fecha_a_mercado_e_usa_o_preco_executado_pela_corretora(tmp_path, p
     # (9.88 - 9.80) * 1 acao = +0,08, debitado no CAIXA (nao em sombra)
     assert s["caixa"] == pytest.approx(100.08, abs=0.01)
     assert s["daytrade"]["resultado_sombra"] == pytest.approx(0.0)
+    # `caixa_sombra` (saldo paralelo) fica INTOCADO em execucao real -- so'
+    # `cash` recebe o P&L quando `execution_mode="live"`.
+    assert s["daytrade"]["caixa_sombra"] == pytest.approx(100.0)
 
 
 def test_live_sem_conexao_com_o_terminal_nao_conclui_que_nao_preencheu(tmp_path, pregao_aberto):
@@ -466,6 +483,95 @@ def test_live_ordem_abandonada_pelo_robo_e_cancelada_no_terminal(tmp_path, prega
     assert broker.pendentes_enviadas[1].limit_price == pytest.approx(11.76)  # 12.00 - 2*12 ticks
     assert len(broker.canceladas) == 1, "a ordem substituida tem de sair do terminal"
     assert broker.canceladas[0].limit_price == pytest.approx(9.80)
+
+
+# ---------- gap de restart do lado da ENTRADA (2026-08-23) -----------------
+#
+# Mesma familia de risco do lado da saida (ja fechado, ver `machine.restore`):
+# `resting_limit`/`_resting_children_qty` nunca sao restaurados de proposito
+# (a ordem e' uma DECISAO, redecidida do zero pelo warm start) -- mas o(s)
+# TICKET(S) REAIS que um processo anterior mandou pra corretora nao desaparecem
+# so' porque o processo morreu. Diferente da saida, aqui e' seguro RECONCILIAR
+# sozinho (`pending_entry_refs`), porque uma ordem de compra parada sobrando
+# e' risco baixo (nenhuma posicao fica exposta esperando ela).
+
+def test_restart_dentro_da_janela_de_ancora_fixa_cancela_o_ticket_antigo_antes_de_arma_novo(
+    tmp_path, pregao_aberto,
+):
+    """O PROCESSO inteiro reinicia (novo `IntradayLiveRuntime`, mesmo
+    banco/corretora) ainda dentro da janela de ancora fixa, com uma ordem de
+    entrada ja armada e SEM fill nenhum. O warm start do processo novo
+    recalcula a decisao do zero (nao sabe do ticket antigo por conta propria)
+    -- sem a correcao, mandaria uma SEGUNDA ordem de compra por cima da que o
+    processo velho ja tinha no terminal."""
+    broker = _FakeMT5Broker()
+    barras = [_bar("13:00", 10.00, 10.00, 10.00, 10.00)]
+    rt, _feed = _runtime_live(tmp_path, barras, broker, semente=barras[:1])
+    rt.run_once(now=_agora("13:00:30"))
+
+    assert len(broker.pendentes_enviadas) == 1, "warm start armou a ordem fixa"
+    ticket_antigo = broker.pendentes_enviadas[0].broker_ref
+    assert broker.canceladas == []
+
+    # "reinicia o processo": um `IntradayLiveRuntime` NOVO, mesmo slot/banco,
+    # cujo `executor` (objeto novo) nao tem NENHUMA memoria do ticket que o
+    # processo anterior mandou.
+    from strategy.daytrade.lab.gremah import Gremah
+
+    feed_novo = _ScriptedBarFeed(barras, barras[:1])
+    rt_novo = IntradayLiveRuntime(
+        slot=SLOT, strategy=Gremah(symbol=SYMBOL, tick_size=0.01, profit_pct=0.01,
+                                   spacing_multiplier=2.0, stop_multiplier=20.0,
+                                   dividir_entrada=False),
+        config=_config(), bar_feed=feed_novo, broker=broker,
+        db_path=rt.db_path, execution_mode="live", initial_capital=100.0,
+    )
+
+    rt_novo.run_once(now=_agora("13:00:45"))  # ainda dentro da janela fixa
+
+    assert len(broker.canceladas) == 1, "o ticket orfao do processo velho foi cancelado"
+    assert broker.canceladas[0].broker_ref == ticket_antigo
+    assert len(broker.pendentes_enviadas) == 2, "cancelou o velho e armou um novo"
+
+
+def test_restart_fora_da_janela_de_ancora_fixa_tambem_cancela_o_ticket_antigo(
+    tmp_path, pregao_aberto,
+):
+    """Mesmo risco, caminho DIFERENTE: o restart acontece DEPOIS de
+    `fixed_anchor_until` (comeco a FRIO, sem warm start nenhum) -- a
+    reconciliacao tem de acontecer na primeira decisao NOVA do robo
+    (`_on_limit_placed`), nao so' no bloco de warm start."""
+    broker = _FakeMT5Broker()
+    barras_processo_velho = [_bar("13:00", 10.00, 10.00, 10.00, 10.00)]
+    rt, _feed = _runtime_live(tmp_path, barras_processo_velho, broker, semente=barras_processo_velho)
+    rt.run_once(now=_agora("13:00:30"))
+    ticket_antigo = broker.pendentes_enviadas[0].broker_ref
+
+    from strategy.daytrade.lab.gremah import Gremah
+
+    # processo novo, relogio ja' PASSOU de `fixed_anchor_until` (14:00) --
+    # cai em comeco a frio, sem warm start. Comeco a frio NAO consome
+    # NENHUMA barra ja fechada no instante em que liga (`closed_bars_since
+    # (None)` devolve tudo o que ja existe no feed, e essas viram so' a marca
+    # de partida, ver `_start_session`) -- precisa de uma barra chegando
+    # DEPOIS desse instante pro robo ter algo pra de fato decidir, exatamente
+    # como um feed ao vivo real.
+    feed_novo = _ScriptedBarFeed([], [])
+    rt_novo = IntradayLiveRuntime(
+        slot=SLOT, strategy=Gremah(symbol=SYMBOL, tick_size=0.01, profit_pct=0.01,
+                                   spacing_multiplier=2.0, stop_multiplier=20.0,
+                                   dividir_entrada=False),
+        config=_config(), bar_feed=feed_novo, broker=broker,
+        db_path=rt.db_path, execution_mode="live", initial_capital=100.0,
+    )
+    rt_novo.run_once(now=_agora("14:32:00"))  # cold start: so' calibra, nada pra consumir ainda
+
+    feed_novo._barras.append(_bar("14:33", 12.00, 12.00, 12.00, 12.00))
+    rt_novo.run_once(now=_agora("14:33:00"))  # 1a barra nova -- o robo decide e' AGORA
+
+    assert len(broker.canceladas) == 1, "o ticket orfao do processo velho foi cancelado"
+    assert broker.canceladas[0].broker_ref == ticket_antigo
+    assert len(broker.pendentes_enviadas) == 2, "cancelou o velho e armou a nova ancora rolante"
 
 
 # ---------- Fase 2 (2026-08-22): divisao de ordem de VERDADE na corretora --
@@ -632,6 +738,47 @@ def test_live_saida_dividida_confirma_fatia_e_estoura_prazo_pro_resto_a_mercado(
     with store.live_journal(rt.db_path) as conn:
         acc = store.load_account(conn, SLOT.id)
     assert "PMAM3" not in acc.positions
+
+
+def test_restart_com_fatia_de_saida_armada_em_execucao_real_falha_alto(tmp_path, pregao_aberto):
+    """Gap de restart no meio de uma fatia armada (2026-08-23): o PROCESSO
+    inteiro reinicia (novo `IntradayLiveRuntime`, mesmo banco) enquanto a 1a
+    fatia da saida dividida ainda esta pendente na corretora, sem fill
+    confirmado. O ticket dessa ordem vivia so' em memoria no processo velho --
+    o processo novo tem de falhar alto em vez de arriscar rearmar uma segunda
+    ordem de saida por cima da que pode ainda estar viva no book."""
+    broker = _FakeMT5Broker()
+    script = {
+        0: [EnterLimit(side="long", limit_price=10.00, initial_stop=9.00,
+                       initial_target=11.00, quantity=2,
+                       exit_split_unit=1, exit_ttl_bars=2, reason="teste_restart")],
+    }
+    rt, feed = _runtime_live_scripted(tmp_path, broker, script)
+    rt.run_once(now=_agora("13:00:00"))
+
+    feed._barras.append(_bar("13:01", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:01:00"))
+
+    broker.posicao = {"side": "long", "price": 10.00, "quantity": 2, "ticket": 1}
+    feed._barras.append(_bar("13:02", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:02:00"))
+
+    # toca o alvo (11.00) -- arma a 1a fatia como ordem-limite REAL, ainda sem
+    # fill nenhum confirmado.
+    feed._barras.append(_bar("13:03", 10.50, 11.05, 10.50, 11.00))
+    rt.run_once(now=_agora("13:03:00"))
+    assert rt.machine.position.quantity == 2, "so' armou, nenhum fill confirmado ainda"
+
+    # "reinicia o processo": um `IntradayLiveRuntime` NOVO, mesmo slot/banco,
+    # sem nenhuma memoria do `pending_exit_order` que o processo velho tinha.
+    rt_novo = IntradayLiveRuntime(
+        slot=SLOT, strategy=_ScriptedDaytrade(SYMBOL, {}), config=_config(),
+        bar_feed=_ScriptedBarFeed([], []), broker=broker,
+        db_path=rt.db_path, execution_mode="live", initial_capital=100.0,
+    )
+
+    with pytest.raises(RuntimeError, match="FATIA DE SAIDA"):
+        rt_novo.run_once(now=_agora("13:04:00"))
 
 
 def test_live_saida_dividida_sem_prazo_falha_alto(tmp_path, pregao_aberto):
@@ -922,10 +1069,16 @@ def test_liga_depois_do_corte_comeca_a_frio_sem_buscar_semente(tmp_path, pregao_
 
     sessao = [p for p in passos if p.action == "daytrade_sessao"][0]
     assert sessao.detail["inicio"] == "cold"
-    # a UNICA busca ao feed e' a cauda do pregao ANTERIOR (janela de volume
-    # rolante, sempre buscada) -- o warm start de HOJE nao acontece (comeco a
-    # frio nunca tenta buscar a semente de HOJE).
-    assert feed.pedidos_de_semente == [(date(2026, 8, 20), itr_mod._FIM_DE_PREGAO_QUALQUER)]
+    # As buscas ao feed sao SEMPRE a cauda de sessoes ANTERIORES (janela de
+    # volume rolante + janela de volatilidade diaria) -- o warm start de HOJE
+    # nao acontece (comeco a frio nunca tenta buscar a semente de HOJE).
+    dias_vol = []
+    dia = SESSION
+    for _ in range(itr_mod._CAUDA_VOL_DIAS):
+        dia = live_clock.previous_session(dia)
+        dias_vol.append((dia, itr_mod._FIM_DE_PREGAO_QUALQUER))
+    esperado = [(date(2026, 8, 20), itr_mod._FIM_DE_PREGAO_QUALQUER)] + dias_vol
+    assert feed.pedidos_de_semente == esperado
 
 
 def test_seed_volume_window_busca_e_repassa_a_cauda_do_pregao_anterior(tmp_path, pregao_aberto):
@@ -965,6 +1118,33 @@ def test_seed_volume_window_busca_e_repassa_a_cauda_do_pregao_anterior(tmp_path,
     # acoes = 10 lotes -- nao o minimo de 1 lote que "sem cauda" produziria.
     assert rt.machine.resting_limit is not None
     assert rt.machine.resting_limit.quantity == 1_000
+
+
+def test_seed_daily_volatility_busca_e_repassa_o_range_diario_do_pregao_anterior(tmp_path, pregao_aberto):
+    """Fim a fim: o range diario (high-low) do pregao ANTERIOR chega no robo
+    via `seed_daily_volatility` ANTES da primeira barra de hoje -- mesmo
+    canal ja' validado para `seed_volume_window` acima
+    (`test_seed_volume_window_busca_e_repassa_a_cauda_do_pregao_anterior`),
+    agora alimentando `JanelaVolatilidadeDiaria` em vez do teto de volume."""
+    def _bar_on(date_str, hhmm, o, h, low, c, volume):
+        return Bar(ts=pd.Timestamp(f"{date_str} {hhmm}", tz="UTC"),
+                   open=float(o), high=float(h), low=float(low), close=float(c), volume=float(volume))
+
+    dia_anterior = [
+        _bar_on("2026-08-20", "13:00", 10.0, 10.5, 9.8, 10.2, 1_000.0),
+        _bar_on("2026-08-20", "13:01", 10.2, 11.0, 9.5, 10.9, 1_000.0),
+    ]
+    rt, feed = _runtime(tmp_path, barras=[], semente=dia_anterior,
+                        fixed_anchor_until=time(14, 0),
+                        alvo_por_volatilidade=True, alvo_vol_mult=0.5)
+
+    rt.run_once(now=_agora("15:01:00"))
+
+    # range diario agregado das 2 barras acima: high=11.0, low=9.5 -> 1.5.
+    # Unica sessao com dado dentre as `_CAUDA_VOL_DIAS` buscadas (as outras
+    # `session_bars_until` devolvem lista vazia, `barra_diaria([])` e' None
+    # e nao entra na janela) -- mediana de 1 valor so' e' o proprio valor.
+    assert rt.strategy._janela_vol.range_mediano() == pytest.approx(1.5)
 
 
 def test_comeco_a_frio_nao_consome_as_barras_que_ja_passaram(tmp_path, pregao_aberto):
@@ -1297,9 +1477,15 @@ def test_conta_de_day_trade_nao_tem_robo_de_saque(tmp_path, pregao_aberto):
 # ---------- caixa minimo do dia (2x o lote, reavaliado a cada pregao) -------
 
 def _set_cash(rt, valor: float) -> None:
+    """Mexe nos DOIS saldos (2026-08-23, ver `AccountState.cash_for`): estes
+    testes cobrem o gate de caixa-do-dia em si, não a separação sombra/real
+    -- mantendo `cash_sombra` igual a `cash` eles continuam válidos
+    independente de qual dos dois `_check_capital` está lendo para o
+    `execution_mode` da fixture (`_runtime()` default `"shadow"`)."""
     with store.live_journal(rt.db_path) as conn:
         acc = store.load_account(conn, SLOT.id)
         acc.cash = valor
+        acc.cash_sombra = valor
         store.save_account(conn, acc)
 
 
@@ -1336,6 +1522,55 @@ def test_caixa_suficiente_opera_normalmente(tmp_path, pregao_aberto):
     passos = rt.run_once(now=_agora("13:02:30"))
 
     assert not any(p.action == "daytrade_skip" for p in passos)
+
+
+def _set_cash_sombra(rt, valor: float) -> None:
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        acc.cash_sombra = valor
+        store.save_account(conn, acc)
+
+
+def test_gate_de_caixa_em_sombra_le_cash_sombra_nao_cash(tmp_path, pregao_aberto):
+    """O ponto central do pedido do dono (2026-08-23): rodando em
+    `execution_mode="shadow"`, o gate diario (`_check_capital`) tem de olhar
+    `cash_sombra`, nao `cash` -- um robo de teste em sombra com pouco caixa
+    REAL (ou zero) mas saldo de sombra suficiente tem de continuar operando.
+
+    Chama `_check_capital` DIRETO (nao `run_once`): `_start_session` decide o
+    grid de entrada a partir so' da semente (preco atual, sem precisar de
+    toque ainda) e, em `execution_mode="live"`, mandaria a ordem pra
+    corretora ANTES deste gate ser consultado -- um detalhe de sequencia de
+    `run_once` alheio ao que este teste cobre, e que faria a contraprova
+    (`test_gate_de_caixa_em_live_le_cash_nao_cash_sombra`) esbarrar num
+    dublê de corretora que so' entende sombra."""
+    rt, _feed = _runtime(tmp_path, [_bar("13:00", 10.00, 10.00, 10.00, 10.00)],
+                        execution_mode="shadow")
+    _set_cash(rt, 0.0)            # caixa real: nao cobriria o minimo de R$20
+    _set_cash_sombra(rt, 20.00)   # saldo de sombra: cobre exatamente
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        alarme = rt._check_capital(conn, acc, SESSION, preco=10.00)
+
+    assert alarme is None
+
+
+def test_gate_de_caixa_em_live_le_cash_nao_cash_sombra(tmp_path, pregao_aberto):
+    """Contraprova: em `execution_mode="live"`, o mesmo gate continua sendo o
+    caixa REAL -- um saldo de sombra generoso nao pode liberar dinheiro de
+    verdade que nao existe."""
+    rt, _feed = _runtime(tmp_path, [_bar("13:00", 10.00, 10.00, 10.00, 10.00)],
+                        execution_mode="live")
+    _set_cash(rt, 10.00)          # caixa real: nao cobre o minimo de R$20
+    _set_cash_sombra(rt, 1_000.00)  # saldo de sombra: irrelevante em live
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        alarme = rt._check_capital(conn, acc, SESSION, preco=10.00)
+
+    assert alarme is not None
+    assert "nao cobre o minimo" in alarme
 
 
 def test_minimo_do_dia_sai_do_preco_e_da_quantidade_reais(tmp_path, pregao_aberto):

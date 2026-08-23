@@ -596,7 +596,7 @@ def _assert_slots_disjuntos(slot, robot_key: str) -> None:
             )
 
 
-def available_cash(slot_id: str) -> Optional[float]:
+def available_cash(slot_id: str, execution_mode: str = "live") -> Optional[float]:
     """Caixa que o LEDGER MANUAL diz pertencer a este slot, ou `None` se a
     conta ainda não existe.
 
@@ -604,7 +604,12 @@ def available_cash(slot_id: str) -> Optional[float]:
     `Broker.cash_balance()`. Ver o comentário no lugar de
     `detect_broker_capital()` (removida): o saldo do terminal MT5 atrasa em
     relação ao da Rico, e com dois robôs disputando a mesma conta um número
-    atrasado viraria dois livros-caixa errados."""
+    atrasado viraria dois livros-caixa errados.
+
+    `execution_mode`: qual dos dois saldos ler (`AccountState.cash_for`,
+    pedido do dono 2026-08-23) -- default `"live"` preserva o comportamento
+    de antes desta conta ganhar `cash_sombra` para todo chamador que não se
+    importa com o modo (swing, por exemplo, nunca teve sombra)."""
     from journal import live_store
 
     try:
@@ -612,7 +617,7 @@ def available_cash(slot_id: str) -> Optional[float]:
             conta = live_store.load_account(conn, slot_id)
     except (live_store.LegacyPaperAccountError, live_store.LegacyManualAccountError):
         return None
-    return None if conta is None else round(conta.cash, 2)
+    return None if conta is None else round(conta.cash_for(execution_mode), 2)
 
 
 def _intraday_capital_minimo(robot_key: str, symbol: Optional[str] = None) -> Optional[float]:
@@ -724,12 +729,20 @@ def start(config: ProcessConfig) -> dict:
         create_account(config)
 
         piso = min_cash_for(slot, config.strategy)
-        caixa = available_cash(config.slot)
+        # Swing NUNCA honra `execution_mode` (não tem conceito de sombra --
+        # ver `dashboard.app.operacao_iniciar`, que já força "live" para ele
+        # antes de chegar aqui) -- mas `start()` é chamado direto pela CLI e
+        # pelos testes também, então não pode CONFIAR que `config.execution_
+        # mode` já veio corrigido; refaz a mesma regra aqui.
+        modo_do_gate = config.execution_mode if slot.is_intraday else "live"
+        caixa = available_cash(config.slot, modo_do_gate)
         if caixa is None or caixa < piso:
+            rotulo_saldo = "sombra" if modo_do_gate == "shadow" else "real"
             raise RuntimeError(
-                f"caixa do slot '{slot.label}' é R$ {0.0 if caixa is None else caixa:.2f}, "
-                f"abaixo do mínimo de R$ {piso:.2f} para operar — "
-                "informe o caixa destinado a este robô no painel antes de iniciar."
+                f"caixa {rotulo_saldo} do slot '{slot.label}' é R$ "
+                f"{0.0 if caixa is None else caixa:.2f}, abaixo do mínimo de "
+                f"R$ {piso:.2f} para operar — informe o caixa destinado a "
+                "este robô no painel antes de iniciar."
             )
 
         argv = [

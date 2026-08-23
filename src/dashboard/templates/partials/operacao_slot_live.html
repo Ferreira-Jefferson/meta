@@ -11,7 +11,11 @@
    Precisa ser elemento de PRIMEIRO nível da resposta: o htmx só extrai
    `hx-swap-oob` da raiz do fragmento. #}
 {% import "partials/operacao_resumo.html" as r %}
-{{ r.resumo(slot.id, caixa_ledger, proc, caixa_minima, caixa_ok, oob=True) }}
+{{ r.resumo(slot.id, caixa_ledger, proc, caixa_minima, caixa_ok, oob=True,
+           cash_live=(caixa_real_ledger if slot.is_intraday else none),
+           cash_sombra=(caixa_sombra_ledger if slot.is_intraday else none),
+           caixa_ok_live=(caixa_ok_real if slot.is_intraday else none),
+           caixa_ok_sombra=(caixa_ok_sombra if slot.is_intraday else none)) }}
 {% endif %}
 {# A barra de controle (iniciar/parar) mudou de lugar: agora divide a linha
    com o campo de caixa em `operacao_body.html`, FORA deste nó. Aqui só sai o
@@ -119,22 +123,65 @@
   {% endif %}
 </section>
 
-<section class="capital-cards stagger">
+{% if s.daytrade %}
+{# Modo efetivo + as DUAS versões (real/sombra) de todo número desta seção
+   que deriva do caixa -- pedido do dono (2026-08-23), na SEGUNDA volta:
+   "todos os números que aparecem devem ser só do modo selecionado", em
+   TODO lugar, não só no card "Caixa" que a primeira correção cobriu.
+   `Carteira`/`Patrimônio` são formulas de `AccountState.equity`/
+   `patrimonio` (`caixa + posições`/`+ caixa externo`) -- refeitas aqui com
+   `caixa_sombra_ledger` no lugar de `caixa_real_ledger` pra dar o número que
+   apareceria SE o saldo fosse o de sombra. `s.investido`/`s.caixa_externo`
+   não têm versão sombra (posições e saque são sempre reais, day trade nem
+   tem robô de saque) -- só o CAIXA que entra na conta troca. #}
+{% set modo_efetivo = config_anterior.execution_mode or "shadow" %}
+{% set carteira_real = caixa_real_ledger + s.investido %}
+{% set carteira_sombra = caixa_sombra_ledger + s.investido %}
+{% set carteira_inicial = carteira_sombra if modo_efetivo == "shadow" else carteira_real %}
+{% set patrimonio_real = carteira_real + s.caixa_externo %}
+{% set patrimonio_sombra = carteira_sombra + s.caixa_externo %}
+{% set patrimonio_inicial = patrimonio_sombra if modo_efetivo == "shadow" else patrimonio_real %}
+{% endif %}
+<section class="capital-cards stagger"{% if s.daytrade %} id="ops-cards-{{ slot.id }}"{% endif %}>
   <div class="capital-card">
     <span class="k">Caixa</span>
-    <span class="v num">R$ {{ s.caixa | num_br }}</span>
+    {# Mode-aware (2026-08-23, mesmo pedido que trocou o `<input>` de caixa):
+       `s.caixa` (de `status()`) é SEMPRE o caixa real -- pra este card não
+       contradizer o `<input>` e o resumo do cabeçalho (que já trocam com o
+       `<select execution_mode>`), o valor inicial já nasce do saldo do modo
+       efetivo (`caixa_ledger`, resolvido em `_slot_ctx`), e os dois brutos
+       ficam em `data-cash-*` pro JS trocar sem round-trip -- ver
+       `static/js/operacao.js::sincronizaCaixaComExecucao`. #}
+    <span class="v num"
+          {% if s.daytrade %}
+          data-cash-live="{{ caixa_real_ledger | num_br }}" data-cash-sombra="{{ caixa_sombra_ledger | num_br }}"
+          {% endif %}>R$ {{ (caixa_ledger if s.daytrade else s.caixa) | num_br }}</span>
     <span class="sub">Destinado a este robô</span>
   </div>
   <div class="capital-card">
     <span class="k">Carteira</span>
-    <span class="v num">R$ {{ s.carteira | num_br }}</span>
+    <span class="v num"
+          {% if s.daytrade %}
+          data-cash-live="{{ carteira_real | num_br }}" data-cash-sombra="{{ carteira_sombra | num_br }}"
+          {% endif %}>R$ {{ (carteira_inicial if s.daytrade else s.carteira) | num_br }}</span>
     <span class="sub">Caixa + posições a mercado</span>
   </div>
   {% if s.daytrade %}
-  <div class="capital-card {% if s.daytrade.resultado_sombra >= 0 %}safe{% endif %}">
+  {# Estes dois cards só existem em SOMBRA -- pedido do dono (2026-08-23):
+     "todos os números que aparecem devem ser só do modo selecionado". Nascem
+     escondidos (`hidden`) quando o modo efetivo já é "live" no render
+     inicial, e o JS alterna via `data-ops-card-sombra` ao trocar o
+     `<select>`, sem round-trip. #}
+  <div class="capital-card {% if s.daytrade.resultado_sombra >= 0 %}safe{% endif %}"
+       data-ops-card-sombra{% if modo_efetivo != "shadow" %} hidden{% endif %}>
     <span class="k">Resultado em sombra</span>
     <span class="v num">R$ {{ s.daytrade.resultado_sombra | num_br }}</span>
     <span class="sub">Não tocou o caixa · {{ s.daytrade.trades_na_sessao }} trade(s) hoje</span>
+  </div>
+  <div class="capital-card" data-ops-card-sombra{% if modo_efetivo != "shadow" %} hidden{% endif %}>
+    <span class="k">Saldo sombra</span>
+    <span class="v num">R$ {{ s.daytrade.caixa_sombra | num_br }}</span>
+    <span class="sub">Separado do caixa real · acumulado entre pregões, nunca debita nem credita o caixa</span>
   </div>
   {% else %}
   <div class="capital-card safe">
@@ -145,7 +192,10 @@
   {% endif %}
   <div class="capital-card headline">
     <span class="k">Patrimônio</span>
-    <span class="v num">R$ {{ s.patrimonio | num_br }}</span>
+    <span class="v num"
+          {% if s.daytrade %}
+          data-cash-live="{{ patrimonio_real | num_br }}" data-cash-sombra="{{ patrimonio_sombra | num_br }}"
+          {% endif %}>R$ {{ (patrimonio_inicial if s.daytrade else s.patrimonio) | num_br }}</span>
     <span class="sub">Carteira + caixa externo</span>
   </div>
 </section>

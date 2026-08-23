@@ -131,6 +131,77 @@
     }, 0);
   });
 
+  /* ---- caixa troca de saldo com a execução (pedido do dono, 2026-08-23) --
+   *
+   * "Sombra" e "Real" cada um tem o SEU saldo (`cash_sombra`/`cash`, ver
+   * `AccountState.cash_for`). O `<select execution_mode>` e o `<input>` de
+   * caixa sao FORMS IRMAOS (endpoints diferentes, ver a docstring de
+   * `operacao_body.html`), entao mudar o select nao troca o valor do input
+   * sozinho -- sem isto, o dono via "Sombra" selecionado mas continuava
+   * editando (e submetendo) o caixa REAL, porque so' existe UM `<input>` na
+   * tela e ele nao sabia de qual saldo era.
+   *
+   * So' troca o VALOR exibido/editavel, lido de `data-cash-live`/
+   * `data-cash-sombra` (que o servidor ja mandou prontos, formatados) -- a
+   * decisao de qual coluna GRAVAR continua so' do servidor
+   * (`app.py::operacao_caixa`, a partir do `execution_mode` que o
+   * `hx-include` do form de caixa manda junto).
+   */
+  function sincronizaCaixaComExecucao(select) {
+    var sombra = select.value === 'shadow';
+    var barra = select.closest('.ops-bar');
+    if (barra) {
+      var input = barra.querySelector('input[data-ops-money]');
+      if (input) {
+        var bruto = input.getAttribute(sombra ? 'data-cash-sombra' : 'data-cash-live');
+        if (bruto != null) input.value = bruto;
+      }
+      var dica = barra.querySelector('[data-ops-cash-hint]');
+      if (dica) dica.textContent = sombra ? 'sombra' : 'real';
+    }
+    // O resumo do cabeçalho (`ops-sum-<slot>`) mora FORA de `.ops-bar` --
+    // dentro do `<summary>` do cartão, um nó irmão que não desce da mesma
+    // raiz (ver `partials/operacao_resumo.html`). O id do `<select>` é
+    // `ops-exec-<slot>` (ver `operacao_slot_control.html`); o do resumo e'
+    // `ops-sum-<slot>` -- mesmo sufixo, prefixo diferente.
+    if (!select.id || select.id.indexOf('ops-exec-') !== 0) return;
+    var slotId = select.id.slice('ops-exec-'.length);
+    var resumo = document.getElementById('ops-sum-' + slotId);
+    if (!resumo) return;
+    var cash = resumo.querySelector('.ops-sum-cash');
+    if (cash) {
+      var valor = cash.getAttribute(sombra ? 'data-cash-sombra' : 'data-cash-live');
+      if (valor != null) cash.textContent = 'R$ ' + valor;
+    }
+    var hint = resumo.querySelector('.ops-sum-hint');
+    if (hint) {
+      var ok = hint.getAttribute(sombra ? 'data-ok-sombra' : 'data-ok-live');
+      if (ok != null) hint.classList.toggle('is-blocked', ok === '0');
+    }
+    // Cartões de capital (`partials/operacao_slot_live.html`): "Caixa",
+    // "Carteira" e "Patrimônio" trocam de valor junto (TODOS os que derivam
+    // do caixa, não só o primeiro -- reclamação do dono, 2026-08-23: a
+    // primeira versão desta função só cobria o card "Caixa", deixando
+    // "Carteira"/"Patrimônio" presos no saldo real mesmo com "Sombra"
+    // selecionado), e "Resultado em sombra"/"Saldo sombra" só existem
+    // quando SOMBRA está selecionado.
+    var cartoes = document.getElementById('ops-cards-' + slotId);
+    if (!cartoes) return;
+    var valores = cartoes.querySelectorAll('.v[data-cash-live]');
+    for (var j = 0; j < valores.length; j++) {
+      var v = valores[j].getAttribute(sombra ? 'data-cash-sombra' : 'data-cash-live');
+      if (v != null) valores[j].textContent = 'R$ ' + v;
+    }
+    var cardsSombra = cartoes.querySelectorAll('[data-ops-card-sombra]');
+    for (var i = 0; i < cardsSombra.length; i++) cardsSombra[i].hidden = !sombra;
+  }
+
+  document.addEventListener('change', function (ev) {
+    var sel = ev.target;
+    if (!sel || !sel.matches || !sel.matches('select[name="execution_mode"]')) return;
+    sincronizaCaixaComExecucao(sel);
+  });
+
   function aplica() {
     restaura();
     var forms = document.querySelectorAll('form.ops-new-robot-form');

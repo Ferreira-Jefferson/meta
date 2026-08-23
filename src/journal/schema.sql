@@ -169,6 +169,9 @@ CREATE TABLE IF NOT EXISTS live_accounts (
     mode               TEXT    NOT NULL CHECK (mode IN ('mt5')),
     initial_capital    REAL    NOT NULL,
     cash               REAL    NOT NULL,
+    -- Saldo paralelo, só atualizado em execution_mode="shadow" -- nunca
+    -- confundido com `cash` (dinheiro real). Ver `AccountState.cash_sombra`.
+    cash_sombra        REAL    NOT NULL DEFAULT 0,
     investment_robot   TEXT    NOT NULL DEFAULT '',
     withdrawal_robot   TEXT    NOT NULL DEFAULT '',
     -- Ativo que ESTA conta negocia. Vazio no swing (o robô diário escolhe

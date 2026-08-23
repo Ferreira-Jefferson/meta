@@ -119,6 +119,7 @@ from live.runtime import StepReport
 from strategy.daytrade.base import (
     Bar,
     EnterLimit,
+    barra_diaria,
     capital_minimo_brl,
     warm_start_calibration,
 )
@@ -155,6 +156,13 @@ _FIM_DE_PREGAO_QUALQUER = pd.Timestamp("2999-01-01", tz="UTC")
 #: anterior inteiro.
 _CAUDA_VOLUME_MINUTOS = 90.0
 
+#: Quantas sessoes anteriores buscar do feed para `seed_daily_volatility` --
+#: generoso sobre a janela default do robo (`vol_janela_dias=10`,
+#: `strategy.daytrade.lab.gremah.Gremah`/`gremah_tick.GremahTick`), mesmo
+#: espirito de `_CAUDA_VOLUME_MINUTOS` acima: nao pede o historico inteiro,
+#: so' o bastante pra cobrir qualquer janela configurada.
+_CAUDA_VOL_DIAS = 15
+
 
 @dataclass
 class _SessionSnapshot:
@@ -178,6 +186,23 @@ class _SessionSnapshot:
     ordens_postas: int = 0
     ordens_abandonadas: int = 0
     machine: dict = None  # `IntradaySessionMachine.state()`
+    # Tickets REAIS (`Order.broker_ref`) da(s) ordem-limite de ENTRADA que
+    # `resting_limit`/`_resting_children_qty` da maquina vigiam AGORA --
+    # espelho, do lado da entrada, do mesmo gap de restart ja fechado do lado
+    # da saida (ver `IntradaySessionMachine.restore`). Diferente da saida,
+    # aqui a correcao NAO precisa falhar alto: uma ordem de COMPRA parada que
+    # sobrou de um processo anterior e' risco baixo (nao ha posicao exposta
+    # esperando ela), entao da para RECONCILIAR sozinho -- cancelar o(s)
+    # ticket(s) direto pelo `broker_ref` persistido, sem depender do estado em
+    # memoria de `MT5IntradayExecution` (que nasce vazio a cada processo
+    # novo). So' e' zerado nos pontos onde a resolucao e' CONFIRMADA
+    # (`_on_limit_cancelled`, ou `_on_opened` quando o ultimo filho preenche e
+    # `resting_limit` vira `None`) -- nunca so' porque `resting_limit` esta
+    # `None` num instante qualquer, que tambem e' verdade logo apos um
+    # restart ANTES de o robo decidir de novo, e limpar cedo demais perderia
+    # o rastro do ticket que ainda precisa ser cancelado. Consultado em
+    # `_start_session` (warm start) e `_on_limit_placed` (decisao nova).
+    pending_entry_refs: list = None
 
     def to_dict(self) -> dict:
         return {
@@ -190,6 +215,7 @@ class _SessionSnapshot:
             "ordens_postas": self.ordens_postas,
             "ordens_abandonadas": self.ordens_abandonadas,
             "machine": self.machine or {},
+            "pending_entry_refs": list(self.pending_entry_refs or []),
         }
 
     @classmethod
@@ -207,6 +233,7 @@ class _SessionSnapshot:
             ordens_postas=int(raw.get("ordens_postas") or 0),
             ordens_abandonadas=int(raw.get("ordens_abandonadas") or 0),
             machine=raw.get("machine") or {},
+            pending_entry_refs=list(raw.get("pending_entry_refs") or []),
         )
 
 
@@ -417,6 +444,32 @@ class IntradayLiveRuntime:
             cauda = [b for b in cauda if b.ts > corte]
         self.strategy.seed_volume_window(cauda)
 
+    def _seed_daily_volatility(self, session: date) -> None:
+        """Busca as `_CAUDA_VOL_DIAS` sessoes ANTERIORES, agrega cada uma
+        numa barra diaria (`strategy.daytrade.base.barra_diaria`) e repassa
+        para `IntradayStrategy.seed_daily_volatility` -- so' um robo com
+        alvo dimensionado por volatilidade (`Gremah`/`GremahTick`, ver
+        `strategy.daytrade.base.JanelaVolatilidadeDiaria`) usa isto; os
+        outros recebem uma lista que nunca consultam (default no-op na
+        base).
+
+        Chamado a CADA `_start_session`, mesmo espirito de
+        `_seed_volume_window` -- `session_bars_until` nunca levanta
+        excecao (lista vazia se o terminal falhar), entao o pior caso e' o
+        robo operar sem a janela, igual a um pregao sem historico
+        anterior disponivel. Ordem devolvida: mais antiga primeiro, igual
+        `backtest.intraday.engine`."""
+        diarias: list[Bar] = []
+        dia = session
+        for _ in range(_CAUDA_VOL_DIAS):
+            dia = clock.previous_session(dia)
+            bars_do_dia = self.bar_feed.session_bars_until(dia, _FIM_DE_PREGAO_QUALQUER)
+            diaria = barra_diaria(bars_do_dia)
+            if diaria is not None:
+                diarias.append(diaria)
+        diarias.reverse()
+        self.strategy.seed_daily_volatility(diarias)
+
     def _start_session(self, conn, account: AccountState, session: date, now: datetime) -> StepReport:
         """Calibra o robo para este pregao e (re)abre a sessao na maquina.
 
@@ -431,6 +484,7 @@ class IntradayLiveRuntime:
         pnl_antes, flat_antes = self.machine.session_pnl, self.machine.flattened
 
         self._seed_volume_window(session)
+        self._seed_daily_volatility(session)
 
         modo = "cold"
         semente = 0
@@ -446,11 +500,28 @@ class IntradayLiveRuntime:
                 # um fill que nunca poderia acontecer, porque ninguem chegou a
                 # registrar a ordem. Registrar aqui e' o que fecha esse buraco.
                 if self.executor is not None and isinstance(pending, EnterLimit):
-                    self.executor.place_limit(
+                    if self._snapshot.pending_entry_refs:
+                        # Restart no meio do pregao com uma ordem ja' armada:
+                        # `warm_start_calibration` acabou de RECALCULAR a
+                        # decisao do zero a partir do dado real, mas o(s)
+                        # ticket(s) que o processo ANTERIOR mandou pra
+                        # corretora (persistidos em `pending_entry_refs`) nao
+                        # somem sozinhos so' porque este processo nao lembra
+                        # deles. Sem cancelar primeiro, a linha abaixo mandaria
+                        # uma SEGUNDA ordem de compra por cima -- risco baixo
+                        # (nenhuma posicao fica exposta esperando ela, ver
+                        # docstring de `pending_entry_refs`), mas ainda uma
+                        # entrada em dobro se as duas preencherem.
+                        self.executor.cancel_stale_refs(
+                            self._snapshot.pending_entry_refs, ts=seed_bars[-1].ts,
+                        )
+                        self._snapshot.pending_entry_refs = []
+                    enviadas = self.executor.place_limit(
                         side=pending.side, limit_price=pending.limit_price,
                         quantities=pending.children(self.config.default_quantity),
                         ts=seed_bars[-1].ts,
                     )
+                    self._snapshot.pending_entry_refs = [o.broker_ref for o in enviadas if o.broker_ref]
                 modo, semente = "warm_start", len(seed_bars)
                 self._snapshot.session = session
                 # NUNCA anda pra tras: num restart (`restaurada=True`) o
@@ -628,27 +699,36 @@ class IntradayLiveRuntime:
         e': sem posicao aberta, nao comeca o pregao; COM posicao aberta (o
         processo subiu no meio do dia e restaurou o snapshot), deixa rodar --
         um robo sem caixa ainda precisa conseguir FECHAR o que ja esta na rua,
-        e travar aqui deixaria a posicao orfa ate o flatten."""
+        e travar aqui deixaria a posicao orfa ate o flatten.
+
+        O saldo conferido e' `account.cash_for(self.execution_mode)` (pedido
+        do dono, 2026-08-23): um robo em `execution_mode="shadow"` dimensiona
+        e opera contra `cash_sombra`, nunca `cash` -- sem isto, o piso de
+        inicio (`live_control.start()`, tambem mode-aware) deixava o robo
+        SUBIR usando o saldo de sombra, so' para este gate recusar toda barra
+        do dia seguinte comparando contra o caixa real, que pode ser bem
+        menor (ou zero)."""
         if self._capital_checked_for == session:
             return self._capital_alarm
 
         minimo = capital_minimo_brl(preco, self.config.default_quantity)
         self._capital_checked_for = session
         self._capital_minimo_hoje = minimo
+        saldo = account.cash_for(self.execution_mode)
 
-        if account.cash >= minimo:
+        if saldo >= minimo:
             self._capital_alarm = None
             return None
 
         self._capital_alarm = (
-            f"caixa de R$ {account.cash:.2f} nao cobre o minimo de R$ {minimo:.2f} "
+            f"caixa de R$ {saldo:.2f} nao cobre o minimo de R$ {minimo:.2f} "
             f"para operar {self.strategy.symbol} hoje ({self.config.default_quantity} "
             f"acoes a R$ {preco:.4f} = R$ {preco * self.config.default_quantity:.2f} "
             f"por lote, e o piso e' o dobro do lote)"
         )
         self._log(conn, account.id, "error",
                   f"nao vou operar: {self._capital_alarm}",
-                  {"pregao": session.isoformat(), "caixa": round(account.cash, 2),
+                  {"pregao": session.isoformat(), "caixa": round(saldo, 2),
                    "minimo": round(minimo, 2), "preco": preco,
                    "quantidade": self.config.default_quantity})
         return self._capital_alarm
@@ -828,16 +908,28 @@ class IntradayLiveRuntime:
         # preencher abriria uma posicao que o robo nunca pediu.
         if evento.replaced is not None:
             self.executor.cancel_limit(evento.ts, reason="superseded")
+        elif self._snapshot.pending_entry_refs:
+            # `evento.replaced` so' enxerga uma ordem anterior que ESTA
+            # maquina colocou -- uma decisao "nova" (`replaced is None`) do
+            # ponto de vista dela pode ainda assim ter tickets REAIS sobrando
+            # de um PROCESSO ANTERIOR (restart no meio do pregao com uma
+            # ordem armada, ver `pending_entry_refs`). `self.executor` aqui e'
+            # sempre uma instancia NOVA (`pending_orders` nasce vazio), entao
+            # `cancel_limit` nao teria o que cancelar -- cancela pelo
+            # `broker_ref` persistido em vez disso.
+            self.executor.cancel_stale_refs(self._snapshot.pending_entry_refs, ts=evento.ts)
+            self._snapshot.pending_entry_refs = []
         # Um filho REAL por elemento de `EnterLimit.split_quantities` (ver a
         # docstring de `EnterLimit.children` e a Fase 2 em
         # `live/intraday_execution.py`) -- `[quantity]` quando a ordem nao
         # veio dividida, o comportamento de sempre.
-        self.executor.place_limit(
+        enviadas = self.executor.place_limit(
             side=evento.order.side,
             limit_price=evento.order.limit_price,
             quantities=evento.order.children(self.config.default_quantity),
             ts=evento.ts,
         )
+        self._snapshot.pending_entry_refs = [o.broker_ref for o in enviadas if o.broker_ref]
 
     def _on_limit_cancelled(self, conn, account: AccountState, evento: LimitCancelled) -> None:
         """Mesma razao de `_on_limit_placed` para nao gravar evento: e'
@@ -852,6 +944,10 @@ class IntradayLiveRuntime:
         self._volume_no_nivel = 0.0
         if self.executor is not None:
             self.executor.cancel_limit(evento.ts, reason=evento.reason)
+        # Resolucao CONFIRMADA (ver `pending_entry_refs`): a maquina acabou de
+        # cancelar o resting_limit que este ticket rastreava, entao nao ha
+        # mais nada real pra reconciliar num restart futuro.
+        self._snapshot.pending_entry_refs = []
 
     @staticmethod
     def _penetration_ticks(evento: PositionOpened, tick_size: float) -> Optional[float]:
@@ -894,6 +990,13 @@ class IntradayLiveRuntime:
         sinal) e a marcacao a mercado sai correta sem nenhuma mudanca:
         `market_value = price * quantity` fica negativo, que e' exatamente o
         que uma posicao vendida vale."""
+        if self.machine.resting_limit is None:
+            # Resolucao CONFIRMADA (ver `pending_entry_refs`): este fill foi o
+            # ULTIMO filho (ordem nao dividida, ou o fim de uma dividida) --
+            # nao sobra ticket nenhum pra reconciliar num restart futuro. Se
+            # ainda houver filho esperando (`resting_limit` continua setado),
+            # os tickets continuam validos, nao mexe.
+            self._snapshot.pending_entry_refs = []
         if self._open_intent_id is not None:
             self._on_opened_top_up(conn, account, evento)
             return
@@ -1106,6 +1209,7 @@ class IntradayLiveRuntime:
 
         if self.execution_mode == "shadow":
             self._snapshot.shadow_pnl_brl += evento.pnl_brl
+            account.cash_sombra += evento.pnl_brl
         else:
             account.cash += evento.pnl_brl
 
@@ -1174,6 +1278,7 @@ class IntradayLiveRuntime:
         self._snapshot.trades += 1
         if self.execution_mode == "shadow":
             self._snapshot.shadow_pnl_brl += evento.pnl_brl
+            account.cash_sombra += evento.pnl_brl
         else:
             account.cash += evento.pnl_brl
 
@@ -1253,6 +1358,11 @@ class IntradayLiveRuntime:
                 "ordens_postas": self._snapshot.ordens_postas,
                 "ordens_abandonadas": self._snapshot.ordens_abandonadas,
                 "resultado_sombra": round(self._snapshot.shadow_pnl_brl, 2),
+                # Saldo sombra ACUMULADO entre pregões (`AccountState.
+                # cash_sombra`) -- diferente de `resultado_sombra` acima, que
+                # zera a cada sessao nova. Nunca deriva de/alimenta `caixa`
+                # (dinheiro real), mesmo com a conta em execution_mode="live".
+                "caixa_sombra": round(account.cash_sombra, 2),
                 "resultado_sessao": round(self.machine.session_pnl, 2),
                 "posicao_aberta": None if pos is None else {
                     "lado": pos.side, "qtd": pos.quantity,
