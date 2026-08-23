@@ -102,6 +102,7 @@ def test_ensure_account_recusa_divergencia_de_modo(db_path):
                 mode               TEXT    NOT NULL,
                 initial_capital    REAL    NOT NULL,
                 cash               REAL    NOT NULL,
+                cash_sombra        REAL    NOT NULL DEFAULT 0,
                 investment_robot   TEXT    NOT NULL DEFAULT '',
                 withdrawal_robot   TEXT    NOT NULL DEFAULT '',
                 symbol             TEXT    NOT NULL DEFAULT '',
@@ -163,6 +164,52 @@ def test_save_account_persiste_cash_e_policy_state(db_path):
         assert reloaded.withdrawn_total == 500.0
         assert reloaded.external_cash == 500.0
         assert reloaded.policy_state == {"month_paid": "2026-08", "floor": 55_000.0}
+
+
+def test_migracao_de_cash_sombra_semeia_com_cash_nao_initial_capital(db_path):
+    """`cash_sombra` (2026-08-23, pedido do dono: "separe os dois valores") e'
+    coluna nova numa tabela que ja existe -- precisa de `ALTER TABLE`
+    (`_add_missing_account_columns`). O backfill usa `cash` (o saldo REAL de
+    agora), nao `initial_capital`: uma conta que ja operou pode ter os dois
+    bem diferentes (visto em producao: cash=30, initial_capital=0) -- semear
+    do jeito errado mostraria "saldo sombra" que nunca bateu com o caixa
+    real do dia em que a coluna nasceu."""
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("""
+            CREATE TABLE live_accounts (
+                id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+                name               TEXT    NOT NULL UNIQUE,
+                mode               TEXT    NOT NULL CHECK (mode IN ('mt5')),
+                initial_capital    REAL    NOT NULL,
+                cash               REAL    NOT NULL,
+                investment_robot   TEXT    NOT NULL DEFAULT '',
+                withdrawal_robot   TEXT    NOT NULL DEFAULT '',
+                symbol             TEXT    NOT NULL DEFAULT '',
+                withdrawn_total    REAL    NOT NULL DEFAULT 0,
+                external_cash      REAL    NOT NULL DEFAULT 0,
+                policy_state       TEXT    NOT NULL DEFAULT '{}',
+                created_at         TEXT    NOT NULL DEFAULT (datetime('now')),
+                updated_at         TEXT    NOT NULL DEFAULT (datetime('now'))
+            )
+        """)
+        conn.execute(
+            """INSERT INTO live_accounts (name, mode, initial_capital, cash)
+               VALUES ('dt-conta-antiga', 'mt5', 0.0, 30.0)"""
+        )
+        conn.commit()
+
+        ensure_tables(conn)
+
+        row = conn.execute(
+            "SELECT cash, cash_sombra, initial_capital FROM live_accounts WHERE name = 'dt-conta-antiga'"
+        ).fetchone()
+        assert row["cash"] == pytest.approx(30.0)
+        assert row["initial_capital"] == pytest.approx(0.0)
+        assert row["cash_sombra"] == pytest.approx(30.0)  # veio do CASH, nao do initial_capital
+    finally:
+        conn.close()
 
 
 # ---------------------------------------------------------------------------

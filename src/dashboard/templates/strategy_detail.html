@@ -124,8 +124,21 @@
       {% for a in robot.assets %}
       <tr>
         <td class="pname">{{ a.symbol }}</td>
+        {# Alguns ativos dimensionam alvo/stop por FRAÇÃO DA VOLATILIDADE
+           medida (`alvo_por_volatilidade`, 2026-08-23) em vez de percentual
+           do preço — nesse caso `profit_pct`/`stop_multiplier` são só
+           FALLBACK (janela de volatilidade ainda sem dado), não o número
+           que decide de verdade. Mostrar o percentual aqui seria a mesma
+           mentira que esta seção existe para evitar (ver o comentário
+           acima), só que entre MODOS de dimensionar em vez de entre
+           ativos. #}
+        {% if a.alvo_por_volatilidade %}
+        <td class="right num">{{ a.alvo_vol_mult | num_br(None) }}× a volatilidade</td>
+        <td class="right num">{{ (a.stop_vol_mult if a.stop_vol_mult is not none else a.stop_multiplier) | num_br(None) }}× o alvo</td>
+        {% else %}
         <td class="right num">{{ (a.profit_pct * 100) | num_br(None) }}%</td>
         <td class="right num">{{ a.stop_multiplier | num_br(None) }}× o alvo</td>
+        {% endif %}
         {# Sem dado de minuto salvo não há preço, e sem preço não há caixa
            mínimo: a célula mostra a falta em vez de um número inventado. #}
         <td class="right num">

@@ -12,7 +12,11 @@ import pandas as pd
 import pytest
 
 from strategy.daytrade.base import Bar
-from strategy.daytrade.lab.gremah_tick import _CALIBRATION_BY_SYMBOL_TICK, GremahTick
+from strategy.daytrade.lab.gremah_tick import (
+    _CALIBRATION_BY_SYMBOL_TICK,
+    _VOLATILITY_OVERRIDE_BY_SYMBOL_TICK,
+    GremahTick,
+)
 
 
 def _strat(**kwargs) -> GremahTick:
@@ -128,13 +132,21 @@ def test_seed_volume_window_usa_a_cauda_do_pregao_anterior_na_abertura():
     assert actions[0].quantity == 1_000
 
 
-# ---------- divisao de entrada em pedacos (2026-08-22, EXPLORATORIO) -------
+# ---------- divisao de entrada em pedacos (2026-08-22) --------------------
 # So' tem efeito de verdade com `IntradayBacktestConfig.
 # limit_fill_capped_by_volume=True` (testado em `test_intraday_machine.py`);
 # aqui so' a LOGICA de fatiamento, isolada do motor.
 
-def test_dividir_entrada_desligado_por_default():
-    assert GremahTick(symbol="PMAM3").dividir_entrada is False
+def test_dividir_entrada_ligado_por_default():
+    # Padrao `True` desde 2026-08-23 (pedido do dono, depois de medir IS/OOS
+    # -- ver a memoria `dividir_entrada_is_oos_2026_08_23` do projeto).
+    assert GremahTick(symbol="PMAM3").dividir_entrada is True
+
+
+def test_exit_ttl_bars_padrao_e_8():
+    # Decidido 2026-08-23 apos varrer 1..10 em PMAM3 (IS+OOS) -- ver a
+    # memoria `exit_ttl_bars_decisao_2026_08_23` do projeto.
+    assert GremahTick(symbol="PMAM3").exit_ttl_bars == 8
 
 
 def test_dividir_pecas_sem_evento_na_janela_nao_divide():
@@ -189,9 +201,9 @@ def test_janela_do_teto_de_volume_e_1min_por_decisao_do_dono_2026_08_22():
 # ---------- calibracao por simbolo (ponto de partida copiado do M1) -------
 
 @pytest.mark.parametrize("symbol,profit_pct,stop_multiplier", [
-    ("PMAM3", 0.0032, 10.0),
-    ("CSAN3", 0.0021, 20.0),
-    ("KLBN4", 0.0021, 5.0),
+    ("PMAM3", 0.0032, 20.0),
+    ("CSAN3", 0.0015, 5.0),
+    ("KLBN4", 0.0015, 5.0),
 ])
 def test_calibracao_por_simbolo_e_usada_quando_nao_sobrescrita(symbol, profit_pct, stop_multiplier):
     strat = GremahTick(symbol=symbol)
@@ -204,3 +216,96 @@ def test_calibracao_por_simbolo_e_usada_quando_nao_sobrescrita(symbol, profit_pc
 def test_simbolo_desconhecido_sem_override_falha_alto():
     with pytest.raises(ValueError, match="ATIVO_INEXISTENTE"):
         GremahTick(symbol="ATIVO_INEXISTENTE")
+
+
+# ---------- override por simbolo: (k,s) confirmado no OOS (2026-08-23) ----
+
+@pytest.mark.parametrize("symbol,k,s", [
+    ("GRND3", 0.05, 8.0),
+])
+def test_override_de_volatilidade_liga_sozinho_para_simbolo_confirmado(symbol, k, s):
+    """Mesmo mecanismo/motivo de `gremah.
+    test_override_de_volatilidade_liga_sozinho_para_simbolo_confirmado` --
+    GRND3 e' o primeiro simbolo confirmado em TICK com par de volatilidade
+    em vez de percentual (2026-08-23)."""
+    strat = GremahTick(symbol=symbol)
+
+    assert strat.alvo_por_volatilidade is True
+    assert strat.alvo_vol_mult == pytest.approx(k)
+    assert strat.stop_vol_mult == pytest.approx(s)
+    assert _VOLATILITY_OVERRIDE_BY_SYMBOL_TICK[symbol] == (k, s)
+
+
+@pytest.mark.parametrize("symbol", ["PMAM3", "BMGB4", "KLBN3", "LPSB3", "DASA3", "KLBN4", "PCAR3", "CSAN3"])
+def test_simbolos_sem_override_de_volatilidade_continuam_no_percentual(symbol):
+    strat = GremahTick(symbol=symbol)
+
+    assert symbol not in _VOLATILITY_OVERRIDE_BY_SYMBOL_TICK
+    assert strat.alvo_por_volatilidade is False
+
+
+def test_alvo_vol_mult_explicito_vence_o_override_tick():
+    strat = GremahTick(symbol="GRND3", alvo_vol_mult=0.99)
+
+    assert strat.alvo_vol_mult == pytest.approx(0.99)
+    assert strat.alvo_vol_mult != _VOLATILITY_OVERRIDE_BY_SYMBOL_TICK["GRND3"][0]
+
+
+def test_stop_vol_mult_explicito_vence_o_s_do_override_tick():
+    strat = GremahTick(symbol="GRND3", stop_vol_mult=99.0)
+
+    assert strat.alvo_vol_mult == pytest.approx(_VOLATILITY_OVERRIDE_BY_SYMBOL_TICK["GRND3"][0])
+    assert strat.stop_vol_mult == pytest.approx(99.0)
+
+
+# ---------- alvo por volatilidade (2026-08-23, opt-in) --------------------
+# Mesmo mecanismo de `test_gremah.py` (mesma classe base) -- cobre so' que a
+# `GremahTick` tem a MESMA API, nao repete a aritmetica ja' coberta la.
+
+def _diaria(rng: float) -> Bar:
+    ts = pd.Timestamp("2026-01-04 18:00:00", tz="UTC")
+    return Bar(ts=ts, open=10.0, high=10.0 + rng, low=10.0, close=10.0, volume=0)
+
+
+def test_alvo_por_volatilidade_exige_mult_explicito():
+    with pytest.raises(ValueError):
+        GremahTick(symbol="PMAM3", alvo_por_volatilidade=True)
+
+
+def test_alvo_por_volatilidade_sem_janela_cai_no_fallback_percentual():
+    strat = _strat(alvo_por_volatilidade=True, alvo_vol_mult=0.5)
+    profit, spacing, stop = strat._session_ticks(5.00)
+    assert profit == strat._ticks_from_pct(5.00, strat.profit_pct)
+    assert spacing == strat._ticks_from_pct(5.00, strat.profit_pct * strat.spacing_multiplier)
+    assert stop == strat._ticks_from_pct(5.00, strat.profit_pct * strat.stop_multiplier)
+
+
+def test_alvo_por_volatilidade_usa_range_mediano_quando_disponivel():
+    strat = _strat(alvo_por_volatilidade=True, alvo_vol_mult=0.5)
+    strat.seed_daily_volatility([_diaria(10.0), _diaria(20.0), _diaria(30.0)])  # mediana = 20.0
+
+    profit, _, _ = strat._session_ticks(999.0)  # preco IGNORADO quando ha' volatilidade
+    assert profit == max(1, round(20.0 * 0.5 / strat.tick_size))
+
+
+def test_stop_vol_mult_global_vence_stop_multiplier_por_simbolo():
+    strat = _strat(alvo_por_volatilidade=True, alvo_vol_mult=0.5, stop_vol_mult=8.0)
+    strat.seed_daily_volatility([_diaria(10.0), _diaria(20.0), _diaria(30.0)])
+
+    _, _, stop = strat._session_ticks(999.0)
+    assert stop == max(1, round(20.0 * 0.5 * 8.0 / strat.tick_size))
+
+
+def test_stop_frac_range_troca_so_o_stop():
+    strat = _strat(stop_frac_range=0.5)
+    strat.seed_daily_volatility([_diaria(10.0), _diaria(20.0), _diaria(30.0)])
+
+    profit, spacing, stop = strat._session_ticks(5.00)
+    assert profit == strat._ticks_from_pct(5.00, strat.profit_pct)
+    assert stop == max(1, round(20.0 * 0.5 / strat.tick_size))
+
+
+def test_stop_frac_range_sem_janela_cai_no_fallback_percentual():
+    strat = _strat(stop_frac_range=0.5)
+    profit, spacing, stop = strat._session_ticks(5.00)
+    assert stop == strat._ticks_from_pct(5.00, strat.profit_pct * strat.stop_multiplier)

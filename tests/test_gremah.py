@@ -11,7 +11,11 @@ import pandas as pd
 import pytest
 
 from strategy.daytrade.base import Bar
-from strategy.daytrade.lab.gremah import _CALIBRATION_BY_SYMBOL, Gremah
+from strategy.daytrade.lab.gremah import (
+    _CALIBRATION_BY_SYMBOL,
+    _VOLATILITY_OVERRIDE_BY_SYMBOL,
+    Gremah,
+)
 
 
 def _strat(**kwargs) -> Gremah:
@@ -148,6 +152,173 @@ def test_stop_multiplier_explicito_vence_a_calibracao_da_tabela():
     assert strat.profit_pct == pytest.approx(0.0021)
 
 
+# ---------- alvo por volatilidade (2026-08-23, opt-in) --------------------
+
+def _diaria(rng: float) -> Bar:
+    ts = pd.Timestamp("2026-01-04 18:00", tz="UTC")
+    return Bar(ts=ts, open=10.0, high=10.0 + rng, low=10.0, close=10.0, volume=0)
+
+
+def test_alvo_por_volatilidade_exige_mult_explicito():
+    with pytest.raises(ValueError):
+        Gremah(symbol="PMAM3", alvo_por_volatilidade=True)
+
+
+def test_ticks_from_pct_continua_a_arquitetura_default():
+    """Nao mexeu no caminho antigo: desligado (default), o alvo continua
+    saindo 100% de `_ticks_from_pct`."""
+    strat = _strat()
+    assert strat.alvo_por_volatilidade is False
+    profit, spacing, stop = strat._session_ticks(5.00)
+    assert profit == strat._ticks_from_pct(5.00, strat.profit_pct)
+    assert spacing == strat._ticks_from_pct(5.00, strat.profit_pct * strat.spacing_multiplier)
+    assert stop == strat._ticks_from_pct(5.00, strat.profit_pct * strat.stop_multiplier)
+
+
+def test_alvo_por_volatilidade_sem_janela_cai_no_fallback_percentual():
+    """Ligado, mas `seed_daily_volatility` nunca foi chamado (primeiro
+    pregao do historico, ou feed falhou) -- tem que se comportar
+    EXATAMENTE como desligado, nunca travar nem devolver ticks invalidos."""
+    strat = _strat(alvo_por_volatilidade=True, alvo_vol_mult=0.5)
+    profit, spacing, stop = strat._session_ticks(5.00)
+    assert profit == strat._ticks_from_pct(5.00, strat.profit_pct)
+    assert spacing == strat._ticks_from_pct(5.00, strat.profit_pct * strat.spacing_multiplier)
+    assert stop == strat._ticks_from_pct(5.00, strat.profit_pct * strat.stop_multiplier)
+
+
+def test_alvo_por_volatilidade_variante_a_mantem_stop_multiplier_por_simbolo():
+    """Variante A (dono, 2026-08-23): so' o ALVO vira volatilidade; o stop
+    continua usando o `stop_multiplier` do SIMBOLO (aqui, 20x explicito)."""
+    strat = _strat(alvo_por_volatilidade=True, alvo_vol_mult=0.5)  # stop_multiplier=20.0 (de _strat)
+    strat.seed_daily_volatility([_diaria(10.0), _diaria(20.0), _diaria(30.0)])  # mediana = 20.0
+
+    profit, spacing, stop = strat._session_ticks(999.0)  # preco IGNORADO quando ha' volatilidade
+    assert profit == max(1, round(20.0 * 0.5 / strat.tick_size))
+    assert spacing == max(1, round(20.0 * 0.5 * strat.spacing_multiplier / strat.tick_size))
+    assert stop == max(1, round(20.0 * 0.5 * strat.stop_multiplier / strat.tick_size))
+
+
+def test_alvo_por_volatilidade_variante_b_stop_global_ignora_stop_multiplier():
+    """Variante B (dono, 2026-08-23): `stop_vol_mult` GLOBAL substitui o
+    `stop_multiplier` por simbolo so' para o stop."""
+    strat = _strat(alvo_por_volatilidade=True, alvo_vol_mult=0.5, stop_vol_mult=8.0)
+    strat.seed_daily_volatility([_diaria(10.0), _diaria(20.0), _diaria(30.0)])
+
+    _, _, stop = strat._session_ticks(999.0)
+    assert stop == max(1, round(20.0 * 0.5 * 8.0 / strat.tick_size))
+    assert stop != max(1, round(20.0 * 0.5 * strat.stop_multiplier / strat.tick_size))
+
+
+def test_seed_daily_volatility_substitui_nao_acumula():
+    """Mesmo padrao de `seed_volume_window`/`definir_cauda_anterior`:
+    chamar de novo REPLACES, nao empilha em cima do que ja' tinha."""
+    strat = _strat(alvo_por_volatilidade=True, alvo_vol_mult=1.0)
+    strat.seed_daily_volatility([_diaria(100.0)])
+    assert strat._janela_vol.range_mediano() == pytest.approx(100.0)
+
+    strat.seed_daily_volatility([_diaria(5.0)])
+    assert strat._janela_vol.range_mediano() == pytest.approx(5.0)
+
+
+def test_seed_daily_volatility_usa_so_a_cauda_do_tamanho_da_janela():
+    """`previous_daily_bars` pode vir maior que `vol_janela_dias` (o motor
+    de backtest manda tudo que ja' viu) -- so' as ultimas contam."""
+    strat = _strat(alvo_por_volatilidade=True, alvo_vol_mult=1.0, vol_janela_dias=2)
+    strat.seed_daily_volatility([_diaria(1000.0), _diaria(2.0), _diaria(4.0)])
+    assert strat._janela_vol.range_mediano() == pytest.approx(3.0)  # mediana de [2.0, 4.0]
+
+
+# ---------- stop_frac_range (2026-08-23, isolando a variavel: so' o stop) --
+
+def test_stop_frac_range_desligado_nao_muda_nada():
+    strat = _strat()
+    assert strat.stop_frac_range is None
+    profit, spacing, stop = strat._session_ticks(5.00)
+    assert stop == strat._ticks_from_pct(5.00, strat.profit_pct * strat.stop_multiplier)
+
+
+def test_stop_frac_range_troca_so_o_stop_mantem_alvo_e_espacamento_percentuais():
+    """Alvo e espacamento continuam saindo do percentual de sempre -- so' o
+    stop muda pra fracao do range diario."""
+    strat = _strat(stop_frac_range=0.5)
+    strat.seed_daily_volatility([_diaria(10.0), _diaria(20.0), _diaria(30.0)])  # mediana = 20.0
+
+    profit, spacing, stop = strat._session_ticks(5.00)
+    assert profit == strat._ticks_from_pct(5.00, strat.profit_pct)
+    assert spacing == strat._ticks_from_pct(5.00, strat.profit_pct * strat.spacing_multiplier)
+    assert stop == max(1, round(20.0 * 0.5 / strat.tick_size))
+    assert stop != strat._ticks_from_pct(5.00, strat.profit_pct * strat.stop_multiplier)
+
+
+def test_stop_frac_range_sem_janela_cai_no_fallback_percentual():
+    strat = _strat(stop_frac_range=0.5)  # nunca chamou seed_daily_volatility
+    profit, spacing, stop = strat._session_ticks(5.00)
+    assert stop == strat._ticks_from_pct(5.00, strat.profit_pct * strat.stop_multiplier)
+
+
+def test_stop_frac_range_combina_com_alvo_por_volatilidade():
+    """`alvo_por_volatilidade` decide alvo/espacamento; `stop_frac_range`
+    ainda pode sobrescrever o stop por cima, independente do caminho que
+    escolheu os outros dois."""
+    strat = _strat(alvo_por_volatilidade=True, alvo_vol_mult=1.0, stop_frac_range=0.5)
+    strat.seed_daily_volatility([_diaria(10.0), _diaria(20.0), _diaria(30.0)])
+
+    profit, spacing, stop = strat._session_ticks(999.0)
+    assert profit == max(1, round(20.0 * 1.0 / strat.tick_size))  # via alvo_vol_mult
+    assert stop == max(1, round(20.0 * 0.5 / strat.tick_size))    # via stop_frac_range
+
+
+# ---------- override por simbolo: (k,s) confirmado no OOS (2026-08-23) ----
+
+@pytest.mark.parametrize("symbol,k,s", [
+    ("BMGB4", 0.05, 8.0),
+    ("CSAN3", 0.05, 5.0),
+    ("GRND3", 0.05, 10.0),
+    ("KLBN4", 0.05, 10.0),
+])
+def test_override_de_volatilidade_liga_sozinho_para_simbolo_confirmado(symbol, k, s):
+    """Simbolo com par (k,s) confirmado no OOS (`_VOLATILITY_OVERRIDE_BY_
+    SYMBOL`) constroi ja' em modo volatilidade, sem precisar passar nada
+    explicito -- e' o resultado direto de "usar o que e' melhor pra cada
+    um" (pedido do dono 2026-08-23), o mesmo protocolo de aceitar/descartar
+    que ja' construiu a tabela percentual."""
+    strat = Gremah(symbol=symbol)
+
+    assert strat.alvo_por_volatilidade is True
+    assert strat.alvo_vol_mult == pytest.approx(k)
+    assert strat.stop_vol_mult == pytest.approx(s)
+    # a tabela em si tem que bater com o teste -- se alguem editar
+    # `_VOLATILITY_OVERRIDE_BY_SYMBOL` sem atualizar este teste, isto pega.
+    assert _VOLATILITY_OVERRIDE_BY_SYMBOL[symbol] == (k, s)
+
+
+@pytest.mark.parametrize("symbol", ["PMAM3", "DASA3", "PCAR3", "CLSC4", "KLBN3", "LPSB3"])
+def test_simbolos_sem_confirmacao_oos_continuam_no_percentual(symbol):
+    """Os 6 simbolos onde nada bateu o percentual no IS (CLSC4, DASA3) ou
+    pioraram no OOS (KLBN3, LPSB3, PCAR3, PMAM3) NAO tem override --
+    continuam exatamente no caminho de sempre."""
+    strat = Gremah(symbol=symbol)
+
+    assert symbol not in _VOLATILITY_OVERRIDE_BY_SYMBOL
+    assert strat.alvo_por_volatilidade is False
+
+
+def test_alvo_vol_mult_explicito_vence_o_override():
+    """Passar `alvo_vol_mult=` na mao sempre vence o override automatico --
+    mesmo espirito de `profit_pct=` vencer `_CALIBRATION_BY_SYMBOL`."""
+    strat = Gremah(symbol="BMGB4", alvo_vol_mult=0.99)
+
+    assert strat.alvo_vol_mult == pytest.approx(0.99)
+    assert strat.alvo_vol_mult != _VOLATILITY_OVERRIDE_BY_SYMBOL["BMGB4"][0]
+
+
+def test_stop_vol_mult_explicito_vence_o_s_do_override():
+    strat = Gremah(symbol="BMGB4", stop_vol_mult=99.0)
+
+    assert strat.alvo_vol_mult == pytest.approx(_VOLATILITY_OVERRIDE_BY_SYMBOL["BMGB4"][0])
+    assert strat.stop_vol_mult == pytest.approx(99.0)
+
+
 def test_ambos_explicitos_ignora_a_tabela_mesmo_para_simbolo_desconhecido():
     strat = Gremah(symbol="ATIVO_INEXISTENTE", profit_pct=0.005, stop_multiplier=8.0)
 
@@ -240,3 +411,49 @@ def test_janela_do_teto_de_volume_e_1min_por_decisao_do_dono_2026_08_22():
     marcada como provisoria ("por hora"). Este teste so existe para nao
     deixar essa decisao se perder numa refatoracao silenciosa."""
     assert Gremah(symbol="PMAM3").realocacao_janela_minutos == pytest.approx(1.0)
+
+
+# ---------- divisao de entrada em pedacos (2026-08-23) ---------------------
+# MESMA logica de `GremahTick._dividir_pecas` (ver `tests/test_gremah_tick.py`),
+# aqui "evento" e' a barra M1 fechada em vez do negocio individual. So' tem
+# efeito de verdade com `IntradayBacktestConfig.limit_fill_capped_by_volume=
+# True` (testado em `test_intraday_machine.py`); aqui so' a LOGICA de
+# fatiamento, isolada do motor.
+
+def test_dividir_entrada_ligado_por_default():
+    # Padrao `True` desde 2026-08-23 (pedido do dono, depois de medir IS/OOS
+    # -- ver a memoria `dividir_entrada_is_oos_2026_08_23` do projeto).
+    assert Gremah(symbol="PMAM3").dividir_entrada is True
+
+
+def test_exit_ttl_bars_padrao_e_8():
+    # Decidido 2026-08-23 apos varrer 1..10 em PMAM3 (IS+OOS) -- ver a
+    # memoria `exit_ttl_bars_decisao_2026_08_23` do projeto.
+    assert Gremah(symbol="PMAM3").exit_ttl_bars == 8
+
+
+def test_dividir_pecas_sem_evento_na_janela_nao_divide():
+    strat = _strat(dividir_entrada=True)
+    ts = pd.Timestamp("2026-01-05 13:00:00", tz="UTC")
+    assert strat._dividir_pecas(500, ts) is None
+
+
+def test_dividir_pecas_quando_barra_tipica_ja_cobre_o_total():
+    strat = _strat(dividir_entrada=True, realocacao_janela_minutos=30.0)
+    ts0 = pd.Timestamp("2026-01-05 13:00:00", tz="UTC")
+    strat._janela_volume.registrar(ts0, 10_000.0)  # 1 barra tipica de 10.000 acoes
+
+    assert strat._dividir_pecas(500, ts0) is None  # 500 < 10.000 -- nada a dividir
+
+
+def test_dividir_pecas_fatia_perto_da_barra_tipica_recente():
+    strat = _strat(dividir_entrada=True, dividir_max_pecas=8, realocacao_janela_minutos=30.0)
+    ts0 = pd.Timestamp("2026-01-05 13:00:00", tz="UTC")
+    for i in range(5):
+        strat._janela_volume.registrar(ts0 + pd.Timedelta(minutes=i), 100.0)  # barras de 1 lote
+
+    pecas = strat._dividir_pecas(500, ts0 + pd.Timedelta(minutes=5))
+
+    assert pecas is not None
+    assert sum(pecas) == 500
+    assert all(p % 100 == 0 for p in pecas)

@@ -237,6 +237,39 @@ def test_seed_volume_window_recebe_a_cauda_da_sessao_anterior_a_cada_dia():
     assert [b.ts for b in cauda_dia2] == list(bars_a.index)  # as 3 barras do dia 1, dentro da folga de 90min
 
 
+def test_seed_daily_volatility_recebe_so_sessoes_anteriores_sem_look_ahead():
+    """`IntradayStrategy.seed_daily_volatility` (2026-08-23, alvo por
+    volatilidade) tem que receber a barra DIARIA de cada sessao ANTERIOR --
+    nunca a de HOJE (olhar o proprio dia seria look-ahead) -- e crescer a
+    cada sessao nova, mais antiga primeiro."""
+    bars_a = _mk_bars("2026-01-05", [(100, 105, 95, 102), (102, 104, 98, 100)])
+    bars_b = _mk_bars("2026-01-06", [(200, 210, 190, 205)])
+    bars_c = _mk_bars("2026-01-07", [(300, 301, 299, 300)])
+    bars = pd.concat([bars_a, bars_b, bars_c])
+
+    class _RecordingStrategy(_StubIntradayStrategy):
+        def __init__(self):
+            super().__init__()
+            self.vol_calls: list[list] = []
+
+        def seed_daily_volatility(self, previous_daily_bars):
+            self.vol_calls.append(list(previous_daily_bars))
+
+    strat = _RecordingStrategy()
+    run_intraday_backtest(bars, strat, _config())
+
+    assert len(strat.vol_calls) == 3
+    assert strat.vol_calls[0] == []  # primeira sessao: nada anterior
+    # segunda sessao: so' a diaria do dia 1 (high=105, low=95 -- agregado das 2 barras)
+    assert len(strat.vol_calls[1]) == 1
+    assert strat.vol_calls[1][0].high == pytest.approx(105.0)
+    assert strat.vol_calls[1][0].low == pytest.approx(95.0)
+    # terceira sessao: dias 1 e 2, NUNCA o 3 (hoje) -- mais antigo primeiro
+    assert len(strat.vol_calls[2]) == 2
+    assert strat.vol_calls[2][0].high == pytest.approx(105.0)  # dia 1
+    assert strat.vol_calls[2][1].high == pytest.approx(210.0)  # dia 2
+
+
 def test_lado_short_stop_acima_target_abaixo():
     bars = _mk_bars("2026-01-05", [
         (100, 101, 99, 100),
@@ -390,3 +423,123 @@ def test_enter_a_mercado_substitui_ordem_limite_pendente():
     trade = result.trades[0]
     assert trade.entry_price == pytest.approx(102.0)
     assert trade.exit_price == pytest.approx(95.0)
+
+
+# ---------- conta quebrada (2026-08-23) -------------------------------------
+# Achado ao testar CLSC4 (preco alto, R$100 de capital de teste): sem este
+# freio, MaxDD passava de -100% -- impossivel numa conta sem margem. Uma
+# conta sem caixa nao consegue mandar mais NENHUMA ordem depois de zerada.
+
+def test_patrimonio_zerado_para_o_backtest_e_nao_gera_trade_depois():
+    bars = _mk_bars("2026-01-05", [
+        (100, 101, 99, 100),   # 0: Enter long (sem stop -- so' mark-to-market decide)
+        (100, 101, 99, 100),   # 1: executa no open=100
+        (100, 101, 1, 50),     # 2: close=50 -- perda enorme (quantidade grande, capital minusculo)
+        (50, 51, 49, 50),      # 3: NUNCA deveria rodar -- conta ja quebrou na barra 2
+        (50, 51, 49, 50),      # 4
+    ])
+    strat = _StubIntradayStrategy({
+        bars.index[0]: [Enter(side="long")],
+        bars.index[3]: [Enter(side="long")],  # se isto executasse, seria um 2o trade
+    })
+    result = run_intraday_backtest(
+        bars, strat, _config(initial_capital=10.0, default_quantity=1000),
+    )
+
+    assert result.wiped_out_at == bars.index[2]
+    # so' as 3 primeiras barras (0,1,2) geraram ponto de patrimonio -- 3 e 4
+    # nunca foram processadas.
+    assert len(result.equity_curve) == 3
+    assert result.equity_curve.iloc[-1] <= 0
+    # nenhum SEGUNDO trade -- a acao da barra 3 nunca chegou a rodar.
+    assert len(result.trades) == 0  # a 1a posicao nunca fechou (sem stop, conta quebrou antes)
+
+
+# ---------- caixa insuficiente para o minimo do ativo (2026-08-23) ---------
+# MESMA regra que `live.intraday_runtime.IntradayLiveRuntime._check_capital`
+# ja aplica ao vivo -- fechando a divergencia backtest/ao vivo que motivou
+# a pergunta do dono ("se o robo tem esse mecanismo, pq no teste ele so nao
+# usa?"). Desligado por padrao (`enforce_capital_minimo=False` no dataclass)
+# para nao quebrar testes com capital sintetico pequeno de proposito;
+# `config_for` liga por padrao para todo backtest real.
+
+def test_enforce_capital_minimo_desligado_e_o_default_e_nao_muda_nada():
+    bars = _mk_bars("2026-01-05", [
+        (100, 101, 99, 100),
+        (100, 101, 99, 100),
+        (105, 106, 104, 105),
+    ])
+    strat = _StubIntradayStrategy({bars.index[0]: [Enter(side="long")]})
+    config = _config(initial_capital=10.0)  # 10 nao cobre 1 lote a 100 (default_quantity=1 aqui, ok)
+    assert config.enforce_capital_minimo is False
+    result = run_intraday_backtest(bars, strat, config)
+
+    assert result.sessoes_puladas_por_capital == []
+    assert len(result.trades) == 1  # comportamento de sempre, nada bloqueado
+
+
+def test_enforce_capital_minimo_pula_a_sessao_inteira_quando_caixa_nao_cobre():
+    bars = _mk_bars("2026-01-05", [
+        (100, 101, 99, 100),  # se rodasse, entraria aqui
+        (100, 101, 99, 100),
+        (105, 106, 104, 105),
+    ])
+    strat = _StubIntradayStrategy({bars.index[0]: [Enter(side="long")]})
+    # preco~100, default_quantity=1 -> 1 lote de VERDADE seria so' 1 acao
+    # (`default_quantity`, nao `LOTE_PADRAO_B3`) -- uso default_quantity=100
+    # para o custo do lote (R$10.000) ficar bem acima do caixa (R$50).
+    config = _config(initial_capital=50.0, default_quantity=100, enforce_capital_minimo=True)
+    result = run_intraday_backtest(bars, strat, config)
+
+    assert result.sessoes_puladas_por_capital == [bars.index[0]]
+    assert len(result.trades) == 0  # a sessao inteira ficou de fora -- Enter nunca rodou
+    # equity fica FLAT no caixa disponivel, sem gap na serie.
+    assert len(result.equity_curve) == len(bars)
+    assert (result.equity_curve == 50.0).all()
+
+
+def test_enforce_capital_minimo_com_caixa_suficiente_opera_normal():
+    bars = _mk_bars("2026-01-05", [
+        (100, 101, 99, 100),
+        (100, 101, 99, 100),
+        (105, 106, 104, 105),
+    ])
+    strat = _StubIntradayStrategy({
+        bars.index[0]: [Enter(side="long")],
+        bars.index[1]: [Exit()],
+    })
+    # caixa (R$100.000) cobre de sobra o minimo (2x R$100x100=R$20.000).
+    config = _config(initial_capital=100_000.0, default_quantity=100, enforce_capital_minimo=True)
+    result = run_intraday_backtest(bars, strat, config)
+
+    assert result.sessoes_puladas_por_capital == []
+    assert len(result.trades) == 1
+
+
+def test_enforce_capital_minimo_nao_pula_sessao_resumida():
+    """A sessao RESUMIDA (`resume_same_session=True`, ex.: warm start ao
+    vivo no meio do pregao) ja tem calibracao/posicao por fora -- a
+    politica de recusar o pregao so' faz sentido ANTES de qualquer
+    decisao, entao nunca se aplica a ela."""
+    bars = _mk_bars("2026-01-05", [
+        (100, 101, 99, 100),
+        (100, 101, 99, 100),
+    ])
+    strat = _StubIntradayStrategy({})
+    config = _config(initial_capital=10.0, default_quantity=100, enforce_capital_minimo=True)
+    result = run_intraday_backtest(bars, strat, config, resume_same_session=True)
+
+    assert result.sessoes_puladas_por_capital == []
+
+
+def test_patrimonio_positivo_nunca_marca_wiped_out():
+    bars = _mk_bars("2026-01-05", [
+        (100, 101, 99, 100),
+        (100, 101, 99, 100),
+        (105, 106, 104, 105),
+    ])
+    strat = _StubIntradayStrategy({bars.index[0]: [Enter(side="long")]})
+    result = run_intraday_backtest(bars, strat, _config())
+
+    assert result.wiped_out_at is None
+    assert len(result.equity_curve) == len(bars)

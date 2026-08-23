@@ -38,6 +38,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import time
+from statistics import median
 
 import pandas as pd
 
@@ -51,9 +52,18 @@ from strategy.daytrade.base import (
     IntradayAction,
     IntradayOpenPosition,
     IntradayStrategy,
+    JanelaVolatilidadeDiaria,
     RollingVolumeWindow,
     capital_minimo_brl,
 )
+
+#: Sessoes anteriores usadas por padrao para medir o range diario mediano
+#: (`alvo_por_volatilidade`) -- ver `strategy.daytrade.base.
+#: JanelaVolatilidadeDiaria`. Nao e' calibracao: e' o tamanho da janela; o
+#: multiplicador (`alvo_vol_mult`) e' quem de fato define o alvo, e por isso
+#: SEM default (`__init__` falha alto se `alvo_por_volatilidade=True` sem
+#: ele).
+VOL_JANELA_DIAS_PADRAO = 10
 
 #: Perda-limite diaria padrao, como fracao do caixa minimo do dia
 #: (`capital_minimo_brl`). Substituiu o R$30 fixo em 2026-08-22: medido nos
@@ -102,6 +112,33 @@ REALOCACAO_TETO_PCT_VOLUME_MINUTO_PADRAO = 0.10
 #: entrada -- ja e' uma melhora sobre o desenho anterior (congelado no
 #: PRIMEIRO minuto do dia), mesmo sem a suavizacao da media de 30min.
 REALOCACAO_JANELA_MINUTOS_PADRAO = 1.0
+
+#: Teto de pedacos que `dividir_entrada=True` cria para UMA entrada -- MESMA
+#: constante e mesmo motivo da `GremahTick` (`strategy.daytrade.lab.
+#: gremah_tick.DIVIDIR_MAX_PECAS_PADRAO`), duplicada aqui porque cada robo
+#: mantem sua propria copia dos numeros que le (ver `_lotes_por_realocacao`,
+#: tambem duplicada). Implementado 2026-08-23 (pedido do dono: "implemente a
+#: divisao no gremah") e virou padrao `True` no mesmo dia -- medido IS/OOS
+#: antes (PMAM3, efeito benigno em M1, ao contrario da inversao de sinal
+#: vista na GremahTick -- ver a memoria `dividir_entrada_is_oos_2026_08_23`
+#: do projeto). So' tem efeito com o motor rodando `IntradayBacktestConfig.
+#: limit_fill_capped_by_volume=True` (padrao desde 2026-08-23, ver
+#: `backtest.intraday.profiles.config_for`).
+DIVIDIR_MAX_PECAS_PADRAO = 8
+
+#: Barras (1 minuto cada, aqui) que uma fatia de SAIDA espera antes de virar
+#: ordem a mercado pelo restante (`EnterLimit.exit_ttl_bars`) -- so' tem
+#: efeito com `dividir_entrada=True`. Decidido 2026-08-23 apos varrer 1..10
+#: em PMAM3 (IS+OOS, Gremah E GremahTick -- ver a memoria `exit_ttl_bars_
+#: decisao_2026_08_23` do projeto): ttl curto (1-3) e' estrutural ruim (ttl=1
+#: chega a dar MaxDD -126,65% no IS da Gremah), 8 e' o melhor ou quase melhor
+#: ponto em 3 das 4 series medidas (o unico onde nao e' o pico, Gremah OOS,
+#: perde por pouco para o ttl=7), e ir alem de 8 nao e' monotonico -- alguns
+#: pontos ate' pioram de novo (ex.: Gremah IS MaxDD volta a -71,81% no
+#: ttl=10). MESMA constante e mesmo motivo da `GremahTick` (`strategy.
+#: daytrade.lab.gremah_tick.EXIT_TTL_BARS_PADRAO`), duplicada pela mesma
+#: razao de `DIVIDIR_MAX_PECAS_PADRAO` acima.
+EXIT_TTL_BARS_PADRAO = 8
 
 
 @dataclass(frozen=True)
@@ -187,6 +224,61 @@ _CALIBRATION_BY_SYMBOL: dict[str, _SymbolCalibration] = {
     "BMGB4": _SymbolCalibration(profit_pct=0.0021, stop_multiplier=20.0),
 }
 
+# ---------------------------------------------------------------------------
+# Override POR SIMBOLO: alvo+espacamento+stop por VOLATILIDADE (k, s) em vez
+# do percentual acima -- MESMO protocolo de aceitar/descartar que construiu a
+# tabela percentual (4 passos: regime de preco -> varredura fina IS -> UMA
+# passada OOS -> positivo no IS e negativo no OOS = descartado, SEM segunda
+# tentativa -- foi assim que CMIN3/BBDC3/EQTL3/EUCA4 cairam fora da tabela
+# acima). Motivado pelo mesmo achado de sempre: `profit_pct` satura no piso
+# de 1 tick em 9 dos 10 simbolos (`_ticks_from_pct`), entao o alvo percentual
+# nao tem efeito real -- mas ISOLAR so' o stop (`stop_frac_range`) perde a
+# maior parte do ganho, porque o ESPACAMENTO por volatilidade tambem muda a
+# cadencia de reentrada (nao so' onde o stop fica), e essa cadencia e' o que
+# realmente afeta o numero de trades e o resultado composto.
+#
+# Medido 2026-08-23 (1a rodada, capital de teste FIXO R$100 -- ver a 2a
+# rodada abaixo, que substitui esses numeros). Mesma janela comum dos 10
+# simbolos (IS ate' `profiles.OOS_CUTOFF`, OOS 2026-06-15..2026-08-21).
+#
+# 2a RODADA (mesmo dia, pedido do dono -- "sempre rode com o caixa minimo
+# para cada ativo"): a 1a rodada testou com R$100 fixos, o que mascarava o
+# efeito real do piso de 1 lote em papeis caros (foi assim que a CLSC4
+# mostrou MaxDD de -244,7% num teste separado -- ver `engine.py::
+# wiped_out_at`). Refeita a varredura IS e a confirmacao OOS com o CAIXA
+# MINIMO REAL de cada simbolo (`capital_minimo_brl` no preco do inicio de
+# cada janela) -- resultado: so' a KLBN4 mudou (s de 8 para 10, achado no
+# novo IS e confirmado no novo OOS); BMGB4/CSAN3/GRND3 continuam com o MESMO
+# par de antes (ainda o melhor do grid sob caixa real); KLBN3/LPSB3/PMAM3
+# tiveram um candidato melhor no IS mas ele PIOROU no OOS de novo (mesmo
+# resultado qualitativo da 1a rodada, numeros diferentes) -- descartados.
+#
+#   simbolo   k     s    capital OOS (novo)   capital OOS (percentual)   trades (percentual -> novo)
+#   BMGB4    0,05   8         R$1085,95             R$1085,95      (byte-identico -- e' o "atual")
+#   CSAN3    0,05   5         R$ 736,75             R$ 736,75      (byte-identico -- e' o "atual")
+#   GRND3    0,05  10         R$1214,58             R$1214,58      (byte-identico -- e' o "atual")
+#   KLBN4    0,05  10         R$1207,54             R$1204,62 (s=8)     846 -> 812
+#
+# Os outros 6 NAO estao aqui, de proposito, por dois motivos diferentes:
+#   - CLSC4, DASA3, PCAR3: nenhum par (k,s) do grid bateu o percentual no IS
+#     com caixa real -- nem chegou a ser testado no OOS (nao ha' o que
+#     confirmar).
+#   - KLBN3, LPSB3, PMAM3: o melhor par do IS (com caixa real) PIOROU no OOS
+#     (-0,3% / -4,5% / -4,2%) -- descartado, mesma regra do percentual, sem
+#     repescagem com outro par.
+#
+# `Gremah.__init__` aplica isto AUTOMATICAMENTE (equivalente a passar
+# `alvo_por_volatilidade=True, alvo_vol_mult=k, stop_vol_mult=s`) para quem
+# esta' aqui, a menos que o chamador passe esses parametros explicitamente
+# (o override nunca sobrescreve uma escolha deliberada de quem construiu o
+# robo).
+_VOLATILITY_OVERRIDE_BY_SYMBOL: dict[str, tuple[float, float]] = {
+    "BMGB4": (0.05, 8.0),
+    "CSAN3": (0.05, 5.0),
+    "GRND3": (0.05, 10.0),
+    "KLBN4": (0.05, 10.0),
+}
+
 
 @dataclass(frozen=True)
 class SymbolSetup:
@@ -202,25 +294,49 @@ class SymbolSetup:
     O capital mínimo fica de fora de propósito: ele depende do preço de HOJE,
     e buscar preço não é assunto de `strategy/` (AGENTS.md #1) — quem exibe
     busca o preço e chama `strategy.daytrade.base.capital_minimo_brl`.
+
+    `alvo_por_volatilidade`/`alvo_vol_mult`/`stop_vol_mult` (2026-08-23):
+    quando `alvo_por_volatilidade` é `True` (4 símbolos confirmados no OOS,
+    ver `_VOLATILITY_OVERRIDE_BY_SYMBOL`), `profit_pct`/`stop_multiplier`
+    acima viram FALLBACK — só usados se a janela de volatilidade ainda não
+    tiver dado (primeiro pregão do histórico, ou feed falhou) — não o que
+    decide o alvo no dia a dia. A ficha tem que mostrar o que REALMENTE
+    decide, não o fallback, para nunca anunciar um número que não é mais o
+    que governa o ativo.
     """
 
     symbol: str
     profit_pct: float
     stop_multiplier: float
+    alvo_por_volatilidade: bool = False
+    alvo_vol_mult: float | None = None
+    stop_vol_mult: float | None = None
 
 
 def calibrated_setups() -> tuple[SymbolSetup, ...]:
     """Os ativos que este robô pode operar hoje, na ordem em que foram medidos.
+
+    Constrói uma instância REAL de `Gremah` por símbolo e lê os atributos
+    JÁ RESOLVIDOS dela — em vez de ler `_CALIBRATION_BY_SYMBOL` direto —
+    para a ficha nunca divergir do que o objeto de fato faz.
+    `_VOLATILITY_OVERRIDE_BY_SYMBOL` muda o sizing de 4 dos 10 símbolos sem
+    tocar em `_CALIBRATION_BY_SYMBOL`; ler a tabela crua mostraria o
+    percentual como se ainda fosse ele quem decide, quando não é mais.
 
     Cada um com alvo e stop PRÓPRIOS: `profit_pct`/`stop_multiplier` não
     transferem entre símbolos (medido 2026-08-21, reconfirmado em 10 papéis
     2026-08-22), e é por isso que `Gremah.__init__` falha alto num símbolo
     ausente em vez de herdar a calibração de outro papel.
     """
-    return tuple(
-        SymbolSetup(symbol=s, profit_pct=c.profit_pct, stop_multiplier=c.stop_multiplier)
-        for s, c in _CALIBRATION_BY_SYMBOL.items()
-    )
+    setups = []
+    for symbol in _CALIBRATION_BY_SYMBOL:
+        robo = Gremah(symbol=symbol)
+        setups.append(SymbolSetup(
+            symbol=symbol, profit_pct=robo.profit_pct, stop_multiplier=robo.stop_multiplier,
+            alvo_por_volatilidade=robo.alvo_por_volatilidade,
+            alvo_vol_mult=robo.alvo_vol_mult, stop_vol_mult=robo.stop_vol_mult,
+        ))
+    return tuple(setups)
 
 
 @dataclass
@@ -396,6 +512,15 @@ class Gremah(IntradayStrategy):
         "Cada ativo tem um caixa mínimo próprio para começar a operar: o piso é o "
         "DOBRO do custo de um lote de 100 ações, sem arredondamento. É a diferença "
         "entre poder operar um ativo e não poder — ver a tabela de ativos.",
+        "Esse mínimo não fica congelado no valor do primeiro dia: ele é o custo de "
+        "um lote no preço de HOJE. Se o ativo sobe de preço depois que o robô já "
+        "está rodando, o mínimo sobe junto — e se o caixa acumulado não tiver "
+        "alcançado o novo valor, o robô PULA o pregão inteiro (nenhuma ordem "
+        "enviada) até o lucro guardado cobrir o mínimo atual. Medido na DASA3: "
+        "começando com R$ 260 (a R$ 2,60), o preço subiu para R$ 4,19 meses "
+        "depois, o mínimo foi para R$ 838, e o robô ficou fora de 48 pregões até "
+        "o caixa se recompor. Não é falha — é a mesma trava que impede comprar um "
+        "lote que a conta não pagaria de verdade.",
         "Em lote inteiro a corretagem é zero na Rico. O que sobra é a taxa da bolsa, "
         "e o backtest assume o DOBRO da taxa real, de propósito, como margem de "
         "segurança.",
@@ -418,7 +543,16 @@ class Gremah(IntradayStrategy):
     # Mostrar "1 lote (100 acoes)" (o "—" formatado) seria uma MENTIRA
     # especifica: o tamanho de verdade varia a cada entrada, conforme o caixa
     # acumulado E o volume medio recente, explicado em prosa em `sizing_rules`.
-    param_hidden = ("symbol", "profit_pct", "stop_multiplier", "quantity")
+    #
+    # `alvo_por_volatilidade`/`alvo_vol_mult`/`stop_vol_mult` (2026-08-23):
+    # MESMO motivo -- desde `_VOLATILITY_OVERRIDE_BY_SYMBOL`, sao POR ATIVO
+    # (4 dos 10 ligam sozinhos, 6 continuam no percentual), nao um numero do
+    # robo. A tabela de ativos (`calibrated_setups()`) e' quem mostra qual
+    # caminho cada simbolo usa de verdade.
+    param_hidden = (
+        "symbol", "profit_pct", "stop_multiplier", "quantity",
+        "alvo_por_volatilidade", "alvo_vol_mult", "stop_vol_mult",
+    )
     # O valor cru é o relógio do terminal MT5 (UTC), e é ele que `on_bar`
     # compara. A ficha mostra "14:00 UTC" como valor e "11:00 Brasília" ao
     # lado, em corpo menor -- ver `Strategy.param_utc_time`.
@@ -446,6 +580,30 @@ class Gremah(IntradayStrategy):
         # a descrição não precisa mais carregar a conversão.
         "fixed_anchor_until": "Hora em que a âncora fixa vira rolante.",
         "rolling_reanchor_after_bars": "Barras que uma ordem rolante espera antes de rearmar.",
+        "dividir_entrada": "Divide ENTRADA (em pedaços do tamanho da barra típica recente) E "
+                          "SAÍDA (em fatias de 1 lote, `LOTE_PADRAO_B3`) em vez de exigir tudo "
+                          "de uma vez. Só tem efeito com o motor rodando "
+                          "`limit_fill_capped_by_volume=True` (padrão desde 2026-08-23). Padrão "
+                          "`True` desde 2026-08-23.",
+        "dividir_max_pecas": "Teto de pedaços que `dividir_entrada` cria para uma entrada.",
+        "exit_ttl_bars": "Barras (minutos, aqui) que uma fatia de saída espera antes de virar "
+                         "ordem a mercado pelo restante. Padrão 8 desde 2026-08-23 (varredura "
+                         "1..10 em PMAM3, IS+OOS). Vazio = execução real recusa operar com "
+                         "`dividir_entrada` ligado; backtest/sombra esperam sem prazo.",
+        "alvo_por_volatilidade": "Alvo/espaçamento/stop por fração da volatilidade medida "
+                                 "(mediana do range diário) em vez de percentual do preço. "
+                                 "Desligado por padrão -- opt-in, pendente de medição/decisão "
+                                 "(ver memória do projeto).",
+        "alvo_vol_mult": "O 'k' da regra alvo = k × range diário mediano. Só usado com "
+                        "`alvo_por_volatilidade` ligado -- sem default.",
+        "vol_janela_dias": "Sessões anteriores usadas para medir a mediana do range diário.",
+        "stop_vol_mult": "Multiplicador GLOBAL do stop sobre o alvo por volatilidade. Vazio = "
+                         "usa o `stop_multiplier` do símbolo (a tabela por símbolo continua "
+                         "valendo só para o stop).",
+        "stop_frac_range": "Fração do range diário mediano que substitui o stop, mantendo "
+                           "alvo/espaçamento no caminho de sempre. Independente de "
+                           "`alvo_por_volatilidade` -- medido isoladamente, é o parâmetro que "
+                           "mais mexe no resultado. Vazio = stop pelo `stop_multiplier`.",
     }
     @staticmethod
     def calibrated_setups() -> tuple[SymbolSetup, ...]:
@@ -479,6 +637,14 @@ class Gremah(IntradayStrategy):
         realocacao_limiar_caixa: float = REALOCACAO_LIMIAR_CAIXA_PADRAO,
         realocacao_teto_pct_volume_minuto: float = REALOCACAO_TETO_PCT_VOLUME_MINUTO_PADRAO,
         realocacao_janela_minutos: float = REALOCACAO_JANELA_MINUTOS_PADRAO,
+        dividir_entrada: bool = True,
+        dividir_max_pecas: int = DIVIDIR_MAX_PECAS_PADRAO,
+        exit_ttl_bars: int | None = EXIT_TTL_BARS_PADRAO,
+        alvo_por_volatilidade: bool = False,
+        alvo_vol_mult: float | None = None,
+        vol_janela_dias: int = VOL_JANELA_DIAS_PADRAO,
+        stop_vol_mult: float | None = None,
+        stop_frac_range: float | None = None,
     ):
         self.symbol = symbol
         self.tick_size = tick_size
@@ -525,6 +691,59 @@ class Gremah(IntradayStrategy):
         self.realocacao_limiar_caixa = abs(realocacao_limiar_caixa)
         self.realocacao_teto_pct_volume_minuto = abs(realocacao_teto_pct_volume_minuto)
         self.realocacao_janela_minutos = abs(realocacao_janela_minutos)
+        self.dividir_entrada = dividir_entrada
+        self.dividir_max_pecas = max(1, int(dividir_max_pecas))
+        self.exit_ttl_bars = exit_ttl_bars
+        # Opt-in (2026-08-23): alvo/espacamento/stop por FRACAO DA VOLATILIDADE
+        # (mediana do range diario, `JanelaVolatilidadeDiaria`) em vez de
+        # percentual do preco -- motivado por `profit_pct` saturar no piso de 1
+        # tick em 9 dos 10 simbolos calibrados (ver `_ticks_from_pct`). `False`
+        # por padrao: nada muda ate' ser medido e decidido. Sem `alvo_vol_mult`
+        # explicito quando ligado -- ele e' o `k` da regra, NAO tem default
+        # seguro (ao contrario de `profit_pct`, que tem a tabela por simbolo).
+        #
+        # Simbolo com par (k,s) CONFIRMADO no OOS (`_VOLATILITY_OVERRIDE_BY_
+        # SYMBOL`) liga isto AUTOMATICAMENTE -- so' se o chamador nao decidiu
+        # nada por conta propria (`alvo_por_volatilidade` continua `False` E
+        # `alvo_vol_mult` continua `None`, os dois defaults). Passar qualquer
+        # um dos dois explicitamente sempre vence o override, mesmo espirito
+        # de `profit_pct=`/`stop_multiplier=` vencerem `_CALIBRATION_BY_
+        # SYMBOL` acima.
+        if not alvo_por_volatilidade and alvo_vol_mult is None:
+            override = _VOLATILITY_OVERRIDE_BY_SYMBOL.get(symbol)
+            if override is not None:
+                alvo_por_volatilidade = True
+                alvo_vol_mult, override_stop_vol_mult = override
+                if stop_vol_mult is None:
+                    stop_vol_mult = override_stop_vol_mult
+        if alvo_por_volatilidade and alvo_vol_mult is None:
+            raise ValueError(
+                "gremah: alvo_por_volatilidade=True exige alvo_vol_mult "
+                "explicito (o 'k' da regra alvo = k x range_mediano) -- sem "
+                "default, precisa ser medido (ver scripts/daytrade/"
+                "sweep_gremah_vol.py)."
+            )
+        self.alvo_por_volatilidade = alvo_por_volatilidade
+        self.alvo_vol_mult = alvo_vol_mult
+        self.vol_janela_dias = max(1, int(vol_janela_dias))
+        # `None` (default) = Variante A, o stop usa o mesmo `stop_multiplier`
+        # POR SIMBOLO de sempre, so' a base (volatilidade em vez de preco) que
+        # muda. Um valor explicito = Variante B, o stop vira global (mesmo `s`
+        # para os 10 simbolos, a tabela por simbolo deixa de valer para o
+        # stop).
+        self.stop_vol_mult = stop_vol_mult
+        # Opt-in INDEPENDENTE de `alvo_por_volatilidade` (2026-08-23, medido
+        # isolando a variavel): em 9 dos 10 simbolos calibrados o ALVO ja e' 1
+        # tick tanto pelo percentual quanto por qualquer `k` de volatilidade
+        # (1 centavo e' o menor movimento da B3 -- nao ha "alvo melhor" pra
+        # achar nesses papeis). O que muda de verdade e' o STOP. Este campo
+        # troca SO' o stop por fracao do range diario mediano, mantendo
+        # alvo/espacamento no caminho percentual de sempre (ou no de
+        # `alvo_por_volatilidade`, se os dois estiverem ligados juntos --
+        # nao ha' incompatibilidade, `_session_ticks` aplica por ultimo).
+        # `None` (default) = comportamento de sempre, stop pelo
+        # `stop_multiplier`/`stop_vol_mult`.
+        self.stop_frac_range = stop_frac_range
 
         self._state = _SessionState()
         # Atualizado por `on_capital_update`, chamado pelo motor logo antes de
@@ -538,6 +757,11 @@ class Gremah(IntradayStrategy):
         # pregao anterior e' definida por `seed_volume_window`, que pode ser
         # chamada antes OU depois de `on_session_start`.
         self._janela_volume = RollingVolumeWindow(self.realocacao_janela_minutos)
+        # Sobrevive a `on_session_start` pelo MESMO motivo de `_janela_volume`
+        # acima -- so' a leitura (`registrar_dia`) muda, via `seed_daily_
+        # volatility`, chamada 1x por sessao pelo CHAMADOR (backtest/ao vivo),
+        # nunca por esta classe (AGENTS.md, `strategy/` so importa `core`).
+        self._janela_vol = JanelaVolatilidadeDiaria(self.vol_janela_dias)
 
     def on_session_start(self, session_date) -> None:
         self._state = _SessionState()
@@ -549,14 +773,69 @@ class Gremah(IntradayStrategy):
     def seed_volume_window(self, previous_session_tail: list[Bar]) -> None:
         self._janela_volume.definir_cauda_anterior(previous_session_tail)
 
+    def seed_daily_volatility(self, previous_daily_bars: list[Bar]) -> None:
+        # Reconstroi do zero e refaz so' com a CAUDA que interessa (as
+        # ultimas `vol_janela_dias`) -- `previous_daily_bars` pode chegar
+        # maior que a janela (o motor de backtest manda tudo que ja viu,
+        # ver `backtest/intraday/engine.py`), e chamar de novo a cada sessao
+        # SUBSTITUI em vez de acumular (mesmo padrao de `seed_volume_window`/
+        # `definir_cauda_anterior` -- nunca duplica dia ja' registrado).
+        self._janela_vol = JanelaVolatilidadeDiaria(self.vol_janela_dias)
+        for dia in previous_daily_bars[-self.vol_janela_dias:]:
+            self._janela_vol.registrar_dia(dia)
+
     def _ticks_from_pct(self, price: float, pct: float) -> int:
         return max(1, round(price * pct / self.tick_size))
 
+    def _ticks_from_vol(self, mult: float) -> int | None:
+        """`None` enquanto `_janela_vol` nao tem nenhuma sessao registrada
+        (primeiro pregao do historico, ou feed falhou) -- quem chama cai no
+        fallback percentual (`_session_ticks`)."""
+        range_mediano = self._janela_vol.range_mediano()
+        if range_mediano is None:
+            return None
+        return max(1, round(range_mediano * mult / self.tick_size))
+
+    def _session_ticks(self, price_ref: float) -> tuple[int, int, int]:
+        """Alvo/espacamento/stop em ticks para uma ancora (abertura, na fase
+        fixa; preco atual, na rolante) -- usa a volatilidade medida
+        (`_janela_vol`) quando `alvo_por_volatilidade` esta ligado E a
+        janela ja tem pelo menos uma sessao; cai no percentual do preco de
+        sempre (`_ticks_from_pct`) senao, mesmo espirito degradavel de
+        `seed_volume_window` vazio.
+
+        `stop_frac_range`, se setado, SUBSTITUI o stop calculado acima por
+        `range_mediano x stop_frac_range` -- independente de qual caminho
+        (percentual ou `alvo_por_volatilidade`) decidiu alvo/espacamento.
+        Aplicado por ULTIMO, de proposito: e' o unico dos tres numeros que a
+        medicao (2026-08-23, isolando a variavel) mostrou valer a pena mexer
+        sozinho na maioria dos simbolos."""
+        if self.alvo_por_volatilidade:
+            profit_ticks = self._ticks_from_vol(self.alvo_vol_mult)
+            if profit_ticks is not None:
+                stop_mult = self.stop_vol_mult if self.stop_vol_mult is not None else self.stop_multiplier
+                spacing_ticks = self._ticks_from_vol(self.alvo_vol_mult * self.spacing_multiplier)
+                stop_ticks = self._ticks_from_vol(self.alvo_vol_mult * stop_mult)
+            else:
+                profit_ticks = spacing_ticks = stop_ticks = None
+        else:
+            profit_ticks = spacing_ticks = stop_ticks = None
+        if profit_ticks is None:
+            profit_ticks = self._ticks_from_pct(price_ref, self.profit_pct)
+            spacing_ticks = self._ticks_from_pct(price_ref, self.profit_pct * self.spacing_multiplier)
+            stop_ticks = self._ticks_from_pct(price_ref, self.profit_pct * self.stop_multiplier)
+        if self.stop_frac_range is not None:
+            stop_vol = self._ticks_from_vol(self.stop_frac_range)
+            if stop_vol is not None:
+                stop_ticks = stop_vol
+        return profit_ticks, spacing_ticks, stop_ticks
+
     def _arm_fixed_session_params(self) -> None:
         price = self._state.open_price
-        self._state.profit_ticks_today = self._ticks_from_pct(price, self.profit_pct)
-        self._state.spacing_ticks_today = self._ticks_from_pct(price, self.profit_pct * self.spacing_multiplier)
-        self._state.stop_ticks_today = self._ticks_from_pct(price, self.profit_pct * self.stop_multiplier)
+        profit_ticks, spacing_ticks, stop_ticks = self._session_ticks(price)
+        self._state.profit_ticks_today = profit_ticks
+        self._state.spacing_ticks_today = spacing_ticks
+        self._state.stop_ticks_today = stop_ticks
 
     def _fills_of(self, side: str) -> int:
         return self._state.long_fills if side == "long" else self._state.short_fills
@@ -577,7 +856,21 @@ class Gremah(IntradayStrategy):
         Os DOIS sao recalculados a CADA entrada nova, nao 1x por dia --
         tambem ENCOLHEM se o caixa cair ou o giro recente esfriar. `anchor`
         e' a mesma ancora que spacing/alvo/stop ja usam (fixa na abertura ou
-        rolante), nao um preco fixo: o custo de 1 lote muda com ela."""
+        rolante), nao um preco fixo: o custo de 1 lote muda com ela.
+
+        SEMPRE pelo menos 1 lote, mesmo que `_cash_atual_brl` nao cubra o
+        custo dele -- decisao deliberada (nao um descuido): distinguir
+        "caixa genuinamente insuficiente" de "caixa ainda DESCONHECIDO"
+        (`_cash_atual_brl` comeca em 0.0 e so' e' atualizado por
+        `on_capital_update`, nunca chamado durante `warm_start_calibration`)
+        exigiria um segundo estado (`_cash_conhecido`) e tocaria uma
+        convencao usada em dezenas de testes existentes (capital de teste
+        pequeno de proposito, so' para exercitar OUTRO comportamento, nao
+        dimensionamento). Achado 2026-08-23: quando o caixa e' genuinamente
+        insuficiente (ex.: CLSC4 a R$100 de capital de teste), quem impede o
+        MaxDD de passar de -100% e' o freio em `backtest.intraday.engine.
+        run_intraday_backtest` (`wiped_out_at` -- para de simular assim que
+        o patrimonio zera), nao esta funcao."""
         custo_do_lote = anchor * LOTE_PADRAO_B3
         lotes = 1 + math.floor(self._cash_atual_brl / (self.realocacao_limiar_caixa * custo_do_lote))
         media_volume_min = self._janela_volume.media_por_minuto(ts)
@@ -585,8 +878,35 @@ class Gremah(IntradayStrategy):
         max_lotes_dia = max(1, int(teto_acoes) // LOTE_PADRAO_B3)
         return min(max_lotes_dia, max(1, lotes))
 
+    def _dividir_pecas(self, quantidade_total: int, ts: pd.Timestamp) -> tuple[int, ...] | None:
+        """Fatia `quantidade_total` (acoes, multiplo de `LOTE_PADRAO_B3`) em
+        pedacos do tamanho do NEGOCIO/BARRA TIPICO observado na janela
+        rolante (mediana de `RollingVolumeWindow.volumes_por_evento`) -- um
+        pedaco desse tamanho tem mais chance de casar sozinho (FOK, ver
+        `IntradayBacktestConfig.limit_fill_capped_by_volume`) do que a ordem
+        inteira de uma vez. `None` = nao divide (janela sem evento ainda, ou
+        o tipico ja cobre o total sozinho -- nao ha' o que ganhar fatiando).
+
+        MESMA logica de `GremahTick._dividir_pecas` -- aqui "evento" e' a
+        barra M1 fechada, la' e' o negocio individual."""
+        eventos = self._janela_volume.volumes_por_evento(ts)
+        if not eventos:
+            return None
+        tipico_lotes = max(1, int(median(eventos)) // LOTE_PADRAO_B3)
+        total_lotes = quantidade_total // LOTE_PADRAO_B3
+        if tipico_lotes >= total_lotes:
+            return None
+        n_pecas = min(self.dividir_max_pecas, math.ceil(total_lotes / tipico_lotes))
+        base, resto = divmod(total_lotes, n_pecas)
+        # distribui o resto (em LOTES) pelas primeiras pecas, 1 lote a mais
+        # cada, em vez de empilhar tudo na ultima -- pecas parecidas entre
+        # si, nenhuma desproporcionalmente maior que o tipico.
+        lotes_por_peca = [base + (1 if i < resto else 0) for i in range(n_pecas)]
+        return tuple(l * LOTE_PADRAO_B3 for l in lotes_por_peca if l > 0)
+
     def _build_entry(self, side: str, anchor: float, spacing_ticks: int, profit_ticks: int, stop_ticks: int | None, ts: pd.Timestamp) -> EnterLimit:
         self.quantity = self._lotes_por_realocacao(anchor, ts) * LOTE_PADRAO_B3
+        split = self._dividir_pecas(self.quantity, ts) if self.dividir_entrada else None
         spacing_off = spacing_ticks * self.tick_size
         level_price = round(anchor - spacing_off, 2) if side == "long" else round(anchor + spacing_off, 2)
         profit_off = profit_ticks * self.tick_size
@@ -602,6 +922,12 @@ class Gremah(IntradayStrategy):
             initial_stop=stop_price,
             quantity=self.quantity,
             reason="gremah_" + side,
+            split_quantities=split,
+            # Mesmo `dividir_entrada` tambem fatia a SAIDA (mesma logica da
+            # `GremahTick`): o alvo tinha o MESMO problema tudo-ou-nada que
+            # a entrada -- ver `EnterLimit.exit_split_unit`.
+            exit_split_unit=LOTE_PADRAO_B3 if self.dividir_entrada else None,
+            exit_ttl_bars=self.exit_ttl_bars if self.dividir_entrada else None,
         )
 
     def on_bar(
@@ -692,8 +1018,6 @@ class Gremah(IntradayStrategy):
             )
         else:
             anchor = bar.close
-            profit_ticks = self._ticks_from_pct(anchor, self.profit_pct)
-            spacing_ticks = self._ticks_from_pct(anchor, self.profit_pct * self.spacing_multiplier)
-            stop_ticks = self._ticks_from_pct(anchor, self.profit_pct * self.stop_multiplier)
+            profit_ticks, spacing_ticks, stop_ticks = self._session_ticks(anchor)
             entry = self._build_entry(next_side, anchor, spacing_ticks, profit_ticks, stop_ticks, ts)
         return [entry]

@@ -149,9 +149,31 @@ class IntradayBacktestConfig:
     # `target_fills_as_maker=False`) nunca tem este cap -- e' exatamente
     # essa a assimetria: quem paga o spread encontra contraparte sempre,
     # quem espera parado so' encontra o que realmente passou por ali.
-    # Default `False` preserva o comportamento antigo (preenchimento
-    # garantido no toque) -- so' liga depois de medir com o flag ativo.
+    # Default `False` aqui preserva o comportamento antigo (preenchimento
+    # garantido no toque) para quem monta a config na mao. PADRAO DE TESTE
+    # a partir de 2026-08-23 (pedido do dono: "e' imprescindivel saber se
+    # tinha ou nao volume pra comprar, senao o percentual de acerto se
+    # afasta ainda mais da realidade") passa a ser `True` -- ver
+    # `backtest.intraday.profiles.config_for`, o caminho que TODO backtest/
+    # sombra real usa para montar a config.
     limit_fill_capped_by_volume: bool = False
+    # `True`: no INICIO de cada sessao, `run_intraday_backtest` (`backtest.
+    # intraday.engine`) recusa operar o dia inteiro se o caixa disponivel
+    # (`initial_capital + realized_pnl`) nao cobrir `strategy.daytrade.base.
+    # capital_minimo_brl` no preco de abertura -- MESMA regra que `live.
+    # intraday_runtime.IntradayLiveRuntime._check_capital` ja aplica ao
+    # vivo, so' que ate 2026-08-23 essa regra existia SO' la', nunca no
+    # backtest (`IntradaySessionMachine`/`run_intraday_backtest` nao a
+    # conheciam). Achado ao medir CLSC4 com capital de teste incompativel
+    # com o preco dela: o backtest deixava a estrategia "comprar" um lote
+    # que a conta simplesmente nao pagaria de verdade, produzindo MaxDD
+    # abaixo de -100% (impossivel sem margem) -- o robo ao vivo NUNCA teria
+    # essa chance, porque `_check_capital` recusaria o pregao antes de
+    # comecar. Default `False` aqui preserva testes que usam capital
+    # sintetico pequeno de proposito, so' para exercitar OUTRO
+    # comportamento (fill, restart, etc); `config_for` liga `True` para
+    # todo backtest/sombra real, fechando a divergencia.
+    enforce_capital_minimo: bool = False
 
 
 @dataclass
@@ -396,14 +418,24 @@ class IntradaySessionMachine:
         # agregado, decrescido pelo que a corretora reportar como
         # crescimento da posicao a cada barra (ver `_resolve_limit_fills`).
         self._resting_children_qty: list[int] = []
-        # Fatia de SAIDA (`_Position.exit_split_unit`) vigiada agora como
-        # ordem-limite REAL na corretora (0 = nenhuma armada) -- ver
-        # `_resolve_live_split_exit`. So' existe em execucao REAL; backtest/
-        # sombra continuam usando `_resolve_target_partial_fill` (guiado por
-        # `bar.volume`, sem prazo). NAO persistido em `state()` de proposito
-        # (mesmo espirito de `resting_limit` nao ser restaurado): um restart
-        # no meio de uma fatia armada e' uma lacuna conhecida, sem cobertura
-        # ainda -- nenhum robo em producao usa `exit_split_unit` hoje.
+        # Fatia de SAIDA (`_Position.exit_split_unit`) vigiada agora (0 =
+        # nenhuma armada) -- ordem-limite REAL na corretora quando
+        # `execution` esta setado (`_resolve_live_split_exit`), ou simulada
+        # contra `bar.volume` quando `exit_ttl_bars` esta declarado sem
+        # execucao real (`_resolve_simulated_split_exit`). Sem `exit_ttl_bars`
+        # declarado, backtest/sombra caem no caminho ANTIGO
+        # (`_resolve_target_partial_fill`, sem prazo, nao usa este campo).
+        # PERSISTIDO em `state()` (2026-08-23, ver `restore()`) -- diferente de
+        # `resting_limit`, que e' uma DECISAO do robo e por isso e' redecidida
+        # do zero no warm start, esta fatia e' o rastro de uma ordem que JA
+        # esta (ou nao) na corretora. Em modo simulado (`execution is None`)
+        # restaurar os dois numeros e' o bastante -- nao ha' ordem real para
+        # perder o rastro. Em execucao REAL, o ticket/estado de
+        # `MT5IntradayExecution.pending_exit_order` vive so' em memoria (nunca
+        # persistido -- a corretora e' a unica fonte de verdade sobre ele), e
+        # um processo novo o perde: `restore()` falha alto nesse caso, em vez
+        # de arriscar rearmar uma SEGUNDA ordem de saida por cima da que pode
+        # ainda estar viva no book.
         self._exit_resting_qty: int = 0
         self.resting_exit_bars_waited = 0
         self.flattened = False
@@ -487,6 +519,8 @@ class IntradaySessionMachine:
                 "metadata": dict(pos.metadata),
                 "exit_split_unit": pos.exit_split_unit,
                 "exit_ttl_bars": pos.exit_ttl_bars,
+                "exit_resting_qty": self._exit_resting_qty,
+                "exit_resting_bars_waited": self.resting_exit_bars_waited,
             },
         }
 
@@ -494,7 +528,24 @@ class IntradaySessionMachine:
         """Inverso de `state()`. Nao restaura a ordem-limite vigiada de
         proposito: `resting_limit` e' uma DECISAO do robo, e o robo acabou de
         ser recalibrado — a ordem certa vem do `seed_pending` do warm start,
-        nao de um snapshot velho."""
+        nao de um snapshot velho.
+
+        A fatia de SAIDA (`exit_resting_qty`) e' diferente: nao e' uma decisao
+        a redecidir, e' o rastro de uma ordem que pode estar (ou nao) viva na
+        corretora agora mesmo. Em modo simulado (`self.execution is None`,
+        backtest/sombra) restaurar os dois numeros basta -- a proxima barra
+        volta a checar `bar.volume` normalmente, sem ordem real para perder o
+        rastro. Em execucao REAL (`self.execution` setado) o ticket dessa
+        ordem vive so' dentro de `MT5IntradayExecution.pending_exit_order`,
+        NUNCA persistido -- um processo novo reconstroi a execucao do zero e
+        nao tem como saber se aquela ordem-limite ainda esta no book.
+        Silenciosamente assumir "nao esta" e continuar poderia rearmar uma
+        SEGUNDA ordem de saida por cima da que sobrou: venda dobrada / posicao
+        invertida numa conta NETTING. Falha alto em vez disso -- o supervisor
+        (`scripts/run_live.py::cmd_loop`) ja loga e tenta de novo a cada
+        barra, mesmo padrao de `BrokerExecutionError`; so' religa depois de um
+        humano conferir o terminal e cancelar a ordem-limite de saida
+        pendente, se ainda existir."""
         from datetime import date as _date
 
         if not state:
@@ -507,7 +558,25 @@ class IntradaySessionMachine:
         bloco = state.get("position")
         if not bloco:
             self.position = None
+            self._exit_resting_qty = 0
+            self.resting_exit_bars_waited = 0
             return
+        qtd_pendente = int(bloco.get("exit_resting_qty") or 0)
+        if qtd_pendente > 0 and self.execution is not None:
+            raise RuntimeError(
+                f"{self.strategy.symbol}: reinicio encontrou uma FATIA DE SAIDA "
+                f"armada ({qtd_pendente} acoes) em execucao REAL, mas o ticket "
+                "dessa ordem-limite vive so' em memoria e nao sobrevive a um "
+                "restart do processo -- a corretora e' a unica fonte de verdade "
+                "sobre ele. Resumir aqui sem saber se a ordem ainda esta no book "
+                "arriscaria mandar uma SEGUNDA ordem de saida por cima (venda "
+                "dobrada / posicao invertida numa conta NETTING). Confira o "
+                f"terminal MT5 manualmente: cancele a ordem-limite de saida "
+                f"pendente em {self.strategy.symbol} (se ainda existir) antes de "
+                "religar este slot."
+            )
+        self._exit_resting_qty = qtd_pendente
+        self.resting_exit_bars_waited = int(bloco.get("exit_resting_bars_waited") or 0)
         self.position = _Position(
             side=bloco["side"],
             entry_ts=pd.Timestamp(bloco["entry_ts"]),
@@ -564,11 +633,21 @@ class IntradaySessionMachine:
                 # -- ver `_resolve_live_split_exit`. O caminho simulado logo
                 # abaixo (guiado por `bar.volume`) e' so' para backtest/sombra.
                 events.extend(self._resolve_live_split_exit(ts, bar))
+            elif target_needs_volume and pos.exit_split_unit is not None and pos.exit_ttl_bars is not None:
+                # Mesma divisao de alvo em fatias, mas com PRAZO -- espelha
+                # `_resolve_live_split_exit` usando `bar.volume`/`bar.close`
+                # no lugar da corretora, para o backtest conseguir prever o
+                # que a execucao REAL vai fazer (mesmo motivo de a maquina
+                # ser compartilhada). So' entra aqui quando `exit_ttl_bars`
+                # esta declarado -- sem prazo, cai no `elif` de baixo
+                # (comportamento ANTIGO, ilimitado).
+                events.extend(self._resolve_simulated_split_exit(ts, bar))
             elif target_needs_volume and pos.exit_split_unit is not None:
-                # Alvo dividido em fatias (`EnterLimit.exit_split_unit`): o
-                # stop continua tudo-ou-nada (protecao/urgencia, sempre a
-                # mercado), mas o alvo fecha SO' O QUANTO o volume da barra
-                # cobrir -- pode levar varias barras para zerar a posicao.
+                # Alvo dividido em fatias (`EnterLimit.exit_split_unit`), SEM
+                # prazo declarado: o stop continua tudo-ou-nada
+                # (protecao/urgencia, sempre a mercado), mas o alvo fecha
+                # SO' O QUANTO o volume da barra cobrir -- pode levar varias
+                # barras para zerar a posicao, sem limite.
                 stop_hit, target_hit = _stop_target_touch(pos, bar)
                 if stop_hit and target_hit:
                     hit = "stop" if cfg.ambiguous_bar_resolution == "stop_first" else "target"
@@ -618,12 +697,13 @@ class IntradaySessionMachine:
         # ou a ultima barra da sessao. Nenhuma entrada nova depois disso.
         if not self.flattened and (ts.time() >= self.session_end_time_for(ts) or is_last_bar):
             if self.position is not None:
-                if self._exit_resting_qty > 0 and self.execution is not None:
-                    # cancela a fatia de saida REAL em pe' antes de mandar o
-                    # flatten -- senao as duas ordens (a limite parada e o
-                    # flatten a mercado) ficariam vivas ao mesmo tempo na
-                    # corretora, pela mesma posicao.
-                    self.execution.cancel_exit_limit(ts, reason="flatten")
+                if self._exit_resting_qty > 0:
+                    if self.execution is not None:
+                        # cancela a fatia de saida REAL em pe' antes de mandar o
+                        # flatten -- senao as duas ordens (a limite parada e o
+                        # flatten a mercado) ficariam vivas ao mesmo tempo na
+                        # corretora, pela mesma posicao.
+                        self.execution.cancel_exit_limit(ts, reason="flatten")
                     self._exit_resting_qty = 0
                     self.resting_exit_bars_waited = 0
                 events.append(self._close_position(ts, bar.close, IntradayExitReason.FORCED_FLATTEN))
@@ -793,8 +873,9 @@ class IntradaySessionMachine:
         `on_closed_bar`."""
         eventos: list[MachineEvent] = []
         if self.position is not None:
-            if self._exit_resting_qty > 0 and self.execution is not None:
-                self.execution.cancel_exit_limit(ts, reason="flatten")
+            if self._exit_resting_qty > 0:
+                if self.execution is not None:
+                    self.execution.cancel_exit_limit(ts, reason="flatten")
                 self._exit_resting_qty = 0
                 self.resting_exit_bars_waited = 0
             eventos.append(self._close_position(ts, price, IntradayExitReason.FORCED_FLATTEN))
@@ -824,6 +905,88 @@ class IntradaySessionMachine:
         self._resting_children_qty = []
         self.resting_limit_bars_waited = 0
         return LimitCancelled(order=order, ts=ts, reason="position_closed")
+
+    # ---------- saida dividida em fatias, SIMULADA, com prazo (2026-08-23) --
+
+    def _resolve_simulated_split_exit(self, ts: pd.Timestamp, bar: Bar) -> list[MachineEvent]:
+        """Saida por ALVO dividida em fatias, SIMULADA (backtest/sombra) --
+        espelha `_resolve_live_split_exit` (mesmo `_exit_resting_qty`/
+        `resting_exit_bars_waited`, mesma semantica de prazo), trocando a
+        corretora por `bar.volume`/`bar.close`. Existe para o backtest poder
+        PREVER o que a execucao real vai fazer com `EnterLimit.exit_ttl_bars`
+        declarado, em vez de medir um cenario (espera ilimitada) que a
+        execucao real nunca vai ter -- mesmo motivo de toda esta maquina ser
+        compartilhada entre os dois mundos. So' chamada quando `pos.
+        exit_ttl_bars` esta declarado (ver `on_closed_bar`, item 1); sem
+        prazo, `_resolve_target_partial_fill` (o caminho ANTIGO, ilimitado)
+        continua servindo quem nao decidiu um prazo ainda.
+
+        MESMA estrutura de `_resolve_live_split_exit`, de proposito -- checa
+        primeiro a fatia JA armada (se houver), arma uma fatia NOVA so' no
+        final. Isso da' ao arme o MESMO atraso estrutural de 1 barra que a
+        execucao real tem (mandar a ordem e so' poder checar o fill dela na
+        barra SEGUINTE): a fatia arma no primeiro toque do alvo mas nunca
+        preenche na PROPRIA barra em que armou. Da'i em diante, preenche
+        numa barra que TAMBEM toque o alvo E tenha volume suficiente para
+        ela SOZINHA (FOK) -- nunca preenche pelo preco de uma barra que nem
+        chegou perto do nivel. O prazo conta em TODA barra desde que armou,
+        tocando ou nao (a ordem real ficaria no book esperando, nao so' nos
+        instantes em que o preco volta a tocar). Estourado o prazo sem fill
+        nenhum, fecha o RESTANTE da posicao a MERCADO (`bar.close`) --
+        mesma decisao do dono usada na execucao real ('prazo limitado,
+        depois mercado'). Stop e' sempre tudo-ou-nada e tem prioridade sobre
+        o alvo numa barra ambigua, sem consultar `ambiguous_bar_resolution`
+        -- mesma regra da execucao real, que tambem nao usa esse config."""
+        pos = self.position
+        assert pos is not None and pos.exit_split_unit is not None and pos.exit_ttl_bars is not None
+        stop_hit, target_hit = _stop_target_touch(pos, bar)
+
+        if stop_hit:
+            self._exit_resting_qty = 0
+            self.resting_exit_bars_waited = 0
+            ref_price = _exit_fill_price(pos, bar, "stop")
+            events: list[MachineEvent] = [self._close_position(ts, ref_price, IntradayExitReason.STOP)]
+            self.pending = None
+            orfa = self._cancelar_resting_orfa(ts)
+            if orfa is not None:
+                events.append(orfa)
+            return events
+
+        events = []
+        if self._exit_resting_qty > 0:
+            if target_hit and bar.volume >= self._exit_resting_qty:
+                fechado = self._exit_resting_qty
+                ref_price = _exit_fill_price(pos, bar, "target")
+                events.append(self._close_position(
+                    ts, ref_price, IntradayExitReason.TARGET, quantity_override=fechado,
+                ))
+                self._exit_resting_qty = 0
+                self.resting_exit_bars_waited = 0
+                if self.position is None:  # ultima fatia fechou agora
+                    self.pending = None
+                    orfa = self._cancelar_resting_orfa(ts)
+                    if orfa is not None:
+                        events.append(orfa)
+                # senao: fechou uma fatia, posicao (menor) continua aberta --
+                # a proxima fatia so' arma numa barra FUTURA que tocar o alvo
+                # de novo (bloco abaixo, ja que `_exit_resting_qty == 0`).
+            else:
+                self.resting_exit_bars_waited += 1
+                if self.resting_exit_bars_waited >= pos.exit_ttl_bars:
+                    self._exit_resting_qty = 0
+                    self.resting_exit_bars_waited = 0
+                    events.append(self._close_position(ts, bar.close, IntradayExitReason.TARGET))
+                    self.pending = None
+                    orfa = self._cancelar_resting_orfa(ts)
+                    if orfa is not None:
+                        events.append(orfa)
+            return events
+
+        if target_hit:
+            self._exit_resting_qty = min(pos.exit_split_unit, pos.quantity)
+            self.resting_exit_bars_waited = 0
+
+        return events
 
     # ---------- saida dividida em execucao REAL (Fase 2, 2026-08-22) --------
 

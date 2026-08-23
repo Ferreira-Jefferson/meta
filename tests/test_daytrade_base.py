@@ -16,7 +16,9 @@ from strategy.daytrade.base import (
     CAPITAL_MINIMO_EM_LOTES,
     LOTE_PADRAO_B3,
     Bar,
+    JanelaVolatilidadeDiaria,
     RollingVolumeWindow,
+    barra_diaria,
     capital_minimo_brl,
 )
 
@@ -176,3 +178,53 @@ def test_cauda_vazia_e_o_default_seguro():
     sem_chamada.registrar(t0, 900.0)
 
     assert com_chamada_vazia.media_por_minuto(t0) == pytest.approx(sem_chamada.media_por_minuto(t0))
+
+
+# ---------- barra_diaria / JanelaVolatilidadeDiaria (2026-08-23, alvo por
+# volatilidade em vez de percentual do preco -- ver `strategy.daytrade.lab.
+# gremah`/`gremah_tick`) -------------------------------------------------
+
+def _bar_ohlc(hhmm: str, o, h, low, c) -> Bar:
+    return Bar(ts=pd.Timestamp(f"2026-01-05 {hhmm}", tz="UTC"),
+               open=float(o), high=float(h), low=float(low), close=float(c), volume=100.0)
+
+
+def test_barra_diaria_agrega_ohlc_da_sessao_inteira():
+    barras = [
+        _bar_ohlc("13:00", 10.0, 10.5, 9.8, 10.2),
+        _bar_ohlc("13:01", 10.2, 11.0, 10.1, 10.9),
+        _bar_ohlc("13:02", 10.9, 10.9, 9.5, 9.6),
+    ]
+    diaria = barra_diaria(barras)
+    assert diaria.open == pytest.approx(10.0)      # da PRIMEIRA barra
+    assert diaria.high == pytest.approx(11.0)       # max de todas
+    assert diaria.low == pytest.approx(9.5)         # min de todas
+    assert diaria.close == pytest.approx(9.6)       # da ULTIMA barra
+    assert diaria.volume == pytest.approx(300.0)    # soma
+    assert diaria.ts == barras[-1].ts
+
+
+def test_barra_diaria_vazia_e_none():
+    assert barra_diaria([]) is None
+
+
+def test_janela_volatilidade_vazia_devolve_none():
+    janela = JanelaVolatilidadeDiaria(janela_dias=10)
+    assert janela.range_mediano() is None
+
+
+def test_janela_volatilidade_e_a_mediana_do_range_diario():
+    janela = JanelaVolatilidadeDiaria(janela_dias=5)
+    for rng in (3.0, 5.0, 100.0, 4.0, 6.0):  # mediana = 5.0, 100.0 e' outlier
+        janela.registrar_dia(_bar_ohlc("18:00", 10.0, 10.0 + rng, 10.0, 10.0))
+    assert janela.range_mediano() == pytest.approx(5.0)
+
+
+def test_janela_volatilidade_descarta_alem_do_tamanho_declarado():
+    """So' as ultimas `janela_dias` sessoes contam -- um pregao antigo demais
+    nao pode continuar influenciando a mediana."""
+    janela = JanelaVolatilidadeDiaria(janela_dias=3)
+    janela.registrar_dia(_bar_ohlc("18:00", 10.0, 1_000.0, 10.0, 10.0))  # sai da janela
+    for rng in (1.0, 2.0, 3.0):
+        janela.registrar_dia(_bar_ohlc("18:00", 10.0, 10.0 + rng, 10.0, 10.0))
+    assert janela.range_mediano() == pytest.approx(2.0)

@@ -144,6 +144,63 @@ class RollingVolumeWindow:
         return eventos
 
 
+class JanelaVolatilidadeDiaria:
+    """Mediana do range diario (`high - low`) das ultimas `janela_dias`
+    sessoes ANTERIORES -- medida de volatilidade usada para dimensionar
+    alvo/stop por fracao da volatilidade em vez de percentual do preco
+    (`Gremah`/`GremahTick`, 2026-08-23: o percentual fixo satura no piso de
+    1 tick em 9 dos 10 simbolos calibrados).
+
+    Mediana, nao Wilder/EWM: robusta a um pregao anomalo, e o repo ja usa
+    `median` nos dois robos. Range DIARIO, nao true range intrabar com
+    gap: um ATR de barras de 1 minuto tem resolucao zero ou um tick (o
+    tick da B3, R$0,01, e' maior que o movimento tipico de 1 minuto), e o
+    gap overnight nao faz parte do risco deste robo, que nunca dorme com
+    posicao aberta.
+
+    Recebe barras DIARIAS ja prontas de fora (`registrar_dia`) -- quem tem
+    acesso ao historico multi-dia e' o CHAMADOR (`backtest/intraday/
+    engine.py`, `live/intraday_runtime.py`), nunca a propria estrategia
+    (AGENTS.md, `strategy/` so importa `core`), mesmo padrao de
+    `RollingVolumeWindow`."""
+
+    def __init__(self, janela_dias: int):
+        self.janela_dias = int(janela_dias)
+        self._ranges: deque[float] = deque(maxlen=self.janela_dias)
+
+    def registrar_dia(self, bar_diaria: Bar) -> None:
+        """Chamar uma vez por sessao ANTERIOR concluida (nunca a sessao
+        corrente, ainda incompleta -- olhar o proprio dia seria
+        look-ahead)."""
+        self._ranges.append(bar_diaria.high - bar_diaria.low)
+
+    def range_mediano(self) -> float | None:
+        """`None` enquanto nenhuma sessao foi registrada (primeiro pregao
+        do historico, ou feed falhou) -- quem chama cai no fallback
+        percentual, mesmo espirito de `seed_volume_window` vazio."""
+        if not self._ranges:
+            return None
+        return float(pd.Series(self._ranges).median())
+
+
+def barra_diaria(bars: list[Bar]) -> Bar | None:
+    """Agrega barras M1 (ou ticks degenerados) de UMA sessao numa barra
+    diaria -- mora aqui para backtest e ao vivo agregarem pelo MESMO
+    caminho (mesmo argumento de `profiles.py:1-10`: um numero computado em
+    dois lugares e' um numero que vai divergir). `None` se `bars` vier
+    vazio."""
+    if not bars:
+        return None
+    return Bar(
+        ts=bars[-1].ts,
+        open=bars[0].open,
+        high=max(b.high for b in bars),
+        low=min(b.low for b in bars),
+        close=bars[-1].close,
+        volume=sum(b.volume for b in bars),
+    )
+
+
 @dataclass
 class IntradayOpenPosition:
     """Snapshot read-only da posicao vista pelo robo em `on_bar` — espelha
@@ -362,6 +419,24 @@ class IntradayStrategy(ABC):
         comportamento de quando este metodo nunca e' chamado. Default
         no-op: so' um robo com teto de volume rolante (ex.:
         `Gremah`/`GremahTick`, 2026-08-22) precisa disso."""
+
+    def seed_daily_volatility(self, previous_daily_bars: list[Bar]) -> None:
+        """Alimenta o robo com a barra DIARIA (`base.barra_diaria`) de cada
+        uma das `vol_janela_dias` sessoes ANTERIORES a hoje, mais antiga
+        primeiro -- para um alvo/stop dimensionado por volatilidade
+        (`JanelaVolatilidadeDiaria`) ja ter o que precisa na primeira
+        decisao do pregao, em vez de esperar `vol_janela_dias` sessoes
+        vivendo do zero. Chamado por quem tem acesso ao historico
+        (`backtest/intraday/engine.py`, `live/intraday_runtime.py`) —
+        nunca pela propria estrategia (AGENTS.md, `strategy/` so importa
+        `core`).
+
+        `previous_daily_bars` pode vir com menos de `vol_janela_dias`
+        barras (comeco do historico) ou vazio (feed falhou) -- o robo usa
+        o que tiver; `JanelaVolatilidadeDiaria.range_mediano()` devolve
+        `None` se nada foi registrado, e quem le isso cai no fallback
+        percentual. Default no-op: so' um robo com alvo por volatilidade
+        (ex.: `Gremah`/`GremahTick`, 2026-08-23) precisa disso."""
 
     @abstractmethod
     def on_bar(

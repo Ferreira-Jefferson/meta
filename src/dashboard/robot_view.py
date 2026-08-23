@@ -64,11 +64,22 @@ class RobotAsset:
     `price`/`lot_cost`/`min_capital` são `None` quando não há dado de minuto
     salvo para o ativo: o caixa mínimo depende do preço de hoje, e a página
     mostra a falta em vez de inventar um número.
-    """
+
+    `alvo_por_volatilidade`/`alvo_vol_mult`/`stop_vol_mult` (2026-08-23):
+    quando ligado, `profit_pct`/`stop_multiplier` acima são só FALLBACK
+    (usados quando a janela de volatilidade ainda não tem dado) — não o que
+    decide o alvo no dia a dia. Mostrar o percentual como se fosse o número
+    ativo seria a MESMA mentira que este dataclass foi criado para evitar
+    (ver o histórico acima) — só que entre modos de dimensionar, não entre
+    ativos. `robot_view` decide qual dos dois mostrar a partir destes
+    campos, nunca inventa por conta própria."""
 
     symbol: str
     profit_pct: float
     stop_multiplier: float
+    alvo_por_volatilidade: bool = False
+    alvo_vol_mult: float | None = None
+    stop_vol_mult: float | None = None
     price: float | None = None
     price_date: str = ""
     lot_cost: float | None = None
@@ -199,9 +210,15 @@ def _daytrade_assets(cls, robo) -> tuple[RobotAsset, ...]:
             return ()
         preco, data = _ultimo_preco(symbol)
         return (_asset(symbol, getattr(robo, "profit_pct", 0.0),
-                       getattr(robo, "stop_multiplier", 0.0), preco, data),)
+                       getattr(robo, "stop_multiplier", 0.0),
+                       getattr(robo, "alvo_por_volatilidade", False),
+                       getattr(robo, "alvo_vol_mult", None),
+                       getattr(robo, "stop_vol_mult", None),
+                       preco, data),)
     ativos = tuple(
-        _asset(s.symbol, s.profit_pct, s.stop_multiplier, *_ultimo_preco(s.symbol))
+        _asset(s.symbol, s.profit_pct, s.stop_multiplier,
+               s.alvo_por_volatilidade, s.alvo_vol_mult, s.stop_vol_mult,
+               *_ultimo_preco(s.symbol))
         for s in setups()
     )
     # Ordenado pelo CAIXA MÍNIMO, do mais barato ao mais caro. A ordem antiga
@@ -215,7 +232,8 @@ def _daytrade_assets(cls, robo) -> tuple[RobotAsset, ...]:
         ativos, key=lambda a: (a.min_capital is None, a.min_capital or 0.0, a.symbol)))
 
 
-def _asset(symbol, profit_pct, stop_multiplier, preco, data) -> RobotAsset:
+def _asset(symbol, profit_pct, stop_multiplier, alvo_por_volatilidade,
+           alvo_vol_mult, stop_vol_mult, preco, data) -> RobotAsset:
     # Mora em `daytrade.base` (contrato da família), não na gremah: a regra
     # "2x o lote" vale para qualquer robô intradiário sem fracionário, e
     # `live/intraday_runtime.py` consulta a MESMA função — ver AGENTS.md #6.
@@ -226,6 +244,9 @@ def _asset(symbol, profit_pct, stop_multiplier, preco, data) -> RobotAsset:
         symbol=symbol,
         profit_pct=profit_pct,
         stop_multiplier=stop_multiplier,
+        alvo_por_volatilidade=alvo_por_volatilidade,
+        alvo_vol_mult=alvo_vol_mult,
+        stop_vol_mult=stop_vol_mult,
         price=preco,
         price_date=data,
         lot_cost=lote,

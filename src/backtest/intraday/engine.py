@@ -29,7 +29,8 @@ base`): quem executa depende do contrato de quem decide.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections import deque
+from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 import pandas as pd
@@ -41,7 +42,14 @@ from backtest.intraday.machine import (  # noqa: F401  (reexport: API publica hi
     IntradayTrade,
     PositionClosed,
 )
-from strategy.daytrade.base import Bar, Enter, EnterLimit, IntradayStrategy
+from strategy.daytrade.base import (
+    Bar,
+    Enter,
+    EnterLimit,
+    IntradayStrategy,
+    barra_diaria,
+    capital_minimo_brl,
+)
 
 
 @dataclass
@@ -49,6 +57,25 @@ class IntradayBacktestResult:
     trades: list[IntradayTrade]
     equity_curve: pd.Series
     metrics: dict
+    # Timestamp em que o patrimonio (realizado + mark-to-market) chegou a
+    # zero ou menos, se algum dia chegou -- `None` se a conta nunca quebrou.
+    # A partir deste instante o backtest PARA de simular (ver o motivo
+    # completo no comentario dentro de `run_intraday_backtest`): uma conta
+    # sem margem nao consegue mandar mais nenhuma ordem depois de zerada,
+    # entao continuar gerando barras/trades depois disso e' fantasia --
+    # exatamente o que produzia MaxDD como -244% (impossivel: perder mais
+    # de 100% do capital sem alavancagem nao existe), achado 2026-08-23
+    # com R$100 de capital de teste na CLSC4 (que custa R$151/acao -- 1 lote
+    # sozinho e' R$15.195, muito acima do caixa de teste).
+    wiped_out_at: pd.Timestamp | None = None
+    # Sessoes PULADAS por `config.enforce_capital_minimo` -- o caixa
+    # disponivel na abertura nao cobria `capital_minimo_brl` no preco do
+    # dia, entao a sessao inteira roda em branco (nenhuma decisao do robo),
+    # MESMA regra que `live.intraday_runtime.IntradayLiveRuntime.
+    # _check_capital` ja aplicava ao vivo. Vazio quando o flag esta
+    # desligado (default de quem monta `IntradayBacktestConfig` na mao) ou
+    # quando o caixa sempre cobriu o minimo.
+    sessoes_puladas_por_capital: list = field(default_factory=list)
 
 
 def _bar_volume(row: pd.Series) -> float:
@@ -70,6 +97,13 @@ def bar_from_row(ts: pd.Timestamp, row: pd.Series) -> Bar:
     do MT5 pela MESMA regra — ver `_bar_volume`."""
     return Bar(ts=ts, open=float(row["open"]), high=float(row["high"]),
                low=float(row["low"]), close=float(row["close"]), volume=_bar_volume(row))
+
+
+#: Teto de sessoes anteriores mantidas em memoria para `seed_daily_volatility`
+#: -- mesmo espirito do teto de 90min de `seed_volume_window` acima: generoso
+#: o bastante para qualquer `vol_janela_dias` configurado (default 10) sem
+#: guardar o historico inteiro do backtest (que pode ter anos de sessoes).
+_CAUDA_DIAS_MAXIMA = 60
 
 
 def run_intraday_backtest(
@@ -104,8 +138,43 @@ def run_intraday_backtest(
     equity_values: list[float] = []
 
     previous_session_df: pd.DataFrame | None = None
+    previous_daily_bars: deque[Bar] = deque(maxlen=_CAUDA_DIAS_MAXIMA)
+    sessoes_puladas_por_capital: list[pd.Timestamp] = []
+    # Declarado ANTES do loop (nao dentro): se TODA sessao for pulada por
+    # `enforce_capital_minimo` (capital insuficiente o backtest inteiro), o
+    # corpo do loop que normalmente atribui isto nunca roda, e o `return`
+    # no fim da funcao precisa de um valor mesmo assim.
+    wiped_out_at: pd.Timestamp | None = None
     for session_idx, (session_date, session_df) in enumerate(bars.groupby(bars.index.date)):
         is_resumed_session = resume_same_session and session_idx == 0
+
+        # `enforce_capital_minimo` (2026-08-23): MESMA regra que `live.
+        # intraday_runtime.IntradayLiveRuntime._check_capital` ja aplica ao
+        # vivo -- se o caixa disponivel na abertura nao cobre `capital_
+        # minimo_brl` no preco de hoje, o dia INTEIRO fica de fora (nenhuma
+        # decisao do robo), em vez de deixar a estrategia "comprar" um lote
+        # que a conta nao pagaria de verdade. Pulado na sessao RESUMIDA
+        # (`resume_same_session`) pelo mesmo motivo de `on_session_start`
+        # ser pulado nela: o robo ja foi calibrado/tem posicao por fora
+        # (warm start), e a politica de "recusar o pregao" so' faz sentido
+        # ANTES de qualquer posicao existir -- day trade nunca carrega
+        # posicao entre sessoes, entao esse caso so' ocorre na 1a sessao
+        # de um backtest retomado.
+        if not is_resumed_session and config.enforce_capital_minimo:
+            caixa_disponivel = config.initial_capital + machine.realized_pnl
+            preco_abertura = float(session_df.iloc[0]["open"])
+            minimo_hoje = capital_minimo_brl(preco_abertura, config.default_quantity)
+            if caixa_disponivel < minimo_hoje:
+                sessoes_puladas_por_capital.append(session_df.index[0])
+                session_bars_puladas = [bar_from_row(ts, row) for ts, row in session_df.iterrows()]
+                for ts in session_df.index:
+                    equity_index.append(ts)
+                    equity_values.append(caixa_disponivel)
+                previous_session_df = session_df
+                daily_bar = barra_diaria(session_bars_puladas)
+                if daily_bar is not None:
+                    previous_daily_bars.append(daily_bar)
+                continue
         # `seed_volume_window` (RollingVolumeWindow) precisa da CAUDA do
         # pregao anterior para completar a janela de volume rolante logo na
         # abertura -- pulado para a sessao RESUMIDA porque ela ja foi
@@ -122,30 +191,58 @@ def run_intraday_backtest(
                 tail_df = previous_session_df[previous_session_df.index > corte]
                 tail_bars = [bar_from_row(ts, row) for ts, row in tail_df.iterrows()]
             strategy.seed_volume_window(tail_bars)
+            # `seed_daily_volatility` recebe TODAS as sessoes anteriores ja
+            # vistas neste backtest (so' anteriores -- sem look-ahead); quem
+            # decide quantas usar e' a propria estrategia (`vol_janela_dias`),
+            # nao o motor -- mesmo espirito de `JanelaVolatilidadeDiaria`
+            # descartar sozinha o que passa de `janela_dias`.
+            strategy.seed_daily_volatility(list(previous_daily_bars))
 
         if is_resumed_session:
             machine.resume_session(session_date, seed_pending=seed_pending)
         else:
             machine.begin_session(session_date)
 
+        session_bars: list[Bar] = []
         last_ts = session_df.index[-1]
         for ts, row in session_df.iterrows():
             bar = bar_from_row(ts, row)
+            session_bars.append(bar)
             for event in machine.on_closed_bar(bar, is_last_bar=(ts == last_ts)):
                 if isinstance(event, PositionClosed):
                     trades.append(event.trade)
 
             # marca patrimonio (realizado + mark-to-market da posicao aberta).
             equity_index.append(ts)
-            equity_values.append(
-                config.initial_capital + machine.realized_pnl + machine.unrealized_brl(bar.close)
-            )
+            equity_atual = config.initial_capital + machine.realized_pnl + machine.unrealized_brl(bar.close)
+            equity_values.append(equity_atual)
+
+            # Conta QUEBROU (patrimonio <= 0) -- uma conta sem margem nao
+            # consegue mandar mais NENHUMA ordem depois disso (nao ha' caixa
+            # para cobrir nem 1 lote), entao o backtest tem que PARAR aqui,
+            # nao continuar simulando barra/trade contra dinheiro que nao
+            # existe mais. Sem este freio, o dimensionamento da estrategia
+            # podia continuar "comprando" com caixa negativo (piso de 1 lote
+            # em `Gremah._lotes_por_realocacao`, por exemplo) e o MaxDD
+            # reportado passava de -100% -- impossivel numa conta a vista,
+            # e sinal de capital de teste incompativel com o preco do ativo
+            # (achado 2026-08-23: CLSC4 a R$151,95 com R$100 de capital de
+            # teste, 1 lote custa R$15.195).
+            if equity_atual <= 0:
+                wiped_out_at = ts
+                break
 
         if on_progress is not None:
             on_progress({"session_date": session_date, "trades_so_far": len(trades),
                          "session_pnl_brl": machine.session_pnl})
 
         previous_session_df = session_df
+        daily_bar = barra_diaria(session_bars)
+        if daily_bar is not None:
+            previous_daily_bars.append(daily_bar)
+
+        if wiped_out_at is not None:
+            break
 
     equity_curve = pd.Series(equity_values, index=pd.DatetimeIndex(equity_index), name="equity")
     pnl_pcts = [t.pnl_pct for t in trades]
@@ -162,4 +259,6 @@ def run_intraday_backtest(
         **metrics.trade_stats(pnl_pcts),
         "n_trades": len(trades),
     }
-    return IntradayBacktestResult(trades=trades, equity_curve=equity_curve, metrics=result_metrics)
+    return IntradayBacktestResult(trades=trades, equity_curve=equity_curve,
+                                   metrics=result_metrics, wiped_out_at=wiped_out_at,
+                                   sessoes_puladas_por_capital=sessoes_puladas_por_capital)

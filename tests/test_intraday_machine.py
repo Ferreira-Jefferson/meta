@@ -608,6 +608,192 @@ def test_alvo_dividido_stop_fecha_o_resto_inteiro_de_uma_vez():
     assert m.position is None
 
 
+# ---------- alvo dividido com PRAZO, simulado (`EnterLimit.exit_ttl_bars`,
+# 2026-08-23) -- espelha `_resolve_live_split_exit` usando `bar.volume`/
+# `bar.close` no lugar da corretora, para o backtest prever o que a execucao
+# REAL vai fazer (mesma razao de a maquina ser compartilhada).
+
+def test_alvo_dividido_com_prazo_nao_preenche_na_propria_barra_que_armou():
+    """MESMO atraso estrutural da execucao real: a fatia arma no primeiro
+    toque, mas so' pode preencher a partir da barra SEGUINTE (mandar a ordem
+    e checar o fill dela na mesma respiracao nao existe nem na corretora de
+    verdade)."""
+    strat = _Scripted({0: [EnterLimit(side="long", limit_price=9.80, quantity=300,
+                                      initial_target=9.90, exit_split_unit=100,
+                                      exit_ttl_bars=5)]})
+    m = IntradaySessionMachine(strat, _config(limit_fill_capped_by_volume=True,
+                                              target_fills_as_maker=True))
+    m.begin_session(pd.Timestamp("2026-01-05").date())
+    m.on_closed_bar(_bar_vol(0, 10.00, 10.00, 10.00, 10.00, 0.0))
+    m.on_closed_bar(_bar_vol(1, 10.00, 10.00, 9.79, 9.85, 300.0))  # fill em 9.80
+    assert m.position.quantity == 300
+
+    # 1o toque do alvo, com volume de sobra -- arma a fatia, mas NAO preenche
+    # nesta mesma barra.
+    ev2 = m.on_closed_bar(_bar_vol(2, 9.85, 9.95, 9.85, 9.90, 100.0))
+    assert [e for e in ev2 if isinstance(e, PositionClosed)] == []
+    assert m.position.quantity == 300
+    assert m.resting_exit_bars_waited == 0
+
+    # barra SEGUINTE, tambem tocando o alvo com volume suficiente -- agora sim
+    # preenche a fatia.
+    ev3 = m.on_closed_bar(_bar_vol(3, 9.90, 9.95, 9.85, 9.90, 100.0))
+    fechadas3 = [e for e in ev3 if isinstance(e, PositionClosed)]
+    assert len(fechadas3) == 1
+    assert fechadas3[0].trade.quantity == 100
+    assert fechadas3[0].trade.exit_price == pytest.approx(9.90)
+    assert m.position is not None
+    assert m.position.quantity == 200
+    assert m.resting_exit_bars_waited == 0
+
+
+def test_alvo_dividido_com_prazo_estourado_fecha_o_resto_a_mercado():
+    strat = _Scripted({0: [EnterLimit(side="long", limit_price=9.80, quantity=300,
+                                      initial_target=9.90, exit_split_unit=100,
+                                      exit_ttl_bars=2)]})
+    m = IntradaySessionMachine(strat, _config(limit_fill_capped_by_volume=True,
+                                              target_fills_as_maker=True))
+    m.begin_session(pd.Timestamp("2026-01-05").date())
+    m.on_closed_bar(_bar_vol(0, 10.00, 10.00, 10.00, 10.00, 0.0))
+    m.on_closed_bar(_bar_vol(1, 10.00, 10.00, 9.79, 9.85, 300.0))
+
+    # 1o toque -- arma a fatia (nao conta prazo ainda, so' a partir da PROXIMA
+    # barra que checa o fill dela).
+    m.on_closed_bar(_bar_vol(2, 9.85, 9.95, 9.85, 9.90, 100.0))
+    assert m.resting_exit_bars_waited == 0
+    assert m.position.quantity == 300
+
+    # 1a checagem: toca de novo, mas SEM volume suficiente -- 1 barra de espera.
+    ev3 = m.on_closed_bar(_bar_vol(3, 9.90, 9.95, 9.85, 9.90, 10.0))
+    assert [e for e in ev3 if isinstance(e, PositionClosed)] == []
+    assert m.resting_exit_bars_waited == 1
+    assert m.position.quantity == 300
+
+    # 2a checagem, ainda sem volume: estoura o prazo (exit_ttl_bars=2) --
+    # fecha TUDO o que sobrou a MERCADO (bar.close), nao so' a fatia.
+    ev4 = m.on_closed_bar(_bar_vol(4, 9.90, 9.90, 9.85, 9.88, 10.0))
+    fechadas4 = [e for e in ev4 if isinstance(e, PositionClosed)]
+    assert len(fechadas4) == 1
+    assert fechadas4[0].trade.quantity == 300
+    assert fechadas4[0].trade.exit_price == pytest.approx(9.88)  # bar.close, nao o nivel do alvo
+    assert fechadas4[0].trade.exit_reason == IntradayExitReason.TARGET
+    assert m.position is None
+    assert m.resting_exit_bars_waited == 0
+
+
+def test_alvo_dividido_com_prazo_conta_barras_mesmo_sem_tocar_o_alvo():
+    """O prazo conta em TODA barra desde que a fatia armou, tocando ou nao --
+    espelha a ordem real, que fica no book esperando independente do preco
+    da barra seguinte ter chegado perto dela de novo."""
+    strat = _Scripted({0: [EnterLimit(side="long", limit_price=9.80, quantity=300,
+                                      initial_target=9.90, exit_split_unit=100,
+                                      exit_ttl_bars=2)]})
+    m = IntradaySessionMachine(strat, _config(limit_fill_capped_by_volume=True,
+                                              target_fills_as_maker=True))
+    m.begin_session(pd.Timestamp("2026-01-05").date())
+    m.on_closed_bar(_bar_vol(0, 10.00, 10.00, 10.00, 10.00, 0.0))
+    m.on_closed_bar(_bar_vol(1, 10.00, 10.00, 9.79, 9.85, 300.0))
+    m.on_closed_bar(_bar_vol(2, 9.85, 9.95, 9.85, 9.90, 100.0))  # arma
+    assert m.resting_exit_bars_waited == 0
+
+    # preco foge do alvo (nem toca) -- 1a checagem ja conta prazo mesmo assim.
+    ev3 = m.on_closed_bar(_bar_vol(3, 9.85, 9.85, 9.70, 9.75, 999.0))
+    assert [e for e in ev3 if isinstance(e, PositionClosed)] == []
+    assert m.resting_exit_bars_waited == 1
+
+    # 2a checagem sem tocar: estoura o prazo (exit_ttl_bars=2).
+    ev4 = m.on_closed_bar(_bar_vol(4, 9.75, 9.75, 9.60, 9.65, 999.0))
+    fechadas4 = [e for e in ev4 if isinstance(e, PositionClosed)]
+    assert len(fechadas4) == 1
+    assert fechadas4[0].trade.quantity == 300
+    assert fechadas4[0].trade.exit_price == pytest.approx(9.65)
+
+
+def test_alvo_dividido_com_prazo_stop_fecha_tudo_e_zera_o_prazo():
+    strat = _Scripted({0: [EnterLimit(side="long", limit_price=9.80, quantity=300,
+                                      initial_stop=9.00, initial_target=9.90,
+                                      exit_split_unit=100, exit_ttl_bars=5)]})
+    m = IntradaySessionMachine(strat, _config(limit_fill_capped_by_volume=True,
+                                              target_fills_as_maker=True))
+    m.begin_session(pd.Timestamp("2026-01-05").date())
+    m.on_closed_bar(_bar_vol(0, 10.00, 10.00, 10.00, 10.00, 0.0))
+    m.on_closed_bar(_bar_vol(1, 10.00, 10.00, 9.79, 9.85, 300.0))
+    m.on_closed_bar(_bar_vol(2, 9.85, 9.95, 9.85, 9.90, 100.0))  # arma a fatia
+    ev3 = m.on_closed_bar(_bar_vol(3, 9.90, 9.95, 9.85, 9.90, 10.0))  # checa, sem volume
+    assert [e for e in ev3 if isinstance(e, PositionClosed)] == []
+    assert m.resting_exit_bars_waited == 1
+
+    ev = m.on_closed_bar(_bar_vol(4, 9.85, 9.85, 8.50, 8.60, 1.0))  # despenca abaixo do stop
+
+    fechadas = [e for e in ev if isinstance(e, PositionClosed)]
+    assert len(fechadas) == 1
+    assert fechadas[0].trade.quantity == 300
+    assert fechadas[0].trade.exit_reason == IntradayExitReason.STOP
+    assert m.position is None
+    assert m.resting_exit_bars_waited == 0
+    assert m.resting_exit_bars_waited == 0
+
+
+def test_state_restore_preserva_fatia_de_saida_armada_em_sombra():
+    """Gap de restart no meio de uma fatia armada (2026-08-23): em modo
+    SIMULADO (`execution is None`, backtest/sombra) nao ha' ordem real para
+    perder o rastro -- restaurar `exit_resting_qty`/`resting_exit_bars_waited`
+    e' o bastante para o prazo continuar contando de onde parou."""
+    strat = _Scripted({0: [EnterLimit(side="long", limit_price=9.80, quantity=300,
+                                      initial_target=9.90, exit_split_unit=100,
+                                      exit_ttl_bars=2)]})
+    m = IntradaySessionMachine(strat, _config(limit_fill_capped_by_volume=True,
+                                              target_fills_as_maker=True))
+    m.begin_session(pd.Timestamp("2026-01-05").date())
+    m.on_closed_bar(_bar_vol(0, 10.00, 10.00, 10.00, 10.00, 0.0))
+    m.on_closed_bar(_bar_vol(1, 10.00, 10.00, 9.79, 9.85, 300.0))
+    m.on_closed_bar(_bar_vol(2, 9.85, 9.95, 9.85, 9.90, 100.0))  # arma a fatia
+    ev3 = m.on_closed_bar(_bar_vol(3, 9.90, 9.95, 9.85, 9.90, 10.0))  # 1a checagem, sem volume
+    assert [e for e in ev3 if isinstance(e, PositionClosed)] == []
+    assert m._exit_resting_qty == 100
+    assert m.resting_exit_bars_waited == 1
+
+    snapshot = m.state()
+    outra = IntradaySessionMachine(_Scripted({}), _config(limit_fill_capped_by_volume=True,
+                                                           target_fills_as_maker=True))
+    outra.restore(snapshot)
+
+    assert outra._exit_resting_qty == 100
+    assert outra.resting_exit_bars_waited == 1
+    assert outra.position is not None and outra.position.quantity == 300
+
+    # so' falta 1 barra de espera (exit_ttl_bars=2, ja usou 1 antes do
+    # restart) -- estoura o prazo e fecha o resto a mercado, sem reiniciar a
+    # contagem do zero.
+    ev4 = outra.on_closed_bar(_bar_vol(4, 9.90, 9.90, 9.85, 9.88, 10.0))
+    fechadas4 = [e for e in ev4 if isinstance(e, PositionClosed)]
+    assert len(fechadas4) == 1
+    assert fechadas4[0].trade.quantity == 300
+    assert outra.position is None
+
+
+def test_restore_com_fatia_de_saida_armada_em_execucao_real_falha_alto():
+    """O mesmo restart em execucao REAL nao pode resumir silenciosamente: o
+    ticket da ordem-limite de saida vive so' em `MT5IntradayExecution`
+    (nunca persistido), entao um processo novo nao tem como saber se ela
+    ainda esta viva no book. Resumir do mesmo jeito arriscaria uma SEGUNDA
+    ordem de saida por cima -- falha alto em vez disso (ver `restore()`)."""
+    snapshot = {
+        "session_date": "2026-01-05", "session_pnl": 0.0, "realized_pnl": 0.0,
+        "flattened": False,
+        "position": {
+            "side": "long", "entry_ts": "2026-01-05T13:01:00", "entry_price": 9.80,
+            "quantity": 300, "current_stop": None, "current_target": 9.90,
+            "bars_held": 3, "metadata": {}, "exit_split_unit": 100, "exit_ttl_bars": 2,
+            "exit_resting_qty": 100, "exit_resting_bars_waited": 1,
+        },
+    }
+    m = IntradaySessionMachine(_Scripted({}), _config(), execution=object())
+
+    with pytest.raises(RuntimeError, match="FATIA DE SAIDA"):
+        m.restore(snapshot)
+
+
 def test_resume_session_ignora_seed_pending_se_ja_existe_posicao_restaurada():
     """`restore()` (ex.: apos um restart do processo) pode repor uma posicao
     REAL antes de `resume_session` rodar (ver `live/intraday_runtime.py::

@@ -77,10 +77,18 @@ def test_gremah_tick_e_o_top1_e_gremah_o_top2():
 
 
 def test_o_painel_so_oferece_ativo_medido_em_tick():
-    """A tabela de calibracao da `gremah_tick` tem 10 linhas, 9 herdadas do M1
-    e nunca remedidas. O painel oferece so' o que passou pelos 4 passos EM
-    TICK — herdar um numero medido noutra granularidade e liga-lo em dinheiro
-    real e' o erro que `gremah.py` documenta ter cometido e corrigido."""
-    assert symbols_for_robot("gremah_tick") == ("PMAM3",)
+    """A tabela de calibracao da `gremah_tick` tem 10 linhas, e as 10 estao
+    em `TICK_CONFIRMED_SYMBOLS` -- mas por dois caminhos diferentes: 9
+    passaram pelos 4 passos completos (regime -> varredura IS ->
+    confirmacao OOS), e a CLSC4 foi confirmada so' em OOS (amostra
+    pequena demais no IS pra diferenciar qualquer parametro; o dono
+    decidiu o numero dela olhando so' o OOS, e pediu para marcar como
+    confirmada mesmo assim -- ver `gremah_tick.py`, paragrafo da CLSC4).
+    O painel nao distingue os dois caminhos, so' oferece o que tem
+    alguma medicao propria em tick."""
+    assert symbols_for_robot("gremah_tick") == (
+        "PMAM3", "BMGB4", "KLBN3", "LPSB3", "DASA3", "KLBN4", "PCAR3", "CSAN3",
+        "GRND3", "CLSC4",
+    )
     # A `gremah` continua com os dez dela: sao medicoes proprias em M1.
     assert len(symbols_for_robot("gremah")) == 10

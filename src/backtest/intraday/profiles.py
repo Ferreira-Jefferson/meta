@@ -158,6 +158,8 @@ def config_for(
     target_fills_as_maker: bool = False,
     preco_atual: float | None = None,
     initial_capital: float | None = None,
+    limit_fill_capped_by_volume: bool = True,
+    enforce_capital_minimo: bool = True,
 ) -> IntradayBacktestConfig:
     """Monta o `IntradayBacktestConfig` de um perfil + a economia do simbolo
     lida do terminal (`market_data_intraday.mt5_source.symbol_economics`).
@@ -171,7 +173,24 @@ def config_for(
     initial_capital`) -- passe-o explicitamente (backtest ao vivo sempre
     sobrescreve depois, via `IntradayLiveRuntime`) OU passe `preco_atual` para
     este montador computar o minimo real do simbolo (`capital_minimo_brl`).
-    Passar os dois e' erro do chamador."""
+    Passar os dois e' erro do chamador.
+
+    `limit_fill_capped_by_volume`: `True` por padrao desde 2026-08-23 --
+    PADRAO DE TESTE (pedido do dono: sem isso o percentual de acerto medido
+    se afasta da realidade, porque assume que toda ordem parada preenche
+    100% no toque, sem checar se existiu negocio real com volume suficiente).
+    So' desliga quem passar `False` explicitamente (ex.: comparacao ad-hoc
+    contra o comportamento antigo).
+
+    `enforce_capital_minimo`: `True` por padrao desde 2026-08-23 -- MESMA
+    regra que `live.intraday_runtime.IntradayLiveRuntime._check_capital` ja
+    aplica ao vivo (recusar o pregao se o caixa nao cobrir `capital_minimo_
+    brl`), agora tambem no backtest (`run_intraday_backtest`). Achado ao
+    medir CLSC4 com `initial_capital` incompativel com o preco dela: sem
+    isto, o backtest deixava a estrategia "comprar" um lote que a conta nao
+    pagaria de verdade, produzindo MaxDD abaixo de -100% (impossivel sem
+    margem) -- o robo ao vivo jamais teria essa chance. So' desliga quem
+    passar `False` explicitamente."""
     if initial_capital is None:
         if preco_atual is None:
             raise ValueError(
@@ -194,4 +213,6 @@ def config_for(
         session_end_policy=profile.session_end_policy,
         default_quantity=(profile.default_quantity if default_quantity is None else default_quantity),
         target_fills_as_maker=target_fills_as_maker,
+        limit_fill_capped_by_volume=limit_fill_capped_by_volume,
+        enforce_capital_minimo=enforce_capital_minimo,
     )

@@ -159,6 +159,29 @@ class MT5IntradayExecution:
         self.pending_orders = []
         return [self.broker.cancel(o) for o in orders]
 
+    def cancel_stale_refs(self, broker_refs: list[str], ts: pd.Timestamp) -> list[Order]:
+        """Cancela no terminal ordens-limite de ENTRADA cujo ticket sobrou de
+        um PROCESSO ANTERIOR (restart no meio do pregao) -- `self.
+        pending_orders` desta instancia nasce sempre vazio (e' um objeto
+        novo), entao `cancel_limit` nao teria o que cancelar mesmo que a
+        ordem ainda esteja viva no book.
+
+        Construida so' com `broker_ref` (o unico campo que `MT5Broker.cancel`
+        de fato usa para cancelar por ticket -- ver a docstring dele); os
+        demais campos aqui sao so' para caber na assinatura de `Order`, nunca
+        lidos pela corretora neste caminho. Mesma garantia de no-op seguro de
+        `cancel_limit`: um ticket que ja preencheu ou ja sumiu do terminal
+        (por qualquer motivo, inclusive ter sido cancelado por este mesmo
+        metodo numa tentativa anterior) e' cancelamento idempotente."""
+        canceladas = []
+        for ref in broker_refs:
+            order = Order(
+                ticker=self.symbol, side=OrderSide.BUY, quantity=0,
+                order_type=OrderType.LIMIT, broker_ref=ref, sent_at=ts.to_pydatetime(),
+            )
+            canceladas.append(self.broker.cancel(order))
+        return canceladas
+
     # ---------- o que a maquina pergunta (ENTRADA) --------------------------
 
     def limit_fill(self, order, bar) -> Optional[dict]:
