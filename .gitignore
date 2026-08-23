@@ -15,3 +15,4 @@ screenshots/
 data/wide_e/*.parquet
 data/vault_1998_2009/*.parquet
 data/raw_intraday/*.parquet
+data/raw_ticks/*.parquet
