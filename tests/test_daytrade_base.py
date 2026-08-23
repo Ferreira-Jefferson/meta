@@ -9,11 +9,14 @@ declarada, nunca inventa a propria).
 """
 from __future__ import annotations
 
+import pandas as pd
 import pytest
 
 from strategy.daytrade.base import (
     CAPITAL_MINIMO_EM_LOTES,
     LOTE_PADRAO_B3,
+    Bar,
+    RollingVolumeWindow,
     capital_minimo_brl,
 )
 
@@ -55,3 +58,121 @@ def test_constantes_declaradas_batem_com_a_formula():
     assert CAPITAL_MINIMO_EM_LOTES == pytest.approx(2.0)
     assert LOTE_PADRAO_B3 == 100
     assert capital_minimo_brl(7.0) == pytest.approx(7.0 * LOTE_PADRAO_B3 * CAPITAL_MINIMO_EM_LOTES)
+
+
+# ---------- RollingVolumeWindow (2026-08-22, pedido do dono: media movel --
+# substitui o teto de posicao antigo, congelado no primeiro minuto/janela
+# inicial do pregao) --------------------------------------------------------
+
+def _bar(ts: pd.Timestamp, volume: float) -> Bar:
+    return Bar(ts=ts, open=1.0, high=1.0, low=1.0, close=1.0, volume=volume)
+
+
+def test_media_por_minuto_sem_cauda_e_conservadora_ate_a_janela_encher():
+    """Sem cauda do pregao anterior, minutos ainda nao vividos hoje contam
+    como volume ZERO -- divide SEMPRE pela janela NOMINAL (30min por
+    default), nunca so' pelo tempo decorrido. E' o lado seguro: superestimar
+    o teto de posicao e' o erro caro (o book real nao absorve uma ordem
+    grande demais), subestimar so' custa lote a menos."""
+    janela = RollingVolumeWindow(janela_minutos=30.0)
+    janela.iniciar_sessao()
+    t0 = pd.Timestamp("2026-01-05 13:00:00", tz="UTC")
+    janela.registrar(t0, 3000.0)  # 1 unico evento, 0min decorridos
+
+    assert janela.media_por_minuto(t0) == pytest.approx(3000.0 / 30.0)
+
+
+def test_media_por_minuto_com_janela_cheia_e_a_media_de_verdade():
+    janela = RollingVolumeWindow(janela_minutos=30.0)
+    janela.iniciar_sessao()
+    t0 = pd.Timestamp("2026-01-05 13:00:00", tz="UTC")
+    for i in range(30):
+        janela.registrar(t0 + pd.Timedelta(minutes=i), 100.0)
+
+    ts_final = t0 + pd.Timedelta(minutes=29)
+    assert janela.media_por_minuto(ts_final) == pytest.approx(100.0)
+
+
+def test_evicta_eventos_mais_velhos_que_a_propria_janela():
+    """Um pico isolado bem antigo nao pode continuar inflando a media
+    depois de sair da janela -- so' os eventos DENTRO dela contam."""
+    janela = RollingVolumeWindow(janela_minutos=10.0)
+    janela.iniciar_sessao()
+    t0 = pd.Timestamp("2026-01-05 13:00:00", tz="UTC")
+    janela.registrar(t0, 100_000.0)  # pico isolado
+    for i in range(1, 11):
+        janela.registrar(t0 + pd.Timedelta(minutes=i), 10.0)
+    ts_final = t0 + pd.Timedelta(minutes=11)
+    janela.registrar(ts_final, 10.0)  # 11min depois do pico -- ja saiu da janela de 10min
+
+    assert janela.media_por_minuto(ts_final) == pytest.approx(10.0)
+
+
+def test_cauda_do_pregao_anterior_completa_o_deficit_na_abertura():
+    """Pedido literal do dono: 'na abertura ele considera tambem as ultimas
+    barras do dia anterior' -- sem os 30min de hoje ainda vividos, a media
+    usa o final REAL do pregao anterior em vez de assumir volume zero."""
+    janela = RollingVolumeWindow(janela_minutos=30.0)
+    ontem_fim = pd.Timestamp("2026-01-05 20:55:00", tz="UTC")
+    cauda = [_bar(ontem_fim - pd.Timedelta(minutes=m), 100.0) for m in range(29, -1, -1)]
+    janela.definir_cauda_anterior(cauda)  # 30 barras x 100 acoes = 3000 no total
+    janela.iniciar_sessao()
+
+    hoje_abertura = pd.Timestamp("2026-01-06 13:00:00", tz="UTC")
+    janela.registrar(hoje_abertura, 500.0)
+
+    # 0min decorridos hoje -- deficit inteiro (30min) vem da cauda.
+    assert janela.media_por_minuto(hoje_abertura) == pytest.approx((3000.0 + 500.0) / 30.0)
+
+
+def test_cauda_para_de_ser_usada_assim_que_hoje_acumula_a_janela_inteira():
+    janela = RollingVolumeWindow(janela_minutos=5.0)
+    ontem_fim = pd.Timestamp("2026-01-05 20:55:00", tz="UTC")
+    janela.definir_cauda_anterior([_bar(ontem_fim, 999_999.0)])  # pico enorme
+    janela.iniciar_sessao()
+
+    hoje_abertura = pd.Timestamp("2026-01-06 13:00:00", tz="UTC")
+    for i in range(6):
+        janela.registrar(hoje_abertura + pd.Timedelta(minutes=i), 100.0)
+    ts_final = hoje_abertura + pd.Timedelta(minutes=5)  # 5min decorridos == janela inteira
+
+    # decorrido (5min) NAO e' menor que a janela (5min) -- cauda ignorada,
+    # o pico de ontem nao pode mais aparecer na media.
+    assert janela.media_por_minuto(ts_final) == pytest.approx(100.0)
+
+
+def test_definir_cauda_pode_vir_antes_ou_depois_de_iniciar_sessao():
+    """As duas ordens de chamada tem que produzir o MESMO resultado -- ao
+    vivo a cauda e' buscada no INICIO de `_start_session`, antes do warm
+    start decidir cold vs quente; no backtest e' antes de `begin_session`."""
+    ontem_fim = pd.Timestamp("2026-01-05 20:55:00", tz="UTC")
+    cauda = [_bar(ontem_fim, 1000.0)]
+    hoje = pd.Timestamp("2026-01-06 13:00:00", tz="UTC")
+
+    antes = RollingVolumeWindow(janela_minutos=30.0)
+    antes.definir_cauda_anterior(cauda)
+    antes.iniciar_sessao()
+
+    depois = RollingVolumeWindow(janela_minutos=30.0)
+    depois.iniciar_sessao()
+    depois.definir_cauda_anterior(cauda)
+
+    assert antes.media_por_minuto(hoje) == pytest.approx(depois.media_por_minuto(hoje))
+
+
+def test_cauda_vazia_e_o_default_seguro():
+    """`definir_cauda_anterior([])` (primeiro pregao do historico, ou feed
+    sem dado do dia anterior) tem que se comportar EXATAMENTE como nunca
+    ter sido chamado -- nunca um erro, nunca um valor inventado."""
+    com_chamada_vazia = RollingVolumeWindow(janela_minutos=30.0)
+    com_chamada_vazia.definir_cauda_anterior([])
+    com_chamada_vazia.iniciar_sessao()
+
+    sem_chamada = RollingVolumeWindow(janela_minutos=30.0)
+    sem_chamada.iniciar_sessao()
+
+    t0 = pd.Timestamp("2026-01-05 13:00:00", tz="UTC")
+    com_chamada_vazia.registrar(t0, 900.0)
+    sem_chamada.registrar(t0, 900.0)
+
+    assert com_chamada_vazia.media_por_minuto(t0) == pytest.approx(sem_chamada.media_por_minuto(t0))

@@ -199,3 +199,22 @@ def server_wall_clock_to_utc(wall: datetime) -> datetime:
     """
     parede = wall.replace(tzinfo=MT5_SERVER_TIMEZONE)
     return parede.astimezone(timezone.utc)
+
+
+def utc_to_server_wall_clock(instant: datetime) -> datetime:
+    """Inverso de `server_wall_clock_to_utc`: o instante UTC escrito no
+    relogio de parede do servidor, NAIVE.
+
+    Existe porque as APIs de JANELA do terminal (`copy_rates_range`,
+    `copy_ticks_range`) interpretam os limites que recebem no relogio do
+    SERVIDOR, nao em UTC. Quem pede "os ticks desde 19:30 UTC" sem converter
+    pede, na verdade, 19:30 de Brasilia — tres horas de dado a mais ou a
+    menos, dependendo do sinal.
+
+    Devolve naive de proposito: um datetime com `tzinfo` faria o pacote
+    `MetaTrader5` reinterpreta-lo, e o valor tem de chegar la exatamente como
+    o numero de parede que e'.
+    """
+    if instant.tzinfo is None:
+        instant = instant.replace(tzinfo=timezone.utc)
+    return instant.astimezone(MT5_SERVER_TIMEZONE).replace(tzinfo=None)

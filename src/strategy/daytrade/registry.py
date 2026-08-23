@@ -25,8 +25,31 @@ from dataclasses import dataclass
 
 from strategy.daytrade.base import IntradayStrategy
 from strategy.daytrade.lab.gremah import Gremah
+from strategy.daytrade.lab.gremah_tick import GremahTick
 
+# A ORDEM DESTE DICIONÁRIO É O PÓDIO DE DAY TRADE — o primeiro é o TOP-1.
+#
+# Diferente do ranking de swing (recalculado a cada 6h a partir do diário de
+# backtests, ver `journal.reader.top_strategies_by_final_capital`), aqui a
+# ordem é DECLARADA. Não é preguiça: dois robôs de day trade não são
+# comparáveis por "capital final" de uma run — eles não rodam a mesma
+# granularidade de dado, então não existe uma run em que os dois apareçam
+# lado a lado. Um ranking automático teria de comparar números medidos em
+# bases diferentes, que é a comparação desonesta que este projeto evita.
+#
+# 2026-08-22, decisão do dono: `gremah_tick` é o TOP-1 e `gremah` o TOP-2. O
+# que sustenta a ordem, em uma linha cada:
+#   - tick a tick não tem a ambiguidade "stop e alvo na mesma barra" que o M1
+#     resolve por chute pessimista — um negócio tem um preço só;
+#   - ao vivo, stop e alvo são avaliados no negócio, não no fim do minuto:
+#     apaga a divergência de até 60s que `live/intraday_runtime.py` declara;
+#   - uma ordem-limite só é dada como tocada quando alguém NEGOCIOU no nível,
+#     em vez de bastar a faixa do minuto contê-lo.
+# O que a ordem NÃO afirma, e precisa ser dito junto: a `gremah_tick` tem
+# medição própria em UM ativo (PMAM3) contra os dez da `gremah` — é por isso
+# que `GremahTick.calibrated_setups()` oferece um só.
 _ROBOTS: dict[str, type[IntradayStrategy]] = {
+    GremahTick.name: GremahTick,
     Gremah.name: Gremah,
 }
 
@@ -41,6 +64,15 @@ class DaytradeRobotInfo:
     symbol: str
     version: str
     description: str
+    #: Posição no pódio declarado (1 = TOP-1). Sai da ordem de `_ROBOTS`, e
+    #: existe como CAMPO para o painel poder rotular a escolha — antes a ordem
+    #: só existia implícita na lista, e uma ordem que ninguém enxerga não é
+    #: uma recomendação, é um acaso de iteração.
+    rank: int = 1
+    #: `"m1"` ou `"tick"` — a granularidade em que este robô foi medido (ver
+    #: `IntradayStrategy.feed_kind`). No painel é o que distingue dois robôs
+    #: do mesmo desenho.
+    feed_kind: str = "m1"
 
 
 def _description(cls: type) -> str:
@@ -52,17 +84,20 @@ def _description(cls: type) -> str:
 
 
 def list_daytrade_robots() -> list[DaytradeRobotInfo]:
-    """Um `DaytradeRobotInfo` por robô registrado, na ordem do registry.
+    """Um `DaytradeRobotInfo` por robô registrado, na ordem do PÓDIO (TOP-1
+    primeiro) — ver o comentário sobre `_ROBOTS` no topo do módulo.
 
     Instancia com os defaults de cada classe só para ler `.symbol` — leitura
     pura, sem I/O (mesmo espírito de `strategy.registry.list_strategies`)."""
     infos = []
-    for key, cls in _ROBOTS.items():
+    for posicao, (key, cls) in enumerate(_ROBOTS.items(), start=1):
         robo = cls()
         infos.append(DaytradeRobotInfo(
             key=key, label=key, symbol=robo.symbol,
             version=getattr(robo, "version", "0.1"),
             description=_description(cls),
+            rank=posicao,
+            feed_kind=getattr(cls, "feed_kind", "m1"),
         ))
     return infos
 

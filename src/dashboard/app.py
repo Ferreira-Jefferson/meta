@@ -602,7 +602,13 @@ def _novo_robo_ctx(conn) -> dict:
                 "rodando": bool(slot_id and rodando.get(slot_id)),
             })
         ativos.sort(key=lambda a: (a["minimo"] is None, a["minimo"] or 0.0))
-        robos.append({"key": info.key, "label": info.key,
+        # `rank` e `feed_kind` vêm do registry (ver o comentário sobre
+        # `_ROBOTS` lá): a ordem da lista JÁ é o pódio, mas ordem sozinha não
+        # se lê como recomendação dentro de um `<select>` de dois itens — o
+        # rótulo é o que diz qual é o TOP-1. `feed_kind` distingue dois robôs
+        # do mesmo desenho pela única coisa que os separa.
+        robos.append({"key": info.key, "label": info.key, "rank": info.rank,
+                      "feed_kind": info.feed_kind,
                       "description": info.description, "ativos": ativos})
     return {"robos": robos, "livres": sum(
         1 for r in robos for a in r["ativos"] if not a["em_uso"])}

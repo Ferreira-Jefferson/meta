@@ -55,7 +55,8 @@ ROWS = [
 
 def _config() -> IntradayBacktestConfig:
     costs = IntradayCostModel(point_value_brl=1.0, tick_size=0.01, fee_round_trip_brl=0.0, slippage_ticks=0.0)
-    return IntradayBacktestConfig(costs=costs, session_end_time=time(23, 59), target_fills_as_maker=True)
+    return IntradayBacktestConfig(costs=costs, initial_capital=1_000.0,
+                                   session_end_time=time(23, 59), target_fills_as_maker=True)
 
 
 def _strat() -> Gremah:

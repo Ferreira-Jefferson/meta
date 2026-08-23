@@ -87,7 +87,12 @@ def _build_intraday_runtime(slot: Slot, capital: float, execution_mode: str, rob
     o painel abre N robôs de day trade, e usar o default do robô mostraria
     PMAM3 em todos eles.
 
-    Não conecta em nada: o `MT5BarFeed` nunca é lido por `status()` — o painel
+    O FEED (barra M1 ou negócio a negócio) sai de `live.intraday_feed.feed_for`,
+    que lê `IntradayStrategy.feed_kind` — o painel não escolhe granularidade,
+    ela é propriedade do robô. Aqui isso só muda o que `status()` reporta em
+    `feed.nome`/`feed.atraso_s`; quem lê dado de verdade é o processo do robô.
+
+    Não conecta em nada: o feed nunca é lido por `status()` — o painel
     só reporta o fuso em uso, não busca barra. Também não passa `clock_feed`:
     conferir o relógio do servidor exige ler tick, e uma página de status não
     pode disparar I/O na corretora. Custo do perfil vem de `PROFILES` com tick
@@ -95,8 +100,8 @@ def _build_intraday_runtime(slot: Slot, capital: float, execution_mode: str, rob
     calcula é o processo do robô, que lê o tick real do terminal (ver
     `scripts/run_live.py::build_intraday`)."""
     from backtest.intraday.profiles import PROFILES, config_for
-    from live.bar_feed import MT5BarFeed
     from live.broker_mt5 import MT5Broker  # import tardio: nao conecta ao construir
+    from live.intraday_feed import feed_for
     from live.intraday_runtime import IntradayLiveRuntime
     from strategy.daytrade.registry import get_daytrade_robot
 
@@ -111,8 +116,9 @@ def _build_intraday_runtime(slot: Slot, capital: float, execution_mode: str, rob
         slot=slot,
         strategy=robo,
         config=config_for(profile, trade_tick_value=0.01, trade_tick_size=0.01,
-                          target_fills_as_maker=robo.target_fills_as_maker),
-        bar_feed=MT5BarFeed(robo.symbol),
+                          target_fills_as_maker=robo.target_fills_as_maker,
+                          initial_capital=capital),
+        bar_feed=feed_for(robo),
         broker=MT5Broker(magic=slot.magic),
         execution_mode=execution_mode,
         initial_capital=capital,

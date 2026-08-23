@@ -166,3 +166,77 @@ def test_simbolo_desconhecido_com_apenas_um_override_ainda_falha():
     # nenhum stop_multiplier "default" implicito.
     with pytest.raises(ValueError, match="ATIVO_INEXISTENTE"):
         Gremah(symbol="ATIVO_INEXISTENTE", profit_pct=0.005)
+
+
+# ---------- teto de lotes por volume rolante (2026-08-22, pedido do dono) --
+
+def test_teto_de_lotes_reage_a_um_giro_recente_mais_fraco():
+    """Substituiu (2026-08-22) o teto congelado no PRIMEIRO minuto do
+    pregao: agora e' uma media MOVEL (`realocacao_janela_minutos`, aqui
+    explicito em 30min so' para a aritmetica do teste ficar redonda -- o
+    default de verdade do robo e' 1min, ver `REALOCACAO_JANELA_MINUTOS_
+    PADRAO`), reavaliada a CADA entrada -- um pico isolado nao pode
+    continuar inflando o teto depois de sair da janela."""
+    strat = _strat(realocacao_teto_pct_volume_minuto=0.10, realocacao_limiar_caixa=0.0001,
+                    realocacao_janela_minutos=30.0,
+                    rolling_reanchor_after_bars=1)  # limiar de caixa minusculo: nunca e' o gargalo
+    strat.on_session_start(None)
+    strat.on_capital_update(1_000_000.0)  # caixa gigante: so' o teto de volume deve limitar
+    ts0 = pd.Timestamp("2026-01-05 15:00", tz="UTC")  # ja em fase rolante
+
+    # 1 barra de 93.000 acoes -- media por minuto (janela nominal de 30min,
+    # sem cauda) = 93000/30 = 3100; teto 10% = 310 acoes = 3 lotes.
+    actions0 = strat.on_bar(ts0, Bar(ts=ts0, open=5.00, high=5.00, low=5.00, close=5.00, volume=93_000), None, 0.0)
+    assert len(actions0) == 1
+    assert actions0[0].quantity == 300
+
+    ts_meio = ts0 + pd.Timedelta(minutes=1)
+    actions_meio = strat.on_bar(
+        ts_meio, Bar(ts=ts_meio, open=5.00, high=5.00, low=5.00, close=5.00, volume=50), None, 0.0)
+    assert actions_meio == []  # ordem ainda parada, so' contando barras (rolling_reanchor_after_bars=1)
+
+    # 32 minutos depois do pico -- ele (e a barra intermediaria) ja SAIRAM
+    # da janela de 30min. A reancoragem (1 barra de espera) reconsulta o
+    # teto, que tem que refletir o giro recente fraco, nao os 3 lotes
+    # iniciais.
+    ts1 = ts0 + pd.Timedelta(minutes=32)
+    actions1 = strat.on_bar(ts1, Bar(ts=ts1, open=5.00, high=5.00, low=5.00, close=5.00, volume=300), None, 0.0)
+    assert len(actions1) == 1
+    assert actions1[0].quantity == 100  # 1 lote (minimo) -- media caiu para 300/30 = 10 acoes/min
+
+
+def test_seed_volume_window_usa_a_cauda_do_pregao_anterior_na_abertura():
+    """Pedido literal do dono: na abertura, sem 30min de hoje ainda vividos,
+    o robo usa as ultimas barras do pregao ANTERIOR em vez de assumir volume
+    zero -- `seed_volume_window` e' o canal por onde o CHAMADOR (`live/`/
+    `backtest/`) entrega essa cauda (a estrategia nunca busca historico
+    sozinha, AGENTS.md: `strategy/` so' importa `core`). Janela explicita em
+    30min so' para a aritmetica do teste ficar redonda -- o default de
+    verdade do robo e' 1min."""
+    strat = _strat(realocacao_teto_pct_volume_minuto=0.10, realocacao_limiar_caixa=0.0001,
+                    realocacao_janela_minutos=30.0)
+    ontem_fim = pd.Timestamp("2026-01-05 20:55", tz="UTC")
+    cauda = [
+        Bar(ts=ontem_fim - pd.Timedelta(minutes=m), open=5.0, high=5.0, low=5.0, close=5.0, volume=10_000.0)
+        for m in range(29, -1, -1)
+    ]  # 30 barras x 10.000 acoes = 300.000 no total
+    strat.seed_volume_window(cauda)
+    strat.on_session_start(None)
+    strat.on_capital_update(1_000_000.0)
+
+    ts0 = pd.Timestamp("2026-01-06 13:00", tz="UTC")
+    actions = strat.on_bar(ts0, Bar(ts=ts0, open=5.00, high=5.00, low=5.00, close=5.00, volume=0.0), None, 0.0)
+
+    # media = 300.000 da cauda / 30 = 10.000 acoes/min; teto 10% = 1.000
+    # acoes = 10 lotes -- nao o minimo de 1 lote que "sem cauda" produziria.
+    assert len(actions) == 1
+    assert actions[0].quantity == 1_000
+
+
+def test_janela_do_teto_de_volume_e_1min_por_decisao_do_dono_2026_08_22():
+    """Nao e' o valor medido como mais consistente (30min tinha o menor
+    MaxDD e o melhor Calmar, IS e OOS, dos tres tamanhos testados em
+    PMAM3) -- e' a decisao EXPLICITA do dono apos ver essa medicao,
+    marcada como provisoria ("por hora"). Este teste so existe para nao
+    deixar essa decisao se perder numa refatoracao silenciosa."""
+    assert Gremah(symbol="PMAM3").realocacao_janela_minutos == pytest.approx(1.0)

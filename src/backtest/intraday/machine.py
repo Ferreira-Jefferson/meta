@@ -74,12 +74,32 @@ class _Position:
     current_target: float | None
     bars_held: int = 0
     metadata: dict = field(default_factory=dict)
+    # Tamanho de cada fatia independente do FECHAMENTO por alvo, quando
+    # `limit_fill_capped_by_volume` esta ligado -- ver `EnterLimit.
+    # exit_split_unit`. `None` = alvo exige `quantity` inteira de uma vez
+    # (comportamento antigo). Herdado da ordem que abriu/alimentou a
+    # posicao, nao muda depois.
+    exit_split_unit: int | None = None
+    # Prazo (em barras) que cada fatia de saida REAL espera antes do motor
+    # cancelar e fechar o resto a mercado -- so' usado quando `exit_split_unit`
+    # e' declarado E a execucao e' REAL (ver `EnterLimit.exit_ttl_bars` e
+    # `IntradaySessionMachine._resolve_live_split_exit`). Herdado da mesma
+    # ordem que `exit_split_unit`, nao muda depois.
+    exit_ttl_bars: int | None = None
 
 
 @dataclass(frozen=True)
 class IntradayBacktestConfig:
     costs: IntradayCostModel
-    initial_capital: float = 20_000.0
+    # SEM default -- ate 2026-08-22 valia R$20.000, que ninguem que montava a
+    # config fora de `config_for()` sabia que estava ali: dimensiona lote via
+    # `on_capital_update` E carimba `capital_base` de cada trade, entao um
+    # caixa fantasma produz posicao/expectativa de retorno fantasma (medido
+    # em PMAM3: CAGR de dezenas de milhares de % com o caixa real do dono,
+    # R$100, contra numeros ilusoriamente "normais" com R$20k). Cada chamador
+    # agora tem de decidir explicitamente -- `config_for()` computa o default
+    # certo (`capital_minimo_brl` do preco atual) quando nao override.
+    initial_capital: float
     default_quantity: int = 1
     # Corte de flatten forcado — dispara na PRIMEIRA barra cujo horario seja
     # >= este valor, ou na ultima barra da sessao, o que vier primeiro.
@@ -112,6 +132,26 @@ class IntradayBacktestConfig:
     # entradas) e usa stop a mercado so pra proteger — default `False`
     # preserva o comportamento antigo (todo fechamento paga slippage).
     target_fills_as_maker: bool = False
+    # `True`: uma ordem PARADA (maker -- entrada `EnterLimit`, ou o alvo
+    # quando `target_fills_as_maker=True`) so' preenche numa barra/tick cujo
+    # `volume` seja >= a quantidade pedida (do FILHO, se a ordem veio
+    # dividida por `EnterLimit.split_quantities` -- ver a docstring la).
+    # Modela FOK (fill-or-kill): a ordem so' casa se existir contraparte
+    # REAL suficiente naquele evento, nunca "meio preenche". Existe porque
+    # o motor assumia preenchimento 100% garantido no toque, otimismo que
+    # nao sobrevive a duas observacoes reais (2026-08-22, pedido do dono):
+    # (1) uma ordem parada grande as vezes nao e' pega mesmo com o preco
+    # tendo tocado o nivel; (2) na B3 o RLP (provedor de liquidez que
+    # aumenta o volume disponivel num preco) so' interage com ordem A
+    # MERCADO, nunca com ordem parada -- uma ordem maker estruturalmente
+    # nao alcanca essa fatia de liquidez, e o motor antigo fingia que sim.
+    # Ordem A MERCADO (`Enter`, `Exit`, stop, flatten, e o alvo quando
+    # `target_fills_as_maker=False`) nunca tem este cap -- e' exatamente
+    # essa a assimetria: quem paga o spread encontra contraparte sempre,
+    # quem espera parado so' encontra o que realmente passou por ali.
+    # Default `False` preserva o comportamento antigo (preenchimento
+    # garantido no toque) -- so' liga depois de medir com o flag ativo.
+    limit_fill_capped_by_volume: bool = False
 
 
 @dataclass
@@ -215,16 +255,45 @@ def _position_view(pos: _Position) -> IntradayOpenPosition:
     )
 
 
-def _resolve_stop_target_hit(pos: _Position, bar: Bar, ambiguous_bar_resolution: str) -> Optional[str]:
-    """`"stop"`, `"target"` ou `None`. Quando os DOIS tocam na mesma barra,
-    `ambiguous_bar_resolution` decide — nao ha como saber qual veio primeiro
-    so com OHLC de 1 minuto."""
+def _stop_target_touch(pos: _Position, bar: Bar) -> tuple[bool, bool]:
+    """(`stop_hit`, `target_hit`) -- so' o toque de PRECO (`bar.high`/
+    `bar.low` contra os niveis), sem nenhum cheque de volume. Extraido de
+    `_resolve_stop_target_hit` para ser reusado por `on_closed_bar` no
+    caminho de alvo dividido (`_Position.exit_split_unit`), que precisa da
+    mesma deteccao de toque mas de uma resolucao de preenchimento
+    diferente (parcial, nao tudo-ou-nada)."""
     stop_hit = pos.current_stop is not None and (
         bar.low <= pos.current_stop if pos.side == "long" else bar.high >= pos.current_stop
     )
     target_hit = pos.current_target is not None and (
         bar.high >= pos.current_target if pos.side == "long" else bar.low <= pos.current_target
     )
+    return stop_hit, target_hit
+
+
+def _resolve_stop_target_hit(
+    pos: _Position, bar: Bar, ambiguous_bar_resolution: str,
+    target_needs_volume: bool = False,
+) -> Optional[str]:
+    """`"stop"`, `"target"` ou `None`. Quando os DOIS tocam na mesma barra,
+    `ambiguous_bar_resolution` decide — nao ha como saber qual veio primeiro
+    so com OHLC de 1 minuto.
+
+    `target_needs_volume=True` (so quando `target_fills_as_maker` E
+    `limit_fill_capped_by_volume` estao ligados): o alvo so' "toca" de
+    verdade se `bar.volume >= pos.quantity` -- a MESMA barra que nao tiver
+    volume suficiente simplesmente nao resolve nada, e a posicao continua
+    aberta para a PROXIMA barra reavaliar do zero (preco pode continuar no
+    alvo com mais volume, ou ter ido embora). O stop NUNCA tem este cap:
+    e' saida por protecao/urgencia, sempre a mercado.
+
+    So' vale para `pos.exit_split_unit is None` -- com fatia declarada,
+    `on_closed_bar` usa `_stop_target_touch` + `_resolve_target_partial_fill`
+    direto, para poder fechar SO' O QUANTO o volume cobrir em vez de tudo
+    ou nada."""
+    stop_hit, target_hit = _stop_target_touch(pos, bar)
+    if target_hit and target_needs_volume and bar.volume < pos.quantity:
+        target_hit = False
     if stop_hit and target_hit:
         return "stop" if ambiguous_bar_resolution == "stop_first" else "target"
     if stop_hit:
@@ -232,6 +301,27 @@ def _resolve_stop_target_hit(pos: _Position, bar: Bar, ambiguous_bar_resolution:
     if target_hit:
         return "target"
     return None
+
+
+def _resolve_target_partial_fill(pos: _Position, bar: Bar) -> int:
+    """Quanto o alvo consegue fechar nesta barra, dado o tamanho de fatia
+    `pos.exit_split_unit` (`None` = a posicao inteira e' UMA fatia so' --
+    unifica os dois casos) -- mesma logica FOK por pedaco de
+    `_resolve_limit_fills`, do lado da saida em vez da entrada, tudo-ou-nada
+    por barra (`bar.volume` e' o orcamento). Processa fatias em ordem ate
+    estourar o orcamento ou fechar a posicao inteira."""
+    orcamento = bar.volume
+    tamanho_fatia = pos.exit_split_unit or pos.quantity
+    restante = pos.quantity
+    fechado = 0
+    while restante > 0:
+        fatia = min(tamanho_fatia, restante)
+        if orcamento < fatia:
+            break
+        fechado += fatia
+        orcamento -= fatia
+        restante -= fatia
+    return fechado
 
 
 def _exit_fill_price(pos: _Position, bar: Bar, kind: str) -> float:
@@ -296,6 +386,26 @@ class IntradaySessionMachine:
         self.pending: Enter | Exit | None = None
         self.resting_limit: EnterLimit | None = None
         self.resting_limit_bars_waited = 0
+        # Quantidades dos FILHOS de `resting_limit` ainda sem preencher (ver
+        # `EnterLimit.split_quantities`) -- `[order.quantity]` quando a
+        # ordem nao veio dividida, um lote so'. Caminho SIMULADO
+        # (`execution is None`) preenche filho a filho, um por um, contra
+        # `bar.volume`; caminho REAL (`execution` setado, ver
+        # `live/intraday_execution.py`) manda um filho por elemento como
+        # ordem de verdade na corretora e trata este total como um POOL
+        # agregado, decrescido pelo que a corretora reportar como
+        # crescimento da posicao a cada barra (ver `_resolve_limit_fills`).
+        self._resting_children_qty: list[int] = []
+        # Fatia de SAIDA (`_Position.exit_split_unit`) vigiada agora como
+        # ordem-limite REAL na corretora (0 = nenhuma armada) -- ver
+        # `_resolve_live_split_exit`. So' existe em execucao REAL; backtest/
+        # sombra continuam usando `_resolve_target_partial_fill` (guiado por
+        # `bar.volume`, sem prazo). NAO persistido em `state()` de proposito
+        # (mesmo espirito de `resting_limit` nao ser restaurado): um restart
+        # no meio de uma fatia armada e' uma lacuna conhecida, sem cobertura
+        # ainda -- nenhum robo em producao usa `exit_split_unit` hoje.
+        self._exit_resting_qty: int = 0
+        self.resting_exit_bars_waited = 0
         self.flattened = False
         self.session_pnl = 0.0
         self.realized_pnl = 0.0
@@ -317,13 +427,26 @@ class IntradaySessionMachine:
         do replay: passa a ser vigiada desde a PRIMEIRA barra, em vez de
         precisar de uma barra extra so para o robo redecidir o mesmo.
         `None` NAO limpa uma ordem que ja estivesse vigiada (reconectar no
-        meio do pregao nao deve cancelar o que ja estava de pe)."""
+        meio do pregao nao deve cancelar o que ja estava de pe).
+
+        `seed_pending` e' IGNORADO se `self.position` ja existir (um
+        `restore()` anterior repos uma posicao REAL, ver
+        `live/intraday_runtime.py::_restore`, chamado ANTES desta funcao no
+        despacho de reconexao): o replay do warm start nao sabe de posicao
+        nenhuma (`warm_start_calibration` sempre chama o robo com
+        `position=None`) e recalcula a ordem pendente do zero -- plantar
+        essa ordem por cima de uma posicao ja aberta a deixaria orfa e
+        desconectada assim que a posicao fechasse (o preco/nivel dela pode
+        nem existir mais)."""
         self._reset_session(session_date, clear_resting=False)
+        if self.position is not None:
+            return
         if isinstance(seed_pending, Enter):
             self.pending = seed_pending
         elif isinstance(seed_pending, EnterLimit):
             self.resting_limit = seed_pending
             self.resting_limit_bars_waited = 0
+            self._resting_children_qty = seed_pending.children(self.config.default_quantity)
 
     def _reset_session(self, session_date, clear_resting: bool = True) -> None:
         self.session_date = session_date
@@ -332,6 +455,7 @@ class IntradaySessionMachine:
         if clear_resting:
             self.resting_limit = None
             self.resting_limit_bars_waited = 0
+            self._resting_children_qty = []
 
     # ---------- persistencia (so a operacao ao vivo usa) ------------------
 
@@ -361,6 +485,8 @@ class IntradaySessionMachine:
                 "current_target": pos.current_target,
                 "bars_held": pos.bars_held,
                 "metadata": dict(pos.metadata),
+                "exit_split_unit": pos.exit_split_unit,
+                "exit_ttl_bars": pos.exit_ttl_bars,
             },
         }
 
@@ -391,6 +517,8 @@ class IntradaySessionMachine:
             current_target=bloco.get("current_target"),
             bars_held=int(bloco.get("bars_held") or 0),
             metadata=dict(bloco.get("metadata") or {}),
+            exit_split_unit=bloco.get("exit_split_unit"),
+            exit_ttl_bars=bloco.get("exit_ttl_bars"),
         )
 
     # ---------- marcacao de patrimonio -----------------------------------
@@ -428,22 +556,82 @@ class IntradaySessionMachine:
 
         # (1) stop/target automatico tem prioridade sobre qualquer acao filada.
         if self.position is not None:
-            hit = _resolve_stop_target_hit(self.position, bar, cfg.ambiguous_bar_resolution)
-            if hit is not None:
-                ref_price = _exit_fill_price(self.position, bar, hit)
-                reason = IntradayExitReason.STOP if hit == "stop" else IntradayExitReason.TARGET
-                events.append(self._close_position(ts, ref_price, reason))
-                self.pending = None  # decisao pendente do robo para este ticker fica obsoleta
+            pos = self.position
+            target_needs_volume = cfg.target_fills_as_maker and cfg.limit_fill_capped_by_volume
+            if self.execution is not None and pos.exit_split_unit is not None:
+                # Execucao REAL com saida dividida: quem decide o fill e' a
+                # corretora, via ordem-limite de verdade por fatia, com prazo
+                # -- ver `_resolve_live_split_exit`. O caminho simulado logo
+                # abaixo (guiado por `bar.volume`) e' so' para backtest/sombra.
+                events.extend(self._resolve_live_split_exit(ts, bar))
+            elif target_needs_volume and pos.exit_split_unit is not None:
+                # Alvo dividido em fatias (`EnterLimit.exit_split_unit`): o
+                # stop continua tudo-ou-nada (protecao/urgencia, sempre a
+                # mercado), mas o alvo fecha SO' O QUANTO o volume da barra
+                # cobrir -- pode levar varias barras para zerar a posicao.
+                stop_hit, target_hit = _stop_target_touch(pos, bar)
+                if stop_hit and target_hit:
+                    hit = "stop" if cfg.ambiguous_bar_resolution == "stop_first" else "target"
+                elif stop_hit:
+                    hit = "stop"
+                elif target_hit:
+                    hit = "target"
+                else:
+                    hit = None
+                if hit == "stop":
+                    ref_price = _exit_fill_price(pos, bar, "stop")
+                    events.append(self._close_position(ts, ref_price, IntradayExitReason.STOP))
+                    self.pending = None
+                    orfa = self._cancelar_resting_orfa(ts)
+                    if orfa is not None:
+                        events.append(orfa)
+                elif hit == "target":
+                    fechado = _resolve_target_partial_fill(pos, bar)
+                    if fechado > 0:
+                        ref_price = _exit_fill_price(pos, bar, "target")
+                        events.append(self._close_position(
+                            ts, ref_price, IntradayExitReason.TARGET, quantity_override=fechado,
+                        ))
+                        if self.position is None:  # ultima fatia fechou agora
+                            self.pending = None
+                            orfa = self._cancelar_resting_orfa(ts)
+                            if orfa is not None:
+                                events.append(orfa)
+                        # senao: fechou uma fatia, posicao (menor) continua
+                        # aberta -- proxima barra reavalia o resto do zero.
+            else:
+                hit = _resolve_stop_target_hit(pos, bar, cfg.ambiguous_bar_resolution,
+                                               target_needs_volume=target_needs_volume)
+                if hit is not None:
+                    ref_price = _exit_fill_price(pos, bar, hit)
+                    reason = IntradayExitReason.STOP if hit == "stop" else IntradayExitReason.TARGET
+                    events.append(self._close_position(ts, ref_price, reason))
+                    self.pending = None  # decisao pendente do robo para este ticker fica obsoleta
+                    # a posicao fechou -- qualquer FILHO ainda sem preencher do
+                    # MESMO grupo dividido (`EnterLimit.split_quantities`) ficou
+                    # orfao, nao uma entrada nova para tentar de novo.
+                    orfa = self._cancelar_resting_orfa(ts)
+                    if orfa is not None:
+                        events.append(orfa)
 
         # (2) flatten forcado — primeira barra da sessao cujo horario >= corte,
         # ou a ultima barra da sessao. Nenhuma entrada nova depois disso.
         if not self.flattened and (ts.time() >= self.session_end_time_for(ts) or is_last_bar):
             if self.position is not None:
+                if self._exit_resting_qty > 0 and self.execution is not None:
+                    # cancela a fatia de saida REAL em pe' antes de mandar o
+                    # flatten -- senao as duas ordens (a limite parada e o
+                    # flatten a mercado) ficariam vivas ao mesmo tempo na
+                    # corretora, pela mesma posicao.
+                    self.execution.cancel_exit_limit(ts, reason="flatten")
+                    self._exit_resting_qty = 0
+                    self.resting_exit_bars_waited = 0
                 events.append(self._close_position(ts, bar.close, IntradayExitReason.FORCED_FLATTEN))
             self.pending = None
             if self.resting_limit is not None:
                 events.append(LimitCancelled(order=self.resting_limit, ts=ts, reason="flatten"))
                 self.resting_limit = None
+                self._resting_children_qty = []
             self.flattened = True
 
         if not self.flattened:
@@ -451,6 +639,9 @@ class IntradaySessionMachine:
             if isinstance(self.pending, Exit) and self.position is not None:
                 events.append(self._close_position(ts, bar.open, IntradayExitReason.SIGNAL))
                 self.pending = None
+                orfa = self._cancelar_resting_orfa(ts)
+                if orfa is not None:
+                    events.append(orfa)
             elif isinstance(self.pending, Enter) and self.position is None:
                 pending = self.pending
                 if self.execution is not None:
@@ -489,6 +680,7 @@ class IntradaySessionMachine:
                 if self.resting_limit is not None:
                     events.append(LimitCancelled(order=self.resting_limit, ts=ts, reason="superseded"))
                     self.resting_limit = None
+                    self._resting_children_qty = []
             else:
                 self.pending = None  # Enter com posicao ja aberta (ou Exit sem posicao): descartado
 
@@ -498,32 +690,58 @@ class IntradaySessionMachine:
             # `Enter` (que sempre paga `slippage_ticks` na abertura).
             # Persiste por varias barras (nao so a proxima), ate
             # tocar, expirar por `ttl_bars`, ou a sessao acabar.
-            if self.resting_limit is not None and self.position is None:
+            #
+            # `self._resting_children_qty` (nao `self.position is None`) e'
+            # a guarda: uma ordem DIVIDIDA (`EnterLimit.split_quantities`)
+            # continua tentando preencher os FILHOS restantes mesmo depois
+            # de algum ja ter aberto a posicao -- cada fill novo faz
+            # TOP-UP (soma quantidade, recalcula preco medio ponderado) em
+            # vez de abrir uma posicao paralela.
+            if self.resting_limit is not None and self._resting_children_qty:
                 order = self.resting_limit
-                fill = self._resolve_limit_fill(order, bar)
-                if fill is not None:
-                    fill_price, fill_qty = fill
-                    self.position = _Position(
-                        side=order.side,
-                        entry_ts=ts,
-                        entry_price=fill_price,
-                        quantity=fill_qty,
-                        current_stop=order.initial_stop,
-                        current_target=order.initial_target,
-                        metadata=dict(order.metadata or {}),
-                    )
-                    self.resting_limit = None
-                    self.resting_limit_bars_waited = 0
-                    events.append(PositionOpened(
-                        ts=ts, side=order.side, price=fill_price,
-                        quantity=fill_qty, stop=order.initial_stop,
-                        target=order.initial_target, order_kind="limit",
-                        reason=order.reason, bar=bar,
-                    ))
+                fills, restantes = self._resolve_limit_fills(
+                    order, self._resting_children_qty, bar,
+                )
+                if fills:
+                    for fill_price, fill_qty in fills:
+                        if self.position is None:
+                            self.position = _Position(
+                                side=order.side,
+                                entry_ts=ts,
+                                entry_price=fill_price,
+                                quantity=fill_qty,
+                                current_stop=order.initial_stop,
+                                current_target=order.initial_target,
+                                metadata=dict(order.metadata or {}),
+                                exit_split_unit=order.exit_split_unit,
+                                exit_ttl_bars=order.exit_ttl_bars,
+                            )
+                        else:
+                            pos = self.position
+                            nova_qty = pos.quantity + fill_qty
+                            pos.entry_price = (
+                                (pos.entry_price * pos.quantity + fill_price * fill_qty) / nova_qty
+                            )
+                            pos.quantity = nova_qty
+                        events.append(PositionOpened(
+                            ts=ts, side=order.side, price=fill_price,
+                            quantity=fill_qty, stop=order.initial_stop,
+                            target=order.initial_target, order_kind="limit",
+                            reason=order.reason, bar=bar,
+                        ))
+                    self._resting_children_qty = restantes
+                    if restantes:
+                        # algum filho ainda espera -- ordem continua "fresca"
+                        # (acabou de casar algo), nao acumula espera de TTL.
+                        self.resting_limit_bars_waited = 0
+                    else:
+                        self.resting_limit = None
+                        self.resting_limit_bars_waited = 0
                 else:
                     self.resting_limit_bars_waited += 1
                     if order.ttl_bars is not None and self.resting_limit_bars_waited >= order.ttl_bars:
                         self.resting_limit = None
+                        self._resting_children_qty = []
                         self.resting_limit_bars_waited = 0
                         events.append(LimitCancelled(order=order, ts=ts, reason="ttl"))
 
@@ -548,12 +766,14 @@ class IntradaySessionMachine:
                         # substitui qualquer ordem-limite pendente
                         events.append(LimitCancelled(order=self.resting_limit, ts=ts, reason="superseded"))
                     self.resting_limit = None
+                    self._resting_children_qty = []
                     self.resting_limit_bars_waited = 0
                 elif isinstance(action, EnterLimit) and self.position is None:
                     # substitui (nao acumula) qualquer ordem-limite ja pendente
                     events.append(LimitPlaced(order=action, ts=ts, replaced=self.resting_limit))
                     self.resting_limit = action
                     self.resting_limit_bars_waited = 0
+                    self._resting_children_qty = action.children(cfg.default_quantity)
 
         if self.position is not None:
             self.position.bars_held += 1
@@ -573,46 +793,239 @@ class IntradaySessionMachine:
         `on_closed_bar`."""
         eventos: list[MachineEvent] = []
         if self.position is not None:
+            if self._exit_resting_qty > 0 and self.execution is not None:
+                self.execution.cancel_exit_limit(ts, reason="flatten")
+                self._exit_resting_qty = 0
+                self.resting_exit_bars_waited = 0
             eventos.append(self._close_position(ts, price, IntradayExitReason.FORCED_FLATTEN))
         if self.resting_limit is not None:
             eventos.append(LimitCancelled(order=self.resting_limit, ts=ts, reason="flatten"))
             self.resting_limit = None
+        self._resting_children_qty = []
         self.resting_limit_bars_waited = 0
         self.pending = None
         self.flattened = True
         return eventos
 
+    def _cancelar_resting_orfa(self, ts: pd.Timestamp) -> Optional[LimitCancelled]:
+        """Cancela o que sobrar de `resting_limit`/`_resting_children_qty`
+        quando a posicao que os originou acabou de fechar (stop, alvo ou
+        saida por sinal) -- so' pode existir aqui se a ordem veio DIVIDIDA
+        (`EnterLimit.split_quantities`) e nem todos os filhos preencheram
+        ainda: continuar tentando preencher os que sobraram abriria uma
+        posicao NOVA e desconectada da que acabou de fechar, contra a
+        intencao original do robo. Sem cap por volume isto nunca dispara --
+        uma ordem nao dividida sempre preenche 100% de uma vez, entao
+        `resting_limit` ja e' `None` no instante em que a posicao existe."""
+        if self.resting_limit is None:
+            return None
+        order = self.resting_limit
+        self.resting_limit = None
+        self._resting_children_qty = []
+        self.resting_limit_bars_waited = 0
+        return LimitCancelled(order=order, ts=ts, reason="position_closed")
+
+    # ---------- saida dividida em execucao REAL (Fase 2, 2026-08-22) --------
+
+    def _resolve_live_split_exit(self, ts: pd.Timestamp, bar: Bar) -> list[MachineEvent]:
+        """Saida por ALVO dividida em fatias, com EXECUCAO REAL -- reusa o
+        mesmo padrao `ttl_bars`/`resting_limit_bars_waited` das ordens de
+        entrada, do lado da saida (ver `EnterLimit.exit_ttl_bars`). So'
+        chamada quando `self.execution is not None` e `self.position.
+        exit_split_unit is not None` (ver `on_closed_bar`, item 1).
+
+        Stop continua tudo-ou-nada a MERCADO, sempre -- protecao/urgencia
+        nao espera fatia nenhuma. O alvo arma UMA fatia por vez
+        (`min(exit_split_unit, quantidade restante)`) como ordem-limite REAL
+        na corretora; enquanto ela espera, cada barra pergunta a corretora
+        (nao ao OHLC) se a posicao encolheu -- fill parcial ou total dessa
+        fatia. Estourado `exit_ttl_bars` sem fill nenhum, cancela a fatia e
+        fecha o QUE SOBRAR a MERCADO -- decisao do dono ('prazo limitado,
+        depois mercado'): a posicao sempre fecha dentro de um tempo
+        previsivel, nunca fica exposta indefinidamente esperando a fatia
+        final."""
+        pos = self.position
+        assert pos is not None and pos.exit_split_unit is not None and self.execution is not None
+        if pos.exit_ttl_bars is None:
+            raise NotImplementedError(
+                f"{self.strategy.symbol}: saida dividida (`exit_split_unit`) em "
+                "execucao REAL exige `exit_ttl_bars` -- sem prazo a posicao ficaria "
+                "exposta indefinidamente esperando a ultima fatia, contra a decisao "
+                "do dono ('prazo limitado, depois mercado'). Declare "
+                "`EnterLimit.exit_ttl_bars` na ordem que abriu a posicao."
+            )
+        events: list[MachineEvent] = []
+        stop_hit, target_hit = _stop_target_touch(pos, bar)
+
+        if stop_hit:
+            if self._exit_resting_qty > 0:
+                self.execution.cancel_exit_limit(ts, reason="stop")
+                self._exit_resting_qty = 0
+                self.resting_exit_bars_waited = 0
+            ref_price = _exit_fill_price(pos, bar, "stop")
+            events.append(self._close_position(ts, ref_price, IntradayExitReason.STOP))
+            self.pending = None
+            orfa = self._cancelar_resting_orfa(ts)
+            if orfa is not None:
+                events.append(orfa)
+            return events
+
+        if self._exit_resting_qty > 0:
+            fill = self.execution.exit_fill(pos.side, bar)
+            if fill is not None:
+                fechado = min(int(round(fill["quantity"])), self._exit_resting_qty)
+                events.append(self._close_position(
+                    ts, fill["price"], IntradayExitReason.TARGET,
+                    quantity_override=fechado, already_filled_at=fill["price"],
+                ))
+                self._exit_resting_qty -= fechado
+                self.resting_exit_bars_waited = 0
+                if self.position is None:  # ultima fatia (desta ou de outra rodada) fechou agora
+                    self._exit_resting_qty = 0
+                    self.pending = None
+                    orfa = self._cancelar_resting_orfa(ts)
+                    if orfa is not None:
+                        events.append(orfa)
+                # senao: fechou uma fatia, posicao (menor) continua aberta --
+                # se `_exit_resting_qty` ainda sobrar (fill parcial da propria
+                # fatia), a MESMA ordem-limite continua vigiada; se zerou, a
+                # proxima barra rearma outra fatia do zero (bloco `target_hit`
+                # abaixo, ja que `_exit_resting_qty == 0` de novo).
+            else:
+                self.resting_exit_bars_waited += 1
+                if self.resting_exit_bars_waited >= pos.exit_ttl_bars:
+                    self.execution.cancel_exit_limit(ts, reason="ttl")
+                    self._exit_resting_qty = 0
+                    self.resting_exit_bars_waited = 0
+                    # fecha o RESTANTE a mercado -- ainda e' um exit de ALVO
+                    # (a decisao continua sendo "sair no alvo"), so' que a
+                    # ultima fatia nao esperou a vez dela na fila e saiu pelo
+                    # caminho de urgencia.
+                    events.append(self._close_position(ts, bar.close, IntradayExitReason.TARGET))
+                    self.pending = None
+                    orfa = self._cancelar_resting_orfa(ts)
+                    if orfa is not None:
+                        events.append(orfa)
+            return events
+
+        if target_hit:
+            fatia = min(pos.exit_split_unit, pos.quantity)
+            self.execution.place_exit_limit(
+                position_side=pos.side, quantity=fatia, limit_price=pos.current_target,
+                current_position_qty=pos.quantity, ts=ts,
+            )
+            self._exit_resting_qty = fatia
+            self.resting_exit_bars_waited = 0
+
+        return events
+
     # ---------- preenchimento: simulado (backtest) ou real (corretora) ------
 
-    def _resolve_limit_fill(self, order: EnterLimit, bar: Bar) -> Optional[tuple[float, int]]:
-        """`(preco, quantidade)` se a ordem-limite vigiada preencheu nesta
-        barra, `None` se continua parada. Ver `self.execution`.
+    def _resolve_limit_fills(
+        self, order: EnterLimit, children_qty: list[int], bar: Bar,
+    ) -> tuple[list[tuple[float, int]], list[int]]:
+        """`(preenchimentos, filhos_restantes)` para a ordem-limite vigiada
+        nesta barra. `preenchimentos`: uma entrada `(preco, quantidade)` por
+        FILHO que preencheu -- pode ser mais de um na MESMA barra, se sobrar
+        volume para varios. Ver `self.execution`.
 
-        Backtest/sombra: a barra decide (tocou o nivel -> preencheu no nivel).
-        Real: a CORRETORA decide, e o preco/quantidade sao os dela. Uma falha
-        em CONSULTAR a corretora nao vira `None` (isso seria ler "nao consegui
-        perguntar" como "nao preencheu", e o robo re-armaria uma ordem sobre
-        uma posicao que talvez ja exista) -- a excecao sobe."""
-        if self.execution is None:
-            if not _limit_touched(order, bar):
-                return None
-            return order.limit_price, (order.quantity or self.config.default_quantity)
-        fill = self.execution.limit_fill(order, bar)
-        if fill is None:
-            return None
-        return fill["price"], fill["quantity"]
+        Backtest/sombra SEM cap (`limit_fill_capped_by_volume=False`):
+        comportamento ANTIGO, inalterado -- toque preenche tudo de uma vez
+        (a lista de filhos vira uma soma so', `split_quantities` fica sem
+        efeito pratico: sem o cap nao ha' motivo nenhum para dividir).
+
+        Backtest/sombra COM cap (`limit_fill_capped_by_volume=True`): cada
+        filho so' preenche se sobrar volume REAL suficiente NESTA barra/tick
+        para ele SOZINHO (FOK -- casa tudo ou nada, nunca parcial dentro de
+        um filho). Processados na ORDEM declarada, o volume da barra e' um
+        orcamento UNICO compartilhado entre eles: o primeiro filho que cabe
+        consome esse orcamento antes do proximo ser testado -- e' por isso
+        que pedacos MENORES tem mais chance de caber, mesmo quando o total
+        pedido nao caberia inteiro.
+
+        Real (2026-08-22, Fase 2 -- divisao de ordem de verdade na corretora):
+        `self.execution.limit_fill` devolve o CRESCIMENTO da posicao desde a
+        ultima checagem (delta, nao o total) -- porque `place_limit` da
+        execucao ja manda um filho por elemento de `children_qty` como ordem
+        REAL, e o motor nao precisa saber QUAL ticket preencheu, so' quanto
+        cresceu (a corretora consolida tudo numa posicao so', ver
+        `live/intraday_execution.py`). `children_qty` aqui e' tratado como
+        UM POOL agregado (nao mais um filho por ordem real, ja que a
+        corretora decide sozinha quais tickets casam e quando) -- o delta e'
+        subtraido do total pendente e o restante volta como um unico item de
+        lista, so' para o chamador continuar sabendo "ainda falta algo" (o
+        `ttl_bars`/`resting_limit_bars_waited` do lado de fora nao muda).
+        Uma falha em CONSULTAR a corretora nao vira "nao preencheu" (isso
+        faria o robo re-armar sobre uma posicao que talvez ja exista) -- a
+        excecao sobe de dentro de `limit_fill`."""
+        if self.execution is not None:
+            fill = self.execution.limit_fill(order, bar)
+            if fill is None:
+                return [], children_qty
+            pendente_total = sum(children_qty)
+            preenchido = min(int(round(fill["quantity"])), pendente_total)
+            restante = pendente_total - preenchido
+            return [(fill["price"], preenchido)], ([restante] if restante > 0 else [])
+
+        if not _limit_touched(order, bar):
+            return [], children_qty
+
+        if not self.config.limit_fill_capped_by_volume:
+            total = sum(children_qty)
+            return ([(order.limit_price, total)] if total else []), []
+
+        fills: list[tuple[float, int]] = []
+        remaining: list[int] = []
+        orcamento = bar.volume
+        for qty in children_qty:
+            if orcamento >= qty:
+                fills.append((order.limit_price, qty))
+                orcamento -= qty
+            else:
+                remaining.append(qty)
+        return fills, remaining
 
     # ---------- fechamento -------------------------------------------------
 
     def _close_position(self, exit_ts: pd.Timestamp, exit_ref_price: float,
-                        reason: IntradayExitReason) -> PositionClosed:
+                        reason: IntradayExitReason,
+                        quantity_override: int | None = None,
+                        already_filled_at: float | None = None) -> PositionClosed:
+        """`quantity_override`: fecha so' uma FATIA da posicao (o resto
+        continua aberto) -- existe para o alvo dividido (`EnterLimit.
+        exit_split_unit`), onde o volume da barra (backtest/sombra) ou a
+        fatia REAL (execucao ao vivo, ver `_resolve_live_split_exit`) pode
+        cobrir menos do que a posicao inteira. `None` (todo o resto do
+        motor) fecha tudo, comportamento antigo.
+
+        `already_filled_at`: a fatia JA' preencheu na corretora (uma
+        ordem-limite de saida que `_resolve_live_split_exit` estava
+        vigiando) -- so' REGISTRA o trade nesse preco, sem mandar ordem
+        nova nenhuma. `None` (todo o resto do motor, inclusive o alvo
+        NAO dividido em execucao real) manda uma ordem de fechamento A
+        MERCADO agora e usa o preco que a corretora de fato executou.
+
+        Fechamento parcial (`quantity_override != position.quantity`) so'
+        e' permitido em execucao REAL quando a posicao tem
+        `exit_split_unit` declarado (o unico caminho com uma fatia REAL de
+        verdade, ver `_resolve_live_split_exit`) -- qualquer outro
+        fechamento parcial em execucao real seria mandar um tamanho que a
+        corretora nunca confirmou, falha alto em vez disso."""
         assert self.position is not None
         position = self.position
         cfg = self.config
+        qty = position.quantity if quantity_override is None else quantity_override
+        if self.execution is not None and qty != position.quantity and position.exit_split_unit is None:
+            raise NotImplementedError(
+                "fechamento parcial de posicao (EnterLimit.exit_split_unit) nao tem "
+                "caminho de execucao real -- so' backtest/sombra, ver a docstring do campo."
+            )
         is_maker_target = reason == IntradayExitReason.TARGET and cfg.target_fills_as_maker
         exec_px = (exit_ref_price if is_maker_target
                    else apply_intraday_slippage(exit_ref_price, _exit_side(position), cfg.costs))
-        if self.execution is not None:
+        if already_filled_at is not None:
+            exec_px = float(already_filled_at)
+        elif self.execution is not None:
             # Execucao real: manda a ordem de fechamento AGORA e usa o preco
             # que a corretora executou, nao o estimado acima. Vem ANTES de
             # qualquer mutacao de estado de proposito -- se o envio falhar, a
@@ -621,14 +1034,19 @@ class IntradaySessionMachine:
             # aqui e falhar depois deixaria as duas visoes divergentes, que e'
             # o pior estado possivel para um robo que decide sozinho.
             #
-            # Sai a MERCADO inclusive no alvo: `target_fills_as_maker` e' uma
-            # premissa de MODELAGEM do backtest, e uma saida por alvo que
-            # dependesse de nova ordem-limite poderia simplesmente nao
-            # preencher, deixando a posicao aberta contra o proprio stop. O
-            # custo dessa diferenca e' real e conhecido -- e' parte do que a
-            # corrida em sombra existe para medir.
+            # Sai a MERCADO inclusive no alvo (quando NAO ha' saida dividida
+            # em andamento): `target_fills_as_maker` e' uma premissa de
+            # MODELAGEM do backtest, e uma saida por alvo que dependesse de
+            # nova ordem-limite poderia simplesmente nao preencher, deixando
+            # a posicao aberta contra o proprio stop. O custo dessa diferenca
+            # e' real e conhecido -- e' parte do que a corrida em sombra
+            # existe para medir. `exit_market` fecha o RESTANTE da posicao
+            # (`position.quantity`, ja' descontado de fatias anteriores que
+            # tenham fechado por `already_filled_at`) -- coerente com `qty`
+            # so' divergir de `position.quantity` quando `already_filled_at`
+            # esta' setado (guarda acima).
             exec_px = float(self.execution.exit_market(position, exit_ts, reason)["price"])
-        fees = fees_round_trip_brl(position.quantity, position.entry_price, exec_px, cfg.costs)
+        fees = fees_round_trip_brl(qty, position.entry_price, exec_px, cfg.costs)
         trade = IntradayTrade(
             symbol=self.strategy.symbol,
             strategy_name=self.strategy.name,
@@ -638,15 +1056,18 @@ class IntradaySessionMachine:
             entry_price=position.entry_price,
             exit_ts=exit_ts,
             exit_price=exec_px,
-            quantity=position.quantity,
+            quantity=qty,
             exit_reason=reason,
             point_value_brl=cfg.costs.point_value_brl,
             capital_base=cfg.initial_capital,
             fees_total=fees,
-            slippage_total=abs(exec_px - exit_ref_price) * position.quantity * cfg.costs.point_value_brl,
+            slippage_total=abs(exec_px - exit_ref_price) * qty * cfg.costs.point_value_brl,
         )
         pnl = trade.pnl_brl
         self.session_pnl += pnl
         self.realized_pnl += pnl
-        self.position = None
+        if qty >= position.quantity:
+            self.position = None
+        else:
+            position.quantity -= qty
         return PositionClosed(trade=trade, pnl_brl=pnl)

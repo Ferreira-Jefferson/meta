@@ -62,16 +62,45 @@ class BrokerExecutionError(RuntimeError):
 class MT5IntradayExecution:
     """Ponte de execucao real para `IntradaySessionMachine.execution`.
 
-    Guarda a ordem pendente CORRENTE (`self.pending_order`) para poder
-    cancela-la; todo o resto do estado continua morando na maquina."""
+    Guarda a(s) ordem(ns) pendente(s) CORRENTE(s) para poder cancela-las;
+    todo o resto do estado continua morando na maquina.
+
+    Fase 2 (2026-08-22) -- divisao de ordem de verdade na corretora: ate
+    entao esta classe SEMPRE tratava a ordem-limite como um pedido so'
+    (`self.pending_order`), ignorando `EnterLimit.split_quantities` -- o robo
+    pedia a divisao, mas a corretora recebia UMA ordem so' do tamanho total.
+    Agora `place_limit` manda um filho REAL por elemento de `quantities`
+    (`self.pending_orders`), e `limit_fill` detecta o CRESCIMENTO da posicao
+    consolidada (delta), nao "existe posicao?" -- nao precisa saber QUAL
+    ticket preencheu, so' quanto cresceu (o motor ja contabiliza por
+    quantidade, nao por identidade de ordem, ver `backtest.intraday.machine.
+    _resolve_limit_fills`). Do lado da SAIDA, `place_exit_limit`/
+    `exit_fill`/`cancel_exit_limit` fazem o mesmo, espelhado, para a fatia de
+    `_Position.exit_split_unit` (ver `IntradaySessionMachine.
+    _resolve_live_split_exit`)."""
 
     def __init__(self, broker, symbol: str) -> None:
         self.broker = broker
         self.symbol = symbol
-        # A `Order` da ordem-limite viva no terminal (com `broker_ref` =
-        # ticket), ou `None`. Nao e' estado de decisao -- e' so o recibo
-        # necessario para cancelar depois.
-        self.pending_order: Optional[Order] = None
+        # As `Order` das ordens-limite de ENTRADA vivas no terminal (com
+        # `broker_ref` = ticket cada), uma por filho de `EnterLimit.
+        # split_quantities` (`[quantity]` quando a ordem nao veio dividida).
+        # Cancelar TODAS indiscriminadamente e' seguro mesmo que algumas ja
+        # tenham preenchido: `MT5Broker.cancel` e' idempotente para um ticket
+        # que ja nao esta mais vivo (ver a docstring dele).
+        self.pending_orders: list[Order] = []
+        # Ultima leitura de quantidade/preco medio da posicao desde que o
+        # grupo de filhos CORRENTE foi armado (`place_limit` zera os dois) --
+        # e' o que permite `limit_fill` devolver so' o DELTA (o que cresceu
+        # desde a ultima checagem), nao o total, e reconstituir o preco da
+        # FATIA nova invertendo a media ponderada que a corretora ja fez.
+        self._last_known_qty: float = 0.0
+        self._last_known_avg: float = 0.0
+        # Espelho do lado da SAIDA: a ordem-limite de saida REAL vigiada
+        # agora (`None` = nenhuma armada) e a quantidade da posicao ANTES
+        # dela ser armada (baseline para medir o quanto encolheu).
+        self.pending_exit_order: Optional[Order] = None
+        self._exit_baseline_qty: float = 0.0
         # Recibos do ultimo fill de entrada e da ultima saida, para o runtime
         # gravar `broker_ref`/`fees` REAIS no diario em vez de `None`. A
         # maquina so devolve preco e quantidade (o que ela precisa para o
@@ -80,52 +109,75 @@ class MT5IntradayExecution:
         self.last_entry_ref: Optional[str] = None
         self.last_exit_order: Optional[Order] = None
 
-    # ---------- ordem-limite pendente --------------------------------------
+    # ---------- ordem-limite pendente (ENTRADA) -----------------------------
 
-    def place_limit(self, side: str, limit_price: float, quantity: int,
-                    ts: pd.Timestamp) -> Order:
-        """Registra a ordem-limite no terminal. Devolve a `Order` (para o
-        runtime journalizar) e guarda o ticket para o cancelamento."""
-        order = Order(
-            ticker=self.symbol,
-            side=OrderSide.BUY if side == "long" else OrderSide.SELL,
-            quantity=quantity,
-            order_type=OrderType.LIMIT,
-            limit_price=limit_price,
-            sent_at=ts.to_pydatetime(),
-        )
-        enviada = self.broker.place_pending(order)
-        if enviada.status == OrderStatus.REJECTED:
-            raise BrokerExecutionError(
-                f"corretora recusou a ordem-limite {side} {quantity} {self.symbol} @ "
-                f"{limit_price:.4f}: {enviada.note}"
+    def place_limit(self, side: str, limit_price: float, quantities: list[int],
+                    ts: pd.Timestamp) -> list[Order]:
+        """Registra UMA ordem-limite REAL por elemento de `quantities` (ver
+        `EnterLimit.children`) no MESMO nivel. Devolve a lista de `Order`
+        (para o runtime journalizar) e guarda os tickets para cancelamento.
+
+        Se qualquer fatia for recusada, CANCELA as ja enviadas antes de
+        levantar -- nunca deixa uma entrada armada PELA METADE na corretora
+        sem o robo saber."""
+        self._last_known_qty = 0.0
+        self._last_known_avg = 0.0
+        enviadas: list[Order] = []
+        for i, qty in enumerate(quantities):
+            order = Order(
+                ticker=self.symbol,
+                side=OrderSide.BUY if side == "long" else OrderSide.SELL,
+                quantity=qty,
+                order_type=OrderType.LIMIT,
+                limit_price=limit_price,
+                sent_at=ts.to_pydatetime(),
             )
-        self.pending_order = enviada
-        return enviada
+            enviada = self.broker.place_pending(order)
+            if enviada.status == OrderStatus.REJECTED:
+                for feita in enviadas:
+                    self.broker.cancel(feita)
+                self.pending_orders = []
+                raise BrokerExecutionError(
+                    f"corretora recusou a fatia {i + 1}/{len(quantities)} ({qty} de "
+                    f"{sum(quantities)} acoes) da ordem-limite {side} {self.symbol} @ "
+                    f"{limit_price:.4f}: {enviada.note}. As {len(enviadas)} fatia(s) ja "
+                    "enviada(s) foram canceladas -- nunca fica uma entrada armada pela "
+                    "metade."
+                )
+            enviadas.append(enviada)
+        self.pending_orders = enviadas
+        return enviadas
 
-    def cancel_limit(self, ts: pd.Timestamp, reason: str) -> Optional[Order]:
-        """Remove do terminal a ordem-limite corrente, se houver.
+    def cancel_limit(self, ts: pd.Timestamp, reason: str) -> list[Order]:
+        """Remove do terminal TODAS as ordens-limite de entrada correntes.
 
         Nunca levanta: uma pendente que ja sumiu do terminal (expirou, foi
-        cancelada na mao) tem o objetivo cumprido, e `MT5Broker.cancel` ja
-        traduz isso em `CANCELLED` com o motivo na nota."""
-        order = self.pending_order
-        if order is None:
-            return None
-        self.pending_order = None
-        return self.broker.cancel(order)
+        cancelada na mao, ou ja preencheu) tem o objetivo cumprido, e
+        `MT5Broker.cancel` ja traduz isso em `CANCELLED` com o motivo na
+        nota -- cancelar um ticket ja preenchido e' um no-op seguro."""
+        orders = self.pending_orders
+        self.pending_orders = []
+        return [self.broker.cancel(o) for o in orders]
 
-    # ---------- o que a maquina pergunta -----------------------------------
+    # ---------- o que a maquina pergunta (ENTRADA) --------------------------
 
     def limit_fill(self, order, bar) -> Optional[dict]:
-        """A ordem-limite vigiada preencheu? Pergunta a CORRETORA, nao a barra.
+        """A ordem-limite vigiada CRESCEU desde a ultima checagem? Pergunta a
+        CORRETORA, nao a barra.
 
-        `{"price", "quantity"}` se sim, `None` se continua parada. `bar` entra
-        na assinatura para casar com o modo simulado (e para o diagnostico das
-        excecoes); o valor dela NAO participa da decisao aqui -- esse e'
-        justamente o ponto."""
+        `{"price", "quantity"}` do DELTA (nao do total) se cresceu, `None` se
+        nao mudou. `bar` entra na assinatura para casar com o modo simulado
+        (e para o diagnostico das excecoes); o valor dela NAO participa da
+        decisao aqui -- esse e' justamente o ponto.
+
+        O `price` do delta e' reconstituido invertendo a media ponderada que
+        a propria corretora ja fez (`avg_novo*qtd_novo - avg_velho*qtd_velho)
+        / delta_qtd`) -- devolver a media JA misturada (`posicao['price']`)
+        faria o motor misturar a mistura de novo ao fazer o proprio TOP-UP
+        (ver `backtest.intraday.machine.on_closed_bar`)."""
         posicao = self._read_position()
-        if posicao is None:
+        qtd_atual = 0.0 if posicao is None else float(posicao["quantity"])
+        if qtd_atual <= self._last_known_qty:
             return None
         if posicao["side"] != order.side:
             raise BrokerExecutionError(
@@ -136,13 +188,80 @@ class MT5IntradayExecution:
                 "terminal (posicao aberta na mao? outro robo com o mesmo magic?) "
                 "antes de religar este slot."
             )
-        # A pendente virou posicao -- o ticket morreu sozinho, nao ha o que
-        # cancelar depois.
-        self.last_entry_ref = (
-            self.pending_order.broker_ref if self.pending_order is not None else None
+        avg_atual = float(posicao["price"])
+        delta_qty = qtd_atual - self._last_known_qty
+        if self._last_known_qty > 0:
+            delta_price = (
+                (avg_atual * qtd_atual - self._last_known_avg * self._last_known_qty) / delta_qty
+            )
+        else:
+            delta_price = avg_atual
+        self._last_known_qty = qtd_atual
+        self._last_known_avg = avg_atual
+        self.last_entry_ref = posicao.get("ticket")
+        return {"price": delta_price, "quantity": int(round(delta_qty))}
+
+    # ---------- ordem-limite pendente (SAIDA dividida, Fase 2) --------------
+
+    def place_exit_limit(self, position_side: str, quantity: int, limit_price: float,
+                         current_position_qty: float, ts: pd.Timestamp) -> Order:
+        """Registra UMA ordem-limite REAL de fechamento (fatia de
+        `_Position.exit_split_unit`) no terminal -- o oposto de `place_limit`,
+        do lado da saida. `current_position_qty` e' o que a MAQUINA sabe que
+        a posicao tem ANTES desta fatia (baseline para `exit_fill` medir o
+        quanto encolheu depois) -- lido da propria maquina, nao da corretora
+        de novo, para nao arriscar uma leitura atrasada/adiantada no
+        instante exato do armamento."""
+        order = Order(
+            ticker=self.symbol,
+            side=OrderSide.SELL if position_side == "long" else OrderSide.BUY,
+            quantity=quantity,
+            order_type=OrderType.LIMIT,
+            limit_price=limit_price,
+            sent_at=ts.to_pydatetime(),
         )
-        self.pending_order = None
-        return {"price": posicao["price"], "quantity": posicao["quantity"]}
+        enviada = self.broker.place_pending(order)
+        if enviada.status == OrderStatus.REJECTED:
+            raise BrokerExecutionError(
+                f"corretora recusou a ordem-limite de SAIDA ({quantity} {self.symbol} @ "
+                f"{limit_price:.4f}): {enviada.note}. A posicao continua aberta na "
+                "corretora, sem fatia nenhuma cancelada."
+            )
+        self.pending_exit_order = enviada
+        self._exit_baseline_qty = float(current_position_qty)
+        return enviada
+
+    def cancel_exit_limit(self, ts: pd.Timestamp, reason: str) -> Optional[Order]:
+        """Remove do terminal a ordem-limite de saida corrente, se houver.
+        Mesma garantia de no-op seguro de `cancel_limit`."""
+        order = self.pending_exit_order
+        if order is None:
+            return None
+        self.pending_exit_order = None
+        return self.broker.cancel(order)
+
+    def exit_fill(self, position_side: str, bar) -> Optional[dict]:
+        """A fatia de saida vigiada (`place_exit_limit`) encolheu a posicao
+        desde que foi armada? `{"price", "quantity"}` do que fechou (o preco
+        e' o LIMITE pedido -- uma ordem-limite so' preenche nesse nivel ou
+        melhor, e sem consultar deal a deal no terminal nao ha como saber
+        "melhor"; usar o limite e' o numero conhecido, nunca inventado), ou
+        `None` se a posicao nao mudou."""
+        posicao = self._read_position()
+        qtd_atual = 0.0 if posicao is None else float(posicao["quantity"])
+        diminuiu = self._exit_baseline_qty - qtd_atual
+        if diminuiu <= 0:
+            return None
+        if posicao is not None and posicao["side"] != position_side:
+            raise BrokerExecutionError(
+                f"a corretora reporta posicao {posicao['side']} em {self.symbol} "
+                f"({posicao['quantity']} acoes) enquanto a saida vigiada era de uma "
+                f"posicao {position_side}. Nao vou assumir que esta posicao e' minha "
+                "nem opera-la: confira o terminal antes de religar este slot."
+            )
+        self._exit_baseline_qty = qtd_atual
+        preco = self.pending_exit_order.limit_price if self.pending_exit_order is not None else None
+        return {"price": preco, "quantity": int(round(diminuiu))}
 
     def exit_market(self, position, ts: pd.Timestamp, reason: IntradayExitReason) -> dict:
         """Fecha a posicao A MERCADO e devolve `{"price"}` -- o preco que a

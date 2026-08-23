@@ -285,7 +285,8 @@ def _daytrade_cards() -> list[RobotCard]:
             version=info.version,
             description=curta,
             href=f"/strategies/{info.key}",
-            facts=(fato_ativo, ("Cadência", "intradiária")),
+            facts=(fato_ativo, ("Cadência", "negócio a negócio"
+                                if info.feed_kind == "tick" else "barra de 1 min")),
             in_ranking=False,
         ))
     return cartoes
@@ -358,7 +359,12 @@ def _daytrade_doc(key: str) -> RobotDoc:
         example=tuple(getattr(cls, "plain_example", ()) or ()),
         facts=(
             fato_ativo,
-            ("Cadência", "barra a barra"),
+            # "barra a barra" era verdade quando todo robô de day trade lia M1.
+            # Desde a `gremah_tick` (2026-08-22) a família tem duas
+            # granularidades, e é a única coisa que separa dois robôs do mesmo
+            # desenho — dizer o mesmo dos dois apagaria a diferença na tela.
+            ("Cadência", "negócio a negócio"
+                if getattr(cls, "feed_kind", "m1") == "tick" else "barra de 1 min"),
             ("Overnight", "nunca"),
         ),
         assets=assets,

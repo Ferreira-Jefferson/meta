@@ -23,6 +23,7 @@ instrumento incomparaveis.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Literal, Union
 
@@ -40,6 +41,107 @@ class Bar:
     low: float
     close: float
     volume: float
+
+
+class RollingVolumeWindow:
+    """Volume medio por minuto nos ultimos `janela_minutos` de tempo
+    NEGOCIADO — cruza a virada de sessao quando a sessao corrente ainda
+    nao acumulou a janela inteira sozinha, em vez de assumir minutos
+    vazios (silenciosamente subestimaria o teto logo na abertura, quando o
+    giro costuma ser mais alto, nao mais baixo).
+
+    Substituiu (2026-08-22, pedido do dono) o teto de posicao anterior, que
+    usava so' o volume do PRIMEIRO minuto/janela inicial do pregao,
+    CONGELADO pelo resto do dia — um minuto so' e' amostra ruidosa demais, e
+    congelar ignora o giro real do resto da sessao. Agora e' consultada a
+    CADA sinal de entrada (`media_por_minuto`), nunca congelada.
+
+    Resolution-agnostic por construcao (mesmo espirito de
+    `IntradaySessionMachine`): recebe um EVENTO por vez (`registrar`), M1 ou
+    tick — o que muda entre os dois e' so' quantos eventos chegam por
+    minuto, nao a formula. `Bar.volume` ja' significa "acoes negociadas
+    NESTE evento" nas duas granularidades (a barra M1 agrega o minuto; o
+    tick degenerado e' o proprio negocio, ver
+    `market_data_intraday/tick_bars.py`), entao a mesma soma-e-divide-por-
+    tempo vale para as duas sem nenhum `if` de granularidade aqui dentro.
+    """
+
+    def __init__(self, janela_minutos: float):
+        self.janela_minutos = float(janela_minutos)
+        self._hoje: deque[tuple[pd.Timestamp, float]] = deque()
+        self._cauda_ontem: list[tuple[pd.Timestamp, float]] = []
+        self._abertura: pd.Timestamp | None = None
+
+    def iniciar_sessao(self) -> None:
+        """Chamar em `on_session_start` — zera a parte de HOJE, preserva a
+        cauda do pregao anterior (definida a parte, ver
+        `definir_cauda_anterior`: quem tem acesso ao historico e' o
+        CHAMADOR, em `live/`/`backtest/`, nunca a propria estrategia —
+        AGENTS.md, `strategy/` so importa `core`)."""
+        self._hoje = deque()
+        self._abertura = None
+
+    def definir_cauda_anterior(self, bars: list[Bar]) -> None:
+        """`bars`: qualquer trecho do FINAL do pregao anterior (o quanto
+        sobrar dele) — so' os ultimos `janela_minutos` dela importam, o
+        resto e' descartado aqui. Pode ser chamado antes OU depois de
+        `iniciar_sessao`, sao independentes."""
+        if not bars:
+            self._cauda_ontem = []
+            return
+        fim = bars[-1].ts
+        limite = fim - pd.Timedelta(minutes=self.janela_minutos)
+        self._cauda_ontem = [(b.ts, b.volume) for b in bars if b.ts > limite]
+
+    def registrar(self, ts: pd.Timestamp, volume: float) -> None:
+        """Empilha o evento de HOJE — chamar em TODA barra/tick recebido,
+        nao so' quando ha sinal de entrada: e' o dado bruto que
+        `media_por_minuto` consulta depois."""
+        if self._abertura is None:
+            self._abertura = ts
+        self._hoje.append((ts, volume))
+        limite = ts - pd.Timedelta(minutes=self.janela_minutos)
+        while self._hoje and self._hoje[0][0] <= limite:
+            self._hoje.popleft()
+
+    def media_por_minuto(self, ts: pd.Timestamp) -> float:
+        """Volume medio por minuto nos ultimos `janela_minutos` ATE `ts`.
+        Completa com a cauda do pregao anterior enquanto a sessao de hoje
+        ainda nao acumulou a janela inteira sozinha — ver docstring da
+        classe."""
+        total = sum(v for _, v in self._hoje)
+        decorrido_min = (
+            (ts - self._abertura).total_seconds() / 60.0
+            if self._abertura is not None else 0.0
+        )
+        if decorrido_min < self.janela_minutos and self._cauda_ontem:
+            deficit_min = self.janela_minutos - decorrido_min
+            fim_ontem = self._cauda_ontem[-1][0]
+            limite = fim_ontem - pd.Timedelta(minutes=deficit_min)
+            total += sum(v for t, v in self._cauda_ontem if t > limite)
+        return total / self.janela_minutos
+
+    def volumes_por_evento(self, ts: pd.Timestamp) -> list[float]:
+        """Volume de CADA evento individual (tick ou barra) dentro da
+        janela ATE `ts`, completando com a cauda igual `media_por_minuto` --
+        nao a media, a lista crua. Existe para quem precisa do TAMANHO
+        TIPICO de um evento so' (ex.: dividir uma ordem grande em pedacos do
+        tamanho de um negocio real, `Gremah`/`GremahTick`
+        `split_quantities`), que uma media por minuto nao responde: um
+        minuto com 10 negocios de 100 acoes e um minuto com 1 negocio de
+        1.000 tem a MESMA media, mas pedir 1.000 de uma vez so' preenche no
+        segundo caso."""
+        eventos = [v for _, v in self._hoje]
+        decorrido_min = (
+            (ts - self._abertura).total_seconds() / 60.0
+            if self._abertura is not None else 0.0
+        )
+        if decorrido_min < self.janela_minutos and self._cauda_ontem:
+            deficit_min = self.janela_minutos - decorrido_min
+            fim_ontem = self._cauda_ontem[-1][0]
+            limite = fim_ontem - pd.Timedelta(minutes=deficit_min)
+            eventos = [v for t, v in self._cauda_ontem if t > limite] + eventos
+        return eventos
 
 
 @dataclass
@@ -90,7 +192,48 @@ class EnterLimit:
     devolvida pelo robo enquanto uma ja esta pendente SUBSTITUI a
     anterior (mesmo espirito de `Enter`/`Exit` sobrescreverem `pending`).
     `ttl_bars=None` = espera indefinidamente (até o fim da sessao, que
-    cancela qualquer ordem pendente no flatten forcado)."""
+    cancela qualquer ordem pendente no flatten forcado).
+
+    `split_quantities` (2026-08-22, pedido do dono): a MESMA ordem (lado,
+    preco, stop, alvo) fatiada em varios filhos independentes em vez de um
+    lote so' -- existe porque uma ordem parada grande demais pode nao ser
+    CASADA de verdade mesmo com o preco tendo tocado o nivel (ver
+    `IntradayBacktestConfig.limit_fill_capped_by_volume`: cada filho so'
+    preenche se o evento que tocou o nivel teve volume real >= o tamanho
+    DELE, nao do total). `None` (default) = comportamento antigo, um lote
+    so' do tamanho de `quantity`. Quando presente, `sum(split_quantities)`
+    tem que bater com `quantity` -- o motor NAO redistribui sozinho.
+
+    `exit_split_unit` (2026-08-22, pedido do dono): o MESMO problema do
+    `split_quantities` acima, mas do lado da SAIDA -- o alvo, quando
+    `IntradayBacktestConfig.limit_fill_capped_by_volume` esta ligado, so'
+    "toca" de verdade se `bar.volume` cobrir a posicao INTEIRA de uma vez
+    (ver `IntradayBacktestConfig.limit_fill_capped_by_volume`), o mesmo
+    otimismo que a entrada tinha antes de ser dividida. `exit_split_unit`
+    declara o tamanho de cada pedaco independente do FECHAMENTO (ex.:
+    `LOTE_PADRAO_B3` = fecha em fatias de 1 lote); o motor preenche quantos
+    pedacos o volume da barra cobrir, gera um `IntradayTrade` PARCIAL para
+    cada fatia que fechar (cada uma com seu proprio `exit_price`, ja que
+    podem fechar em barras/precos diferentes) e mantem a posicao aberta
+    (com a quantidade restante) ate a ultima fatia sair -- por stop, por
+    alvo ou por flatten. `None` (default) = comportamento antigo, exige o
+    total de uma vez.
+
+    `exit_ttl_bars` (2026-08-22, pedido do dono -- execucao REAL): so' vale
+    com `exit_split_unit` E execucao ao vivo (`IntradaySessionMachine.
+    execution` setado). Em execucao real uma saida por alvo dividida vira
+    uma ordem-limite REAL na corretora, por fatia -- e' a PRIMEIRA vez que
+    uma saida ao vivo pode simplesmente NAO preencher (toda saida real, ate
+    aqui, sempre foi a mercado). `exit_ttl_bars` e' o prazo (em barras) que
+    cada fatia espera parada antes do motor CANCELAR essa ordem-limite e
+    fechar o QUE SOBRAR da posicao a MERCADO (mesmo caminho de
+    `IntradayExitReason.FORCED_FLATTEN`/`STOP`) -- decisao do dono: "prazo
+    limitado, depois mercado", para a posicao sempre fechar dentro de um
+    tempo previsivel, nunca ficar exposta indefinidamente esperando a
+    fatia final. `None` (default) preserva o comportamento de backtest/
+    sombra (`_resolve_target_partial_fill`, guiado por `bar.volume`, sem
+    prazo) -- so' precisa ser declarado por quem for operar `exit_split_unit`
+    com dinheiro real."""
 
     side: Side
     limit_price: float
@@ -100,6 +243,20 @@ class EnterLimit:
     ttl_bars: int | None = None
     metadata: dict | None = None
     reason: str = ""
+    split_quantities: tuple[int, ...] | None = None
+    exit_split_unit: int | None = None
+    exit_ttl_bars: int | None = None
+
+    def children(self, default_quantity: int) -> list[int]:
+        """Quantidades dos FILHOS independentes desta ordem -- `split_quantities`
+        se declarado, senao um filho so' do tamanho de `quantity` (comportamento
+        antigo, um lote so'). Usado tanto pelo preenchimento simulado
+        (`backtest.intraday.machine`) quanto pelo envio de ordens REAIS
+        (`live.intraday_execution.MT5IntradayExecution.place_limit`) -- as duas
+        pontas tem de concordar em quantos pedacos existem."""
+        if self.split_quantities:
+            return list(self.split_quantities)
+        return [self.quantity or default_quantity]
 
 
 @dataclass
@@ -154,6 +311,22 @@ class IntradayStrategy(ABC):
     # `IntradayBacktestConfig.target_fills_as_maker` para como o motor precifica.
     target_fills_as_maker: bool = False
 
+    # Granularidade em que este robo foi MEDIDO, e portanto a unica em que ele
+    # pode operar: `"m1"` (barra de 1 minuto) ou `"tick"` (negocio a negocio).
+    # Mora aqui pelo mesmo motivo de `target_fills_as_maker`: e' propriedade do
+    # ROBO, e deixa-la a cargo de cada chamador ja' produziu, uma vez, um robo
+    # ao vivo com modelo de custo diferente do robo validado. Quem monta o
+    # ambiente le este campo (`live/intraday_feed.py::feed_for`) em vez de
+    # decidir por nome de classe -- um `if robo == "gremah_tick"` espalhado
+    # pelos chamadores e' a mesma divergencia esperando para acontecer.
+    #
+    # Nao e' uma preferencia: um robo calibrado em M1 rodando em tick veria
+    # dezenas de vezes mais eventos por sessao, e todo parametro contado em
+    # BARRAS (espera de ordem parada, janela de volume) passaria a significar
+    # outra coisa. Foi por isso que a `gremah_tick` recontou os dois dela em
+    # tempo de parede em vez de herdar os numeros da `gremah`.
+    feed_kind: Literal["m1", "tick"] = "m1"
+
     def initialize(self, bars: pd.DataFrame) -> None:
         """Pre-calcula indicadores sobre TODO o historico do backtest.
         Chamado uma vez antes do loop de sessoes. Default vazio — robos sem
@@ -173,6 +346,22 @@ class IntradayStrategy(ABC):
         Default no-op: so' um robo que dimensiona posicao pelo caixa (ex.:
         `Gremah`, reload 2026-08-22) precisa disso; a maioria decide so' com
         o que ja recebe em `on_bar`."""
+
+    def seed_volume_window(self, previous_session_tail: list[Bar]) -> None:
+        """Alimenta o robo com o FINAL do pregao ANTERIOR, antes da
+        primeira barra/tick de hoje — para um teto de posicao baseado em
+        volume rolante (`RollingVolumeWindow`) ter o que precisa quando a
+        sessao de hoje ainda nao acumulou a janela inteira sozinha (ex.:
+        logo na abertura). Chamado por quem tem acesso ao historico
+        (`backtest/intraday/engine.py`, `live/intraday_runtime.py`) — nunca
+        pela propria estrategia, que so' importa `core` (AGENTS.md).
+
+        `previous_session_tail` pode vir vazio (primeiro pregao do
+        historico carregado, ou sem dado do dia anterior disponivel) —
+        nesse caso o robo so' tem o que acumular a partir de agora, mesmo
+        comportamento de quando este metodo nunca e' chamado. Default
+        no-op: so' um robo com teto de volume rolante (ex.:
+        `Gremah`/`GremahTick`, 2026-08-22) precisa disso."""
 
     @abstractmethod
     def on_bar(

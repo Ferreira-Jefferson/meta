@@ -69,6 +69,11 @@ class MT5BarFeed:
     """
 
     name = "mt5_bars"
+    #: Atraso MINIMO entre o preco acontecer e este feed poder entrega-lo. Uma
+    #: barra M1 so' e' legivel depois de fechar, entao o piso e' o proprio
+    #: minuto — nao e' latencia de rede, e' o formato do dado. O painel reporta
+    #: este numero (`IntradayLiveRuntime.status`).
+    nominal_delay_seconds = 60.0
 
     def __init__(
         self,

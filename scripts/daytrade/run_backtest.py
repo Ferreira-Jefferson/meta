@@ -85,6 +85,11 @@ def main() -> None:
         # era o robo que operava. Na gremah isso vale a diferenca entre
         # -R$288 e +R$621 no mesmo periodo.
         target_fills_as_maker=strategy.target_fills_as_maker,
+        # Capital do teste = minimo real do simbolo no preco da PRIMEIRA barra
+        # rodada (nao mais um R$20.000 fixo que nenhum papel deste tamanho
+        # jamais teria de verdade -- ver a docstring de
+        # `IntradayBacktestConfig.initial_capital`).
+        preco_atual=float(run_bars.iloc[0]["close"]),
     )
     costs = config.costs
 

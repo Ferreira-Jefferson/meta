@@ -27,6 +27,8 @@ from dataclasses import dataclass
 from datetime import time
 from typing import Literal
 
+from strategy.daytrade.base import capital_minimo_brl
+
 from backtest.intraday.costs import (
     B3_EQUITY_EXCHANGE_FEE_PCT_PER_LEG,
     IntradayCostModel,
@@ -154,6 +156,8 @@ def config_for(
     trade_tick_size: float,
     default_quantity: int | None = None,
     target_fills_as_maker: bool = False,
+    preco_atual: float | None = None,
+    initial_capital: float | None = None,
 ) -> IntradayBacktestConfig:
     """Monta o `IntradayBacktestConfig` de um perfil + a economia do simbolo
     lida do terminal (`market_data_intraday.mt5_source.symbol_economics`).
@@ -161,7 +165,22 @@ def config_for(
     Existe para o backtest e a operacao ao vivo montarem a config pelo MESMO
     caminho — `default_quantity` so e' sobrescrevivel porque ao vivo a
     quantidade sai do caixa destinado ao robo, nao do lote de referencia do
-    perfil (ver `live/intraday_runtime.py`)."""
+    perfil (ver `live/intraday_runtime.py`).
+
+    `initial_capital`: sem default fixo (ver o motivo em `IntradayBacktestConfig.
+    initial_capital`) -- passe-o explicitamente (backtest ao vivo sempre
+    sobrescreve depois, via `IntradayLiveRuntime`) OU passe `preco_atual` para
+    este montador computar o minimo real do simbolo (`capital_minimo_brl`).
+    Passar os dois e' erro do chamador."""
+    if initial_capital is None:
+        if preco_atual is None:
+            raise ValueError(
+                "config_for precisa de `initial_capital` explicito OU `preco_atual` "
+                "(para computar capital_minimo_brl) -- nao ha mais default implicito."
+            )
+        initial_capital = capital_minimo_brl(preco_atual)
+    elif preco_atual is not None:
+        raise ValueError("config_for: passe `initial_capital` OU `preco_atual`, nao os dois.")
     costs = IntradayCostModel.from_symbol_info(
         trade_tick_value=trade_tick_value,
         trade_tick_size=trade_tick_size,
@@ -170,6 +189,7 @@ def config_for(
     )
     return IntradayBacktestConfig(
         costs=costs,
+        initial_capital=initial_capital,
         session_end_time=profile.session_end_time,
         session_end_policy=profile.session_end_policy,
         default_quantity=(profile.default_quantity if default_quantity is None else default_quantity),

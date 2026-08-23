@@ -51,6 +51,7 @@ from strategy.daytrade.base import (
     IntradayAction,
     IntradayOpenPosition,
     IntradayStrategy,
+    RollingVolumeWindow,
     capital_minimo_brl,
 )
 
@@ -72,14 +73,35 @@ SESSION_STOP_FRACAO_PADRAO = 0.20
 #: experimento.
 REALOCACAO_LIMIAR_CAIXA_PADRAO = 4.0
 
-#: Teto de tamanho de posicao, como fracao do volume negociado no PRIMEIRO
-#: minuto do proprio pregao (ver o bloco "armada uma vez por sessao" em
-#: `on_bar`) -- nao uma media historica de varios dias. Pedido do dono
-#: 2026-08-22: nunca pedir uma fatia do mercado maior que isto (ex.: ativo
-#: negocia 1.000 acoes no minuto de abertura -> teto de 100 acoes = 1 lote),
-#: porque o backtest simula preenchimento instantaneo e o book real nao
-#: absorve uma ordem grande demais frente ao proprio giro do dia.
+#: Teto de tamanho de posicao, como fracao do volume MEDIO por minuto na
+#: janela rolante (`REALOCACAO_JANELA_MINUTOS_PADRAO`, ver
+#: `strategy.daytrade.base.RollingVolumeWindow`). Pedido do dono 2026-08-22:
+#: nunca pedir uma fatia do mercado maior que isto, porque o backtest simula
+#: preenchimento instantaneo e o book real nao absorve uma ordem grande
+#: demais frente ao proprio giro do momento.
+#:
+#: Ate 2026-08-22 isto usava so' o volume do PRIMEIRO minuto do pregao,
+#: CONGELADO pelo resto do dia. Substituido no mesmo dia (pedido do dono) por
+#: uma media MOVEL dos ultimos `REALOCACAO_JANELA_MINUTOS_PADRAO` minutos,
+#: reavaliada a CADA sinal de entrada: um minuto so' e' amostra ruidosa
+#: demais (um pico ou um vazio isolado travava o teto do DIA inteiro), e
+#: congelar ignorava o giro real do resto da sessao.
 REALOCACAO_TETO_PCT_VOLUME_MINUTO_PADRAO = 0.10
+
+#: Janela (minutos) da media movel de volume que alimenta o teto acima. Na
+#: ABERTURA, quando a sessao de hoje ainda nao acumulou a janela inteira
+#: sozinha, `RollingVolumeWindow` completa o que falta com a CAUDA do
+#: pregao ANTERIOR (mesmo pedido do dono) -- nunca assume volume zero nos
+#: minutos que a sessao de hoje ainda nao viveu.
+#:
+#: Medido 2026-08-22 (PMAM3, IS 2023-2026 + OOS jun-ago/2026) contra 5min e
+#: 30min: 30min tinha o menor MaxDD e o melhor Calmar das tres nas DUAS
+#: janelas de teste (o unico que nao inverteu de sinal entre IS e OOS), mas
+#: o dono decidiu manter 1min por ora ("por hora" -- decisao PROVISORIA,
+#: revisitar). 1min = "o volume do ultimo minuto FECHADO", reavaliado a cada
+#: entrada -- ja e' uma melhora sobre o desenho anterior (congelado no
+#: PRIMEIRO minuto do dia), mesmo sem a suavizacao da media de 30min.
+REALOCACAO_JANELA_MINUTOS_PADRAO = 1.0
 
 
 @dataclass(frozen=True)
@@ -217,7 +239,6 @@ class _SessionState:
     stop_ticks_today: int | None = None
     session_stop_armed: bool = False
     session_stop_brl_hoje: float = 0.0
-    max_lotes_dia: int = 1
 
 
 class Gremah(IntradayStrategy):
@@ -368,9 +389,10 @@ class Gremah(IntradayStrategy):
         "ordem, porém, não é fixo: cresce com o caixa acumulado e encolhe de volta "
         "se ele cair.",
         "A cada entrada nova ele recalcula: a cada 4x o custo de 1 lote que o caixa "
-        "acumulado tiver, usa mais um lote. O teto do dia é 10% do volume negociado "
-        "no primeiro minuto do próprio pregão — nunca pedir do mercado uma fatia "
-        "maior que essa.",
+        "acumulado tiver, usa mais um lote. O teto é 10% do volume do ÚLTIMO minuto "
+        "FECHADO — nunca pedir do mercado uma fatia maior que essa. Na abertura, "
+        "quando ainda não há 1 minuto do próprio pregão, completa com o final do "
+        "pregão anterior.",
         "Cada ativo tem um caixa mínimo próprio para começar a operar: o piso é o "
         "DOBRO do custo de um lote de 100 ações, sem arredondamento. É a diferença "
         "entre poder operar um ativo e não poder — ver a tabela de ativos.",
@@ -394,8 +416,8 @@ class Gremah(IntradayStrategy):
     # construtor NAO tem efeito -- `_build_entry` sempre recalcula
     # `self.quantity` via `_lotes_por_realocacao` antes de cada entrada.
     # Mostrar "1 lote (100 acoes)" (o "—" formatado) seria uma MENTIRA
-    # especifica: o tamanho de verdade varia de 1 ate' `max_lotes_dia` lotes
-    # conforme o caixa acumulado, explicado em prosa em `sizing_rules`.
+    # especifica: o tamanho de verdade varia a cada entrada, conforme o caixa
+    # acumulado E o volume medio recente, explicado em prosa em `sizing_rules`.
     param_hidden = ("symbol", "profit_pct", "stop_multiplier", "quantity")
     # O valor cru é o relógio do terminal MT5 (UTC), e é ele que `on_bar`
     # compara. A ficha mostra "14:00 UTC" como valor e "11:00 Brasília" ao
@@ -415,8 +437,11 @@ class Gremah(IntradayStrategy):
         "realocacao_limiar_caixa": "Quantas vezes o custo de 1 lote o caixa acumulado precisa "
                                    "ter para a próxima entrada usar mais um lote (encolhe de volta "
                                    "se o caixa cair).",
-        "realocacao_teto_pct_volume_minuto": "Teto de posição: % do volume negociado no 1º "
-                                             "minuto do próprio pregão.",
+        "realocacao_teto_pct_volume_minuto": "Teto de posição: % da média de volume por minuto "
+                                             "na janela rolante (`realocacao_janela_minutos`).",
+        "realocacao_janela_minutos": "Tamanho da janela (minutos) da média móvel de volume que "
+                                     "alimenta o teto acima. Reavaliada a cada entrada nova; na "
+                                     "abertura, completa com a cauda do pregão anterior.",
         # Exibido em hora de Brasília com o UTC ao lado (`param_utc_time`), então
         # a descrição não precisa mais carregar a conversão.
         "fixed_anchor_until": "Hora em que a âncora fixa vira rolante.",
@@ -453,6 +478,7 @@ class Gremah(IntradayStrategy):
         rolling_reanchor_after_bars: int = 30,
         realocacao_limiar_caixa: float = REALOCACAO_LIMIAR_CAIXA_PADRAO,
         realocacao_teto_pct_volume_minuto: float = REALOCACAO_TETO_PCT_VOLUME_MINUTO_PADRAO,
+        realocacao_janela_minutos: float = REALOCACAO_JANELA_MINUTOS_PADRAO,
     ):
         self.symbol = symbol
         self.tick_size = tick_size
@@ -498,6 +524,7 @@ class Gremah(IntradayStrategy):
         self.rolling_reanchor_after_bars = rolling_reanchor_after_bars
         self.realocacao_limiar_caixa = abs(realocacao_limiar_caixa)
         self.realocacao_teto_pct_volume_minuto = abs(realocacao_teto_pct_volume_minuto)
+        self.realocacao_janela_minutos = abs(realocacao_janela_minutos)
 
         self._state = _SessionState()
         # Atualizado por `on_capital_update`, chamado pelo motor logo antes de
@@ -506,12 +533,21 @@ class Gremah(IntradayStrategy):
         # replay usa 1 lote, o minimo; a primeira barra AO VIVO ja chega com o
         # caixa real).
         self._cash_atual_brl = 0.0
+        # Sobrevive a `on_session_start` de proposito (so' a parte de HOJE
+        # zera, ver `RollingVolumeWindow.iniciar_sessao`) -- a cauda do
+        # pregao anterior e' definida por `seed_volume_window`, que pode ser
+        # chamada antes OU depois de `on_session_start`.
+        self._janela_volume = RollingVolumeWindow(self.realocacao_janela_minutos)
 
     def on_session_start(self, session_date) -> None:
         self._state = _SessionState()
+        self._janela_volume.iniciar_sessao()
 
     def on_capital_update(self, cash_brl: float) -> None:
         self._cash_atual_brl = cash_brl
+
+    def seed_volume_window(self, previous_session_tail: list[Bar]) -> None:
+        self._janela_volume.definir_cauda_anterior(previous_session_tail)
 
     def _ticks_from_pct(self, price: float, pct: float) -> int:
         return max(1, round(price * pct / self.tick_size))
@@ -535,19 +571,22 @@ class Gremah(IntradayStrategy):
                 return side
         return None
 
-    def _lotes_por_realocacao(self, anchor: float) -> int:
+    def _lotes_por_realocacao(self, anchor: float, ts: pd.Timestamp) -> int:
         """Quantos lotes a proxima entrada usa, dado o caixa acumulado
-        (`on_capital_update`) e o teto do dia (`_state.max_lotes_dia`).
-        Verificado a CADA entrada nova, nao 1x por dia -- tambem ENCOLHE se o
-        caixa cair. `anchor` e' a mesma ancora que spacing/alvo/stop ja usam
-        (fixa na abertura ou rolante), nao um preco fixo: o custo de 1 lote
-        muda com ela."""
+        (`on_capital_update`) e o teto de volume rolante (`_janela_volume`).
+        Os DOIS sao recalculados a CADA entrada nova, nao 1x por dia --
+        tambem ENCOLHEM se o caixa cair ou o giro recente esfriar. `anchor`
+        e' a mesma ancora que spacing/alvo/stop ja usam (fixa na abertura ou
+        rolante), nao um preco fixo: o custo de 1 lote muda com ela."""
         custo_do_lote = anchor * LOTE_PADRAO_B3
         lotes = 1 + math.floor(self._cash_atual_brl / (self.realocacao_limiar_caixa * custo_do_lote))
-        return min(self._state.max_lotes_dia, max(1, lotes))
+        media_volume_min = self._janela_volume.media_por_minuto(ts)
+        teto_acoes = media_volume_min * self.realocacao_teto_pct_volume_minuto
+        max_lotes_dia = max(1, int(teto_acoes) // LOTE_PADRAO_B3)
+        return min(max_lotes_dia, max(1, lotes))
 
-    def _build_entry(self, side: str, anchor: float, spacing_ticks: int, profit_ticks: int, stop_ticks: int | None) -> EnterLimit:
-        self.quantity = self._lotes_por_realocacao(anchor) * LOTE_PADRAO_B3
+    def _build_entry(self, side: str, anchor: float, spacing_ticks: int, profit_ticks: int, stop_ticks: int | None, ts: pd.Timestamp) -> EnterLimit:
+        self.quantity = self._lotes_por_realocacao(anchor, ts) * LOTE_PADRAO_B3
         spacing_off = spacing_ticks * self.tick_size
         level_price = round(anchor - spacing_off, 2) if side == "long" else round(anchor + spacing_off, 2)
         profit_off = profit_ticks * self.tick_size
@@ -582,15 +621,15 @@ class Gremah(IntradayStrategy):
         # fixa, e um inicio 100% rolante nunca a chamaria, deixando o limite
         # de perda diaria travado no default `0.0` do dataclass (halt na
         # primeira barra) se isto morasse la' dentro.
+        # Alimenta a janela de volume rolante com TODA barra vista, mesmo
+        # fora de sinal de entrada -- e' o dado bruto que `_lotes_por_
+        # realocacao` consulta na hora de armar uma ordem nova (ver
+        # `strategy.daytrade.base.RollingVolumeWindow`).
+        self._janela_volume.registrar(ts, bar.volume)
+
         if not state.session_stop_armed:
             state.session_stop_armed = True
             state.session_stop_brl_hoje = capital_minimo_brl(bar.open) * self.session_stop_pct_capital
-            # Teto de realocacao do dia: fracao do volume do PRIMEIRO minuto
-            # do proprio pregao (ver `REALOCACAO_TETO_PCT_VOLUME_MINUTO_PADRAO`),
-            # nao uma media historica -- "aguardar 1 minuto da abertura" e'
-            # exatamente esta barra, a primeira que `on_bar` ve no dia.
-            teto_acoes = bar.volume * self.realocacao_teto_pct_volume_minuto
-            state.max_lotes_dia = max(1, int(teto_acoes) // LOTE_PADRAO_B3)
 
         if is_fixed_phase and state.open_price is None:
             state.open_price = bar.open
@@ -649,11 +688,12 @@ class Gremah(IntradayStrategy):
             entry = self._build_entry(
                 next_side, state.open_price,
                 state.spacing_ticks_today, state.profit_ticks_today, state.stop_ticks_today,
+                ts,
             )
         else:
             anchor = bar.close
             profit_ticks = self._ticks_from_pct(anchor, self.profit_pct)
             spacing_ticks = self._ticks_from_pct(anchor, self.profit_pct * self.spacing_multiplier)
             stop_ticks = self._ticks_from_pct(anchor, self.profit_pct * self.stop_multiplier)
-            entry = self._build_entry(next_side, anchor, spacing_ticks, profit_ticks, stop_ticks)
+            entry = self._build_entry(next_side, anchor, spacing_ticks, profit_ticks, stop_ticks, ts)
         return [entry]

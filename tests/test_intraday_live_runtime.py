@@ -8,12 +8,15 @@ sombra de verdade).
 
 O que esta em jogo, em ordem de importancia:
   1. sombra nunca chama a corretora e nunca debita o caixa do dono;
-  2. `penetration_ticks` e' gravado — e' a medicao que justifica a fase de
-     sombra (a premissa de maker do robo nunca foi verificada contra o
-     mercado real, ver a docstring do modulo testado);
-  3. o despacho warm-start/frio segue a politica decidida em 2026-08-21
+  2. `penetration_ticks` e `volume_no_nivel` sao gravados — e' a medicao que
+     justifica a fase de sombra (a premissa de maker do robo nunca foi
+     verificada contra o mercado real, ver a docstring do modulo testado);
+  3. a posicao e' dimensionada pelo capital REAL do slot, nunca pelos
+     R$20.000 do default do `IntradayBacktestConfig`;
+  4. o despacho warm-start/frio segue a politica decidida em 2026-08-21
      (`pmam3_daytrade_champion` na memoria do projeto);
-  4. um buraco de barras nao executa decisao velha nem deixa posicao orfa.
+  5. um buraco NO PROCESSO (tempo sem rodar, nao eventos acumulados) nao
+     executa decisao velha nem deixa posicao orfa.
 """
 from __future__ import annotations
 
@@ -29,8 +32,8 @@ from core.live_models import OrderSide, OrderStatus, OrderType
 from journal import live_store as store
 from live import clock as live_clock
 from live import intraday_runtime as itr_mod
-from live.intraday_runtime import MAX_GAP_BARS, IntradayLiveRuntime
-from strategy.daytrade.base import Bar
+from live.intraday_runtime import MAX_GAP_SECONDS, IntradayLiveRuntime
+from strategy.daytrade.base import Bar, EnterLimit, IntradayStrategy
 
 # O slot de day trade e' DINAMICO desde 2026-08-22: o id carrega robo+ativo
 # (`dt-<robo>-<ativo>`) e o painel abre quantos o dono quiser. Nao existe mais
@@ -84,7 +87,7 @@ class _ScriptedBarFeed:
 
     def session_bars_until(self, session, until_ts):
         self.pedidos_de_semente.append((session, until_ts))
-        return [b for b in self._semente if b.ts <= until_ts]
+        return [b for b in self._semente if b.ts.date() == session and b.ts <= until_ts]
 
 
 def _bar(hhmm: str, o, h, low, c) -> Bar:
@@ -96,6 +99,10 @@ def _config() -> IntradayBacktestConfig:
     return IntradayBacktestConfig(
         costs=IntradayCostModel(point_value_brl=1.0, tick_size=0.01,
                                fee_round_trip_brl=0.0, slippage_ticks=0.0),
+        # `IntradayLiveRuntime` sempre sobrescreve com o capital real do slot
+        # (ver `replace(config, initial_capital=...)` no construtor) -- este
+        # valor nunca chega a valer para nenhum teste deste arquivo.
+        initial_capital=0.0,
         # Mesma politica da producao (PMAM3 e' acao): o corte sai do
         # calendario, nao de um numero fixo. Em 21/08/2026 (horario de verao
         # dos EUA) isso da 19:54 UTC, que era o valor congelado — de proposito,
@@ -461,6 +468,198 @@ def test_live_ordem_abandonada_pelo_robo_e_cancelada_no_terminal(tmp_path, prega
     assert broker.canceladas[0].limit_price == pytest.approx(9.80)
 
 
+# ---------- Fase 2 (2026-08-22): divisao de ordem de VERDADE na corretora --
+#
+# Ate aqui `EnterLimit.split_quantities`/`exit_split_unit` sempre foram
+# tratados como um pedido so' em execucao real (a corretora recebia UMA
+# ordem do tamanho total, ignorando a divisao que o robo pediu). Os testes
+# abaixo cobrem o caminho novo: um filho REAL por fatia, preenchimento
+# incremental detectado pelo CRESCIMENTO/ENCOLHIMENTO da posicao na
+# corretora (nao mais por `bar.volume`), e a saida dividida com prazo
+# limitado -> mercado (decisao do dono).
+#
+# Usam uma estrategia ROTEIRIZADA por indice de barra (em vez de `Gremah`)
+# para controlar `EnterLimit` diretamente, sem a logica de ancora/calibracao
+# do robo real atrapalhar o cenario.
+
+class _ScriptedDaytrade(IntradayStrategy):
+    """Sem `fixed_anchor_until`: sempre comeca a FRIO, entao a barra de
+    indice 0 do script e' a PRIMEIRA barra que `run_once` realmente
+    consome (nao uma semente de warm start)."""
+
+    name = "scripted_dt"
+    version = "1"
+
+    def __init__(self, symbol: str, script: dict[int, list]):
+        self.symbol = symbol
+        self.tick_size = 0.01
+        self.target_fills_as_maker = True
+        self.script = script
+        self._i = -1
+
+    def on_bar(self, ts, bar, position, session_pnl_brl):
+        self._i += 1
+        return list(self.script.get(self._i, []))
+
+
+def _runtime_live_scripted(tmp_path, broker, script: dict[int, list]):
+    strat = _ScriptedDaytrade(SYMBOL, script)
+    feed = _ScriptedBarFeed([], [])
+    rt = IntradayLiveRuntime(
+        slot=SLOT, strategy=strat, config=_config(),
+        bar_feed=feed, broker=broker,
+        db_path=tmp_path / "live_intraday.sqlite",
+        execution_mode="live", initial_capital=100.0,
+    )
+    rt.ensure_account()
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        acc.cash = 100.0
+        store.save_account(conn, acc)
+    return rt, feed
+
+
+def test_live_entrada_dividida_manda_ordens_reais_e_faz_top_up_no_diario(tmp_path, pregao_aberto):
+    """`EnterLimit.split_quantities` agora manda um FILHO REAL por elemento
+    na corretora (antes ia tudo como uma ordem so'), e o preenchimento em
+    BARRAS DIFERENTES (a corretora casando um filho de cada vez) tem de
+    acumular numa UNICA posicao/Intent -- nao numa entrada fantasma por
+    filho, que era o bug que sobreviveria se `_on_opened` nao soubesse
+    distinguir TOP-UP de entrada nova."""
+    broker = _FakeMT5Broker()
+    script = {
+        0: [EnterLimit(side="long", limit_price=10.00, initial_stop=9.00,
+                       initial_target=11.00, quantity=2, split_quantities=(1, 1),
+                       reason="teste_split")],
+    }
+    rt, feed = _runtime_live_scripted(tmp_path, broker, script)
+    rt.run_once(now=_agora("13:00:00"))
+
+    feed._barras.append(_bar("13:01", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:01:00"))
+    assert len(broker.pendentes_enviadas) == 2, "os DOIS filhos tem de ir para a corretora"
+    assert {int(o.quantity) for o in broker.pendentes_enviadas} == {1}
+
+    # 1o filho preenche
+    broker.posicao = {"side": "long", "price": 10.00, "quantity": 1, "ticket": 1}
+    feed._barras.append(_bar("13:02", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:02:00"))
+    assert rt.machine.position is not None
+    assert rt.machine.position.quantity == 1
+    assert rt.machine.position.entry_price == pytest.approx(10.00)
+
+    # 2o filho preenche, em preco DIFERENTE -- prova a media ponderada
+    broker.posicao = {"side": "long", "price": 10.05, "quantity": 2, "ticket": 1}
+    feed._barras.append(_bar("13:03", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:03:00"))
+
+    assert rt.machine.position.quantity == 2
+    assert rt.machine.position.entry_price == pytest.approx(10.05)
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        intents = store.all_intents(conn, acc.id)
+        ordens = conn.execute(
+            "SELECT * FROM live_orders WHERE account_id = ? ORDER BY id", (acc.id,)
+        ).fetchall()
+    assert len(intents) == 1, "um so' Intent para a entrada inteira, apesar de 2 fills"
+    assert len(ordens) == 2, "uma Order por FILHO que preencheu, sob o mesmo Intent"
+    assert all(o["intent_id"] == intents[0].id for o in ordens)
+    pos = acc.positions["PMAM3"]
+    assert pos.quantity == 2, "live_positions com a quantidade CUMULATIVA, nao a do ultimo filho"
+    assert pos.entry_price == pytest.approx(10.05)
+
+
+def test_live_saida_dividida_confirma_fatia_e_estoura_prazo_pro_resto_a_mercado(tmp_path, pregao_aberto):
+    """Lado da SAIDA da Fase 2: o alvo dividido (`exit_split_unit`) vira
+    ordem-limite REAL por fatia, com prazo (`exit_ttl_bars`) -- decisao do
+    dono ('prazo limitado, depois mercado'). A 1a fatia confirma via a
+    posicao ENCOLHENDO na corretora; a 2a nao preenche dentro do prazo e tem
+    de fechar o QUE SOBRAR a MERCADO."""
+    broker = _FakeMT5Broker()
+    broker.preco_de_saida = 10.90
+    script = {
+        0: [EnterLimit(side="long", limit_price=10.00, initial_stop=9.00,
+                       initial_target=11.00, quantity=2,
+                       exit_split_unit=1, exit_ttl_bars=2, reason="teste_exit_split")],
+    }
+    rt, feed = _runtime_live_scripted(tmp_path, broker, script)
+    rt.run_once(now=_agora("13:00:00"))
+
+    feed._barras.append(_bar("13:01", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:01:00"))
+
+    broker.posicao = {"side": "long", "price": 10.00, "quantity": 2, "ticket": 1}
+    feed._barras.append(_bar("13:02", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:02:00"))
+    assert rt.machine.position is not None and rt.machine.position.quantity == 2
+
+    # toca o alvo (11.00) -- arma a 1a fatia (1 acao) como ordem-limite REAL
+    feed._barras.append(_bar("13:03", 10.50, 11.05, 10.50, 11.00))
+    rt.run_once(now=_agora("13:03:00"))
+    assert rt.machine.position.quantity == 2, "so' ARMOU, nenhum fill confirmado ainda"
+    fatias_saida = [o for o in broker.pendentes_enviadas
+                    if o.order_type == OrderType.LIMIT and o.side == OrderSide.SELL]
+    assert len(fatias_saida) == 1
+    assert fatias_saida[0].quantity == 1
+    assert fatias_saida[0].limit_price == pytest.approx(11.00)
+
+    # a corretora confirma a 1a fatia (posicao encolhe de 2 para 1)
+    broker.posicao = {"side": "long", "price": 10.00, "quantity": 1, "ticket": 1}
+    feed._barras.append(_bar("13:04", 11.00, 11.05, 10.95, 11.00))
+    rt.run_once(now=_agora("13:04:00"))
+    assert rt.machine.position is not None and rt.machine.position.quantity == 1, (
+        "so' 1 fechou, o resto continua aberto"
+    )
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+    assert acc.positions["PMAM3"].quantity == 1, "live_positions ATUALIZADA, nao apagada"
+    assert acc.cash == pytest.approx(101.0), "lucro da fatia (11.00-10.00)*1 ja' creditado"
+
+    # a 2a fatia arma (o preco continua no alvo) e NAO preenche por 2 barras
+    feed._barras.append(_bar("13:05", 11.00, 11.05, 10.95, 11.00))
+    rt.run_once(now=_agora("13:05:00"))
+    assert rt.machine.position is not None and rt.machine.position.quantity == 1
+    feed._barras.append(_bar("13:06", 11.00, 11.05, 10.95, 11.00))
+    rt.run_once(now=_agora("13:06:00"))
+    assert rt.machine.position is not None, "1a barra de espera -- ainda nao estourou o prazo"
+    feed._barras.append(_bar("13:07", 11.00, 11.05, 10.95, 11.00))
+    rt.run_once(now=_agora("13:07:00"))
+
+    assert rt.machine.position is None, "estourou exit_ttl_bars=2 -- fechou o resto a mercado"
+    assert broker.ordens_a_mercado, "o restante saiu por ordem A MERCADO, nao ficou esperando"
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+    assert "PMAM3" not in acc.positions
+
+
+def test_live_saida_dividida_sem_prazo_falha_alto(tmp_path, pregao_aberto):
+    """Sem `exit_ttl_bars` a posicao ficaria exposta indefinidamente
+    esperando a fatia final -- exatamente o que a decisao do dono ('prazo
+    limitado, depois mercado') existe para proibir. Falha alto em vez de
+    arriscar isso com dinheiro real."""
+    broker = _FakeMT5Broker()
+    script = {
+        0: [EnterLimit(side="long", limit_price=10.00, initial_stop=9.00,
+                       initial_target=11.00, quantity=1, exit_split_unit=1,
+                       reason="sem_prazo")],
+    }
+    rt, feed = _runtime_live_scripted(tmp_path, broker, script)
+    rt.run_once(now=_agora("13:00:00"))
+
+    feed._barras.append(_bar("13:01", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:01:00"))
+
+    broker.posicao = {"side": "long", "price": 10.00, "quantity": 1, "ticket": 1}
+    feed._barras.append(_bar("13:02", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:02:00"))
+
+    feed._barras.append(_bar("13:03", 10.00, 10.00, 10.00, 10.00))
+    with pytest.raises(NotImplementedError, match="exit_ttl_bars"):
+        rt.run_once(now=_agora("13:03:00"))
+
+
 def test_sombra_continua_simulando_o_fill_pela_barra(tmp_path, pregao_aberto):
     """Regressao da fronteira: sombra NAO ganha ponte de execucao -- ela
     continua com o fill simulado pela barra, que e' justamente a premissa que
@@ -475,6 +674,55 @@ def test_sombra_continua_simulando_o_fill_pela_barra(tmp_path, pregao_aberto):
     assert rt.machine.execution is None
     rt.run_once(now=_agora("13:03:00"))
     assert rt.machine.position is not None  # a barra decidiu, sem corretora
+
+
+def test_capital_do_slot_dimensiona_a_posicao_e_nao_o_da_config_recebida(tmp_path, pregao_aberto):
+    """REGRESSAO (2026-08-22): `IntradayBacktestConfig.initial_capital` tinha
+    default de R$20.000 (removido -- ver a docstring do campo) e nenhum
+    montador de runtime ao vivo o sobrescrevia — o `initial_capital` do slot
+    so' ia para a CONTA. Resultado: a maquina chamava
+    `on_capital_update(20_000 + realizado)` e o robo escolhia lotes contra um
+    caixa que nao existe. O campo agora e' obrigatorio (nao ha mais como
+    esquecer em silencio), mas o teste continua valendo: garante que
+    `IntradayLiveRuntime` SEMPRE substitui o `initial_capital` da config
+    recebida pelo capital real do slot, mesmo que a config chegue com outro
+    numero (aqui, de proposito, um valor diferente de 100 -- ver `_config()`).
+
+    Medido no pregao real da PMAM3 de 2026-08-21 (R$0,13-0,14): com os
+    R$20.000 fantasmas o robo pediu 33.400 acoes e perdeu R$672 num unico
+    trade — mais de 100x o proprio teto de perda diaria (R$5,20). Com o
+    capital certo (R$100) pede 200 acoes."""
+    from strategy.daytrade.lab.gremah import Gremah
+
+    barras = [
+        _bar("13:00", 10.00, 10.00, 10.00, 10.00),
+        _bar("13:01", 10.00, 10.00, 9.79, 9.85),
+    ]
+    feed = _ScriptedBarFeed(barras, barras[:1])
+    rt = IntradayLiveRuntime(
+        slot=SLOT,
+        strategy=Gremah(symbol=SYMBOL, tick_size=0.01, profit_pct=0.01,
+                        spacing_multiplier=2.0, stop_multiplier=20.0),
+        config=_config(),           # sai daqui com initial_capital=0.0, de proposito
+        bar_feed=feed, broker=_ExplodingBroker(),
+        db_path=tmp_path / "live_intraday.sqlite",
+        execution_mode="shadow", initial_capital=100.0,
+    )
+
+    assert rt.config.initial_capital == pytest.approx(100.0)
+    # E a MAQUINA tem de ver o mesmo numero: era passando o `config` cru para
+    # ela (em vez de `self.config`) que o furo sobrevivia ao primeiro conserto.
+    assert rt.machine.config.initial_capital == pytest.approx(100.0)
+
+    rt.ensure_account()
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        acc.cash = 100.0
+        store.save_account(conn, acc)
+    rt.run_once(now=_agora("13:03:00"))
+
+    # caixa 100, lote a 10.00 = R$1.000: 1 + floor(100 / (4*1000)) = 1 lote.
+    assert rt.machine.position.quantity == 100
 
 
 def test_execution_mode_invalido_recusa_no_construtor():
@@ -525,6 +773,58 @@ def test_penetracao_de_um_tick_e_registrada_como_um_tick(tmp_path, pregao_aberto
         acc = store.load_account(conn, SLOT.id)
         intent = store.all_intents(conn, acc.id)[0]
     assert intent.payload["penetration_ticks"] == pytest.approx(1.0)
+
+
+def test_barra_sem_faixa_grava_penetracao_n_a_em_vez_de_zero(tmp_path, pregao_aberto):
+    """E' o caso NORMAL do feed de tick: `open==high==low==close`, porque um
+    negocio e' um evento atomico a um preco so'.
+
+    Gravar 0.0 ali seria pior que nao medir — o painel e quem le o diario
+    leriam "a premissa de maker e' fragil em 100% dos toques", quando na
+    verdade a penetracao e' zero POR CONSTRUCAO e a pergunta nao cabe nesse
+    formato de dado. Quem responde a pergunta de fila aqui e'
+    `volume_no_nivel`."""
+    barras = [
+        _bar("13:00", 10.00, 10.00, 10.00, 10.00),
+        # degeneradas, como o tick a tick entrega: um preco por evento
+        _bar("13:01", 9.90, 9.90, 9.90, 9.90),
+        _bar("13:02", 9.80, 9.80, 9.80, 9.80),   # negocia exatamente no nivel
+        _bar("13:03", 9.85, 9.85, 9.85, 9.85),
+    ]
+    rt, _feed = _runtime(tmp_path, barras)
+
+    rt.run_once(now=_agora("13:04:00"))
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        intent = store.all_intents(conn, acc.id)[0]
+    assert intent.payload["penetration_ticks"] is None
+    assert intent.payload["volume_no_nivel"] > 0
+
+
+def test_volume_no_nivel_conta_o_que_negociou_esperando_a_ordem(tmp_path, pregao_aberto):
+    """A pergunta de fila, feita de um jeito que o tick responde: quantas
+    acoes passaram pelo meu nivel contra quantas eu pedi.
+
+    Menos volume no nivel do que a quantidade pedida significa que o
+    preenchimento que o backtest assumiu era otimismo — a ordem podia estar
+    atras na fila e nunca chegar a vez dela."""
+    barras = [
+        _bar("13:00", 10.00, 10.00, 10.00, 10.00),
+        _bar("13:01", 9.90, 9.90, 9.90, 9.90),   # acima do nivel: nao conta
+        _bar("13:02", 9.80, 9.80, 9.80, 9.80),   # no nivel: conta (1.000)
+        _bar("13:03", 9.79, 9.79, 9.79, 9.79),   # abaixo: contaria, mas ja encheu
+    ]
+    rt, _feed = _runtime(tmp_path, barras)
+
+    rt.run_once(now=_agora("13:05:00"))
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        intent = store.all_intents(conn, acc.id)[0]
+    # so' a barra que negociou NO nivel entrou na conta — a de 9.90 nao.
+    assert intent.payload["volume_no_nivel"] == pytest.approx(1_000.0)
+    assert intent.payload["quantidade_pedida"] == 100
 
 
 # ---------- short: quantidade negativa em live_positions ------------------
@@ -622,7 +922,49 @@ def test_liga_depois_do_corte_comeca_a_frio_sem_buscar_semente(tmp_path, pregao_
 
     sessao = [p for p in passos if p.action == "daytrade_sessao"][0]
     assert sessao.detail["inicio"] == "cold"
-    assert feed.pedidos_de_semente == []  # nem tentou buscar o historico
+    # a UNICA busca ao feed e' a cauda do pregao ANTERIOR (janela de volume
+    # rolante, sempre buscada) -- o warm start de HOJE nao acontece (comeco a
+    # frio nunca tenta buscar a semente de HOJE).
+    assert feed.pedidos_de_semente == [(date(2026, 8, 20), itr_mod._FIM_DE_PREGAO_QUALQUER)]
+
+
+def test_seed_volume_window_busca_e_repassa_a_cauda_do_pregao_anterior(tmp_path, pregao_aberto):
+    """Fim a fim: a cauda do pregao ANTERIOR (2026-08-20) chega no robo via
+    `seed_volume_window` ANTES da primeira barra de hoje, e influencia o
+    teto de posicao da entrada -- pedido literal do dono ('na abertura ele
+    considera tambem as ultimas barras do dia anterior'), nao um numero
+    congelado no minimo de 1 lote por falta de historico."""
+    def _bar_on(date_str, hhmm, o, h, low, c, volume):
+        return Bar(ts=pd.Timestamp(f"{date_str} {hhmm}", tz="UTC"),
+                   open=float(o), high=float(h), low=float(low), close=float(c), volume=float(volume))
+
+    # 30 barras de 10.000 acoes = 300.000 no total, ultimas 30min do pregao
+    # anterior (que fecha as 19:54 UTC nesse roteiro).
+    cauda_ontem = [_bar_on("2026-08-20", f"19:{25 + m:02d}", 10.0, 10.0, 10.0, 10.0, 10_000.0)
+                   for m in range(30)]
+    rt, feed = _runtime(tmp_path, barras=[], semente=cauda_ontem,
+                        fixed_anchor_until=time(14, 0),
+                        realocacao_teto_pct_volume_minuto=0.10, realocacao_limiar_caixa=0.0001)
+
+    # 1a chamada: comeco a FRIO (depois do corte de ancora fixa, sem semente
+    # de HOJE) -- so' estabelece a sessao e ja busca a cauda do pregao
+    # anterior. Deliberadamente NAO uso warm start aqui: `on_capital_update`
+    # nunca e' chamado durante o replay do warm start (ver o comentario em
+    # `Gremah.__init__`), entao o caixa ficaria zerado e o teto de CAIXA
+    # (nao o de volume que quero medir) travaria o lote em 1 de qualquer jeito.
+    rt.run_once(now=_agora("15:01:00"))
+    assert (date(2026, 8, 20), itr_mod._FIM_DE_PREGAO_QUALQUER) in feed.pedidos_de_semente
+
+    # a barra "ao vivo" chega DEPOIS, pelo caminho normal (`on_capital_update`
+    # de verdade) -- e' aqui que o teto de volume (com a cauda ja' carregada)
+    # decide o tamanho da PRIMEIRA entrada do dia.
+    feed._barras.append(_bar_on("2026-08-21", "15:01", 10.00, 10.00, 10.00, 10.00, 0.0))
+    rt.run_once(now=_agora("15:02:00"))
+
+    # media = 300.000 da cauda / 30 = 10.000 acoes/min; teto 10% = 1.000
+    # acoes = 10 lotes -- nao o minimo de 1 lote que "sem cauda" produziria.
+    assert rt.machine.resting_limit is not None
+    assert rt.machine.resting_limit.quantity == 1_000
 
 
 def test_comeco_a_frio_nao_consome_as_barras_que_ja_passaram(tmp_path, pregao_aberto):
@@ -657,8 +999,11 @@ def test_buraco_grande_achata_e_nao_reprocessa(tmp_path, pregao_aberto):
         acc = store.load_account(conn, SLOT.id)
     assert "PMAM3" in acc.positions  # posicao aberta antes do buraco
 
+    # 28 minutos entre um passo e outro (13:02 -> 13:30), bem acima de
+    # `MAX_GAP_SECONDS`. O que dispara o buraco e' esse tempo SEM RODAR, nao a
+    # quantidade de barras que se acumulou — ver a constante.
     feed._barras = barras + [
-        _bar(f"13:{m:02d}", 9.50, 9.52, 9.48, 9.50) for m in range(2, 2 + MAX_GAP_BARS + 2)
+        _bar(f"13:{m:02d}", 9.50, 9.52, 9.48, 9.50) for m in range(2, 30)
     ]
     passos = rt.run_once(now=_agora("13:30:00"))
 
@@ -672,6 +1017,33 @@ def test_buraco_grande_achata_e_nao_reprocessa(tmp_path, pregao_aberto):
     assert any(e["level"] == "error" and "buraco" in e["message"] for e in eventos)
 
 
+def test_rajada_de_eventos_em_segundos_NAO_e_buraco(tmp_path, pregao_aberto):
+    """O detector mede tempo SEM RODAR, nao quantidade de eventos.
+
+    E' o caso que o feed de tick torna rotina: dezenas de negocios podem sair
+    em segundos (`gremah_tick` recebe um evento por negocio, nao um por
+    minuto). Contando eventos, como era ate 2026-08-22, cada rajada normal
+    seria lida como "o processo ficou fora do ar" — o robo achataria a posicao
+    e reiniciaria a sessao no meio de um pregao perfeitamente saudavel."""
+    semente = [_bar("13:00", 10.00, 10.00, 10.00, 10.00)]
+    rt, feed = _runtime(tmp_path, barras=[], semente=semente, fixed_anchor_until=time(14, 0))
+    rt.run_once(now=_agora("13:00:30"))
+
+    # 40 eventos de preco (mais que o antigo teto de 15) chegando dentro de
+    # 40 segundos — muito abaixo dos 15 minutos de `MAX_GAP_SECONDS`.
+    base = pd.Timestamp("2026-08-21 13:00:30", tz="UTC")
+    feed._barras = [
+        Bar(ts=base + pd.Timedelta(seconds=s),
+            open=9.50, high=9.50, low=9.50, close=9.50, volume=100.0)
+        for s in range(1, 41)
+    ]
+    passos = rt.run_once(now=_agora("13:01:20"))
+
+    assert [p.action for p in passos if p.action == "daytrade_buraco"] == []
+    consumo = [p for p in passos if p.action == "daytrade"][0]
+    assert consumo.detail["barras"] == 40
+
+
 def test_buraco_recalibra_no_passo_seguinte(tmp_path, pregao_aberto):
     """Depois de achatar, o pregao CONTINUA: o robo tem de ser recalibrado
     (ainda ha janela fixa) em vez de adotar como abertura a primeira barra
@@ -681,7 +1053,7 @@ def test_buraco_recalibra_no_passo_seguinte(tmp_path, pregao_aberto):
     rt.run_once(now=_agora("13:01:00"))
 
     feed._barras = [_bar(f"13:{m:02d}", 9.50, 9.52, 9.48, 9.50)
-                    for m in range(1, 1 + MAX_GAP_BARS + 2)]
+                    for m in range(1, 18)]
     rt.run_once(now=_agora("13:25:00"))
 
     feed._barras = feed._barras + [_bar("13:26", 9.50, 9.52, 9.48, 9.50)]

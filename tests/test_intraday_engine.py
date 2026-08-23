@@ -210,6 +210,33 @@ def test_flatten_forcado_nao_carrega_posicao_para_a_proxima_sessao():
     assert vistas[bars_b.index[0]] is None
 
 
+def test_seed_volume_window_recebe_a_cauda_da_sessao_anterior_a_cada_dia():
+    """`IntradayStrategy.seed_volume_window` (2026-08-22, pedido do dono:
+    teto de posicao por volume rolante) precisa da CAUDA do pregao anterior
+    para completar a janela na abertura -- e' o motor (aqui) que tem acesso
+    ao dataframe inteiro e recorta essa cauda, nunca a propria estrategia
+    (AGENTS.md: `strategy/` so' importa `core`)."""
+    bars_a = _mk_bars("2026-01-05", [(100, 101, 99, 100)] * 3)
+    bars_b = _mk_bars("2026-01-06", [(200, 201, 199, 200)] * 2)
+    bars = pd.concat([bars_a, bars_b])
+
+    class _RecordingStrategy(_StubIntradayStrategy):
+        def __init__(self):
+            super().__init__()
+            self.seed_calls: list[list] = []
+
+        def seed_volume_window(self, previous_session_tail):
+            self.seed_calls.append(list(previous_session_tail))
+
+    strat = _RecordingStrategy()
+    run_intraday_backtest(bars, strat, _config())
+
+    assert len(strat.seed_calls) == 2
+    assert strat.seed_calls[0] == []  # primeira sessao do backtest: nao ha pregao anterior carregado
+    cauda_dia2 = strat.seed_calls[1]
+    assert [b.ts for b in cauda_dia2] == list(bars_a.index)  # as 3 barras do dia 1, dentro da folga de 90min
+
+
 def test_lado_short_stop_acima_target_abaixo():
     bars = _mk_bars("2026-01-05", [
         (100, 101, 99, 100),

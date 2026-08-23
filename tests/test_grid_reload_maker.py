@@ -58,7 +58,8 @@ def test_recarrega_apos_fechar_por_alvo_alternando_o_lado():
     bars = _bars(rows)
     strat = GridReloadMaker(level_spacing_ticks=3, profit_ticks=1, stop_ticks=20, tick_size=0.01)
     costs = IntradayCostModel(point_value_brl=1.0, tick_size=0.01, fee_round_trip_brl=0.0, slippage_ticks=0.0)
-    config = IntradayBacktestConfig(costs=costs, session_end_time=time(23, 59), target_fills_as_maker=True)
+    config = IntradayBacktestConfig(costs=costs, initial_capital=1_000.0,
+                                     session_end_time=time(23, 59), target_fills_as_maker=True)
 
     result = run_intraday_backtest(bars, strat, config)
 

@@ -20,6 +20,34 @@ def cagr(equity: pd.Series) -> float:
     return total_return ** (1.0 / years) - 1.0
 
 
+def period_return(equity: pd.Series, min_years_to_annualize: float = 1.0) -> float:
+    """`cagr(equity)` se o periodo cobrir pelo menos `min_years_to_annualize`
+    anos, senao o retorno TOTAL do periodo (sem anualizar).
+
+    Anualizar (elevar o retorno a `1/anos`) so' faz sentido com uma
+    quantidade de dado da ORDEM DE UM ANO -- com menos, o expoente e' > 1 e
+    AMPLIFICA o retorno do periodo em vez de estima-lo (67 dias = 0,18 anos
+    -> expoente 5,46; um retorno de 3x no periodo vira "39.805% ao ano", que
+    ninguem vai realmente repetir 5,46 vezes seguidas). Medido no day trade
+    (`GremahTick`, PMAM3, 2026-08-22): um OOS de 67 dias com capital real de
+    R$100 dava CAGR de dezenas de milhares de %, sem erro nenhum na conta --
+    so' a pergunta errada pro dado que se tem. Existe como funcao SEPARADA
+    de `cagr()` (nao um parametro nela) porque o ranking diario/portfolio
+    (`backtest/engine.py`, `engine_portfolio.py`, `engine_satellite.py`) roda
+    em janelas de anos de verdade (FULL/5Y/3Y/1Y) onde anualizar e' exatamente
+    a conta certa -- so' o motor intradiario (janelas de semanas/meses por
+    natureza do split IS/OOS) precisa deste fallback."""
+    if len(equity) < 2:
+        return 0.0
+    total_return = equity.iloc[-1] / equity.iloc[0]
+    years = (equity.index[-1] - equity.index[0]).days / 365.25
+    if years <= 0 or total_return <= 0:
+        return 0.0
+    if years < min_years_to_annualize:
+        return total_return - 1.0
+    return total_return ** (1.0 / years) - 1.0
+
+
 def max_drawdown(equity: pd.Series) -> float:
     peak = equity.cummax()
     dd = equity / peak - 1.0
@@ -47,8 +75,12 @@ def sortino(equity: pd.Series, rf_annual: float = 0.10) -> float:
     return float(excess.mean() / downside.std() * math.sqrt(TRADING_DAYS))
 
 
-def calmar(equity: pd.Series) -> float:
-    c = cagr(equity)
+def calmar(equity: pd.Series, min_years_to_annualize: float | None = None) -> float:
+    """`min_years_to_annualize=None` (default, todo chamador existente):
+    usa `cagr()` sem ressalva -- comportamento antigo intacto. Um valor
+    numerico troca para `period_return()` (ver a docstring la para o
+    motivo) -- so' o motor intradiario passa isso."""
+    c = cagr(equity) if min_years_to_annualize is None else period_return(equity, min_years_to_annualize)
     dd = abs(max_drawdown(equity))
     return c / dd if dd > 0 else 0.0
 

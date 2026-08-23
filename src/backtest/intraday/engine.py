@@ -103,8 +103,26 @@ def run_intraday_backtest(
     equity_index: list[pd.Timestamp] = []
     equity_values: list[float] = []
 
+    previous_session_df: pd.DataFrame | None = None
     for session_idx, (session_date, session_df) in enumerate(bars.groupby(bars.index.date)):
         is_resumed_session = resume_same_session and session_idx == 0
+        # `seed_volume_window` (RollingVolumeWindow) precisa da CAUDA do
+        # pregao anterior para completar a janela de volume rolante logo na
+        # abertura -- pulado para a sessao RESUMIDA porque ela ja foi
+        # calibrada por fora (mesmo motivo de pular `on_session_start`
+        # abaixo). `bars` ja carrega tudo em memoria (`strategy.initialize`
+        # acima recebeu o mesmo dataframe): so' precisamos do TRECHO final
+        # da sessao anterior, nao dela inteira -- 90min de folga sobre a
+        # janela default de 30min do robo, generico o bastante para
+        # qualquer janela configurada sem carregar o dia inteiro.
+        if not is_resumed_session:
+            tail_bars: list[Bar] = []
+            if previous_session_df is not None and not previous_session_df.empty:
+                corte = previous_session_df.index[-1] - pd.Timedelta(minutes=90)
+                tail_df = previous_session_df[previous_session_df.index > corte]
+                tail_bars = [bar_from_row(ts, row) for ts, row in tail_df.iterrows()]
+            strategy.seed_volume_window(tail_bars)
+
         if is_resumed_session:
             machine.resume_session(session_date, seed_pending=seed_pending)
         else:
@@ -127,12 +145,20 @@ def run_intraday_backtest(
             on_progress({"session_date": session_date, "trades_so_far": len(trades),
                          "session_pnl_brl": machine.session_pnl})
 
+        previous_session_df = session_df
+
     equity_curve = pd.Series(equity_values, index=pd.DatetimeIndex(equity_index), name="equity")
     pnl_pcts = [t.pnl_pct for t in trades]
     result_metrics = {
-        "cagr": metrics.cagr(equity_curve),
+        # `period_return`, nao `cagr` puro: o split IS/OOS deste motor roda
+        # em janelas de semanas/meses, nunca de anos -- anualizar isso
+        # amplifica o retorno em vez de estima-lo (ver a docstring de
+        # `metrics.period_return`). A chave continua "cagr" (nao muda o
+        # contrato de quem le `result.metrics`), so' o CALCULO troca quando
+        # o periodo e' curto demais pra anualizar de verdade.
+        "cagr": metrics.period_return(equity_curve),
         "max_drawdown": metrics.max_drawdown(equity_curve),
-        "calmar": metrics.calmar(equity_curve),
+        "calmar": metrics.calmar(equity_curve, min_years_to_annualize=1.0),
         **metrics.trade_stats(pnl_pcts),
         "n_trades": len(trades),
     }

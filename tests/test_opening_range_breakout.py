@@ -125,7 +125,7 @@ def test_integracao_com_o_motor_entra_e_sai_pelo_target():
 
     strat = OpeningRangeBreakout(symbol="PMAM3", range_minutes=5, target_r_multiple=1.5)
     costs = IntradayCostModel(point_value_brl=0.2, tick_size=1.0, fee_round_trip_brl=0.0, slippage_ticks=0.0)
-    config = IntradayBacktestConfig(costs=costs, session_end_time=time(23, 59))
+    config = IntradayBacktestConfig(costs=costs, initial_capital=1_000.0, session_end_time=time(23, 59))
 
     result = run_intraday_backtest(bars, strat, config)
 

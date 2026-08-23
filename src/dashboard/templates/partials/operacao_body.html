@@ -391,8 +391,14 @@
              `static/js/operacao.js`. Sem JS, o select de ativos mostra tudo e
              o servidor recusa o par inválido com mensagem. #}
           <select name="robot" data-ops-robot-select required>
+            {# A ordem é o pódio declarado (ver `strategy/daytrade/registry.py`),
+               e o TOP-N vai no texto: dentro de um <select> a ordem sozinha não
+               se lê como recomendação. A granularidade entra junto porque é o
+               que distingue dois robôs do mesmo desenho. #}
             {% for robo in novo_robo.robos %}
-            <option value="{{ robo.key }}"{% if loop.first %} selected{% endif %}>{{ robo.label }}</option>
+            <option value="{{ robo.key }}"{% if loop.first %} selected{% endif %}>
+              TOP-{{ robo.rank }} · {{ robo.label }} ({{ "negócio a negócio" if robo.feed_kind == "tick" else "barra de 1 min" }})
+            </option>
             {% endfor %}
           </select>
         </div>

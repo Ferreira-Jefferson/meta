@@ -48,7 +48,8 @@ def test_integracao_entrada_e_alvo_ambos_sem_slippage_com_target_maker():
     strat = GridBidirecionalTicksMaker2(legs_per_side=1, level_spacing_ticks=2, tick_size=0.01, profit_ticks=1)
     # slippage bem alto para provar que NEM entrada NEM alvo pagam nada.
     costs = IntradayCostModel(point_value_brl=1.0, tick_size=0.01, fee_round_trip_brl=0.0, slippage_ticks=5.0)
-    config = IntradayBacktestConfig(costs=costs, session_end_time=time(23, 59), target_fills_as_maker=True)
+    config = IntradayBacktestConfig(costs=costs, initial_capital=1_000.0,
+                                     session_end_time=time(23, 59), target_fills_as_maker=True)
 
     result = run_intraday_backtest(bars, strat, config)
 

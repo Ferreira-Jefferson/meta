@@ -154,8 +154,12 @@ CHAVE de um robo do registry de swing (`strategy.registry.list_strategies()`
 / pagina `/estrategias`), resolvido via
 `strategy.registry.get_strategy(chave).factory()`. Slot `daytrade`: a chave
 vem do registry PROPRIO de day trade (`strategy.daytrade.registry.
-list_daytrade_robots()`, hoje so `gremah` — ver docstring de la para o
-motivo de nao ser o mesmo registry). O SIMBOLO negociado e' propriedade do
+list_daytrade_robots()` — ver docstring de la para o motivo de nao ser o mesmo
+registry, e para o podio declarado: `gremah_tick` e' o TOP-1, `gremah` o
+TOP-2). A GRANULARIDADE do dado tambem vem do robo (`feed_kind`): o mesmo
+comando sobe um robo de barra M1 ou um de negocio a negocio sem nenhuma flag a
+mais, porque quem monta o feed le a declaracao dele
+(`live/intraday_feed.py::feed_for`). O SIMBOLO negociado e' propriedade do
 ROBO escolhido (`IntradayStrategy.symbol`), nao do slot: `core.config.Slot`
 nao declara simbolo desde 2026-08-21, exatamente para permitir registrar um
 segundo robo de day trade operando outro ativo sem tocar no catalogo.
@@ -272,7 +276,7 @@ def build_intraday(args):
     classe: mantém funcionando qualquer invocação antiga da linha de comando,
     sem inventar um ativo."""
     from backtest.intraday.profiles import PROFILES, config_for
-    from live.bar_feed import MT5BarFeed
+    from live.intraday_feed import feed_for
     from live.intraday_runtime import IntradayLiveRuntime
     from market_data_intraday.mt5_source import symbol_economics
     from strategy.daytrade.registry import get_daytrade_robot
@@ -336,7 +340,9 @@ def build_intraday(args):
     # papel liquido de referencia: se ele acusar, o runtime nao opera (ver
     # `IntradayLiveRuntime`), em vez de reescrever o offset por conta propria.
     clock_feed = MT5Feed(**credenciais)
-    bar_feed = MT5BarFeed(symbol, **credenciais)
+    # BARRA M1 ou NEGOCIO A NEGOCIO conforme o robo declara em `feed_kind` —
+    # nunca uma escolha deste chamador (ver `live/intraday_feed.py`).
+    bar_feed = feed_for(strategy_obj, **credenciais)
     return IntradayLiveRuntime(
         slot=slot,
         strategy=strategy_obj,
@@ -345,7 +351,8 @@ def build_intraday(args):
         # o robo validado tinham modelo de custo diferente.
         config=config_for(profile, trade_tick_value=econ.trade_tick_value,
                           trade_tick_size=econ.trade_tick_size,
-                          target_fills_as_maker=strategy_obj.target_fills_as_maker),
+                          target_fills_as_maker=strategy_obj.target_fills_as_maker,
+                          initial_capital=args.capital),
         bar_feed=bar_feed,
         broker=broker,
         notifier=_build_notifier(args.notify_min_level),

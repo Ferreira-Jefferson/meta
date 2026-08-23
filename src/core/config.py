@@ -13,6 +13,11 @@ DATA_DIR = ROOT / "data" / "raw"
 # `scripts/run_walk_forward.py`) engolir um formato que nao e o dele por
 # acidente. Ver `market_data_intraday/storage.py`.
 INTRADAY_DATA_DIR = ROOT / "data" / "raw_intraday"
+# Tick a tick (trade ticks via MT5, `market_data_intraday/mt5_ticks_source.py`)
+# -- diretorio PROPRIO do M1 pelo MESMO motivo de `INTRADAY_DATA_DIR` acima:
+# formato diferente (bid/ask/last/volume/flags, sem open/high/low) misturado
+# no mesmo glob quebraria o primeiro leitor que assumir OHLCV.
+TICK_DATA_DIR = ROOT / "data" / "raw_ticks"
 DB_PATH = ROOT / "db" / "journal.sqlite"
 SCHEMA_PATH = ROOT / "src" / "journal" / "schema.sql"
 

@@ -29,23 +29,58 @@ em `policy_state["intraday"]["shadow_pnl_brl"]`.
 Isto nao e' so prudencia: e' a MEDICAO que falta. O robo pressupoe que uma
 ordem-limite parada no nivel X preenche quando o preco TOCA X (maker, sem
 pagar o spread) — premissa que nenhum backtest pode validar sem livro de
-ofertas. Por isso cada entrada em sombra grava `penetration_ticks`: quantos
-ticks a barra ATRAVESSOU o nivel. Se os toques penetram 0-1 tick, a premissa
-e' fragil (a ordem podia estar atras na fila e nunca executar); se as barras
-atravessam varios ticks, uma ordem parada quase certamente preenche. Sem
-esse campo, rodar em sombra nao responde a pergunta que motivou o modo.
+ofertas. Cada entrada em sombra grava DOIS numeros para atacar essa pergunta,
+porque nenhum dos dois serve nas duas granularidades:
 
-Divergencia honesta declarada
------------------------------
-Stop e alvo aqui resolvem em barra M1 FECHADA, entao o robo reage ate 60s
-depois do que o backtest intrabar assume. Nao ha correcao possivel do lado
-do robo (um stop por tick seria uma REGRA DIFERENTE da validada, o que a
-regra 6 proibe) — a correcao real e' SL/TP no lado da corretora, trabalho
-separado. Ate la, isto e' um custo conhecido, nao uma surpresa.
+  - `penetration_ticks`: quantos ticks a barra ATRAVESSOU o nivel. Toques de
+    0-1 tick indicam premissa fragil (a ordem podia estar atras na fila e
+    nunca executar); barras que atravessam varios ticks quase certamente
+    preencheriam uma ordem parada. So' faz sentido com feed M1 — uma barra
+    precisa TER faixa para atravessar alguma coisa. Com feed de tick sai
+    `None` (ver `_penetration_ticks`): um negocio e' um preco so', a
+    penetracao seria zero em 100% dos casos por construcao, e gravar esse zero
+    leria como "premissa sempre fragil" quando a pergunta e' que nao cabe.
+
+  - `volume_no_nivel`: quantas acoes NEGOCIARAM no nivel (ou alem dele)
+    enquanto a ordem estava em pe, ate' o fill inclusive, contra a quantidade
+    que o robo pediu (`quantidade_pedida`, gravada junto). E' a mesma pergunta
+    de fila feita de um jeito que o tick responde e o M1 tambem: se 40.000
+    acoes passaram pelo meu nivel e eu queria 200, a fila quase certamente
+    chegou em mim; se passaram 200 e eu queria 200, o preenchimento que o
+    backtest assumiu era otimismo.
+
+Sem esses campos, rodar em sombra nao responde a pergunta que motivou o modo.
+
+Duas granularidades, o MESMO runtime
+------------------------------------
+`bar_feed` pode ser `live/bar_feed.py::MT5BarFeed` (barra M1 fechada) ou
+`live/tick_feed.py::MT5TickFeed` (negocio a negocio) — os dois tem a mesma
+interface, e quem escolhe e' o proprio robo, via `IntradayStrategy.feed_kind`
+(montado em `live/intraday_feed.py::feed_for`). Nada aqui pergunta qual dos
+dois esta lendo: a unidade e' sempre "um evento de preco ja' consumado", e o
+motor (`IntradaySessionMachine`) e' resolution-agnostic por construcao.
+
+O que MUDA de verdade entre os dois nao esta neste arquivo, esta na
+divergencia abaixo.
+
+Divergencia honesta declarada — e o que o tick apaga dela
+----------------------------------------------------------
+Com feed M1, stop e alvo resolvem em barra FECHADA: o robo reage ate 60s
+depois do que o backtest intrabar assume. Nao ha correcao possivel do lado do
+robo (um stop por tick seria uma REGRA DIFERENTE da validada, o que a regra 6
+proibe) — a correcao real e' SL/TP no lado da corretora, trabalho separado.
+
+Com feed de TICK essa divergencia especifica desaparece: o robo reavalia stop
+e alvo a cada negocio, que e' a mesma granularidade em que o backtest de tick
+o validou. Some tambem a ambiguidade "stop e alvo tocados na mesma barra"
+(`IntradayBacktestConfig.ambiguous_bar_resolution`), porque um negocio tem um
+preco so'. O que NAO some, e continua sendo custo conhecido nos dois casos: o
+passo do supervisor (5s) e a premissa de maker, que e' justamente o que
+`penetration_ticks` existe para medir.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timezone
 from pathlib import Path
 from typing import Optional
@@ -88,15 +123,37 @@ from strategy.daytrade.base import (
     warm_start_calibration,
 )
 
-#: Acima disto, um buraco de barras nao e' "o processo demorou um pouco" — e'
-#: o processo tendo ficado fora do ar. Reprocessar 200 barras de uma vez faria
-#: o robo tomar 200 decisoes contra precos que ja passaram; achatar e recomecar
-#: e' a leitura honesta. Casa em espirito com `Strategy.on_missed_bars` do lado
-#: diario (ver `missed_session_policy_2026_08_20` na memoria do projeto): o
-#: buraco nunca e' ignorado, e a decisao velha nunca e' executada.
-MAX_GAP_BARS = 15
+#: Acima disto sem RODAR um passo, nao e' "o processo demorou um pouco" — e' o
+#: processo tendo ficado fora do ar. Reprocessar 15 minutos de eventos de uma
+#: vez faria o robo tomar dezenas de decisoes contra precos que ja passaram;
+#: achatar e recomecar e' a leitura honesta. Casa em espirito com
+#: `Strategy.on_missed_bars` do lado diario (ver
+#: `missed_session_policy_2026_08_20` na memoria do projeto): o buraco nunca e'
+#: ignorado, e a decisao velha nunca e' executada.
+#:
+#: E' tempo SEM RODAR, e nao quantidade de eventos acumulados — a diferenca
+#: importa desde que existe feed de tick. Em M1 os dois mediam a mesma coisa
+#: (chega 1 barra por minuto, entao 15 barras == 15 minutos fora do ar). Em
+#: tick nao: um papel iliquido pode passar horas sem um unico negocio com o
+#: processo perfeitamente vivo, e uma rajada de 50 negocios em 10 segundos e'
+#: pregao normal. Contar eventos declararia buraco nos dois casos errados.
+MAX_GAP_SECONDS = 15 * 60.0
 
 _SHADOW_NOTE = "SHADOW — nao enviada ao MT5"
+
+#: Sentinela de "fim do pregao" para pedir a SESSAO INTEIRA anterior via
+#: `bar_feed.session_bars_until(previous_session, ate)` -- o metodo ja
+#: recorta pelo `session` pedido (ver `MT5BarFeed`/`MT5TickFeed`), entao um
+#: `ate` bem no futuro so' garante nao cortar a cauda real do pregao
+#: anterior antes da hora.
+_FIM_DE_PREGAO_QUALQUER = pd.Timestamp("2999-01-01", tz="UTC")
+
+#: Folga sobre a janela rolante default do robo (30min,
+#: `strategy.daytrade.base.RollingVolumeWindow`) para decidir quanto da
+#: sessao anterior pedir ao feed antes de repassar a `seed_volume_window` --
+#: generico o bastante para qualquer janela configurada sem pedir o pregao
+#: anterior inteiro.
+_CAUDA_VOLUME_MINUTOS = 90.0
 
 
 @dataclass
@@ -106,6 +163,11 @@ class _SessionSnapshot:
 
     session: Optional[date] = None
     last_bar_ts: Optional[pd.Timestamp] = None
+    #: Quando este slot rodou um passo pela ultima vez dentro do pregao. E' a
+    #: base do detector de buraco (`MAX_GAP_SECONDS`) — persistido, e nao so'
+    #: em memoria, porque o caso que ele existe para pegar e' justamente o
+    #: processo que morreu e voltou.
+    last_poll_at: Optional[pd.Timestamp] = None
     shadow_pnl_brl: float = 0.0
     trades: int = 0
     # Ordens-limite postas e abandonadas sem preencher nesta sessao. A razao
@@ -121,6 +183,8 @@ class _SessionSnapshot:
         return {
             "session": self.session.isoformat() if self.session else None,
             "last_bar_ts": self.last_bar_ts.isoformat() if self.last_bar_ts is not None else None,
+            "last_poll_at": (self.last_poll_at.isoformat()
+                             if self.last_poll_at is not None else None),
             "shadow_pnl_brl": round(self.shadow_pnl_brl, 4),
             "trades": self.trades,
             "ordens_postas": self.ordens_postas,
@@ -133,9 +197,11 @@ class _SessionSnapshot:
         raw = raw or {}
         sess = raw.get("session")
         last = raw.get("last_bar_ts")
+        poll = raw.get("last_poll_at")
         return cls(
             session=date.fromisoformat(sess) if sess else None,
             last_bar_ts=pd.Timestamp(last) if last else None,
+            last_poll_at=pd.Timestamp(poll) if poll else None,
             shadow_pnl_brl=float(raw.get("shadow_pnl_brl") or 0.0),
             trades=int(raw.get("trades") or 0),
             ordens_postas=int(raw.get("ordens_postas") or 0),
@@ -176,12 +242,27 @@ class IntradayLiveRuntime:
         self.slot = slot
         self.account_name = slot.id
         self.strategy = strategy
-        self.config = config
+        # O CAPITAL DECLARADO DO SLOT ENTRA NA CONFIG, e nao so' na conta.
+        #
+        # `IntradayBacktestConfig.initial_capital` tem default de R$20.000, e a
+        # maquina o usa em dois lugares que decidem dinheiro de verdade: e' o
+        # numero que chega em `IntradayStrategy.on_capital_update` (o caixa que
+        # a `gremah`/`gremah_tick` usam para escolher QUANTOS LOTES pedir) e a
+        # `capital_base` de cada trade gravado. Ate 2026-08-22 nenhum montador
+        # de runtime ao vivo o sobrescrevia: o robo dimensionava contra
+        # R$20.000 imaginarios enquanto o dono tinha R$100 no ledger. Na PMAM3
+        # a R$0,13 isso e' a diferenca entre 2 lotes e 385 — uma perda de 1
+        # tick vira R$385 em vez de R$2, e estoura o teto de perda diaria
+        # (R$5,20) num unico trade, no primeiro trade.
+        #
+        # `replace` porque o dataclass e' frozen: a config continua imutavel,
+        # so' nasce com o numero certo.
+        self.initial_capital = float(initial_capital)
+        self.config = replace(config, initial_capital=self.initial_capital)
         self.bar_feed = bar_feed
         self.broker = broker
         self.notifier = notifier if notifier is not None else NullNotifier()
         self.execution_mode = execution_mode
-        self.initial_capital = float(initial_capital)
         self.db_path = Path(db_path) if db_path is not None else LIVE_DB_PATH
         # So o modo REAL injeta a ponte de execucao na maquina. Em sombra ela
         # fica `None` e os fills seguem simulados pela barra -- que e'
@@ -192,8 +273,19 @@ class IntradayLiveRuntime:
             MT5IntradayExecution(broker, strategy.symbol)
             if execution_mode == "live" else None
         )
-        self.machine = IntradaySessionMachine(strategy, config, execution=self.executor)
+        # `self.config`, nunca o `config` recebido: e' a versao com o capital
+        # real do slot (ver o bloco acima). Passar o argumento cru aqui era
+        # justamente o que mantinha a maquina dimensionando contra R$20.000.
+        self.machine = IntradaySessionMachine(strategy, self.config, execution=self.executor)
         self._snapshot = _SessionSnapshot()
+        # Acoes negociadas no nivel da ordem-limite que esta em pe AGORA (ver
+        # `_acumula_volume_no_nivel`). So em memoria, e nao no snapshot: e' a
+        # medicao de UMA ordem, e uma ordem nao sobrevive a um restart do
+        # processo — a maquina volta com a `resting_limit` restaurada, mas o
+        # que negociou nela enquanto o processo estava morto ninguem viu.
+        # Persistir um numero parcial daria a impressao de uma medicao
+        # completa.
+        self._volume_no_nivel = 0.0
         # `Intent` da entrada corrente — o `Order`/`Fill` do fechamento
         # penduram na MESMA intencao, para o diario responder "por que abriu
         # e por que fechou" numa linha so, como no lado diario.
@@ -305,6 +397,26 @@ class IntradayLiveRuntime:
             return False
         return now.astimezone(timezone.utc).time() < corte
 
+    def _seed_volume_window(self, session: date) -> None:
+        """Busca a CAUDA do pregao anterior e repassa para
+        `IntradayStrategy.seed_volume_window` -- so' um robo com teto de
+        posicao por volume rolante (`Gremah`/`GremahTick`, ver
+        `strategy.daytrade.base.RollingVolumeWindow`) usa isto; os outros
+        recebem uma lista que nunca consultam (default no-op na base).
+
+        Chamado a CADA `_start_session` (inclusive num restart no meio do
+        pregao, mesmo espirito do warm start) -- refazer a busca e' uma
+        chamada extra ao feed, nao um erro: `session_bars_until` nunca
+        levanta excecao (lista vazia se o terminal falhar, ver
+        `MT5BarFeed`/`MT5TickFeed`), entao o pior caso e' o robo operar sem
+        cauda, igual a um pregao sem historico anterior disponivel."""
+        anterior = clock.previous_session(session)
+        cauda = self.bar_feed.session_bars_until(anterior, _FIM_DE_PREGAO_QUALQUER)
+        if cauda:
+            corte = cauda[-1].ts - pd.Timedelta(minutes=_CAUDA_VOLUME_MINUTOS)
+            cauda = [b for b in cauda if b.ts > corte]
+        self.strategy.seed_volume_window(cauda)
+
     def _start_session(self, conn, account: AccountState, session: date, now: datetime) -> StepReport:
         """Calibra o robo para este pregao e (re)abre a sessao na maquina.
 
@@ -317,6 +429,8 @@ class IntradayLiveRuntime:
         num restart daria ao robo uma folga de risco que ele nao tem."""
         restaurada = self._snapshot.session == session and bool(self._snapshot.machine)
         pnl_antes, flat_antes = self.machine.session_pnl, self.machine.flattened
+
+        self._seed_volume_window(session)
 
         modo = "cold"
         semente = 0
@@ -334,12 +448,27 @@ class IntradayLiveRuntime:
                 if self.executor is not None and isinstance(pending, EnterLimit):
                     self.executor.place_limit(
                         side=pending.side, limit_price=pending.limit_price,
-                        quantity=pending.quantity or self.config.default_quantity,
+                        quantities=pending.children(self.config.default_quantity),
                         ts=seed_bars[-1].ts,
                     )
                 modo, semente = "warm_start", len(seed_bars)
                 self._snapshot.session = session
-                self._snapshot.last_bar_ts = seed_bars[-1].ts
+                # NUNCA anda pra tras: num restart (`restaurada=True`) o
+                # snapshot ja pode ter avancado alem do fim da semente de
+                # HOJE (`session_bars_until` busca de novo, do zero, e pode
+                # devolver menos barra que o processo anterior ja tinha
+                # consumido de verdade). Sobrescrever incondicionalmente
+                # fazia o robo REPROCESSAR uma barra ja consumida na
+                # proxima chamada de `run_once` -- contra uma posicao ja
+                # REAL (restaurada por `_restore`, chamado ANTES desta
+                # funcao), fechando-a por engano (achado 2026-08-22, ao
+                # ligar `resume_session` a ignorar semente sobre posicao ja
+                # restaurada -- sem aquele fix este bug ficava mascarado
+                # por um SEGUNDO bug que reabria a posicao na mesma barra).
+                marco = seed_bars[-1].ts
+                if restaurada and self._snapshot.last_bar_ts is not None:
+                    marco = max(marco, self._snapshot.last_bar_ts)
+                self._snapshot.last_bar_ts = marco
                 self._log(conn, account.id, "info",
                           f"sessao {session.isoformat()} calibrada com {len(seed_bars)} barra(s) "
                           "reais desde a abertura (warm start, nenhum trade fabricado); "
@@ -397,6 +526,11 @@ class IntradayLiveRuntime:
                 self._restore(account, hoje)
                 passos.append(self._start_session(conn, account, hoje, now))
 
+            # Ha' quanto tempo este slot nao roda um passo. Lido ANTES de
+            # carimbar o passo de agora, senao seria sempre zero.
+            parado_ha = self._parado_ha_segundos(now)
+            self._snapshot.last_poll_at = pd.Timestamp(now)
+
             barras = self.bar_feed.closed_bars_since(self._snapshot.last_bar_ts)
             if not barras:
                 self._persist(conn, account)
@@ -413,22 +547,33 @@ class IntradayLiveRuntime:
             self._avaliar_sugestao_de_capital(conn, account, hoje, barras[-1].close)
             if alarme_capital is not None and self.machine.position is None:
                 # Sem posicao aberta: nao comeca. Avanca `last_bar_ts` de
-                # proposito -- ficar sem consumir faria o proximo passo ver o
-                # mesmo lote de barras crescendo ate disparar `MAX_GAP_BARS` e
-                # reportar um "buraco" que nunca existiu.
+                # proposito -- ficar sem consumir faria o robo, quando o caixa
+                # enfim cobrisse o minimo, receber de uma vez todo o dado que
+                # passou enquanto ele estava barrado, e decidir contra precos
+                # que ja foram.
                 self._snapshot.last_bar_ts = barras[-1].ts
                 self._persist(conn, account)
                 return passos + [StepReport("daytrade_skip", hoje, phase=fase,
                                             detail={"motivo": "caixa abaixo do minimo",
                                                     "alarme": alarme_capital})]
 
-            if len(barras) > MAX_GAP_BARS:
-                passos.append(self._handle_gap(conn, account, hoje, barras))
+            if parado_ha is not None and parado_ha > MAX_GAP_SECONDS:
+                passos.append(self._handle_gap(conn, account, hoje, barras, parado_ha))
             else:
                 passos.append(self._consume(conn, account, hoje, barras))
 
             self._persist(conn, account)
         return passos
+
+    def _parado_ha_segundos(self, now: datetime) -> Optional[float]:
+        """Segundos desde o ultimo passo deste slot NESTE pregao, ou `None` se
+        e' o primeiro (nada a comparar — um pregao que comeca nao e' um
+        buraco). Ver `MAX_GAP_SECONDS` para por que a medida e' tempo sem
+        rodar, e nao eventos acumulados."""
+        anterior = self._snapshot.last_poll_at
+        if anterior is None:
+            return None
+        return (pd.Timestamp(now) - anterior).total_seconds()
 
     def _check_clock(self, conn, account: AccountState, session: date) -> Optional[str]:
         """Confere o relogio do servidor MT5 contra o papel liquido de
@@ -585,10 +730,11 @@ class IntradayLiveRuntime:
                       f"nao consegui avaliar sugestao de capital: {e}",
                       {"pregao": session.isoformat()})
 
-    def _handle_gap(self, conn, account: AccountState, session: date, barras: list[Bar]) -> StepReport:
+    def _handle_gap(self, conn, account: AccountState, session: date,
+                    barras: list[Bar], parado_ha: float) -> StepReport:
         """Buraco grande: o processo ficou fora do ar. Nao reprocessa (isso
         seria tomar decisoes velhas contra precos que ja passaram) — achata a
-        posicao com a barra MAIS RECENTE e recomeca a sessao dali."""
+        posicao com o evento de preco MAIS RECENTE e recomeca a sessao dali."""
         ultima = barras[-1]
         fechados = []
         for evento in self.machine.force_flatten(ultima.ts, ultima.close):
@@ -596,12 +742,14 @@ class IntradayLiveRuntime:
                 fechados.append(evento)
             self._apply(conn, account, evento, ultima)
         self._log(conn, account.id, "error",
-                  f"buraco de {len(barras)} barras M1 no pregao {session.isoformat()} — "
-                  "o processo ficou fora do ar. Nao reprocessei o buraco (decisao velha "
+                  f"buraco de {parado_ha / 60.0:.0f} minuto(s) sem rodar no pregao "
+                  f"{session.isoformat()} — o processo ficou fora do ar. Nao "
+                  f"reprocessei os {len(barras)} evento(s) acumulados (decisao velha "
                   "nunca executa, regra 7 do AGENTS.md); "
-                  f"{'posicao achatada e ' if fechados else ''}sessao reiniciada na barra "
+                  f"{'posicao achatada e ' if fechados else ''}sessao reiniciada em "
                   f"{ultima.ts.isoformat()}.",
-                  {"barras": len(barras), "achatou": bool(fechados)})
+                  {"parado_segundos": round(parado_ha, 1), "eventos": len(barras),
+                   "achatou": bool(fechados)})
         self._snapshot.last_bar_ts = ultima.ts
         # O buraco nao encerra o pregao — so a nossa participacao nele ate
         # aqui. Reabre o flatten e obriga uma RECALIBRACAO no proximo passo
@@ -613,12 +761,29 @@ class IntradayLiveRuntime:
         self.machine.flattened = False
         self._calibrated_for = None
         return StepReport("daytrade_buraco", session,
-                          detail={"barras": len(barras), "achatou": bool(fechados)})
+                          detail={"parado_segundos": round(parado_ha, 1),
+                                  "eventos": len(barras), "achatou": bool(fechados)})
+
+    def _acumula_volume_no_nivel(self, bar: Bar) -> None:
+        """Soma o volume negociado NO NIVEL (ou alem dele) da ordem-limite que
+        esta em pe agora. Chamado ANTES de a maquina consumir a barra — depois
+        dela, a ordem pode ja' ter virado posicao e o volume que a preencheu
+        ficaria de fora.
+
+        Ver `_penetration_ticks` para o motivo de esta medicao existir."""
+        order = self.machine.resting_limit
+        if order is None or self.machine.position is not None:
+            return
+        tocou = (bar.low <= order.limit_price if order.side == "long"
+                 else bar.high >= order.limit_price)
+        if tocou:
+            self._volume_no_nivel += bar.volume
 
     def _consume(self, conn, account: AccountState, session: date, barras: list[Bar]) -> StepReport:
         """Alimenta as barras na maquina, EM ORDEM, e journaliza os eventos."""
         abertas = fechadas = 0
         for bar in barras:
+            self._acumula_volume_no_nivel(bar)
             for evento in self.machine.on_closed_bar(bar):
                 if isinstance(evento, PositionOpened):
                     abertas += 1
@@ -663,10 +828,14 @@ class IntradayLiveRuntime:
         # preencher abriria uma posicao que o robo nunca pediu.
         if evento.replaced is not None:
             self.executor.cancel_limit(evento.ts, reason="superseded")
+        # Um filho REAL por elemento de `EnterLimit.split_quantities` (ver a
+        # docstring de `EnterLimit.children` e a Fase 2 em
+        # `live/intraday_execution.py`) -- `[quantity]` quando a ordem nao
+        # veio dividida, o comportamento de sempre.
         self.executor.place_limit(
             side=evento.order.side,
             limit_price=evento.order.limit_price,
-            quantity=evento.order.quantity or self.config.default_quantity,
+            quantities=evento.order.children(self.config.default_quantity),
             ts=evento.ts,
         )
 
@@ -678,6 +847,9 @@ class IntradayLiveRuntime:
         ordem que o robo abandonou continuaria viva na corretora e poderia
         preencher horas depois, contra um preco que o robo ja descartou."""
         self._snapshot.ordens_abandonadas += 1
+        # A medicao de fila e' POR ORDEM: o que negociou no nivel da ordem
+        # abandonada nao diz nada sobre o nivel da proxima, que e' outro preco.
+        self._volume_no_nivel = 0.0
         if self.executor is not None:
             self.executor.cancel_limit(evento.ts, reason=evento.reason)
 
@@ -687,10 +859,19 @@ class IntradayLiveRuntime:
 
         E' a medicao que valida (ou refuta) a premissa de maker do robo — ver
         a secao "Modo sombra" na docstring do modulo. `None` para entrada a
-        mercado: nao ha nivel para penetrar."""
+        mercado (nao ha nivel para penetrar) e para barra SEM FAIXA.
+
+        Barra sem faixa (`high == low`) e' o caso normal de um feed de tick: um
+        negocio e' um evento atomico a um preco so', entao a penetracao e'
+        SEMPRE zero por construcao. Gravar 0.0 ali seria pior que nao medir —
+        leria como "a premissa e' fragil, em 100% dos toques" quando na verdade
+        a pergunta nao cabe nesse formato de dado. Quem responde a pergunta de
+        fila em tick e' `volume_no_nivel` (ver `_acumula_volume_no_nivel`)."""
         if evento.order_kind != "limit" or not tick_size:
             return None
         bar = evento.bar
+        if bar.high == bar.low:
+            return None
         bruto = (evento.price - bar.low) if evento.side == "long" else (bar.high - evento.price)
         return round(bruto / tick_size, 3)
 
@@ -699,12 +880,29 @@ class IntradayLiveRuntime:
         `live_positions` — para o painel mostrar a mesma coisa que o painel do
         swing mostra, sem um caminho de leitura paralelo.
 
+        `self._open_intent_id` ja setado significa que a posicao JA EXISTIA
+        quando este fill chegou -- um FILHO adicional de `EnterLimit.
+        split_quantities` preenchendo numa barra seguinte (TOP-UP, ver
+        `_on_opened_top_up`), nao uma entrada nova. Sem este desvio, cada
+        filho geraria sua PROPRIA `Intent`/`Order`/`LivePosition` com o preco
+        e a quantidade so' DELE (nao os cumulativos que a maquina ja
+        calculou) -- o diario mostraria varias "entradas" fantasma e
+        `live_positions` ficaria com o ultimo fill sobrescrevendo os
+        anteriores em vez da posicao inteira.
+
         Short grava `quantity` NEGATIVA. O schema aceita (nao ha CHECK de
         sinal) e a marcacao a mercado sai correta sem nenhuma mudanca:
         `market_value = price * quantity` fica negativo, que e' exatamente o
         que uma posicao vendida vale."""
+        if self._open_intent_id is not None:
+            self._on_opened_top_up(conn, account, evento)
+            return
         tick = float(getattr(self.strategy, "tick_size", 0.0) or 0.0)
         penetration = self._penetration_ticks(evento, tick)
+        # Acoes negociadas NO NIVEL enquanto a ordem esperava, ate o fill
+        # inclusive. Zerado agora: a proxima ordem comeca a contar do zero.
+        volume_no_nivel = round(self._volume_no_nivel, 2)
+        self._volume_no_nivel = 0.0
         assinado = evento.quantity if evento.side == "long" else -evento.quantity
 
         intent = Intent(
@@ -733,6 +931,8 @@ class IntradayLiveRuntime:
                 "bar_ohlc": [evento.bar.open, evento.bar.high, evento.bar.low, evento.bar.close],
                 "bar_volume": evento.bar.volume,
                 "penetration_ticks": penetration,
+                "volume_no_nivel": volume_no_nivel,
+                "quantidade_pedida": evento.quantity,
                 "execution_mode": self.execution_mode,
             },
         )
@@ -767,6 +967,7 @@ class IntradayLiveRuntime:
             current_stop=evento.stop, max_price_seen=evento.price, min_price_seen=evento.price,
             bars_held=0, metadata={"side": evento.side, "target": evento.target,
                                    "penetration_ticks": penetration,
+                                   "volume_no_nivel": volume_no_nivel,
                                    "execution_mode": self.execution_mode},
         )
         store.upsert_position(conn, account.id, pos)
@@ -776,27 +977,103 @@ class IntradayLiveRuntime:
                   f"{'SOMBRA: ' if self.execution_mode == 'shadow' else ''}entrada "
                   f"{evento.side} {evento.quantity} {self.strategy.symbol} @ {evento.price:.4f} "
                   f"({evento.order_kind}; penetracao "
-                  f"{'n/a' if penetration is None else f'{penetration:.2f} tick(s)'})",
+                  f"{'n/a' if penetration is None else f'{penetration:.2f} tick(s)'}; "
+                  f"{volume_no_nivel:.0f} acoes negociadas no nivel contra as "
+                  f"{evento.quantity} que eu pedi)",
                   {"side": evento.side, "price": evento.price, "quantity": evento.quantity,
-                   "penetration_ticks": penetration, "execution_mode": self.execution_mode})
+                   "penetration_ticks": penetration, "volume_no_nivel": volume_no_nivel,
+                   "execution_mode": self.execution_mode})
+
+    def _on_opened_top_up(self, conn, account: AccountState, evento: PositionOpened) -> None:
+        """Um filho ADICIONAL de `EnterLimit.split_quantities` preencheu com a
+        posicao ja aberta -- grava mais um `Order`/`Fill` sob a MESMA
+        `Intent` (uma Intent pode gerar N Orders, ver a docstring de
+        `core.live_models.Intent`) e ATUALIZA `live_positions` com o preco
+        medio/quantidade CUMULATIVOS que `self.machine.position` ja
+        recalculou (nao os desta fatia isolada, que sozinhos nao
+        representam a posicao)."""
+        pos_total = self.machine.position
+        assert pos_total is not None  # top-up so' acontece com a posicao ainda aberta
+        self._volume_no_nivel = 0.0  # a proxima medicao comeca do zero
+
+        order = Order(
+            ticker=self.strategy.symbol,
+            side=OrderSide.BUY if evento.side == "long" else OrderSide.SELL,
+            quantity=evento.quantity,
+            order_type=OrderType.LIMIT if evento.order_kind == "limit" else OrderType.MARKET,
+            limit_price=evento.price if evento.order_kind == "limit" else None,
+            status=OrderStatus.FILLED,
+            filled_qty=evento.quantity,
+            avg_price=evento.price,
+            broker_ref=None if self.executor is None else self.executor.last_entry_ref,
+            intent_id=self._open_intent_id,
+            sent_at=evento.ts.to_pydatetime(),
+            note=(_SHADOW_NOTE if self.execution_mode == "shadow"
+                  else "fatia adicional de entrada day trade"),
+        )
+        order_id = store.record_order(conn, account.id, order)
+        store.record_fill(conn, Fill(order_id=order_id, quantity=evento.quantity,
+                                     price=evento.price, ts=evento.ts.to_pydatetime()))
+
+        existente = account.positions.get(self.strategy.symbol)
+        assinado = pos_total.quantity if evento.side == "long" else -pos_total.quantity
+        pos = LivePosition(
+            ticker=self.strategy.symbol, quantity=assinado,
+            entry_date=(existente.entry_date if existente is not None else evento.ts.date()),
+            entry_price=pos_total.entry_price,
+            capital_allocated=abs(pos_total.entry_price * pos_total.quantity),
+            current_stop=pos_total.current_stop,
+            max_price_seen=(existente.max_price_seen if existente is not None else pos_total.entry_price),
+            min_price_seen=(existente.min_price_seen if existente is not None else pos_total.entry_price),
+            bars_held=pos_total.bars_held,
+            metadata={"side": evento.side, "target": pos_total.current_target,
+                     "execution_mode": self.execution_mode},
+        )
+        store.upsert_position(conn, account.id, pos)
+        account.positions[pos.ticker] = pos
+
+        self._log(conn, account.id, "info",
+                  f"{'SOMBRA: ' if self.execution_mode == 'shadow' else ''}TOP-UP de entrada "
+                  f"{evento.side} +{evento.quantity} {self.strategy.symbol} @ {evento.price:.4f} "
+                  f"(posicao agora {pos_total.quantity} @ {pos_total.entry_price:.4f})",
+                  {"side": evento.side, "price": evento.price, "quantity": evento.quantity,
+                   "quantidade_total": pos_total.quantity, "preco_medio_total": pos_total.entry_price,
+                   "execution_mode": self.execution_mode})
 
     def _on_closed(self, conn, account: AccountState, evento: PositionClosed, bar: Bar) -> None:
         """Grava a saida e move o P&L para onde ele PODE ir.
+
+        `self.machine.position` ja reflete o estado APOS este evento (ver
+        `IntradaySessionMachine.on_closed_bar`, que so devolve a lista de
+        eventos completa no final): ainda `not None` significa que so' uma
+        FATIA fechou (`EnterLimit.exit_split_unit`) e a posicao continua
+        aberta com o restante -- desvia para `_on_closed_partial`, que
+        ATUALIZA em vez de apagar `live_positions`.
 
         Em sombra o caixa NAO e' tocado: o ledger manual e' o numero que o
         dono digitou, e sujar isso com lucro/prejuizo imaginario destruiria a
         unica fonte de verdade de caixa que temos (ver
         `dashboard/app.py::operacao_caixa`). O resultado sombra acumula em
         `policy_state`, separado, e aparece no painel como tal."""
+        if self.machine.position is not None:
+            self._on_closed_partial(conn, account, evento)
+            return
         trade = evento.trade
         assinado_saida = trade.quantity if trade.side == "short" else -trade.quantity
-        # Em execucao real TODA saida sai a mercado (ver
+        # Em execucao real TODA saida NAO dividida sai a mercado (ver
         # `IntradaySessionMachine._close_position`): uma saida por alvo que
         # dependesse de nova ordem-limite poderia nao preencher e deixar a
         # posicao aberta contra o proprio stop. Em sombra o alvo continua
         # sendo registrado como LIMIT, que e' a premissa que o backtest usa e
         # que a corrida em sombra existe para comparar.
         saida_real = self.executor.last_exit_order if self.executor is not None else None
+        # A ULTIMA fatia de uma saida dividida pode ter fechado por um fill
+        # de ordem-limite CONFIRMADO (nao por `exit_market`) -- `last_exit_order`
+        # fica stale nesse caso; `pending_exit_order` (ainda referenciando o
+        # ticket que acabou de preencher, ver `MT5IntradayExecution.exit_fill`)
+        # e' o fallback que preserva o `broker_ref` de verdade.
+        saida_limite = (self.executor.pending_exit_order
+                        if self.executor is not None and saida_real is None else None)
         alvo_maker = trade.exit_reason.value == "target" and saida_real is None
 
         order = Order(
@@ -810,7 +1087,8 @@ class IntradayLiveRuntime:
             avg_price=trade.exit_price,
             fees=trade.fees_total,
             slippage=trade.slippage_total,
-            broker_ref=None if saida_real is None else saida_real.broker_ref,
+            broker_ref=(saida_real.broker_ref if saida_real is not None
+                       else (saida_limite.broker_ref if saida_limite is not None else None)),
             intent_id=self._open_intent_id,
             sent_at=trade.exit_ts.to_pydatetime(),
             note=(_SHADOW_NOTE if self.execution_mode == "shadow"
@@ -839,6 +1117,74 @@ class IntradayLiveRuntime:
                    "entry_price": trade.entry_price, "exit_price": trade.exit_price,
                    "execution_mode": self.execution_mode,
                    "assinado_saida": assinado_saida})
+
+    def _on_closed_partial(self, conn, account: AccountState, evento: PositionClosed) -> None:
+        """Uma FATIA da posicao fechou (saida dividida, `EnterLimit.
+        exit_split_unit`), mas a posicao continua aberta com o restante --
+        ver `IntradaySessionMachine._resolve_live_split_exit` (execucao real)
+        ou o caminho simulado equivalente guiado por `bar.volume`.
+
+        Grava `Order`/`Fill` sob a MESMA `Intent` (fatiamento, ver a
+        docstring de `core.live_models.Intent`) e ATUALIZA (nao apaga)
+        `live_positions` com a quantidade que sobrou -- apagar aqui
+        destruiria o registro de uma posicao que ainda existe de verdade."""
+        trade = evento.trade
+        pos_total = self.machine.position
+        assert pos_total is not None
+
+        order = Order(
+            ticker=self.strategy.symbol,
+            side=OrderSide.SELL if trade.side == "long" else OrderSide.BUY,
+            quantity=trade.quantity,
+            order_type=OrderType.LIMIT,  # so' fatia dividida chega aqui, sempre maker
+            limit_price=trade.exit_price,
+            status=OrderStatus.FILLED,
+            filled_qty=trade.quantity,
+            avg_price=trade.exit_price,
+            fees=trade.fees_total,
+            slippage=trade.slippage_total,
+            broker_ref=(None if self.executor is None or self.executor.pending_exit_order is None
+                       else self.executor.pending_exit_order.broker_ref),
+            intent_id=self._open_intent_id,
+            sent_at=trade.exit_ts.to_pydatetime(),
+            note=(_SHADOW_NOTE if self.execution_mode == "shadow"
+                  else f"fatia de saida day trade ({trade.exit_reason.value})"),
+        )
+        order_id = store.record_order(conn, account.id, order)
+        store.record_fill(conn, Fill(order_id=order_id, quantity=trade.quantity,
+                                     price=trade.exit_price, fees=trade.fees_total,
+                                     ts=trade.exit_ts.to_pydatetime()))
+
+        existente = account.positions.get(self.strategy.symbol)
+        assinado = pos_total.quantity if pos_total.side == "long" else -pos_total.quantity
+        pos = LivePosition(
+            ticker=self.strategy.symbol, quantity=assinado,
+            entry_date=(existente.entry_date if existente is not None else pos_total.entry_ts.date()),
+            entry_price=pos_total.entry_price,
+            capital_allocated=abs(pos_total.entry_price * pos_total.quantity),
+            current_stop=pos_total.current_stop,
+            max_price_seen=(existente.max_price_seen if existente is not None else pos_total.entry_price),
+            min_price_seen=(existente.min_price_seen if existente is not None else pos_total.entry_price),
+            bars_held=pos_total.bars_held,
+            metadata=(dict(existente.metadata) if existente is not None else {"side": pos_total.side}),
+        )
+        store.upsert_position(conn, account.id, pos)
+        account.positions[pos.ticker] = pos
+
+        self._snapshot.trades += 1
+        if self.execution_mode == "shadow":
+            self._snapshot.shadow_pnl_brl += evento.pnl_brl
+        else:
+            account.cash += evento.pnl_brl
+
+        self._log(conn, account.id, "info",
+                  f"{'SOMBRA: ' if self.execution_mode == 'shadow' else ''}fatia de saida "
+                  f"{trade.side} {trade.quantity} {self.strategy.symbol} @ {trade.exit_price:.4f} "
+                  f"({trade.exit_reason.value}) — resultado R$ {evento.pnl_brl:+.2f}; restam "
+                  f"{pos_total.quantity} acoes na posicao",
+                  {"exit_reason": trade.exit_reason.value, "pnl_brl": round(evento.pnl_brl, 4),
+                   "quantidade_restante": pos_total.quantity,
+                   "execution_mode": self.execution_mode})
 
     # ---------- painel -------------------------------------------------------
 
@@ -872,8 +1218,12 @@ class IntradayLiveRuntime:
             "fase": clock.phase().value,
             "decisao_pendente": [],
             "notificador": type(self.notifier).__name__,
+            # `atraso_s` vem do FEED, nao de um 60.0 fixo: era verdade so' para
+            # M1 (a barra so' pode ser lida depois de fechar). Um feed de tick
+            # entrega o negocio assim que ele sai, e anunciar 60s ali faria o
+            # painel esconder justamente a vantagem que o robo de tick tem.
             "feed": {"nome": self.bar_feed.name, "tempo_real": True,
-                     "atraso_s": 60.0},
+                     "atraso_s": getattr(self.bar_feed, "nominal_delay_seconds", 60.0)},
             "corretora": {"nome": self.broker.name, "modo": self.broker.mode,
                           "automatica": self.broker.supports_automation()},
             "disjuntor": None,
