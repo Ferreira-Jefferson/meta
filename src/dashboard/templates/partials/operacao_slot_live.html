@@ -167,21 +167,17 @@
     <span class="sub">Caixa + posições a mercado</span>
   </div>
   {% if s.daytrade %}
-  {# Estes dois cards só existem em SOMBRA -- pedido do dono (2026-08-23):
-     "todos os números que aparecem devem ser só do modo selecionado". Nascem
-     escondidos (`hidden`) quando o modo efetivo já é "live" no render
-     inicial, e o JS alterna via `data-ops-card-sombra` ao trocar o
-     `<select>`, sem round-trip. #}
-  <div class="capital-card {% if s.daytrade.resultado_sombra >= 0 %}safe{% endif %}"
-       data-ops-card-sombra{% if modo_efetivo != "shadow" %} hidden{% endif %}>
-    <span class="k">Resultado em sombra</span>
-    <span class="v num">R$ {{ s.daytrade.resultado_sombra | num_br }}</span>
-    <span class="sub">Não tocou o caixa · {{ s.daytrade.trades_na_sessao }} trade(s) hoje</span>
-  </div>
-  <div class="capital-card" data-ops-card-sombra{% if modo_efetivo != "shadow" %} hidden{% endif %}>
-    <span class="k">Saldo sombra</span>
-    <span class="v num">R$ {{ s.daytrade.caixa_sombra | num_br }}</span>
-    <span class="sub">Separado do caixa real · acumulado entre pregões, nunca debita nem credita o caixa</span>
+  {# "Resultado" é o MESMO número nos dois modos -- `machine.session_pnl`
+     não sabe de `execution_mode` (o maquinário processa fill real e
+     simulado do mesmo jeito, ver docstring do módulo), então não precisa de
+     `data-cash-*`/toggle nenhum. Pedido do dono (2026-08-23): "as duas
+     visões devem ter os mesmos elementos" -- antes só a sombra tinha este
+     card ("Resultado em sombra") e só ela tinha "Saldo sombra" (redundante
+     com o card "Caixa" agora que ele já troca de saldo sozinho). #}
+  <div class="capital-card {% if s.daytrade.resultado_sessao >= 0 %}safe{% endif %}">
+    <span class="k">Resultado</span>
+    <span class="v num">R$ {{ s.daytrade.resultado_sessao | num_br }}</span>
+    <span class="sub">{{ s.daytrade.trades_na_sessao }} trade(s) hoje · zera no fim do pregão</span>
   </div>
   {% else %}
   <div class="capital-card safe">

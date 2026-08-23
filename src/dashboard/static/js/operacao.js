@@ -23,18 +23,23 @@
   'use strict';
 
   var CHAVE = 'meta-operacao-abertos';
+  var CHAVE_EXECUCAO = 'meta-operacao-execucao';
 
-  function lidos() {
-    try { return JSON.parse(localStorage.getItem(CHAVE)) || {}; }
+  // Generico: qualquer preferencia que so' existe no navegador (secao aberta,
+  // modo de execucao escolhido) mora num mapa proprio dentro do localStorage,
+  // chaveado pela CHAVE do mapa (nao confundir com a chave DENTRO do mapa,
+  // que e' o slot/secao).
+  function lidos(chave) {
+    try { return JSON.parse(localStorage.getItem(chave)) || {}; }
     catch (e) { return {}; }   // modo privado, cota estourada, JSON corrompido
   }
 
-  function grava(mapa) {
-    try { localStorage.setItem(CHAVE, JSON.stringify(mapa)); } catch (e) {}
+  function grava(chave, mapa) {
+    try { localStorage.setItem(chave, JSON.stringify(mapa)); } catch (e) {}
   }
 
   function restaura() {
-    var mapa = lidos();
+    var mapa = lidos(CHAVE);
     var nodes = document.querySelectorAll('details[data-ops-key]');
     for (var i = 0; i < nodes.length; i++) {
       var d = nodes[i];
@@ -52,9 +57,9 @@
     if (!d || d.tagName !== 'DETAILS') return;
     var key = d.getAttribute('data-ops-key');
     if (!key) return;
-    var mapa = lidos();
+    var mapa = lidos(CHAVE);
     mapa[key] = d.open;
-    grava(mapa);
+    grava(CHAVE, mapa);
   }, true);
 
   function filtraAtivos(form) {
@@ -164,8 +169,8 @@
     // raiz (ver `partials/operacao_resumo.html`). O id do `<select>` é
     // `ops-exec-<slot>` (ver `operacao_slot_control.html`); o do resumo e'
     // `ops-sum-<slot>` -- mesmo sufixo, prefixo diferente.
-    if (!select.id || select.id.indexOf('ops-exec-') !== 0) return;
-    var slotId = select.id.slice('ops-exec-'.length);
+    var slotId = slotDoSelectExecucao(select);
+    if (!slotId) return;
     var resumo = document.getElementById('ops-sum-' + slotId);
     if (!resumo) return;
     var cash = resumo.querySelector('.ops-sum-cash');
@@ -181,10 +186,12 @@
     // Cartões de capital (`partials/operacao_slot_live.html`): "Caixa",
     // "Carteira" e "Patrimônio" trocam de valor junto (TODOS os que derivam
     // do caixa, não só o primeiro -- reclamação do dono, 2026-08-23: a
-    // primeira versão desta função só cobria o card "Caixa", deixando
-    // "Carteira"/"Patrimônio" presos no saldo real mesmo com "Sombra"
-    // selecionado), e "Resultado em sombra"/"Saldo sombra" só existem
-    // quando SOMBRA está selecionado.
+    // primeira versão desta função só cobria o card "Caixa"). "Resultado"
+    // NÃO troca -- é `machine.session_pnl`, o mesmo número nos dois modos
+    // (a máquina processa fill real e simulado do mesmo jeito), então o
+    // card nem carrega `data-cash-*`. As duas visões mostram os MESMOS
+    // cards agora (pedido do dono, 2026-08-23) -- não sobrou nenhum
+    // exclusivo de um modo pra esconder/mostrar.
     var cartoes = document.getElementById('ops-cards-' + slotId);
     if (!cartoes) return;
     var valores = cartoes.querySelectorAll('.v[data-cash-live]');
@@ -192,18 +199,54 @@
       var v = valores[j].getAttribute(sombra ? 'data-cash-sombra' : 'data-cash-live');
       if (v != null) valores[j].textContent = 'R$ ' + v;
     }
-    var cardsSombra = cartoes.querySelectorAll('[data-ops-card-sombra]');
-    for (var i = 0; i < cardsSombra.length; i++) cardsSombra[i].hidden = !sombra;
+  }
+
+  // Extrai o slot a partir do id `ops-exec-<slot>` (formato fixado em
+  // `operacao_slot_control.html`); `null` se o elemento nao seguir o padrao.
+  function slotDoSelectExecucao(sel) {
+    if (!sel.id || sel.id.indexOf('ops-exec-') !== 0) return null;
+    return sel.id.slice('ops-exec-'.length);
   }
 
   document.addEventListener('change', function (ev) {
     var sel = ev.target;
     if (!sel || !sel.matches || !sel.matches('select[name="execution_mode"]')) return;
     sincronizaCaixaComExecucao(sel);
+    // Escolha do dono, nao so' o que a conta rodou da ultima vez: sem isto,
+    // atualizar a pagina com "Real" escolhido (mas ainda nao iniciado) volta
+    // pro default "Sombra" do servidor -- mesma queixa de 2026-08-23 ("todo
+    // recarregar de tela nao guarda o ultimo estado"), agora no select em vez
+    // do <details>. Ver `restauraExecucao`.
+    var slotId = slotDoSelectExecucao(sel);
+    if (!slotId) return;
+    var mapa = lidos(CHAVE_EXECUCAO);
+    mapa[slotId] = sel.value;
+    grava(CHAVE_EXECUCAO, mapa);
   });
+
+  // Reaplica a escolha salva por cima do default que o servidor renderizou
+  // (`config_anterior.execution_mode`, o modo da ULTIMA PARTIDA DE VERDADE --
+  // nao serve pra lembrar uma escolha que o dono fez e ainda nem iniciou).
+  // Roda em toda troca de `#ops-body`/refresh de fundo, entao tambem cobre a
+  // barra reaparecendo depois que o robo para.
+  function restauraExecucao() {
+    var mapa = lidos(CHAVE_EXECUCAO);
+    var selects = document.querySelectorAll('select[name="execution_mode"]');
+    for (var i = 0; i < selects.length; i++) {
+      var sel = selects[i];
+      var slotId = slotDoSelectExecucao(sel);
+      if (!slotId) continue;
+      var salvo = mapa[slotId];
+      if (salvo !== 'shadow' && salvo !== 'live') continue;   // nunca mexeu
+      if (sel.value === salvo) continue;
+      sel.value = salvo;
+      sincronizaCaixaComExecucao(sel);   // caixa/cartoes/resumo tem que seguir
+    }
+  }
 
   function aplica() {
     restaura();
+    restauraExecucao();
     var forms = document.querySelectorAll('form.ops-new-robot-form');
     for (var i = 0; i < forms.length; i++) filtraAtivos(forms[i]);
   }
