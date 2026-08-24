@@ -121,6 +121,7 @@ from strategy.daytrade.base import (
     EnterLimit,
     barra_diaria,
     capital_minimo_brl,
+    mediana_negocio_diario,
     warm_start_calibration,
 )
 
@@ -470,6 +471,27 @@ class IntradayLiveRuntime:
         diarias.reverse()
         self.strategy.seed_daily_volatility(diarias)
 
+    def _seed_typical_trade_size(self, session: date) -> None:
+        """Mesmo espirito/janela de `_seed_daily_volatility` acima, so' que
+        para o teto de CAPACIDADE de caixa (`strategy.daytrade.base.
+        JanelaNegocioTipicoDiaria`) em vez do alvo por volatilidade -- so'
+        um robo com esse teto (`GremahTick`, 2026-08-24) usa isto; os
+        outros recebem uma lista que nunca consultam (default no-op na
+        base). Reusa `_CAUDA_VOL_DIAS` sessoes de folga (generoso sobre o
+        default `janela_dias=1` do robo) e o mesmo feed ja' buscado por
+        `_seed_daily_volatility` -- so' agrega diferente (mediana de
+        evento, nao OHLCV)."""
+        medianas: list[float] = []
+        dia = session
+        for _ in range(_CAUDA_VOL_DIAS):
+            dia = clock.previous_session(dia)
+            bars_do_dia = self.bar_feed.session_bars_until(dia, _FIM_DE_PREGAO_QUALQUER)
+            mediana = mediana_negocio_diario(bars_do_dia)
+            if mediana is not None:
+                medianas.append(mediana)
+        medianas.reverse()
+        self.strategy.seed_typical_trade_size(medianas)
+
     def _start_session(self, conn, account: AccountState, session: date, now: datetime) -> StepReport:
         """Calibra o robo para este pregao e (re)abre a sessao na maquina.
 
@@ -485,6 +507,7 @@ class IntradayLiveRuntime:
 
         self._seed_volume_window(session)
         self._seed_daily_volatility(session)
+        self._seed_typical_trade_size(session)
 
         modo = "cold"
         semente = 0

@@ -33,8 +33,8 @@ def test_min_range_price_ignora_sessao_com_range_pequeno_demais():
     strat.on_session_start(None)
     base = pd.Timestamp("2026-01-05 09:00", tz="UTC")
 
-    strat.on_bar(base, _bar(100, 100.1, 99.9, 100), position=None, session_pnl_brl=0.0)  # range=0.2 < 0.5
-    actions = strat.on_bar(base + pd.Timedelta(minutes=1), _bar(101, 110, 100, 105), position=None, session_pnl_brl=0.0)
+    strat.on_bar(base, _bar(100, 100.1, 99.9, 100), positions=[], session_pnl_brl=0.0)  # range=0.2 < 0.5
+    actions = strat.on_bar(base + pd.Timedelta(minutes=1), _bar(101, 110, 100, 105), positions=[], session_pnl_brl=0.0)
 
     assert actions == []
 
@@ -44,8 +44,8 @@ def test_min_range_price_zero_preserva_comportamento_antigo():
     strat.on_session_start(None)
     base = pd.Timestamp("2026-01-05 09:00", tz="UTC")
 
-    strat.on_bar(base, _bar(100, 100.1, 99.9, 100), position=None, session_pnl_brl=0.0)
-    actions = strat.on_bar(base + pd.Timedelta(minutes=1), _bar(101, 110, 100, 105), position=None, session_pnl_brl=0.0)
+    strat.on_bar(base, _bar(100, 100.1, 99.9, 100), positions=[], session_pnl_brl=0.0)
+    actions = strat.on_bar(base + pd.Timedelta(minutes=1), _bar(101, 110, 100, 105), positions=[], session_pnl_brl=0.0)
 
     assert len(actions) == 1
 
@@ -55,7 +55,7 @@ def test_forma_range_e_nao_decide_nada_dentro_da_janela():
     strat.on_session_start(None)
     ts0 = pd.Timestamp("2026-01-05 09:00", tz="UTC")
 
-    actions = strat.on_bar(ts0, _bar(100, 105, 95, 100), position=None, session_pnl_brl=0.0)
+    actions = strat.on_bar(ts0, _bar(100, 105, 95, 100), positions=[], session_pnl_brl=0.0)
 
     assert actions == []
     assert strat._state.range_high == 105
@@ -67,12 +67,12 @@ def test_rompimento_de_alta_apos_o_range_entra_comprado_com_stop_e_alvo_corretos
     strat.on_session_start(None)
     base = pd.Timestamp("2026-01-05 09:00", tz="UTC")
 
-    strat.on_bar(base, _bar(100, 105, 95, 100), position=None, session_pnl_brl=0.0)
+    strat.on_bar(base, _bar(100, 105, 95, 100), positions=[], session_pnl_brl=0.0)
     for i in range(1, 5):
-        strat.on_bar(base + pd.Timedelta(minutes=i), _bar(100, 105, 95, 100), position=None, session_pnl_brl=0.0)
+        strat.on_bar(base + pd.Timedelta(minutes=i), _bar(100, 105, 95, 100), positions=[], session_pnl_brl=0.0)
 
     # range = [95, 105] (tamanho 10); rompimento para cima
-    actions = strat.on_bar(base + pd.Timedelta(minutes=5), _bar(105, 112, 104, 110), position=None, session_pnl_brl=0.0)
+    actions = strat.on_bar(base + pd.Timedelta(minutes=5), _bar(105, 112, 104, 110), positions=[], session_pnl_brl=0.0)
 
     assert len(actions) == 1
     enter = actions[0]
@@ -86,9 +86,9 @@ def test_uma_entrada_por_sessao():
     strat.on_session_start(None)
     base = pd.Timestamp("2026-01-05 09:00", tz="UTC")
 
-    strat.on_bar(base, _bar(100, 105, 95, 100), position=None, session_pnl_brl=0.0)
-    primeira = strat.on_bar(base + pd.Timedelta(minutes=1), _bar(105, 112, 104, 110), position=None, session_pnl_brl=0.0)
-    segunda = strat.on_bar(base + pd.Timedelta(minutes=2), _bar(110, 115, 109, 112), position=None, session_pnl_brl=0.0)
+    strat.on_bar(base, _bar(100, 105, 95, 100), positions=[], session_pnl_brl=0.0)
+    primeira = strat.on_bar(base + pd.Timedelta(minutes=1), _bar(105, 112, 104, 110), positions=[], session_pnl_brl=0.0)
+    segunda = strat.on_bar(base + pd.Timedelta(minutes=2), _bar(110, 115, 109, 112), positions=[], session_pnl_brl=0.0)
 
     assert len(primeira) == 1
     assert segunda == []
@@ -98,8 +98,8 @@ def test_reseta_estado_entre_sessoes():
     strat = OpeningRangeBreakout(symbol="PMAM3", range_minutes=1)
     strat.on_session_start(None)
     base = pd.Timestamp("2026-01-05 09:00", tz="UTC")
-    strat.on_bar(base, _bar(100, 105, 95, 100), position=None, session_pnl_brl=0.0)
-    strat.on_bar(base + pd.Timedelta(minutes=1), _bar(105, 112, 104, 110), position=None, session_pnl_brl=0.0)
+    strat.on_bar(base, _bar(100, 105, 95, 100), positions=[], session_pnl_brl=0.0)
+    strat.on_bar(base + pd.Timedelta(minutes=1), _bar(105, 112, 104, 110), positions=[], session_pnl_brl=0.0)
 
     strat.on_session_start(None)  # nova sessao
 

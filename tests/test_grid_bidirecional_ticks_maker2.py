@@ -28,7 +28,7 @@ def test_enterlimit_emitida_ja_carrega_initial_target():
     ts = pd.Timestamp("2026-01-05 13:00", tz="UTC")
     bar = Bar(ts=ts, open=1.00, high=1.00, low=1.00, close=1.00, volume=10)
 
-    actions = strat.on_bar(ts, bar, position=None, session_pnl_brl=0.0)
+    actions = strat.on_bar(ts, bar, positions=[], session_pnl_brl=0.0)
 
     assert len(actions) == 1
     assert isinstance(actions[0], EnterLimit)

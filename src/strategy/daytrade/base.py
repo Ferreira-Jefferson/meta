@@ -201,6 +201,67 @@ def barra_diaria(bars: list[Bar]) -> Bar | None:
     )
 
 
+def mediana_negocio_diario(bars: list[Bar]) -> float | None:
+    """Mediana do volume de CADA evento (barra M1 ou tick degenerado) de
+    UMA sessao inteira -- a mesma estatistica que `RollingVolumeWindow.
+    volumes_por_evento` da' intradia, so' que fechada no fim do dia, pra
+    servir de ANCORA ESTAVEL (ver `JanelaNegocioTipicoDiaria`).
+
+    Existe porque a mediana intradia (janela rolante de poucos minutos)
+    oscila o dia inteiro -- um teto de CAPACIDADE calculado em cima dela
+    vaza: caixa acima do teto ainda produz posicao maior nos minutos em
+    que a mediana rolante estiver alta. A mediana de uma sessao INTEIRA ja'
+    fechada nao oscila mais (2026-08-24, achado medindo a PMAM3: com R$50
+    mil e R$200 mil dando o MESMO lucro so' depois de trocar a ancora
+    rolante por esta). `None` se `bars` vier vazio."""
+    if not bars:
+        return None
+    return float(pd.Series([b.volume for b in bars]).median())
+
+
+class JanelaNegocioTipicoDiaria:
+    """Mediana de `mediana_negocio_diario` das ultimas `janela_dias` sessoes
+    ANTERIORES -- a ANCORA ESTAVEL de tamanho de negocio usada por um teto
+    de CAPACIDADE de caixa (`Gremah`/`GremahTick`, 2026-08-24: acima da
+    capacidade, caixa extra vira inerte -- nao aumenta posicao nem lucro,
+    so' fica parado, o que o dono pode entao sacar sem perder nada).
+
+    Mesma familia de `JanelaVolatilidadeDiaria` (mediana de dias FECHADOS,
+    nunca o dia corrente -- olhar o proprio dia seria look-ahead) e mesma
+    razao de ser DIARIA em vez de intrabar: a mediana de POUCOS eventos
+    numa janela curta (a PMAM3 tem so' ~2 negocios/minuto) e' refem de um
+    unico negocio de bloco, do mesmo jeito que a MEDIA por minuto era --
+    so' que uma sessao inteira tem centenas de eventos, amostra grande o
+    bastante pra nao balancar com um bloco isolado.
+
+    Default `janela_dias=1` (so' ontem) e' o que foi MEDIDO: um numero que
+    se ajusta de um pregao pro outro (acompanha o mercado mudando de
+    patamar de liquidez, como pedido) mas fica ESTAVEL dentro do dia
+    (nao vaza o teto). `janela_dias` maior suaviza mais, ao custo de reagir
+    mais devagar a uma mudanca real de patamar -- nao medido ainda."""
+
+    def __init__(self, janela_dias: int = 1):
+        self.janela_dias = max(1, int(janela_dias))
+        self._medianas: deque[float] = deque(maxlen=self.janela_dias)
+
+    def registrar_dia(self, bar_diaria: Bar | None, mediana_do_dia: float | None) -> None:
+        """Chamar uma vez por sessao ANTERIOR concluida. `bar_diaria` so'
+        existe na assinatura pra simetria com `JanelaVolatilidadeDiaria` (o
+        chamador ja tem as duas prontas do mesmo loop); quem importa aqui e'
+        `mediana_do_dia`. `None` (sessao vazia) e' ignorado, nao empilha
+        zero -- um dia sem negocio nao e' evidencia de negocio pequeno."""
+        if mediana_do_dia is not None:
+            self._medianas.append(mediana_do_dia)
+
+    def tipico_mediano(self) -> float | None:
+        """`None` enquanto nenhuma sessao foi registrada (primeiro pregao
+        do historico, ou feed falhou) -- quem chama cai no fallback sem
+        teto de capacidade, mesmo espirito de `range_mediano` vazio."""
+        if not self._medianas:
+            return None
+        return float(pd.Series(self._medianas).median())
+
+
 @dataclass
 class IntradayOpenPosition:
     """Snapshot read-only da posicao vista pelo robo em `on_bar` — espelha
@@ -438,15 +499,43 @@ class IntradayStrategy(ABC):
         percentual. Default no-op: so' um robo com alvo por volatilidade
         (ex.: `Gremah`/`GremahTick`, 2026-08-23) precisa disso."""
 
+    def seed_typical_trade_size(self, previous_daily_medians: list[float]) -> None:
+        """Alimenta o robo com `base.mediana_negocio_diario` de cada uma
+        das sessoes ANTERIORES cobertas pela janela de um teto de
+        CAPACIDADE (`JanelaNegocioTipicoDiaria`), mais antiga primeiro --
+        para o teto ja' ter o que precisa na primeira decisao do pregao.
+        Chamado por quem tem acesso ao historico (`backtest/intraday/
+        engine.py`, `live/intraday_runtime.py`) — nunca pela propria
+        estrategia (AGENTS.md, `strategy/` so importa `core`).
+
+        `previous_daily_medians` ja' vem SEM os dias vazios (sessao sem
+        negocio nenhum nao e' evidencia de negocio pequeno, ver
+        `mediana_negocio_diario`) -- pode vir com menos itens que a janela
+        pede (comeco do historico) ou vazio (feed falhou); `Janela
+        NegocioTipicoDiaria.tipico_mediano()` devolve `None` se nada foi
+        registrado, e quem le isso cai no fallback sem teto de capacidade.
+        Default no-op: so' um robo com teto de capacidade de caixa (ex.:
+        `GremahTick`, 2026-08-24) precisa disso."""
+
     @abstractmethod
     def on_bar(
         self,
         ts: pd.Timestamp,
         bar: Bar,
-        position: IntradayOpenPosition | None,
+        positions: list[IntradayOpenPosition],
         session_pnl_brl: float,
     ) -> list[IntradayAction]:
-        """Decisao para esta barra. Devolve acoes declarativas ao motor."""
+        """Decisao para esta barra. Devolve acoes declarativas ao motor.
+
+        `positions` (2026-08-24, antes `position: IntradayOpenPosition |
+        None` unico) -- `IntradaySessionMachine` pode manter mais de uma
+        posicao aberta ao mesmo tempo quando uma entrada e' fatiada em
+        varios lotes (`EnterLimit.split_quantities`) e cada fatia vira uma
+        posicao independente, com seu proprio stop/alvo/prazo (ver
+        `backtest/intraday/machine.py`). Lista vazia = flat. Uma estrategia
+        que nunca pede mais de 1 lote nunca ve mais de 1 item aqui -- o
+        contrato antigo (`if position is not None`) vira `if positions:`
+        sem mudanca de comportamento."""
 
 
 def warm_start_calibration(
@@ -465,10 +554,10 @@ def warm_start_calibration(
     barras reais desde a abertura, ANTES de comecar a alimentar barras ao
     vivo (essas sim executam de verdade).
 
-    `position=None` e `session_pnl_brl=0.0` em toda chamada porque nao
+    `positions=[]` e `session_pnl_brl=0.0` em toda chamada porque nao
     houve execucao real ainda — esta funcao so calibra estado interno
     (ex.: `open_price`, espacamento do dia), nunca fabrica trade nem
-    afeta P&L: com `position` sempre `None`, o robo nunca ve um fill de
+    afeta P&L: com `positions` sempre vazia, o robo nunca ve um fill de
     verdade, entao contas que dependeriam disso (ex.: `long_fills`)
     permanecem zeradas, corretamente — nenhum trade real aconteceu ainda
     hoje.
@@ -485,7 +574,7 @@ def warm_start_calibration(
     strategy.on_session_start(session_date)
     pending: Enter | EnterLimit | None = None
     for bar in seed_bars:
-        for action in strategy.on_bar(bar.ts, bar, None, 0.0):
+        for action in strategy.on_bar(bar.ts, bar, [], 0.0):
             if isinstance(action, (Enter, EnterLimit)):
                 pending = action
             elif isinstance(action, Exit):

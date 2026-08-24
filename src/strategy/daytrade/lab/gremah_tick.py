@@ -167,6 +167,7 @@ from strategy.daytrade.base import (
     IntradayAction,
     IntradayOpenPosition,
     IntradayStrategy,
+    JanelaNegocioTipicoDiaria,
     JanelaVolatilidadeDiaria,
     RollingVolumeWindow,
     capital_minimo_brl,
@@ -197,19 +198,28 @@ REALOCACAO_JANELA_MINUTOS_PADRAO = 1.0
 #: after_bars` usa por default (30 minutos).
 ROLLING_REANCHOR_SEGUNDOS_PADRAO = 30.0 * 60.0
 
-#: Teto de pedacos que `dividir_entrada=True` cria para UMA entrada --
-#: generico o bastante pra nao fragmentar demais um papel iliquido (PMAM3
-#: chega a ter horas sem negocio nenhum: um numero de pedacos gigante so'
-#: aumentaria o tempo ate' o ultimo casar, sem ganho real). So' tem efeito
-#: com `IntradayBacktestConfig.limit_fill_capped_by_volume=True` -- sem o
-#: cap, o motor preenche tudo de uma vez de qualquer jeito (ver
+#: Teto de pedacos que `dividir_entrada=True` cria para UMA entrada -- cada
+#: pedaco e' 1 LOTE fixo (2026-08-24, ver `_dividir_pecas`), entao este teto
+#: e' o numero MAXIMO de ordens reais mandadas de uma vez pra corretora, nao
+#: mais um controle de tamanho de pedaco. Acima do teto, o ultimo pedaco
+#: absorve o excedente (deixa de ser 1 lote) -- os primeiros
+#: `dividir_max_pecas - 1` pedacos continuam identicos independente de
+#: quantos lotes o teto de capacidade recomendar no total (prefixo estavel,
+#: pedido do dono 2026-08-24: "os mesmos que sao pegos em 118 deveria ser
+#: pegos independente do capital disponivel"). So' tem efeito com
+#: `IntradayBacktestConfig.limit_fill_capped_by_volume=True` -- sem o cap, o
+#: motor preenche tudo de uma vez de qualquer jeito (ver
 #: `IntradaySessionMachine._resolve_limit_fills`), entao dividir a ordem nao
 #: muda nada. `dividir_entrada` virou padrao `True` 2026-08-23 (pedido do
 #: dono, depois de medir IS/OOS -- ver a memoria `dividir_entrada_is_oos_
 #: 2026_08_23` do projeto: inverte de sinal entre IS e OOS na GremahTick,
 #: mas o dono decidiu ligar mesmo assim -- "no teste e tudo lindo, por isso
-#: temos o OOS, pra chegar mais proximo da verdade").
-DIVIDIR_MAX_PECAS_PADRAO = 8
+#: temos o OOS, pra chegar mais proximo da verdade"). Subiu de 8 para 50 em
+#: 2026-08-24 junto com a mudanca de pedaco fixo (medido em
+#: `entrada_lote_unico.py`, variante E3) -- acima disso o numero de ordens
+#: reais simultaneas vira um problema operacional na corretora, nao so' de
+#: simulacao.
+DIVIDIR_MAX_PECAS_PADRAO = 50
 
 #: Barras (1 negocio real cada, aqui -- NAO 1 minuto, ver `Gremah.
 #: EXIT_TTL_BARS_PADRAO`) que uma fatia de SAIDA espera antes de virar ordem
@@ -222,6 +232,63 @@ DIVIDIR_MAX_PECAS_PADRAO = 8
 #: e' monotonico. MESMA constante e mesmo motivo de `DIVIDIR_MAX_PECAS_PADRAO`
 #: acima.
 EXIT_TTL_BARS_PADRAO = 8
+
+#: Teto de CAPACIDADE de caixa -- diferente do teto de PREENCHIMENTO
+#: (`REALOCACAO_TETO_PCT_VOLUME_MINUTO_PADRAO`, que limita o tamanho de UMA
+#: entrada pelo fluxo do INSTANTE). Este limita o CAIXA que a formula de
+#: realocacao enxerga, pra caixa acima da capacidade nao virar posicao maior
+#: nenhuma -- so' fica parado, disponivel pra saque sem perder lucro.
+#:
+#: Achado 2026-08-24 medindo a PMAM3: sem este teto, mais caixa PIORA o
+#: resultado acima de ~R$2.500 (a formula de realocacao manda usar mais
+#: lotes do que a liquidez do papel sustenta -- ordem maior nao acha
+#: contraparte, perde o timing fino que tinha pequena) -- em R$50 mil o robo
+#: perdia R$8.527 no OOS. Com o teto, R$20 mil/R$50 mil/R$200 mil dao o
+#: MESMO resultado (+R$91 no OOS) -- caixa extra fica comprovadamente
+#: inerte, em vez de destruir capital.
+#:
+#: `CAPACIDADE_NEGOCIO_MULT_PADRAO=4.0`: o teto de posicao (em negocios
+#: tipicos) usado tanto no preenchimento quanto na capacidade -- varrido
+#: contra 3/4/6/8/16 na PMAM3, 4 foi o unico que preserva lucro estavel
+#: (nao decrescente) em vez de colapsar acima de R$20 mil.
+#:
+#: `CAPACIDADE_FRACAO_PADRAO=0.5`: fracao da capacidade deduzida que o robo
+#: de fato usa -- varrido 30/50/80/100% no OOS, 50% teve o melhor platô
+#: (+R$265 vs +R$91 a 100%) com MaxDD mais baixo. Trade-off real: fracao
+#: menor reduz ainda mais o lucro dentro da faixa boa mas encolhe o
+#: MaxDD -- nao e' so' upside.
+#:
+#: `CAPACIDADE_JANELA_DIAS_PADRAO=1`: a ANCORA de capacidade e' a mediana de
+#: negocio da sessao ANTERIOR (nao a janela intradia de
+#: `REALOCACAO_JANELA_MINUTOS_PADRAO`, que oscila e por isso vazava o teto
+#: -- ver `strategy.daytrade.base.JanelaNegocioTipicoDiaria`). So' 1 dia de
+#: folga foi o que se mediu; uma janela maior suaviza mais ao custo de
+#: reagir mais devagar a uma mudanca real de patamar de liquidez -- nao
+#: medido.
+#:
+#: MEDIDO SO' NA PMAM3, so' no motor TICK -- nao remedido nos outros 9
+#: simbolos de `TICK_CONFIRMED_SYMBOLS` nem na `Gremah` M1. Mecanismo
+#: aplicado a todos por ser estrutural (a formula de realocacao antiga tinha
+#: o mesmo defeito em qualquer simbolo iliquido), mas os NUMEROS (4.0/0.5/1)
+#: sao ponto de partida, nao calibracao por ativo.
+CAPACIDADE_NEGOCIO_MULT_PADRAO = 4.0
+CAPACIDADE_FRACAO_PADRAO = 0.5
+CAPACIDADE_JANELA_DIAS_PADRAO = 1
+
+#: Quantos eventos a janela INTRADIA (`RollingVolumeWindow.volumes_por_
+#: evento`) precisa ter antes do teto de PREENCHIMENTO confiar na mediana
+#: deles -- achado testando a mudanca acima (2026-08-24): com 1 SO' evento
+#: na janela, a mediana E' aquele evento, entao um unico negocio de bloco
+#: isolado (ex.: 93 mil acoes, nada mais na janela) infla o teto direto pro
+#: tamanho do bloco -- pior que o problema que a mediana resolve (a MEDIA
+#: tambem e' refem de um bloco, mas pelo menos DILUI ele pelo tamanho
+#: nominal da janela; com poucos eventos a mediana nao dilui nada). Abaixo
+#: deste minimo, cai no fallback antigo (media/minuto) -- que so' entao volta
+#: a ser o mais conservador dos dois. Numero pequeno de proposito: so'
+#: protege o caso degenerado de 1-2 eventos, sem enfraquecer a mediana onde
+#: ela ja funciona bem (a PMAM3 real, mesmo pouco liquida, tem dezenas de
+#: eventos numa janela de 30min na maior parte do pregao).
+CAPACIDADE_MIN_EVENTOS_PADRAO = 5
 
 
 @dataclass(frozen=True)
@@ -483,10 +550,15 @@ class GremahTick(IntradayStrategy):
         "custaria R$ 1,90 fixos de corretagem num robo de giro alto.",
         "A cada 4x o custo de 1 lote que o caixa acumulado tiver, a proxima entrada "
         "usa mais um lote — e encolhe de volta se o caixa cair.",
-        "O teto e' 10% do volume do ULTIMO minuto FECHADO, reavaliado a cada entrada "
-        "nova -- nao mais um numero congelado no primeiro minuto do dia. Na abertura, "
-        "quando ainda nao ha 1 minuto do proprio pregao, completa com o final do "
-        "pregao anterior.",
+        "O teto de UMA entrada e' o negocio TIPICO recente (mediana dos ultimos "
+        "negocios, nao a media -- media e' inflada por um negocio de bloco isolado) "
+        "vezes 4, reavaliado a cada entrada nova.",
+        "Alem do teto de entrada, existe um teto de CAPACIDADE: caixa acima do que a "
+        "liquidez do ativo sustenta (medida como negocio tipico da sessao ANTERIOR "
+        "inteira, um numero estavel que nao oscila no meio do dia) vira inerte -- nao "
+        "aumenta posicao nem lucro, so' fica parado. Sem isto, mais caixa PIORAVA o "
+        "resultado (medido na PMAM3: R$50 mil perdia mais que R$2.500) -- e' o robo "
+        "sabendo sozinho ate' onde o mercado suporta, sem numero fixo.",
         "O caixa minimo para operar o ativo e' o dobro do custo de um lote de 100 "
         "acoes, no preco de hoje.",
         "Esse minimo nao fica congelado no valor do primeiro dia: se o ativo sobe "
@@ -497,7 +569,7 @@ class GremahTick(IntradayStrategy):
         "para R$ 4,19).",
     )
     param_pct = ("profit_pct", "session_stop_pct_capital",
-                 "realocacao_teto_pct_volume_minuto")
+                 "realocacao_teto_pct_volume_minuto", "capacidade_fracao")
     # Mesmo motivo da `gremah`: alvo e stop sao POR ATIVO, e a tabela plana
     # mostra so' a instancia default. Quem carrega todos e' a tabela de ativos.
     param_hidden = ("symbol", "profit_pct", "stop_multiplier")
@@ -519,18 +591,23 @@ class GremahTick(IntradayStrategy):
                                           "e' relogio, porque negocio nao chega em cadencia fixa.",
         "realocacao_limiar_caixa": "Quantas vezes o custo de 1 lote o caixa acumulado precisa "
                                    "ter para a proxima entrada usar mais um lote.",
-        "realocacao_teto_pct_volume_minuto": "Teto de posicao: % da media de volume por minuto "
+        "realocacao_teto_pct_volume_minuto": "FALLBACK do teto de posicao (`capacidade_negocio_"
+                                             "mult`, abaixo) para quando a janela ainda nao tem "
+                                             "nenhum negocio -- % da media de volume por minuto "
                                              "na janela rolante (`realocacao_janela_minutos`).",
         "realocacao_janela_minutos": "Tamanho da janela (minutos) da media movel de volume que "
                                      "alimenta o teto acima. Reavaliada a cada entrada nova; na "
                                      "abertura, completa com a cauda do pregao anterior.",
-        "dividir_entrada": "Divide ENTRADA (em pedacos do tamanho do negocio tipico recente) E "
-                          "SAIDA (em fatias de 1 lote, `LOTE_PADRAO_B3`) em vez de exigir tudo "
-                          "de uma vez. So' tem efeito com o motor rodando "
+        "dividir_entrada": "Divide ENTRADA (pedacos de 1 LOTE fixo, prefixo estavel -- ver "
+                          "`_dividir_pecas`) e SAIDA (pedacos do tamanho do negocio tipico "
+                          "recente, ver `_fatia_saida`; ate' 2026-08-24 usava `LOTE_PADRAO_B3` "
+                          "fixo, gerando mais negocios no mercado do que precisava pra casar), "
+                          "em vez de exigir tudo de uma vez. So' tem efeito com o motor rodando "
                           "`limit_fill_capped_by_volume=True` (padrao desde 2026-08-23). Padrao "
                           "`True` desde 2026-08-23 -- medido IS/OOS antes (inverte de sinal), "
                           "ligado mesmo assim por decisao do dono.",
-        "dividir_max_pecas": "Teto de pedacos que `dividir_entrada` cria para uma entrada.",
+        "dividir_max_pecas": "Teto de pedacos (1 lote cada, cauda absorve o excedente acima do "
+                             "teto) que `dividir_entrada` cria para uma entrada.",
         "exit_ttl_bars": "Barras (negocios reais, aqui, nao minutos) que uma fatia de saida "
                          "espera antes de virar ordem a mercado pelo restante. Padrao 8 desde "
                          "2026-08-23 (varredura 1..10 em PMAM3, IS+OOS). Vazio = execucao real "
@@ -547,6 +624,20 @@ class GremahTick(IntradayStrategy):
         "stop_frac_range": "Fracao do range diario mediano que substitui o stop, mantendo "
                            "alvo/espacamento no caminho de sempre. Independente de "
                            "`alvo_por_volatilidade`. Vazio = stop pelo `stop_multiplier`.",
+        "capacidade_negocio_mult": "Teto de posicao (entrada) e de capacidade (caixa), em "
+                                  "multiplos do negocio tipico recente. Medido so' na PMAM3 "
+                                  "(4.0) -- varrido contra 3/6/8/16, unico que preserva lucro "
+                                  "estavel em vez de colapsar acima de R$20 mil.",
+        "capacidade_fracao": "Fracao da capacidade deduzida que o robo de fato usa -- o "
+                            "restante fica de caixa parado, disponivel pra saque. Medido so' "
+                            "na PMAM3 (50%) -- varrido 30/50/80/100%, melhor platô de lucro "
+                            "com o menor MaxDD.",
+        "capacidade_janela_dias": "Sessoes anteriores usadas pra medir a ancora ESTAVEL de "
+                                 "capacidade (`JanelaNegocioTipicoDiaria`) -- diferente de "
+                                 "`realocacao_janela_minutos`, que e' intradia e oscila.",
+        "capacidade_min_eventos": "Minimo de negocios na janela intradia antes do teto de "
+                                 "preenchimento confiar na mediana deles -- com poucos eventos "
+                                 "a mediana e' refem de um bloco isolado, igual a media era.",
     }
 
     @staticmethod
@@ -579,6 +670,10 @@ class GremahTick(IntradayStrategy):
         vol_janela_dias: int = VOL_JANELA_DIAS_PADRAO,
         stop_vol_mult: float | None = None,
         stop_frac_range: float | None = None,
+        capacidade_negocio_mult: float = CAPACIDADE_NEGOCIO_MULT_PADRAO,
+        capacidade_fracao: float = CAPACIDADE_FRACAO_PADRAO,
+        capacidade_janela_dias: int = CAPACIDADE_JANELA_DIAS_PADRAO,
+        capacidade_min_eventos: int = CAPACIDADE_MIN_EVENTOS_PADRAO,
     ):
         self.symbol = symbol
         self.tick_size = tick_size
@@ -609,6 +704,14 @@ class GremahTick(IntradayStrategy):
         self.dividir_entrada = dividir_entrada
         self.dividir_max_pecas = max(1, int(dividir_max_pecas))
         self.exit_ttl_bars = exit_ttl_bars
+        self.capacidade_negocio_mult = abs(capacidade_negocio_mult)
+        self.capacidade_fracao = abs(capacidade_fracao)
+        self.capacidade_janela_dias = max(1, int(capacidade_janela_dias))
+        self.capacidade_min_eventos = max(1, int(capacidade_min_eventos))
+        # Sobrevive a `on_session_start` de proposito -- mesmo motivo de
+        # `_janela_volume` (mesma classe): a capacidade e' medida em dias
+        # ANTERIORES, nao deve zerar entre sessoes.
+        self._janela_negocio_tipico = JanelaNegocioTipicoDiaria(self.capacidade_janela_dias)
         # Mesmo mecanismo/motivo de `Gremah.__init__` (mesma classe) -- ver
         # a docstring la para a justificativa completa: simbolo com par
         # (k,s) CONFIRMADO no OOS (`_VOLATILITY_OVERRIDE_BY_SYMBOL_TICK`)
@@ -661,6 +764,13 @@ class GremahTick(IntradayStrategy):
         for dia in previous_daily_bars[-self.vol_janela_dias:]:
             self._janela_vol.registrar_dia(dia)
 
+    def seed_typical_trade_size(self, previous_daily_medians: list[float]) -> None:
+        # Mesmo padrao de `seed_daily_volatility` acima -- SUBSTITUI, nunca
+        # acumula.
+        self._janela_negocio_tipico = JanelaNegocioTipicoDiaria(self.capacidade_janela_dias)
+        for mediana in previous_daily_medians[-self.capacidade_janela_dias:]:
+            self._janela_negocio_tipico.registrar_dia(None, mediana)
+
     def _ticks_from_pct(self, price: float, pct: float) -> int:
         return max(1, round(price * pct / self.tick_size))
 
@@ -712,44 +822,105 @@ class GremahTick(IntradayStrategy):
         return None
 
     def _lotes_por_realocacao(self, anchor: float, ts: pd.Timestamp) -> int:
-        """Mesmo mecanismo de `Gremah._lotes_por_realocacao` (mesma classe)
-        -- ver a docstring la, inclusive o motivo de SEMPRE haver ao menos
-        1 lote (quem barra caixa genuinamente insuficiente e' o freio em
-        `backtest.intraday.engine.run_intraday_backtest`, nao aqui)."""
-        custo_do_lote = anchor * LOTE_PADRAO_B3
-        lotes = 1 + math.floor(self._cash_atual_brl / (self.realocacao_limiar_caixa * custo_do_lote))
-        media_volume_min = self._janela_volume.media_por_minuto(ts)
-        teto_acoes = media_volume_min * self.realocacao_teto_pct_volume_minuto
-        max_lotes_dia = max(1, int(teto_acoes) // LOTE_PADRAO_B3)
-        return min(max_lotes_dia, max(1, lotes))
+        """Quantos lotes a proxima entrada usa -- duas travas independentes,
+        as DUAS derivadas do mercado observado, nenhuma fixa (pedido do
+        dono, 2026-08-24: "o robo deve ser capaz de saber quantos que o
+        mercado suporta... isso nao deve ser fixo, pq o mercado pode
+        mudar").
 
-    def _dividir_pecas(self, quantidade_total: int, ts: pd.Timestamp) -> tuple[int, ...] | None:
-        """Fatia `quantidade_total` (acoes, multiplo de `LOTE_PADRAO_B3`) em
-        pedacos do tamanho do NEGOCIO TIPICO observado na janela rolante
-        (mediana de `RollingVolumeWindow.volumes_por_evento`) -- um pedaco
-        do tamanho de um negocio REAL tem mais chance de casar sozinho
-        (FOK, ver `IntradayBacktestConfig.limit_fill_capped_by_volume`) do
-        que a ordem inteira de uma vez. `None` = nao divide (janela sem
-        evento ainda, ou o negocio tipico ja cobre o total sozinho -- nao
-        ha' o que ganhar fatiando)."""
+        1. TETO DE PREENCHIMENTO -- quantos lotes cabem no negocio TIPICO
+        recente (mediana de `RollingVolumeWindow.volumes_por_evento`) vezes
+        `capacidade_negocio_mult`. Ate' 2026-08-24 isto era 10% da MEDIA de
+        volume por minuto (`realocacao_teto_pct_volume_minuto`) -- a media
+        e' inflada por um unico negocio de bloco (13x a mediana, medido na
+        PMAM3) e por isso quase nunca mordia. So' cai no fallback antigo
+        (media/minuto) quando a janela ainda nao tem NENHUM evento (inicio
+        do historico) -- mediana de zero evento nao existe.
+
+        2. TETO DE CAPACIDADE -- separado do de cima porque usa uma ANCORA
+        ESTAVEL (mediana de negocio da sessao ANTERIOR inteira,
+        `JanelaNegocioTipicoDiaria`, nao a janela intradia que oscila) para
+        limitar o CAIXA que a formula de realocacao enxerga. Sem isto, mais
+        caixa PIORA o resultado acima de uma certa capacidade (a formula
+        manda usar mais lotes do que a liquidez sustenta -- medido: R$50 mil
+        perdendo R$8.527 no OOS da PMAM3 onde R$2.500 ganhava R$885). Com o
+        teto, qualquer caixa ACIMA da capacidade produz o MESMO resultado --
+        o excedente fica comprovadamente inerte, disponivel pra saque sem
+        perder lucro. `None` (primeiro pregao do historico, ou feed falhou)
+        = sem capacidade estavel medida ainda, usa o caixa cru.
+
+        SEMPRE ao menos 1 lote -- quem barra caixa genuinamente insuficiente
+        e' o freio em `backtest.intraday.engine.run_intraday_backtest`, nao
+        aqui."""
+        custo_do_lote = anchor * LOTE_PADRAO_B3
+        passo = self.realocacao_limiar_caixa * custo_do_lote
+
         eventos = self._janela_volume.volumes_por_evento(ts)
-        if not eventos:
-            return None
-        tipico_lotes = max(1, int(median(eventos)) // LOTE_PADRAO_B3)
+        if len(eventos) >= self.capacidade_min_eventos:
+            teto_lotes = max(1, int(median(eventos) * self.capacidade_negocio_mult) // LOTE_PADRAO_B3)
+        else:
+            media_volume_min = self._janela_volume.media_por_minuto(ts)
+            teto_acoes = media_volume_min * self.realocacao_teto_pct_volume_minuto
+            teto_lotes = max(1, int(teto_acoes) // LOTE_PADRAO_B3)
+
+        caixa = self._cash_atual_brl
+        tipico_estavel = self._janela_negocio_tipico.tipico_mediano()
+        if tipico_estavel is not None:
+            teto_estavel_lotes = max(1, int(tipico_estavel * self.capacidade_negocio_mult) // LOTE_PADRAO_B3)
+            capacidade_brl = self.capacidade_fracao * (teto_estavel_lotes - 1) * passo
+            caixa = min(caixa, capacidade_brl)
+
+        lotes = 1 + math.floor(caixa / passo)
+        return min(teto_lotes, max(1, lotes))
+
+    def _fatia_saida(self, ts: pd.Timestamp) -> int:
+        """Tamanho de UMA fatia de saida (`EnterLimit.exit_split_unit`) --
+        negocio TIPICO recente (mediana), nao mais `LOTE_PADRAO_B3` fixo
+        (2026-08-24; `_dividir_pecas` abaixo e' a fatia de ENTRADA, virou 1
+        lote fixo no mesmo dia e nao usa mais esta mediana). Ate' entao a saida
+        fatiava em 100 acoes MESMO quando o negocio tipico do papel era
+        maior (300 na PMAM3) -- 3x mais negocios no mercado do que
+        precisava pra casar, sem ganhar nada de preenchimento com isso.
+        Corrigir sozinho: participacao da PMAM3 no fluxo do ativo caiu de
+        9,70% para 3,45% em R$50 mil (medido, IS), com lucro MAIOR em toda
+        a faixa de capital testada. Mesmo minimo de amostra de
+        `_lotes_por_realocacao` (`capacidade_min_eventos`) -- com poucos
+        eventos, a mediana e' refem de um negocio de bloco isolado do mesmo
+        jeito que a media era. `LOTE_PADRAO_B3` (o minimo, nunca
+        fracionario) abaixo do minimo de amostra."""
+        eventos = self._janela_volume.volumes_por_evento(ts)
+        if len(eventos) < self.capacidade_min_eventos:
+            return LOTE_PADRAO_B3
+        return max(LOTE_PADRAO_B3, int(median(eventos)) // LOTE_PADRAO_B3 * LOTE_PADRAO_B3)
+
+    def _dividir_pecas(self, quantidade_total: int) -> tuple[int, ...] | None:
+        """Fatia `quantidade_total` (acoes, multiplo de `LOTE_PADRAO_B3`) em
+        pedacos de 1 LOTE fixo cada (2026-08-24) -- nao mais o tamanho do
+        negocio tipico (isso ainda decide a fatia de SAIDA, `_fatia_saida`,
+        so' deixou de fazer sentido pra entrada). Um pedaco de 1 lote e' o
+        PREFIXO ESTAVEL: pedir 7 lotes ou 30 lotes, os primeiros N pedacos
+        sao IDENTICOS -- e' o que o dono pediu 2026-08-24 ("os mesmos que
+        sao pegos em 118 deveria ser pegos independente do capital
+        disponivel"), o antigo fatiamento por negocio tipico nao garantia
+        isso (o TAMANHO de cada pedaco mudava com o total: 7 lotes viravam
+        [3,2,2], 12 lotes viravam [3,3,3,3] -- nenhum prefixo em comum).
+        Acima de `dividir_max_pecas`, os primeiros `dividir_max_pecas - 1`
+        pedacos continuam de 1 lote (prefixo intacto); o ULTIMO absorve o
+        excedente, so' pra nao mandar mais ordens reais simultaneas do que
+        a corretora aguenta. `None` = nao ha' o que dividir (1 lote ou
+        menos)."""
         total_lotes = quantidade_total // LOTE_PADRAO_B3
-        if tipico_lotes >= total_lotes:
+        if total_lotes <= 1:
             return None
-        n_pecas = min(self.dividir_max_pecas, math.ceil(total_lotes / tipico_lotes))
-        base, resto = divmod(total_lotes, n_pecas)
-        # distribui o resto (em LOTES) pelas primeiras pecas, 1 lote a mais
-        # cada, em vez de empilhar tudo na ultima -- pecas parecidas entre
-        # si, nenhuma desproporcionalmente maior que o negocio tipico.
-        lotes_por_peca = [base + (1 if i < resto else 0) for i in range(n_pecas)]
-        return tuple(l * LOTE_PADRAO_B3 for l in lotes_por_peca if l > 0)
+        if total_lotes <= self.dividir_max_pecas:
+            return (LOTE_PADRAO_B3,) * total_lotes
+        pecas_unitarias = self.dividir_max_pecas - 1
+        cauda_lotes = total_lotes - pecas_unitarias
+        return (LOTE_PADRAO_B3,) * pecas_unitarias + (cauda_lotes * LOTE_PADRAO_B3,)
 
     def _build_entry(self, side: str, anchor: float, spacing_ticks: int, profit_ticks: int, stop_ticks: int | None, ts: pd.Timestamp) -> EnterLimit:
         self.quantity = self._lotes_por_realocacao(anchor, ts) * LOTE_PADRAO_B3
-        split = self._dividir_pecas(self.quantity, ts) if self.dividir_entrada else None
+        split = self._dividir_pecas(self.quantity) if self.dividir_entrada else None
         spacing_off = spacing_ticks * self.tick_size
         level_price = round(anchor - spacing_off, 2) if side == "long" else round(anchor + spacing_off, 2)
         profit_off = profit_ticks * self.tick_size
@@ -768,8 +939,11 @@ class GremahTick(IntradayStrategy):
             split_quantities=split,
             # Mesmo `dividir_entrada` tambem fatia a SAIDA (2026-08-22,
             # pedido do dono): o alvo tinha o MESMO problema tudo-ou-nada
-            # que a entrada -- ver `EnterLimit.exit_split_unit`.
-            exit_split_unit=LOTE_PADRAO_B3 if self.dividir_entrada else None,
+            # que a entrada -- ver `EnterLimit.exit_split_unit`. Fatia do
+            # tamanho do negocio TIPICO (`_fatia_saida`), nao mais
+            # `LOTE_PADRAO_B3` fixo (2026-08-24) -- ver a docstring de
+            # `_fatia_saida` para o motivo.
+            exit_split_unit=self._fatia_saida(ts) if self.dividir_entrada else None,
             exit_ttl_bars=self.exit_ttl_bars if self.dividir_entrada else None,
         )
 
@@ -777,7 +951,7 @@ class GremahTick(IntradayStrategy):
         self,
         ts: pd.Timestamp,
         bar: Bar,
-        position: IntradayOpenPosition | None,
+        positions: list[IntradayOpenPosition],
         session_pnl_brl: float,
     ) -> list[IntradayAction]:
         state = self._state
@@ -803,14 +977,14 @@ class GremahTick(IntradayStrategy):
 
         if not state.session_halted and session_pnl_brl <= -state.session_stop_brl_hoje:
             state.session_halted = True
-            if position is not None:
+            if positions:
                 actions.append(Exit(reason="stop_agregado_sessao"))
             return actions
 
         if state.session_halted:
             return actions
 
-        if position is not None:
+        if positions:
             if state.pending_side is not None:
                 if state.pending_side == "long":
                     state.long_fills += 1

@@ -29,7 +29,7 @@ def test_fase_fixa_ancora_na_abertura():
     ts = pd.Timestamp("2026-01-05 13:00", tz="UTC")
     bar = Bar(ts=ts, open=5.00, high=5.00, low=5.00, close=5.00, volume=0)
 
-    actions = strat.on_bar(ts, bar, position=None, session_pnl_brl=0.0)
+    actions = strat.on_bar(ts, bar, positions=[], session_pnl_brl=0.0)
 
     assert len(actions) == 1
     assert actions[0].limit_price == pytest.approx(4.90)  # 5.00 - 2*5 ticks
@@ -44,7 +44,7 @@ def test_fase_rolante_nao_precisa_de_open_price():
     ts = pd.Timestamp("2026-01-05 15:00", tz="UTC")
     bar = Bar(ts=ts, open=8.00, high=8.00, low=8.00, close=8.00, volume=0)
 
-    actions = strat.on_bar(ts, bar, position=None, session_pnl_brl=0.0)
+    actions = strat.on_bar(ts, bar, positions=[], session_pnl_brl=0.0)
 
     assert len(actions) == 1
     assert strat._state.open_price is None  # nunca precisou saber

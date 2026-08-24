@@ -30,7 +30,7 @@ def test_fase_fixa_ancora_na_abertura():
     ts = pd.Timestamp("2026-01-05 13:00:00", tz="UTC")
     bar = Bar(ts=ts, open=5.00, high=5.00, low=5.00, close=5.00, volume=0)
 
-    actions = strat.on_bar(ts, bar, position=None, session_pnl_brl=0.0)
+    actions = strat.on_bar(ts, bar, positions=[], session_pnl_brl=0.0)
 
     assert len(actions) == 1
     assert actions[0].limit_price == pytest.approx(4.90)  # 5.00 - 2*5 ticks
@@ -108,7 +108,13 @@ def test_seed_volume_window_usa_a_cauda_do_pregao_anterior_na_abertura():
     `backtest/`) entrega essa cauda (a estrategia nunca busca historico
     sozinha, AGENTS.md: `strategy/` so' importa `core`). Janela explicita em
     30min so' para a aritmetica do teste ficar redonda -- o default de
-    verdade do robo e' 1min."""
+    verdade do robo e' 1min.
+
+    Teto pelo NEGOCIO TIPICO (mediana), nao pela media/minuto, desde
+    2026-08-24 (ver `GremahTick._lotes_por_realocacao`) -- com os 30 eventos
+    da cauda mais o de hoje (31 >= `capacidade_min_eventos`), a mediana
+    (10.000 acoes) e' o fluxo REAL observado, sem diluir pelo tamanho
+    NOMINAL da janela como a media fazia."""
     strat = _strat(realocacao_teto_pct_volume_minuto=0.10, realocacao_limiar_caixa=0.0001,
                     realocacao_janela_minutos=30.0)
     ontem_fim = pd.Timestamp("2026-01-05 20:55:00", tz="UTC")
@@ -126,10 +132,11 @@ def test_seed_volume_window_usa_a_cauda_do_pregao_anterior_na_abertura():
         None, 0.0,
     )
 
-    # media = 300.000 da cauda / 30 = 10.000 acoes/min; teto 10% = 1.000
-    # acoes = 10 lotes -- nao o minimo de 1 lote que "sem cauda" produziria.
+    # mediana dos 31 eventos (30 da cauda a 10.000 + a barra de hoje a 0) =
+    # 10.000 acoes; teto = 10.000 x capacidade_negocio_mult (4) = 40.000
+    # acoes -- bem mais que o minimo de 1 lote que "sem cauda" produziria.
     assert len(actions) == 1
-    assert actions[0].quantity == 1_000
+    assert actions[0].quantity == 40_000
 
 
 # ---------- divisao de entrada em pedacos (2026-08-22) --------------------
@@ -149,46 +156,43 @@ def test_exit_ttl_bars_padrao_e_8():
     assert GremahTick(symbol="PMAM3").exit_ttl_bars == 8
 
 
-def test_dividir_pecas_sem_evento_na_janela_nao_divide():
+def test_dividir_pecas_1_lote_ou_menos_nao_divide():
     strat = _strat(dividir_entrada=True)
-    ts = pd.Timestamp("2026-01-05 13:00:00", tz="UTC")
-    assert strat._dividir_pecas(500, ts) is None
+    assert strat._dividir_pecas(0) is None
+    assert strat._dividir_pecas(100) is None  # 1 lote sozinho -- nada a dividir
 
 
-def test_dividir_pecas_quando_negocio_tipico_ja_cobre_o_total():
-    strat = _strat(dividir_entrada=True)
-    ts0 = pd.Timestamp("2026-01-05 13:00:00", tz="UTC")
-    strat._janela_volume.registrar(ts0, 10_000.0)  # 1 negocio tipico de 10.000 acoes
-
-    assert strat._dividir_pecas(500, ts0) is None  # 500 < 10.000 -- nada a dividir
-
-
-def test_dividir_pecas_fatia_perto_do_negocio_tipico_recente():
+def test_dividir_pecas_1_lote_fixo_por_pedaco_abaixo_do_teto():
     strat = _strat(dividir_entrada=True, dividir_max_pecas=8)
-    ts0 = pd.Timestamp("2026-01-05 13:00:00", tz="UTC")
-    for i in range(5):
-        strat._janela_volume.registrar(ts0 + pd.Timedelta(seconds=i), 100.0)  # negocios de 1 lote
 
-    pecas = strat._dividir_pecas(500, ts0 + pd.Timedelta(seconds=5))
+    pecas = strat._dividir_pecas(500)  # 5 lotes, abaixo do teto de 8
 
-    assert pecas is not None
-    assert sum(pecas) == 500
-    assert all(p % 100 == 0 for p in pecas)
-    assert len(pecas) == 5  # 500/100 acoes = 5 pedacos de 1 lote, o tamanho tipico
+    assert pecas == (100, 100, 100, 100, 100)
 
 
-def test_dividir_pecas_respeita_o_teto_de_pedacos():
+def test_dividir_pecas_e_prefixo_estavel_independente_do_total():
+    # pedido do dono 2026-08-24: os mesmos primeiros lotes de uma entrada
+    # pequena tem que aparecer IDENTICOS numa entrada maior -- ordens de 1
+    # lote fixo sao independentes entre si, entao o prefixo nao muda.
+    strat = _strat(dividir_entrada=True, dividir_max_pecas=8)
+
+    pecas_7 = strat._dividir_pecas(700)
+    pecas_5 = strat._dividir_pecas(500)
+
+    assert pecas_7[:5] == pecas_5 == (100, 100, 100, 100, 100)
+
+
+def test_dividir_pecas_respeita_o_teto_de_pedacos_cauda_absorve_excedente():
     strat = _strat(dividir_entrada=True, dividir_max_pecas=3)
-    ts0 = pd.Timestamp("2026-01-05 13:00:00", tz="UTC")
-    strat._janela_volume.registrar(ts0, 100.0)  # negocio tipico de 1 lote
 
-    pecas = strat._dividir_pecas(1000, ts0)  # pediria 10 pedacos, teto corta em 3
+    pecas = strat._dividir_pecas(1000)  # 10 lotes, teto de 3 pedacos
 
     assert pecas is not None
     assert len(pecas) == 3
     assert sum(pecas) == 1000
-    # distribuido o mais igual possivel (4/3/3 lotes), nao 10/0/0.
-    assert sorted(pecas) == [300, 300, 400]
+    # primeiros 2 pedacos continuam de 1 lote (prefixo intacto); a cauda
+    # absorve o resto (8 lotes), nao distribui igualmente entre os 3.
+    assert pecas == (100, 100, 800)
 
 
 def test_janela_do_teto_de_volume_e_1min_por_decisao_do_dono_2026_08_22():

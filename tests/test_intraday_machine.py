@@ -440,7 +440,10 @@ def test_entrada_capada_por_volume_nao_preenche_sem_volume_suficiente():
 def test_ordem_dividida_preenche_filhos_conforme_o_volume_permite():
     """A divisao (`EnterLimit.split_quantities`) e' o que aumenta a chance
     de PELO MENOS parte da ordem casar: pedacos menores cabem no orcamento
-    de volume da barra mesmo quando o total nao caberia."""
+    de volume da barra mesmo quando o total nao caberia. Em modo SIMULADO
+    (2026-08-24), cada filho que preenche vira uma posicao PROPRIA e
+    independente -- nunca funde/tira media com uma ja aberta (pedido do
+    dono, ver a docstring de `IntradaySessionMachine`)."""
     strat = _Scripted({0: [EnterLimit(side="long", limit_price=9.80, quantity=300,
                                       split_quantities=(100, 100, 100))]})
     m = IntradaySessionMachine(strat, _config(limit_fill_capped_by_volume=True))
@@ -452,17 +455,18 @@ def test_ordem_dividida_preenche_filhos_conforme_o_volume_permite():
     ev1 = m.on_closed_bar(_bar_vol(1, 10.00, 10.00, 9.79, 9.85, 250.0))
     abertas1 = [e for e in ev1 if isinstance(e, PositionOpened)]
     assert len(abertas1) == 2
-    assert m.position is not None
-    assert m.position.quantity == 200
+    assert len(m.positions) == 2
+    assert [p.quantity for p in m.positions] == [100, 100]
     assert m.resting_limit is not None  # ainda espera o 3o filho
 
-    # barra seguinte com volume suficiente para o ultimo filho -- TOP-UP na
-    # MESMA posicao (preco medio ponderado), nao abre uma segunda.
+    # barra seguinte com volume suficiente para o ultimo filho -- vira uma
+    # TERCEIRA posicao independente, nao um top-up nas outras duas.
     ev2 = m.on_closed_bar(_bar_vol(2, 9.85, 9.85, 9.79, 9.80, 100.0))
     abertas2 = [e for e in ev2 if isinstance(e, PositionOpened)]
     assert len(abertas2) == 1
-    assert m.position.quantity == 300
-    assert m.position.entry_price == pytest.approx(9.80)
+    assert len(m.positions) == 3
+    assert [p.quantity for p in m.positions] == [100, 100, 100]
+    assert all(p.entry_price == pytest.approx(9.80) for p in m.positions)
     assert m.resting_limit is None  # grupo todo preenchido
 
 
@@ -487,6 +491,62 @@ def test_grupo_dividido_orfao_e_cancelado_quando_a_posicao_fecha_por_stop():
     assert canceladas[0].reason == "position_closed"
     assert m.resting_limit is None
     assert m.position is None
+
+
+def test_posicoes_independentes_stop_de_uma_fecha_so_ela():
+    """Pedido do dono (2026-08-24): se 2 lotes abrem 2 posicoes
+    independentes, cada uma tem que ter O SEU PROPRIO stop -- o de uma nao
+    pode fechar a outra junto. Simula 2 posicoes com stops DIFERENTES
+    (mutando uma delas depois de aberta, como um trailing proprio faria)
+    para provar que a maquina avalia e fecha cada `_Position` de forma
+    independente."""
+    strat = _Scripted({0: [EnterLimit(side="long", limit_price=9.80, quantity=200,
+                                      split_quantities=(100, 100),
+                                      initial_stop=9.00, initial_target=9.90)]})
+    m = IntradaySessionMachine(strat, _config(limit_fill_capped_by_volume=True))
+    m.begin_session(pd.Timestamp("2026-01-05").date())
+    m.on_closed_bar(_bar_vol(0, 10.00, 10.00, 10.00, 10.00, 0.0))
+    m.on_closed_bar(_bar_vol(1, 10.00, 10.00, 9.79, 9.85, 200.0))  # os 2 filhos preenchem juntos
+    assert len(m.positions) == 2
+    assert all(p.current_stop == pytest.approx(9.00) for p in m.positions)
+
+    # aperta o stop de SO' UMA das duas -- prova de que cada `_Position` tem
+    # seu proprio campo, independente da outra.
+    m.positions[0].current_stop = 9.70
+
+    ev = m.on_closed_bar(_bar_vol(2, 9.85, 9.85, 9.60, 9.65, 999.0))  # toca 9.70 mas nao 9.00
+
+    fechadas = [e for e in ev if isinstance(e, PositionClosed)]
+    assert len(fechadas) == 1
+    assert fechadas[0].trade.quantity == 100
+    assert fechadas[0].trade.exit_reason == IntradayExitReason.STOP
+    assert len(m.positions) == 1
+    assert m.positions[0].current_stop == pytest.approx(9.00)  # a outra continua intacta
+    assert m.positions[0].quantity == 100
+
+
+def test_alvo_maker_capado_com_2_posicoes_nao_dobra_o_orcamento_de_volume():
+    """2 posicoes independentes de 1 lote cada, ambas mirando o MESMO alvo
+    maker capado por volume -- o orcamento da barra e' UNICO e
+    compartilhado (2026-08-24): se so' cabe 1 fatia no volume disponivel,
+    so' 1 das duas fecha nesta barra, nunca as duas (cada uma checando
+    `bar.volume` por conta propria dobraria a liquidez real)."""
+    strat = _Scripted({0: [EnterLimit(side="long", limit_price=9.80, quantity=200,
+                                      split_quantities=(100, 100), initial_target=9.90)]})
+    m = IntradaySessionMachine(strat, _config(limit_fill_capped_by_volume=True,
+                                              target_fills_as_maker=True))
+    m.begin_session(pd.Timestamp("2026-01-05").date())
+    m.on_closed_bar(_bar_vol(0, 10.00, 10.00, 10.00, 10.00, 0.0))
+    m.on_closed_bar(_bar_vol(1, 10.00, 10.00, 9.79, 9.85, 200.0))
+    assert len(m.positions) == 2
+
+    # toca o alvo com volume pra fechar SO' 1 das 2 fatias de 100.
+    ev = m.on_closed_bar(_bar_vol(2, 9.85, 9.95, 9.85, 9.90, 100.0))
+
+    fechadas = [e for e in ev if isinstance(e, PositionClosed)]
+    assert len(fechadas) == 1
+    assert fechadas[0].trade.quantity == 100
+    assert len(m.positions) == 1  # a outra continua aberta, sem volume pra ela nesta barra
 
 
 def test_alvo_maker_capado_nao_fecha_sem_volume_suficiente_e_fecha_depois():
@@ -633,7 +693,7 @@ def test_alvo_dividido_com_prazo_nao_preenche_na_propria_barra_que_armou():
     ev2 = m.on_closed_bar(_bar_vol(2, 9.85, 9.95, 9.85, 9.90, 100.0))
     assert [e for e in ev2 if isinstance(e, PositionClosed)] == []
     assert m.position.quantity == 300
-    assert m.resting_exit_bars_waited == 0
+    assert m.position.resting_exit_bars_waited == 0
 
     # barra SEGUINTE, tambem tocando o alvo com volume suficiente -- agora sim
     # preenche a fatia.
@@ -644,10 +704,10 @@ def test_alvo_dividido_com_prazo_nao_preenche_na_propria_barra_que_armou():
     assert fechadas3[0].trade.exit_price == pytest.approx(9.90)
     assert m.position is not None
     assert m.position.quantity == 200
-    assert m.resting_exit_bars_waited == 0
+    assert m.position.resting_exit_bars_waited == 0
 
 
-def test_alvo_dividido_com_prazo_estourado_fecha_o_resto_a_mercado():
+def test_alvo_dividido_com_prazo_estourado_fecha_so_a_fatia_a_mercado():
     strat = _Scripted({0: [EnterLimit(side="long", limit_price=9.80, quantity=300,
                                       initial_target=9.90, exit_split_unit=100,
                                       exit_ttl_bars=2)]})
@@ -660,25 +720,60 @@ def test_alvo_dividido_com_prazo_estourado_fecha_o_resto_a_mercado():
     # 1o toque -- arma a fatia (nao conta prazo ainda, so' a partir da PROXIMA
     # barra que checa o fill dela).
     m.on_closed_bar(_bar_vol(2, 9.85, 9.95, 9.85, 9.90, 100.0))
-    assert m.resting_exit_bars_waited == 0
+    assert m.position.resting_exit_bars_waited == 0
     assert m.position.quantity == 300
 
     # 1a checagem: toca de novo, mas SEM volume suficiente -- 1 barra de espera.
     ev3 = m.on_closed_bar(_bar_vol(3, 9.90, 9.95, 9.85, 9.90, 10.0))
     assert [e for e in ev3 if isinstance(e, PositionClosed)] == []
-    assert m.resting_exit_bars_waited == 1
+    assert m.position.resting_exit_bars_waited == 1
     assert m.position.quantity == 300
 
     # 2a checagem, ainda sem volume: estoura o prazo (exit_ttl_bars=2) --
-    # fecha TUDO o que sobrou a MERCADO (bar.close), nao so' a fatia.
+    # fecha a MERCADO so' a FATIA travada (100), o resto da posicao (200)
+    # continua aberto (2026-08-24: antes despejava a posicao INTEIRA aqui).
     ev4 = m.on_closed_bar(_bar_vol(4, 9.90, 9.90, 9.85, 9.88, 10.0))
     fechadas4 = [e for e in ev4 if isinstance(e, PositionClosed)]
     assert len(fechadas4) == 1
-    assert fechadas4[0].trade.quantity == 300
+    assert fechadas4[0].trade.quantity == 100
     assert fechadas4[0].trade.exit_price == pytest.approx(9.88)  # bar.close, nao o nivel do alvo
     assert fechadas4[0].trade.exit_reason == IntradayExitReason.TARGET
-    assert m.position is None
-    assert m.resting_exit_bars_waited == 0
+    assert m.position is not None
+    assert m.position.quantity == 200
+    assert m.position.resting_exit_bars_waited == 0
+    assert m.position.exit_resting_qty == 0
+
+
+def test_alvo_dividido_com_prazo_estourado_fatia_nova_arma_e_fecha_independente():
+    """Depois do despejo PARCIAL (so' a fatia travada), a posicao restante
+    continua com o mesmo alvo/stop -- uma nova fatia arma no proximo toque
+    e tem seu PROPRIO prazo do zero, independente do que aconteceu com a
+    fatia anterior."""
+    strat = _Scripted({0: [EnterLimit(side="long", limit_price=9.80, quantity=300,
+                                      initial_target=9.90, exit_split_unit=100,
+                                      exit_ttl_bars=2)]})
+    m = IntradaySessionMachine(strat, _config(limit_fill_capped_by_volume=True,
+                                              target_fills_as_maker=True))
+    m.begin_session(pd.Timestamp("2026-01-05").date())
+    m.on_closed_bar(_bar_vol(0, 10.00, 10.00, 10.00, 10.00, 0.0))
+    m.on_closed_bar(_bar_vol(1, 10.00, 10.00, 9.79, 9.85, 300.0))
+    m.on_closed_bar(_bar_vol(2, 9.85, 9.95, 9.85, 9.90, 100.0))  # arma
+    m.on_closed_bar(_bar_vol(3, 9.90, 9.95, 9.85, 9.90, 10.0))  # espera, sem volume
+    ev4 = m.on_closed_bar(_bar_vol(4, 9.90, 9.90, 9.85, 9.88, 10.0))  # estoura, despeja a fatia
+    assert [e for e in ev4 if isinstance(e, PositionClosed)][0].trade.quantity == 100
+    assert m.position.quantity == 200
+
+    # novo toque do alvo -- arma uma fatia NOVA, prazo do zero.
+    m.on_closed_bar(_bar_vol(5, 9.85, 9.95, 9.85, 9.90, 100.0))
+    assert m.position.resting_exit_bars_waited == 0
+    assert m.position.exit_resting_qty == 100
+
+    ev6 = m.on_closed_bar(_bar_vol(6, 9.90, 9.95, 9.85, 9.90, 100.0))  # preenche
+    fechadas6 = [e for e in ev6 if isinstance(e, PositionClosed)]
+    assert len(fechadas6) == 1
+    assert fechadas6[0].trade.quantity == 100
+    assert m.position is not None
+    assert m.position.quantity == 100
 
 
 def test_alvo_dividido_com_prazo_conta_barras_mesmo_sem_tocar_o_alvo():
@@ -694,19 +789,22 @@ def test_alvo_dividido_com_prazo_conta_barras_mesmo_sem_tocar_o_alvo():
     m.on_closed_bar(_bar_vol(0, 10.00, 10.00, 10.00, 10.00, 0.0))
     m.on_closed_bar(_bar_vol(1, 10.00, 10.00, 9.79, 9.85, 300.0))
     m.on_closed_bar(_bar_vol(2, 9.85, 9.95, 9.85, 9.90, 100.0))  # arma
-    assert m.resting_exit_bars_waited == 0
+    assert m.position.resting_exit_bars_waited == 0
 
     # preco foge do alvo (nem toca) -- 1a checagem ja conta prazo mesmo assim.
     ev3 = m.on_closed_bar(_bar_vol(3, 9.85, 9.85, 9.70, 9.75, 999.0))
     assert [e for e in ev3 if isinstance(e, PositionClosed)] == []
-    assert m.resting_exit_bars_waited == 1
+    assert m.position.resting_exit_bars_waited == 1
 
-    # 2a checagem sem tocar: estoura o prazo (exit_ttl_bars=2).
+    # 2a checagem sem tocar: estoura o prazo (exit_ttl_bars=2) -- fecha so' a
+    # fatia (100), o resto (200) continua aberto.
     ev4 = m.on_closed_bar(_bar_vol(4, 9.75, 9.75, 9.60, 9.65, 999.0))
     fechadas4 = [e for e in ev4 if isinstance(e, PositionClosed)]
     assert len(fechadas4) == 1
-    assert fechadas4[0].trade.quantity == 300
+    assert fechadas4[0].trade.quantity == 100
     assert fechadas4[0].trade.exit_price == pytest.approx(9.65)
+    assert m.position is not None
+    assert m.position.quantity == 200
 
 
 def test_alvo_dividido_com_prazo_stop_fecha_tudo_e_zera_o_prazo():
@@ -721,7 +819,7 @@ def test_alvo_dividido_com_prazo_stop_fecha_tudo_e_zera_o_prazo():
     m.on_closed_bar(_bar_vol(2, 9.85, 9.95, 9.85, 9.90, 100.0))  # arma a fatia
     ev3 = m.on_closed_bar(_bar_vol(3, 9.90, 9.95, 9.85, 9.90, 10.0))  # checa, sem volume
     assert [e for e in ev3 if isinstance(e, PositionClosed)] == []
-    assert m.resting_exit_bars_waited == 1
+    assert m.position.resting_exit_bars_waited == 1
 
     ev = m.on_closed_bar(_bar_vol(4, 9.85, 9.85, 8.50, 8.60, 1.0))  # despenca abaixo do stop
 
@@ -730,8 +828,6 @@ def test_alvo_dividido_com_prazo_stop_fecha_tudo_e_zera_o_prazo():
     assert fechadas[0].trade.quantity == 300
     assert fechadas[0].trade.exit_reason == IntradayExitReason.STOP
     assert m.position is None
-    assert m.resting_exit_bars_waited == 0
-    assert m.resting_exit_bars_waited == 0
 
 
 def test_state_restore_preserva_fatia_de_saida_armada_em_sombra():
@@ -750,26 +846,27 @@ def test_state_restore_preserva_fatia_de_saida_armada_em_sombra():
     m.on_closed_bar(_bar_vol(2, 9.85, 9.95, 9.85, 9.90, 100.0))  # arma a fatia
     ev3 = m.on_closed_bar(_bar_vol(3, 9.90, 9.95, 9.85, 9.90, 10.0))  # 1a checagem, sem volume
     assert [e for e in ev3 if isinstance(e, PositionClosed)] == []
-    assert m._exit_resting_qty == 100
-    assert m.resting_exit_bars_waited == 1
+    assert m.position.exit_resting_qty == 100
+    assert m.position.resting_exit_bars_waited == 1
 
     snapshot = m.state()
     outra = IntradaySessionMachine(_Scripted({}), _config(limit_fill_capped_by_volume=True,
                                                            target_fills_as_maker=True))
     outra.restore(snapshot)
 
-    assert outra._exit_resting_qty == 100
-    assert outra.resting_exit_bars_waited == 1
     assert outra.position is not None and outra.position.quantity == 300
+    assert outra.position.exit_resting_qty == 100
+    assert outra.position.resting_exit_bars_waited == 1
 
     # so' falta 1 barra de espera (exit_ttl_bars=2, ja usou 1 antes do
-    # restart) -- estoura o prazo e fecha o resto a mercado, sem reiniciar a
-    # contagem do zero.
+    # restart) -- estoura o prazo e fecha so' a fatia a mercado (100), sem
+    # reiniciar a contagem do zero.
     ev4 = outra.on_closed_bar(_bar_vol(4, 9.90, 9.90, 9.85, 9.88, 10.0))
     fechadas4 = [e for e in ev4 if isinstance(e, PositionClosed)]
     assert len(fechadas4) == 1
-    assert fechadas4[0].trade.quantity == 300
-    assert outra.position is None
+    assert fechadas4[0].trade.quantity == 100
+    assert outra.position is not None
+    assert outra.position.quantity == 200
 
 
 def test_restore_com_fatia_de_saida_armada_em_execucao_real_falha_alto():

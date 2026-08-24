@@ -82,23 +82,24 @@ class InvertedStrategy(IntradayStrategy):
         self,
         ts: pd.Timestamp,
         bar: Bar,
-        position: IntradayOpenPosition | None,
+        positions: list[IntradayOpenPosition],
         session_pnl_brl: float,
     ) -> list[IntradayAction]:
-        shadow_position = None
-        if position is not None:
-            shadow_position = IntradayOpenPosition(
-                side=_flip(position.side),
-                entry_ts=position.entry_ts,
-                entry_price=position.entry_price,
-                quantity=position.quantity,
-                current_stop=position.current_target,
-                current_target=position.current_stop,
-                bars_held=position.bars_held,
-                metadata=dict(position.metadata),
+        shadow_positions = [
+            IntradayOpenPosition(
+                side=_flip(pos.side),
+                entry_ts=pos.entry_ts,
+                entry_price=pos.entry_price,
+                quantity=pos.quantity,
+                current_stop=pos.current_target,
+                current_target=pos.current_stop,
+                bars_held=pos.bars_held,
+                metadata=dict(pos.metadata),
             )
+            for pos in positions
+        ]
 
-        inner_actions = self.inner.on_bar(ts, bar, shadow_position, session_pnl_brl)
+        inner_actions = self.inner.on_bar(ts, bar, shadow_positions, session_pnl_brl)
 
         actions: list[IntradayAction] = []
         for act in inner_actions:

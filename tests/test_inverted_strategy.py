@@ -19,14 +19,14 @@ class _FakeInner(IntradayStrategy):
     symbol = "PMAM3"
 
     def __init__(self):
-        self.seen_positions: list[IntradayOpenPosition | None] = []
+        self.seen_positions: list[list[IntradayOpenPosition]] = []
         self.calls = 0
 
     def initialize(self, bars):
         self.initialized_with = bars
 
-    def on_bar(self, ts, bar, position, session_pnl_brl):
-        self.seen_positions.append(position)
+    def on_bar(self, ts, bar, positions, session_pnl_brl):
+        self.seen_positions.append(positions)
         self.calls += 1
         if self.calls == 1:
             return [Enter(side="long", initial_stop=90.0, initial_target=110.0, reason="fake_entry")]
@@ -38,7 +38,7 @@ def test_enter_e_invertido_com_stop_e_target_trocados():
     strat = InvertedStrategy(inner)
     ts = pd.Timestamp("2026-01-05 09:00", tz="UTC")
 
-    actions = strat.on_bar(ts, _bar(ts), position=None, session_pnl_brl=0.0)
+    actions = strat.on_bar(ts, _bar(ts), positions=[], session_pnl_brl=0.0)
 
     assert len(actions) == 1
     enter = actions[0]
@@ -52,9 +52,9 @@ def test_exit_passa_direto_sem_alteracao():
     inner = _FakeInner()
     strat = InvertedStrategy(inner)
     ts = pd.Timestamp("2026-01-05 09:00", tz="UTC")
-    strat.on_bar(ts, _bar(ts), position=None, session_pnl_brl=0.0)  # consome a 1a chamada (Enter)
+    strat.on_bar(ts, _bar(ts), positions=[], session_pnl_brl=0.0)  # consome a 1a chamada (Enter)
 
-    actions = strat.on_bar(ts, _bar(ts), position=None, session_pnl_brl=0.0)
+    actions = strat.on_bar(ts, _bar(ts), positions=[], session_pnl_brl=0.0)
 
     assert len(actions) == 1
     assert isinstance(actions[0], Exit)
@@ -70,9 +70,9 @@ def test_posicao_sombra_espelha_lado_e_stop_target_para_o_inner():
         side="short", entry_ts=ts, entry_price=100.0, quantity=100,
         current_stop=110.0, current_target=90.0, bars_held=3,
     )
-    strat.on_bar(ts, _bar(ts), position=real_position, session_pnl_brl=0.0)
+    strat.on_bar(ts, _bar(ts), positions=[real_position], session_pnl_brl=0.0)
 
-    shadow = inner.seen_positions[0]
+    shadow = inner.seen_positions[0][0]
     assert shadow.side == "long"
     assert shadow.current_stop == 90.0
     assert shadow.current_target == 110.0

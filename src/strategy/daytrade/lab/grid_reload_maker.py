@@ -125,7 +125,7 @@ class GridReloadMaker(IntradayStrategy):
         self,
         ts: pd.Timestamp,
         bar: Bar,
-        position: IntradayOpenPosition | None,
+        positions: list[IntradayOpenPosition],
         session_pnl_brl: float,
     ) -> list[IntradayAction]:
         state = self._state
@@ -136,14 +136,14 @@ class GridReloadMaker(IntradayStrategy):
 
         if not state.session_halted and session_pnl_brl <= -self.session_stop_brl:
             state.session_halted = True
-            if position is not None:
+            if positions:
                 actions.append(Exit(reason="stop_agregado_sessao"))
             return actions
 
         if state.session_halted:
             return actions
 
-        if position is not None:
+        if positions:
             # Confirma o preenchimento da EnterLimit pendente (a
             # entrada), se for o caso -- so acontece na PRIMEIRA chamada
             # com posicao aberta apos a ordem ter sido emitida.

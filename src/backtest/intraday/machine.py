@@ -86,6 +86,14 @@ class _Position:
     # `IntradaySessionMachine._resolve_live_split_exit`). Herdado da mesma
     # ordem que `exit_split_unit`, nao muda depois.
     exit_ttl_bars: int | None = None
+    # Fatia de SAIDA vigiada agora PARA ESTA POSICAO (0 = nenhuma armada) --
+    # 2026-08-24, migrado de campo unico da maquina (`_exit_resting_qty`) para
+    # AQUI: com posicoes independentes (`IntradaySessionMachine.positions`,
+    # ver a docstring da classe), cada posicao tem seu PROPRIO relogio de
+    # saida, nao um relogio global compartilhado -- ver `_resolve_simulated_
+    # split_exit`/`_resolve_live_split_exit`.
+    exit_resting_qty: int = 0
+    resting_exit_bars_waited: int = 0
 
 
 @dataclass(frozen=True)
@@ -295,7 +303,7 @@ def _stop_target_touch(pos: _Position, bar: Bar) -> tuple[bool, bool]:
 
 def _resolve_stop_target_hit(
     pos: _Position, bar: Bar, ambiguous_bar_resolution: str,
-    target_needs_volume: bool = False,
+    target_needs_volume: bool = False, orcamento: float | None = None,
 ) -> Optional[str]:
     """`"stop"`, `"target"` ou `None`. Quando os DOIS tocam na mesma barra,
     `ambiguous_bar_resolution` decide — nao ha como saber qual veio primeiro
@@ -303,18 +311,24 @@ def _resolve_stop_target_hit(
 
     `target_needs_volume=True` (so quando `target_fills_as_maker` E
     `limit_fill_capped_by_volume` estao ligados): o alvo so' "toca" de
-    verdade se `bar.volume >= pos.quantity` -- a MESMA barra que nao tiver
+    verdade se `orcamento >= pos.quantity` -- a MESMA barra que nao tiver
     volume suficiente simplesmente nao resolve nada, e a posicao continua
     aberta para a PROXIMA barra reavaliar do zero (preco pode continuar no
     alvo com mais volume, ou ter ido embora). O stop NUNCA tem este cap:
-    e' saida por protecao/urgencia, sempre a mercado.
+    e' saida por protecao/urgencia, sempre a mercado. `orcamento` (2026-08-24,
+    antes lia `bar.volume` direto): o CHAMADOR (`on_closed_bar`) mantem um
+    orcamento de volume UNICO, compartilhado entre TODAS as posicoes
+    avaliadas nesta barra -- com posicoes independentes, cada uma checando
+    `bar.volume` por conta propria dobraria (ou N-plicaria) a liquidez real
+    disponivel. `None` (default) so' e' seguro quando `target_needs_volume`
+    e' `False` (o valor nunca e' lido nesse caso).
 
     So' vale para `pos.exit_split_unit is None` -- com fatia declarada,
     `on_closed_bar` usa `_stop_target_touch` + `_resolve_target_partial_fill`
     direto, para poder fechar SO' O QUANTO o volume cobrir em vez de tudo
     ou nada."""
     stop_hit, target_hit = _stop_target_touch(pos, bar)
-    if target_hit and target_needs_volume and bar.volume < pos.quantity:
+    if target_hit and target_needs_volume and (orcamento or 0) < pos.quantity:
         target_hit = False
     if stop_hit and target_hit:
         return "stop" if ambiguous_bar_resolution == "stop_first" else "target"
@@ -325,14 +339,18 @@ def _resolve_stop_target_hit(
     return None
 
 
-def _resolve_target_partial_fill(pos: _Position, bar: Bar) -> int:
+def _resolve_target_partial_fill(pos: _Position, orcamento: float) -> int:
     """Quanto o alvo consegue fechar nesta barra, dado o tamanho de fatia
     `pos.exit_split_unit` (`None` = a posicao inteira e' UMA fatia so' --
     unifica os dois casos) -- mesma logica FOK por pedaco de
     `_resolve_limit_fills`, do lado da saida em vez da entrada, tudo-ou-nada
-    por barra (`bar.volume` e' o orcamento). Processa fatias em ordem ate
-    estourar o orcamento ou fechar a posicao inteira."""
-    orcamento = bar.volume
+    por barra. `orcamento` (2026-08-24, antes `bar.volume` lido direto
+    aqui dentro): o CHAMADOR (`on_closed_bar`) mantem um orcamento de
+    volume UNICO da barra, compartilhado entre TODAS as posicoes avaliadas
+    nela -- com posicoes independentes, cada uma consumindo `bar.volume`
+    por conta propria dobraria (ou N-plicaria) a liquidez real disponivel.
+    Processa fatias em ordem ate estourar o orcamento ou fechar a posicao
+    inteira."""
     tamanho_fatia = pos.exit_split_unit or pos.quantity
     restante = pos.quantity
     fechado = 0
@@ -377,9 +395,34 @@ class IntradaySessionMachine:
 
     Nao guarda historico de trades nem curva de patrimonio — quem quer isso
     acumula os `PositionClosed` que `on_closed_bar` devolve. O que a maquina
-    guarda e' so o que a PROXIMA barra precisa: posicao aberta, acao filada,
-    ordem-limite vigiada, P&L da sessao (para o robo ver em `on_bar`) e P&L
-    realizado acumulado (para marcar patrimonio).
+    guarda e' so o que a PROXIMA barra precisa: posicao(oes) aberta(s), acao
+    filada, ordem-limite vigiada, P&L da sessao (para o robo ver em `on_bar`)
+    e P&L realizado acumulado (para marcar patrimonio).
+
+    `self.positions: list[_Position]` (2026-08-24, antes um `_Position |
+    None` unico) -- pedido do dono: "se eu tenho capital pra 2 lotes, mas o
+    volume so' permite entrar aos poucos, tenho que abrir DUAS posicoes;
+    abrindo duas eu ganho/perco igual (ou quase) ao abrir 1 sozinha, e cada
+    uma tem que ter O SEU PROPRIO stop, nao um stop que fecha as duas
+    juntas." Antes, uma entrada fatiada em N pedacos (`EnterLimit.
+    split_quantities`) fundia cada preenchimento numa UNICA `_Position`
+    agregada (preco medio ponderado, quantidade somada, um stop/alvo/TTL so'
+    para o total) -- exatamente o oposto do pedido: mais capital (mais lotes
+    agregados) podia se sair PIOR que 1 lote sozinho, porque o stop/TTL da
+    posicao agregada dispara de um jeito diferente (mais barras expostas,
+    mais lotes arrastados juntos num so' evento) do que o stop de uma
+    posicao de 1 lote isolada.
+
+    So' vale para o caminho SIMULADO (`self.execution is None` -- backtest E
+    modo sombra, como o robo e' medido/selecionado hoje). Em EXECUCAO REAL
+    (`self.execution` setado, conta NETTING na corretora) `self.positions`
+    nunca passa de 1 elemento -- a corretora so' enxerga uma posicao
+    agregada por simbolo, e o `exit_market`/o schema de `journal.live_store`
+    (`upsert_position`/`delete_position`, indexados por `(account_id,
+    ticker, kind)`) nao tem como representar duas posicoes independentes do
+    mesmo ticker. Preenchimentos em execucao real continuam fundindo em UMA
+    `_Position` so', como antes -- ver o laco de preenchimento em
+    `on_closed_bar`.
     """
 
     def __init__(self, strategy: IntradayStrategy, config: IntradayBacktestConfig,
@@ -404,7 +447,7 @@ class IntradaySessionMachine:
         # `on_closed_bar`, o mesmo robo, as mesmas prioridades. So a resposta
         # a "preencheu? a que preco?" troca de fonte.
         self.execution = execution
-        self.position: _Position | None = None
+        self.positions: list[_Position] = []
         self.pending: Enter | Exit | None = None
         self.resting_limit: EnterLimit | None = None
         self.resting_limit_bars_waited = 0
@@ -418,14 +461,17 @@ class IntradaySessionMachine:
         # agregado, decrescido pelo que a corretora reportar como
         # crescimento da posicao a cada barra (ver `_resolve_limit_fills`).
         self._resting_children_qty: list[int] = []
-        # Fatia de SAIDA (`_Position.exit_split_unit`) vigiada agora (0 =
-        # nenhuma armada) -- ordem-limite REAL na corretora quando
-        # `execution` esta setado (`_resolve_live_split_exit`), ou simulada
-        # contra `bar.volume` quando `exit_ttl_bars` esta declarado sem
-        # execucao real (`_resolve_simulated_split_exit`). Sem `exit_ttl_bars`
+        # Fatia de SAIDA (`_Position.exit_split_unit`) vigiada agora para
+        # CADA posicao -- ordem-limite REAL na corretora quando `execution`
+        # esta setado (`_resolve_live_split_exit`), ou simulada contra
+        # `bar.volume` quando `exit_ttl_bars` esta declarado sem execucao
+        # real (`_resolve_simulated_split_exit`). Sem `exit_ttl_bars`
         # declarado, backtest/sombra caem no caminho ANTIGO
-        # (`_resolve_target_partial_fill`, sem prazo, nao usa este campo).
-        # PERSISTIDO em `state()` (2026-08-23, ver `restore()`) -- diferente de
+        # (`_resolve_target_partial_fill`, sem prazo). 2026-08-24: migrado
+        # para campos de `_Position` (`pos.exit_resting_qty`/`pos.
+        # resting_exit_bars_waited`) -- cada posicao tem seu PROPRIO relogio,
+        # nao um relogio global da maquina (ver a docstring da classe).
+        # PERSISTIDO em `state()` (ver `restore()`) -- diferente de
         # `resting_limit`, que e' uma DECISAO do robo e por isso e' redecidida
         # do zero no warm start, esta fatia e' o rastro de uma ordem que JA
         # esta (ou nao) na corretora. Em modo simulado (`execution is None`)
@@ -436,8 +482,6 @@ class IntradaySessionMachine:
         # um processo novo o perde: `restore()` falha alto nesse caso, em vez
         # de arriscar rearmar uma SEGUNDA ordem de saida por cima da que pode
         # ainda estar viva no book.
-        self._exit_resting_qty: int = 0
-        self.resting_exit_bars_waited = 0
         self.flattened = False
         self.session_pnl = 0.0
         self.realized_pnl = 0.0
@@ -461,17 +505,17 @@ class IntradaySessionMachine:
         `None` NAO limpa uma ordem que ja estivesse vigiada (reconectar no
         meio do pregao nao deve cancelar o que ja estava de pe).
 
-        `seed_pending` e' IGNORADO se `self.position` ja existir (um
-        `restore()` anterior repos uma posicao REAL, ver
+        `seed_pending` e' IGNORADO se `self.positions` ja tiver algo (um
+        `restore()` anterior repos posicao(oes) REAL, ver
         `live/intraday_runtime.py::_restore`, chamado ANTES desta funcao no
         despacho de reconexao): o replay do warm start nao sabe de posicao
         nenhuma (`warm_start_calibration` sempre chama o robo com
-        `position=None`) e recalcula a ordem pendente do zero -- plantar
+        `positions=[]`) e recalcula a ordem pendente do zero -- plantar
         essa ordem por cima de uma posicao ja aberta a deixaria orfa e
         desconectada assim que a posicao fechasse (o preco/nivel dela pode
         nem existir mais)."""
         self._reset_session(session_date, clear_resting=False)
-        if self.position is not None:
+        if self.positions:
             return
         if isinstance(seed_pending, Enter):
             self.pending = seed_pending
@@ -502,26 +546,28 @@ class IntradaySessionMachine:
         reconstruido do dado real por `warm_start_calibration` (ver
         `strategy/daytrade/base.py`), que e' a unica forma de garantir que a
         calibracao ao voltar e' a mesma que teria sido sem a queda."""
-        pos = self.position
         return {
             "session_date": self.session_date.isoformat() if self.session_date else None,
             "session_pnl": self.session_pnl,
             "realized_pnl": self.realized_pnl,
             "flattened": self.flattened,
-            "position": None if pos is None else {
-                "side": pos.side,
-                "entry_ts": pos.entry_ts.isoformat(),
-                "entry_price": pos.entry_price,
-                "quantity": pos.quantity,
-                "current_stop": pos.current_stop,
-                "current_target": pos.current_target,
-                "bars_held": pos.bars_held,
-                "metadata": dict(pos.metadata),
-                "exit_split_unit": pos.exit_split_unit,
-                "exit_ttl_bars": pos.exit_ttl_bars,
-                "exit_resting_qty": self._exit_resting_qty,
-                "exit_resting_bars_waited": self.resting_exit_bars_waited,
-            },
+            "positions": [
+                {
+                    "side": pos.side,
+                    "entry_ts": pos.entry_ts.isoformat(),
+                    "entry_price": pos.entry_price,
+                    "quantity": pos.quantity,
+                    "current_stop": pos.current_stop,
+                    "current_target": pos.current_target,
+                    "bars_held": pos.bars_held,
+                    "metadata": dict(pos.metadata),
+                    "exit_split_unit": pos.exit_split_unit,
+                    "exit_ttl_bars": pos.exit_ttl_bars,
+                    "exit_resting_qty": pos.exit_resting_qty,
+                    "exit_resting_bars_waited": pos.resting_exit_bars_waited,
+                }
+                for pos in self.positions
+            ],
         }
 
     def restore(self, state: dict) -> None:
@@ -555,53 +601,73 @@ class IntradaySessionMachine:
         self.session_pnl = float(state.get("session_pnl") or 0.0)
         self.realized_pnl = float(state.get("realized_pnl") or 0.0)
         self.flattened = bool(state.get("flattened"))
-        bloco = state.get("position")
-        if not bloco:
-            self.position = None
-            self._exit_resting_qty = 0
-            self.resting_exit_bars_waited = 0
-            return
-        qtd_pendente = int(bloco.get("exit_resting_qty") or 0)
-        if qtd_pendente > 0 and self.execution is not None:
-            raise RuntimeError(
-                f"{self.strategy.symbol}: reinicio encontrou uma FATIA DE SAIDA "
-                f"armada ({qtd_pendente} acoes) em execucao REAL, mas o ticket "
-                "dessa ordem-limite vive so' em memoria e nao sobrevive a um "
-                "restart do processo -- a corretora e' a unica fonte de verdade "
-                "sobre ele. Resumir aqui sem saber se a ordem ainda esta no book "
-                "arriscaria mandar uma SEGUNDA ordem de saida por cima (venda "
-                "dobrada / posicao invertida numa conta NETTING). Confira o "
-                f"terminal MT5 manualmente: cancele a ordem-limite de saida "
-                f"pendente em {self.strategy.symbol} (se ainda existir) antes de "
-                "religar este slot."
-            )
-        self._exit_resting_qty = qtd_pendente
-        self.resting_exit_bars_waited = int(bloco.get("exit_resting_bars_waited") or 0)
-        self.position = _Position(
-            side=bloco["side"],
-            entry_ts=pd.Timestamp(bloco["entry_ts"]),
-            entry_price=float(bloco["entry_price"]),
-            quantity=int(bloco["quantity"]),
-            current_stop=bloco.get("current_stop"),
-            current_target=bloco.get("current_target"),
-            bars_held=int(bloco.get("bars_held") or 0),
-            metadata=dict(bloco.get("metadata") or {}),
-            exit_split_unit=bloco.get("exit_split_unit"),
-            exit_ttl_bars=bloco.get("exit_ttl_bars"),
-        )
+        blocos = state.get("positions")
+        if blocos is None:
+            bloco_legado = state.get("position")
+            blocos = [bloco_legado] if bloco_legado else []
+        self.positions = []
+        for bloco in blocos:
+            qtd_pendente = int(bloco.get("exit_resting_qty") or 0)
+            if qtd_pendente > 0 and self.execution is not None:
+                raise RuntimeError(
+                    f"{self.strategy.symbol}: reinicio encontrou uma FATIA DE SAIDA "
+                    f"armada ({qtd_pendente} acoes) em execucao REAL, mas o ticket "
+                    "dessa ordem-limite vive so' em memoria e nao sobrevive a um "
+                    "restart do processo -- a corretora e' a unica fonte de verdade "
+                    "sobre ele. Resumir aqui sem saber se a ordem ainda esta no book "
+                    "arriscaria mandar uma SEGUNDA ordem de saida por cima (venda "
+                    "dobrada / posicao invertida numa conta NETTING). Confira o "
+                    f"terminal MT5 manualmente: cancele a ordem-limite de saida "
+                    f"pendente em {self.strategy.symbol} (se ainda existir) antes de "
+                    "religar este slot."
+                )
+            self.positions.append(_Position(
+                side=bloco["side"],
+                entry_ts=pd.Timestamp(bloco["entry_ts"]),
+                entry_price=float(bloco["entry_price"]),
+                quantity=int(bloco["quantity"]),
+                current_stop=bloco.get("current_stop"),
+                current_target=bloco.get("current_target"),
+                bars_held=int(bloco.get("bars_held") or 0),
+                metadata=dict(bloco.get("metadata") or {}),
+                exit_split_unit=bloco.get("exit_split_unit"),
+                exit_ttl_bars=bloco.get("exit_ttl_bars"),
+                exit_resting_qty=qtd_pendente,
+                resting_exit_bars_waited=int(bloco.get("exit_resting_bars_waited") or 0),
+            ))
 
     # ---------- marcacao de patrimonio -----------------------------------
 
     def unrealized_brl(self, price: float) -> float:
-        """Marcacao a mercado da posicao aberta a `price` (0.0 sem posicao)."""
-        if self.position is None:
-            return 0.0
-        pos = self.position
-        points = (price - pos.entry_price) if pos.side == "long" else (pos.entry_price - price)
-        return points * self.config.costs.point_value_brl * pos.quantity
+        """Marcacao a mercado da SOMA de todas as posicoes abertas a `price`
+        (0.0 sem posicao nenhuma)."""
+        total = 0.0
+        for pos in self.positions:
+            points = (price - pos.entry_price) if pos.side == "long" else (pos.entry_price - price)
+            total += points * self.config.costs.point_value_brl * pos.quantity
+        return total
 
-    def position_view(self) -> IntradayOpenPosition | None:
-        return _position_view(self.position) if self.position is not None else None
+    def positions_view(self) -> list[IntradayOpenPosition]:
+        return [_position_view(pos) for pos in self.positions]
+
+    @property
+    def position(self) -> _Position | None:
+        """Atalho de compatibilidade para quem so' opera no caminho de NO
+        MAXIMO 1 posicao -- hoje, so' `live/intraday_runtime.py` (execucao
+        REAL, que continua fundindo tudo numa unica `_Position`, ver a
+        docstring da classe). Levanta se `self.positions` tiver mais de 1
+        elemento -- nao deveria acontecer nesse caminho; se acontecer, e'
+        mais seguro falhar alto do que silenciosamente devolver so' a
+        primeira e esconder as outras."""
+        if len(self.positions) > 1:
+            raise RuntimeError(
+                f"{self.strategy.symbol}: `machine.position` (atalho de 1 posicao) "
+                f"chamado com {len(self.positions)} posicoes abertas -- so' faz "
+                "sentido em execucao REAL, que nunca deveria acumular mais de uma "
+                "(ver a docstring de `IntradaySessionMachine`). Use `self.positions` "
+                "diretamente."
+            )
+        return self.positions[0] if self.positions else None
 
     # ---------- o passo ---------------------------------------------------
 
@@ -624,15 +690,30 @@ class IntradaySessionMachine:
         events: list[MachineEvent] = []
 
         # (1) stop/target automatico tem prioridade sobre qualquer acao filada.
-        if self.position is not None:
-            pos = self.position
+        # Itera sobre uma COPIA (`list(...)`) porque fechar uma posicao
+        # remove ela de `self.positions` durante o laco. `exit_orcamento`:
+        # orcamento de volume da barra para preenchimento de SAIDA (maker),
+        # UNICO e COMPARTILHADO entre todas as posicoes avaliadas aqui --
+        # antes so' existia 1 posicao por vez (`bar.volume` bastava, lido
+        # direto); com posicoes independentes (2026-08-24, ver a docstring
+        # da classe), cada uma checando `bar.volume` por conta propria
+        # dobraria (ou N-plicaria) a liquidez real disponivel para a saida.
+        # So' relevante quando `target_needs_volume` (definido dentro do
+        # laco, mesmo valor em toda a barra); despejo a MERCADO (stop, TTL
+        # estourado) nunca disputa este orcamento -- e' urgencia, nao
+        # preenchimento maker.
+        exit_orcamento = bar.volume
+        for pos in list(self.positions):
             target_needs_volume = cfg.target_fills_as_maker and cfg.limit_fill_capped_by_volume
             if self.execution is not None and pos.exit_split_unit is not None:
                 # Execucao REAL com saida dividida: quem decide o fill e' a
                 # corretora, via ordem-limite de verdade por fatia, com prazo
-                # -- ver `_resolve_live_split_exit`. O caminho simulado logo
-                # abaixo (guiado por `bar.volume`) e' so' para backtest/sombra.
-                events.extend(self._resolve_live_split_exit(ts, bar))
+                # -- ver `_resolve_live_split_exit`. Execucao real nunca tem
+                # mais de 1 elemento em `self.positions` (ver a docstring da
+                # classe), entao este laco so' roda uma vez nesse caso. O
+                # caminho simulado logo abaixo (guiado por `bar.volume`) e'
+                # so' para backtest/sombra.
+                events.extend(self._resolve_live_split_exit(ts, bar, pos))
             elif target_needs_volume and pos.exit_split_unit is not None and pos.exit_ttl_bars is not None:
                 # Mesma divisao de alvo em fatias, mas com PRAZO -- espelha
                 # `_resolve_live_split_exit` usando `bar.volume`/`bar.close`
@@ -640,14 +721,21 @@ class IntradaySessionMachine:
                 # que a execucao REAL vai fazer (mesmo motivo de a maquina
                 # ser compartilhada). So' entra aqui quando `exit_ttl_bars`
                 # esta declarado -- sem prazo, cai no `elif` de baixo
-                # (comportamento ANTIGO, ilimitado).
-                events.extend(self._resolve_simulated_split_exit(ts, bar))
+                # (comportamento ANTIGO, ilimitado). So' roda em modo
+                # SIMULADO (execucao real cai no `if` de cima sempre que
+                # `exit_split_unit` esta setado, com ou sem prazo).
+                evs, exit_orcamento = self._resolve_simulated_split_exit(ts, bar, pos, exit_orcamento)
+                events.extend(evs)
             elif target_needs_volume and pos.exit_split_unit is not None:
                 # Alvo dividido em fatias (`EnterLimit.exit_split_unit`), SEM
-                # prazo declarado: o stop continua tudo-ou-nada
+                # prazo declarado, SIMULADO: o stop continua tudo-ou-nada
                 # (protecao/urgencia, sempre a mercado), mas o alvo fecha
                 # SO' O QUANTO o volume da barra cobrir -- pode levar varias
-                # barras para zerar a posicao, sem limite.
+                # barras para zerar ESTA posicao, sem limite. Nao orfaniza
+                # filhos irmaos ainda sem preencher (`self.
+                # _resting_children_qty`) -- cada um vira sua PROPRIA posicao
+                # independente quando preencher (ver a secao 3b), pedido do
+                # dono 2026-08-24 (ver a docstring da classe).
                 stop_hit, target_hit = _stop_target_touch(pos, bar)
                 if stop_hit and target_hit:
                     hit = "stop" if cfg.ambiguous_bar_resolution == "stop_first" else "target"
@@ -659,36 +747,39 @@ class IntradaySessionMachine:
                     hit = None
                 if hit == "stop":
                     ref_price = _exit_fill_price(pos, bar, "stop")
-                    events.append(self._close_position(ts, ref_price, IntradayExitReason.STOP))
-                    self.pending = None
-                    orfa = self._cancelar_resting_orfa(ts)
-                    if orfa is not None:
-                        events.append(orfa)
+                    events.append(self._close_position(pos, ts, ref_price, IntradayExitReason.STOP))
+                    self._clear_stale_enter()
                 elif hit == "target":
-                    fechado = _resolve_target_partial_fill(pos, bar)
+                    fechado = _resolve_target_partial_fill(pos, exit_orcamento)
                     if fechado > 0:
+                        exit_orcamento -= fechado
                         ref_price = _exit_fill_price(pos, bar, "target")
                         events.append(self._close_position(
-                            ts, ref_price, IntradayExitReason.TARGET, quantity_override=fechado,
+                            pos, ts, ref_price, IntradayExitReason.TARGET, quantity_override=fechado,
                         ))
-                        if self.position is None:  # ultima fatia fechou agora
-                            self.pending = None
-                            orfa = self._cancelar_resting_orfa(ts)
-                            if orfa is not None:
-                                events.append(orfa)
-                        # senao: fechou uma fatia, posicao (menor) continua
-                        # aberta -- proxima barra reavalia o resto do zero.
+                        if pos not in self.positions:  # fechou inteira agora
+                            self._clear_stale_enter()
+                        # senao: fechou uma fatia, esta posicao (menor)
+                        # continua aberta -- proxima barra reavalia o resto
+                        # do zero.
             else:
                 hit = _resolve_stop_target_hit(pos, bar, cfg.ambiguous_bar_resolution,
-                                               target_needs_volume=target_needs_volume)
+                                               target_needs_volume=target_needs_volume,
+                                               orcamento=exit_orcamento)
+                if hit == "target" and target_needs_volume:
+                    exit_orcamento -= pos.quantity
                 if hit is not None:
                     ref_price = _exit_fill_price(pos, bar, hit)
                     reason = IntradayExitReason.STOP if hit == "stop" else IntradayExitReason.TARGET
-                    events.append(self._close_position(ts, ref_price, reason))
-                    self.pending = None  # decisao pendente do robo para este ticker fica obsoleta
+                    events.append(self._close_position(pos, ts, ref_price, reason))
+                    self._clear_stale_enter()
                     # a posicao fechou -- qualquer FILHO ainda sem preencher do
-                    # MESMO grupo dividido (`EnterLimit.split_quantities`) ficou
-                    # orfao, nao uma entrada nova para tentar de novo.
+                    # MESMO grupo dividido (`EnterLimit.split_quantities`)
+                    # ficou orfao, nao uma entrada nova para tentar de novo.
+                    # So' se aplica quando esta posicao NAO veio de uma
+                    # entrada dividida (`exit_split_unit is None` aqui, ver o
+                    # `if/elif` acima) -- sem cap por volume isto quase nunca
+                    # dispara de verdade.
                     orfa = self._cancelar_resting_orfa(ts)
                     if orfa is not None:
                         events.append(orfa)
@@ -696,17 +787,18 @@ class IntradaySessionMachine:
         # (2) flatten forcado — primeira barra da sessao cujo horario >= corte,
         # ou a ultima barra da sessao. Nenhuma entrada nova depois disso.
         if not self.flattened and (ts.time() >= self.session_end_time_for(ts) or is_last_bar):
-            if self.position is not None:
-                if self._exit_resting_qty > 0:
-                    if self.execution is not None:
-                        # cancela a fatia de saida REAL em pe' antes de mandar o
-                        # flatten -- senao as duas ordens (a limite parada e o
-                        # flatten a mercado) ficariam vivas ao mesmo tempo na
-                        # corretora, pela mesma posicao.
-                        self.execution.cancel_exit_limit(ts, reason="flatten")
-                    self._exit_resting_qty = 0
-                    self.resting_exit_bars_waited = 0
-                events.append(self._close_position(ts, bar.close, IntradayExitReason.FORCED_FLATTEN))
+            if self.positions:
+                if self.execution is not None and any(p.exit_resting_qty > 0 for p in self.positions):
+                    # cancela a fatia de saida REAL em pe' antes de mandar o
+                    # flatten -- senao as duas ordens (a limite parada e o
+                    # flatten a mercado) ficariam vivas ao mesmo tempo na
+                    # corretora, pela mesma posicao. Execucao real nunca tem
+                    # mais de 1 posicao (ver a docstring da classe).
+                    self.execution.cancel_exit_limit(ts, reason="flatten")
+                for pos in list(self.positions):
+                    pos.exit_resting_qty = 0
+                    pos.resting_exit_bars_waited = 0
+                    events.append(self._close_position(pos, ts, bar.close, IntradayExitReason.FORCED_FLATTEN))
             self.pending = None
             if self.resting_limit is not None:
                 events.append(LimitCancelled(order=self.resting_limit, ts=ts, reason="flatten"))
@@ -715,14 +807,18 @@ class IntradaySessionMachine:
             self.flattened = True
 
         if not self.flattened:
-            # (3) executa acao filada na ABERTURA desta barra.
-            if isinstance(self.pending, Exit) and self.position is not None:
-                events.append(self._close_position(ts, bar.open, IntradayExitReason.SIGNAL))
+            # (3) executa acao filada na ABERTURA desta barra. `Exit` achata
+            # TODAS as posicoes abertas de uma vez (ex.: stop agregado de
+            # sessao, `IntradayExitReason.SIGNAL`) -- nao existe "Exit de uma
+            # posicao so'" no contrato da estrategia.
+            if isinstance(self.pending, Exit) and self.positions:
+                for pos in list(self.positions):
+                    events.append(self._close_position(pos, ts, bar.open, IntradayExitReason.SIGNAL))
                 self.pending = None
                 orfa = self._cancelar_resting_orfa(ts)
                 if orfa is not None:
                     events.append(orfa)
-            elif isinstance(self.pending, Enter) and self.position is None:
+            elif isinstance(self.pending, Enter) and not self.positions:
                 pending = self.pending
                 if self.execution is not None:
                     # Entrada A MERCADO ao vivo nao esta implementada de
@@ -740,7 +836,7 @@ class IntradaySessionMachine:
                     )
                 entry_side: Literal["buy", "sell"] = "buy" if pending.side == "long" else "sell"
                 entry_px = apply_intraday_slippage(bar.open, entry_side, cfg.costs)
-                self.position = _Position(
+                nova_posicao = _Position(
                     side=pending.side,
                     entry_ts=ts,
                     entry_price=entry_px,
@@ -749,11 +845,12 @@ class IntradaySessionMachine:
                     current_target=pending.initial_target,
                     metadata=dict(pending.metadata or {}),
                 )
+                self.positions.append(nova_posicao)
                 self.pending = None
                 events.append(PositionOpened(
-                    ts=ts, side=self.position.side, price=entry_px,
-                    quantity=self.position.quantity, stop=self.position.current_stop,
-                    target=self.position.current_target, order_kind="market",
+                    ts=ts, side=nova_posicao.side, price=entry_px,
+                    quantity=nova_posicao.quantity, stop=nova_posicao.current_stop,
+                    target=nova_posicao.current_target, order_kind="market",
                     reason=pending.reason, bar=bar,
                 ))
                 # entrada a mercado supera qualquer ordem-limite ainda pendente
@@ -771,12 +868,14 @@ class IntradaySessionMachine:
             # Persiste por varias barras (nao so a proxima), ate
             # tocar, expirar por `ttl_bars`, ou a sessao acabar.
             #
-            # `self._resting_children_qty` (nao `self.position is None`) e'
+            # `self._resting_children_qty` (nao a existencia de posicao) e'
             # a guarda: uma ordem DIVIDIDA (`EnterLimit.split_quantities`)
             # continua tentando preencher os FILHOS restantes mesmo depois
-            # de algum ja ter aberto a posicao -- cada fill novo faz
-            # TOP-UP (soma quantidade, recalcula preco medio ponderado) em
-            # vez de abrir uma posicao paralela.
+            # de algum ja ter aberto posicao -- cada fill novo vira uma
+            # posicao INDEPENDENTE em modo simulado (2026-08-24, pedido do
+            # dono -- ver a docstring da classe), ou faz TOP-UP (soma
+            # quantidade, recalcula preco medio ponderado) na UNICA posicao
+            # agregada em execucao real, como antes.
             if self.resting_limit is not None and self._resting_children_qty:
                 order = self.resting_limit
                 fills, restantes = self._resolve_limit_fills(
@@ -784,8 +883,15 @@ class IntradaySessionMachine:
                 )
                 if fills:
                     for fill_price, fill_qty in fills:
-                        if self.position is None:
-                            self.position = _Position(
+                        if self.execution is not None and self.positions:
+                            pos = self.positions[0]
+                            nova_qty = pos.quantity + fill_qty
+                            pos.entry_price = (
+                                (pos.entry_price * pos.quantity + fill_price * fill_qty) / nova_qty
+                            )
+                            pos.quantity = nova_qty
+                        else:
+                            self.positions.append(_Position(
                                 side=order.side,
                                 entry_ts=ts,
                                 entry_price=fill_price,
@@ -795,14 +901,7 @@ class IntradaySessionMachine:
                                 metadata=dict(order.metadata or {}),
                                 exit_split_unit=order.exit_split_unit,
                                 exit_ttl_bars=order.exit_ttl_bars,
-                            )
-                        else:
-                            pos = self.position
-                            nova_qty = pos.quantity + fill_qty
-                            pos.entry_price = (
-                                (pos.entry_price * pos.quantity + fill_price * fill_qty) / nova_qty
-                            )
-                            pos.quantity = nova_qty
+                            ))
                         events.append(PositionOpened(
                             ts=ts, side=order.side, price=fill_price,
                             quantity=fill_qty, stop=order.initial_stop,
@@ -828,18 +927,25 @@ class IntradaySessionMachine:
         # (5) decisao do robo para a PROXIMA barra — nao roda mais depois do flatten.
         if not self.flattened:
             self.strategy.on_capital_update(cfg.initial_capital + self.realized_pnl)
-            actions = self.strategy.on_bar(ts, bar, self.position_view(), self.session_pnl)
+            actions = self.strategy.on_bar(ts, bar, self.positions_view(), self.session_pnl)
             for action in actions:
-                if isinstance(action, AdjustStop) and self.position is not None:
-                    pos = self.position
-                    if pos.current_stop is None:
-                        pos.current_stop = action.new_stop
-                    elif pos.side == "long" and action.new_stop >= pos.current_stop:
-                        pos.current_stop = action.new_stop
-                    elif pos.side == "short" and action.new_stop <= pos.current_stop:
-                        pos.current_stop = action.new_stop
-                elif isinstance(action, AdjustTarget) and self.position is not None:
-                    self.position.current_target = action.new_target
+                if isinstance(action, AdjustStop):
+                    # aplica a TODAS as posicoes abertas do lado -- nenhuma
+                    # estrategia hoje tem mais de 1 posicao por vez, entao
+                    # isto e' identico ao comportamento antigo para elas; uma
+                    # futura estrategia multi-posicao decide 1 stop por
+                    # posicao via `EnterLimit.initial_stop` na entrada, nao
+                    # aqui.
+                    for pos in self.positions:
+                        if pos.current_stop is None:
+                            pos.current_stop = action.new_stop
+                        elif pos.side == "long" and action.new_stop >= pos.current_stop:
+                            pos.current_stop = action.new_stop
+                        elif pos.side == "short" and action.new_stop <= pos.current_stop:
+                            pos.current_stop = action.new_stop
+                elif isinstance(action, AdjustTarget):
+                    for pos in self.positions:
+                        pos.current_target = action.new_target
                 elif isinstance(action, (Enter, Exit)):
                     self.pending = action
                     if self.resting_limit is not None:
@@ -848,15 +954,15 @@ class IntradaySessionMachine:
                     self.resting_limit = None
                     self._resting_children_qty = []
                     self.resting_limit_bars_waited = 0
-                elif isinstance(action, EnterLimit) and self.position is None:
+                elif isinstance(action, EnterLimit) and not self.positions:
                     # substitui (nao acumula) qualquer ordem-limite ja pendente
                     events.append(LimitPlaced(order=action, ts=ts, replaced=self.resting_limit))
                     self.resting_limit = action
                     self.resting_limit_bars_waited = 0
                     self._resting_children_qty = action.children(cfg.default_quantity)
 
-        if self.position is not None:
-            self.position.bars_held += 1
+        for pos in self.positions:
+            pos.bars_held += 1
 
         return events
 
@@ -872,13 +978,13 @@ class IntradaySessionMachine:
         ultima barra da sessao ja dispara o flatten dentro de
         `on_closed_bar`."""
         eventos: list[MachineEvent] = []
-        if self.position is not None:
-            if self._exit_resting_qty > 0:
-                if self.execution is not None:
-                    self.execution.cancel_exit_limit(ts, reason="flatten")
-                self._exit_resting_qty = 0
-                self.resting_exit_bars_waited = 0
-            eventos.append(self._close_position(ts, price, IntradayExitReason.FORCED_FLATTEN))
+        if self.positions:
+            if self.execution is not None and any(p.exit_resting_qty > 0 for p in self.positions):
+                self.execution.cancel_exit_limit(ts, reason="flatten")
+            for pos in list(self.positions):
+                pos.exit_resting_qty = 0
+                pos.resting_exit_bars_waited = 0
+                eventos.append(self._close_position(pos, ts, price, IntradayExitReason.FORCED_FLATTEN))
         if self.resting_limit is not None:
             eventos.append(LimitCancelled(order=self.resting_limit, ts=ts, reason="flatten"))
             self.resting_limit = None
@@ -887,6 +993,21 @@ class IntradaySessionMachine:
         self.pending = None
         self.flattened = True
         return eventos
+
+    def _clear_stale_enter(self) -> None:
+        """Invalida uma decisao `Enter` (mercado) filada quando UMA posicao
+        acabou de fechar por stop/alvo -- decidida contra o mercado de ha'
+        varias barras, executa-la so' porque uma posicao fechou agora seria
+        descolado do presente (regra 7 do AGENTS.md). `Exit` NAO e' limpo
+        aqui de proposito (2026-08-24): pode ter sido decidido para achatar
+        VARIAS posicoes de uma vez (ex.: stop agregado de sessao,
+        `gremah_tick.py`) -- so' e' consumido quando de fato executa
+        (`on_closed_bar`, secao 3), nunca invalidado so' porque UMA posicao
+        entre varias fechou seu proprio stop primeiro. Limpar aqui faria o
+        robo nunca achatar as posicoes irmas quando ele mesmo ja parou de
+        redecidir (sessao em `session_halted`, por exemplo)."""
+        if isinstance(self.pending, Enter):
+            self.pending = None
 
     def _cancelar_resting_orfa(self, ts: pd.Timestamp) -> Optional[LimitCancelled]:
         """Cancela o que sobrar de `resting_limit`/`_resting_children_qty`
@@ -908,18 +1029,27 @@ class IntradaySessionMachine:
 
     # ---------- saida dividida em fatias, SIMULADA, com prazo (2026-08-23) --
 
-    def _resolve_simulated_split_exit(self, ts: pd.Timestamp, bar: Bar) -> list[MachineEvent]:
-        """Saida por ALVO dividida em fatias, SIMULADA (backtest/sombra) --
-        espelha `_resolve_live_split_exit` (mesmo `_exit_resting_qty`/
-        `resting_exit_bars_waited`, mesma semantica de prazo), trocando a
-        corretora por `bar.volume`/`bar.close`. Existe para o backtest poder
-        PREVER o que a execucao real vai fazer com `EnterLimit.exit_ttl_bars`
-        declarado, em vez de medir um cenario (espera ilimitada) que a
-        execucao real nunca vai ter -- mesmo motivo de toda esta maquina ser
-        compartilhada entre os dois mundos. So' chamada quando `pos.
-        exit_ttl_bars` esta declarado (ver `on_closed_bar`, item 1); sem
-        prazo, `_resolve_target_partial_fill` (o caminho ANTIGO, ilimitado)
-        continua servindo quem nao decidiu um prazo ainda.
+    def _resolve_simulated_split_exit(
+        self, ts: pd.Timestamp, bar: Bar, pos: _Position, orcamento: float,
+    ) -> tuple[list[MachineEvent], float]:
+        """Saida por ALVO dividida em fatias, SIMULADA (backtest/sombra), de
+        UMA posicao (`pos`) -- espelha `_resolve_live_split_exit` (mesmo
+        `exit_resting_qty`/`resting_exit_bars_waited`, agora campos de
+        `_Position` em vez de globais da maquina desde 2026-08-24, mesma
+        semantica de prazo), trocando a corretora por `bar.volume`/`bar.
+        close`. Existe para o backtest poder PREVER o que a execucao real
+        vai fazer com `EnterLimit.exit_ttl_bars` declarado, em vez de medir
+        um cenario (espera ilimitada) que a execucao real nunca vai ter --
+        mesmo motivo de toda esta maquina ser compartilhada entre os dois
+        mundos. So' chamada quando `pos.exit_ttl_bars` esta declarado (ver
+        `on_closed_bar`, item 1); sem prazo, `_resolve_target_partial_fill`
+        (o caminho ANTIGO, ilimitado) continua servindo quem nao decidiu um
+        prazo ainda. So' roda em modo SIMULADO (`self.execution is None`,
+        ver `on_closed_bar`) -- nunca orfaniza `self._resting_children_qty`
+        quando `pos` fecha: cada filho irmao ainda sem preencher vira sua
+        PROPRIA posicao independente quando puder (pedido do dono
+        2026-08-24, ver a docstring da classe), nunca uma tentativa
+        "orfa" so' porque UMA posicao do grupo fechou.
 
         MESMA estrutura de `_resolve_live_split_exit`, de proposito -- checa
         primeiro a fatia JA armada (se houver), arma uma fatia NOVA so' no
@@ -932,70 +1062,89 @@ class IntradaySessionMachine:
         chegou perto do nivel. O prazo conta em TODA barra desde que armou,
         tocando ou nao (a ordem real ficaria no book esperando, nao so' nos
         instantes em que o preco volta a tocar). Estourado o prazo sem fill
-        nenhum, fecha o RESTANTE da posicao a MERCADO (`bar.close`) --
-        mesma decisao do dono usada na execucao real ('prazo limitado,
-        depois mercado'). Stop e' sempre tudo-ou-nada e tem prioridade sobre
+        nenhum, fecha a MERCADO (`bar.close`) so' a FATIA que estava
+        travada (`quantity_override`) -- se `pos` ja' nasceu com 1 lote so'
+        (o caso comum desde o fatiamento de entrada de 2026-08-24), a fatia
+        travada E' a posicao inteira, e este fechamento parcial vira, na
+        pratica, um fechamento total dela. Se sobrar quantidade em `pos`
+        (posicao maior que 1 lote), ela continua aberta e uma fatia NOVA
+        arma do zero (prazo proprio) na proxima barra que tocar o alvo de
+        novo -- mesma decisao do dono usada na execucao real ('prazo
+        limitado, depois mercado'), agora aplicada por FATIA em vez de por
+        posicao inteira. Stop e' sempre tudo-ou-nada e tem prioridade sobre
         o alvo numa barra ambigua, sem consultar `ambiguous_bar_resolution`
-        -- mesma regra da execucao real, que tambem nao usa esse config."""
-        pos = self.position
-        assert pos is not None and pos.exit_split_unit is not None and pos.exit_ttl_bars is not None
+        -- mesma regra da execucao real, que tambem nao usa esse config.
+
+        `orcamento`/retorno `(eventos, orcamento_restante)` (2026-08-24): o
+        CHAMADOR (`on_closed_bar`) mantem um orcamento de volume UNICO da
+        barra, compartilhado entre TODAS as posicoes avaliadas nela --
+        antes so' existia 1 posicao por vez, entao ler `bar.volume` direto
+        aqui dentro era seguro; com posicoes independentes, cada uma
+        checando `bar.volume` por conta propria dobraria (ou N-plicaria) a
+        liquidez real disponivel para preencher a saida."""
+        assert pos.exit_split_unit is not None and pos.exit_ttl_bars is not None
         stop_hit, target_hit = _stop_target_touch(pos, bar)
 
         if stop_hit:
-            self._exit_resting_qty = 0
-            self.resting_exit_bars_waited = 0
+            pos.exit_resting_qty = 0
+            pos.resting_exit_bars_waited = 0
             ref_price = _exit_fill_price(pos, bar, "stop")
-            events: list[MachineEvent] = [self._close_position(ts, ref_price, IntradayExitReason.STOP)]
-            self.pending = None
-            orfa = self._cancelar_resting_orfa(ts)
-            if orfa is not None:
-                events.append(orfa)
-            return events
+            events: list[MachineEvent] = [self._close_position(pos, ts, ref_price, IntradayExitReason.STOP)]
+            self._clear_stale_enter()
+            return events, orcamento
 
         events = []
-        if self._exit_resting_qty > 0:
-            if target_hit and bar.volume >= self._exit_resting_qty:
-                fechado = self._exit_resting_qty
+        if pos.exit_resting_qty > 0:
+            if target_hit and orcamento >= pos.exit_resting_qty:
+                fechado = pos.exit_resting_qty
+                orcamento -= fechado
                 ref_price = _exit_fill_price(pos, bar, "target")
                 events.append(self._close_position(
-                    ts, ref_price, IntradayExitReason.TARGET, quantity_override=fechado,
+                    pos, ts, ref_price, IntradayExitReason.TARGET, quantity_override=fechado,
                 ))
-                self._exit_resting_qty = 0
-                self.resting_exit_bars_waited = 0
-                if self.position is None:  # ultima fatia fechou agora
-                    self.pending = None
-                    orfa = self._cancelar_resting_orfa(ts)
-                    if orfa is not None:
-                        events.append(orfa)
-                # senao: fechou uma fatia, posicao (menor) continua aberta --
-                # a proxima fatia so' arma numa barra FUTURA que tocar o alvo
-                # de novo (bloco abaixo, ja que `_exit_resting_qty == 0`).
+                pos.exit_resting_qty = 0
+                pos.resting_exit_bars_waited = 0
+                if pos not in self.positions:  # fechou inteira agora
+                    self._clear_stale_enter()
+                # senao: fechou uma fatia, esta posicao (menor) continua
+                # aberta -- a proxima fatia so' arma numa barra FUTURA que
+                # tocar o alvo de novo (bloco abaixo, ja que `exit_resting_
+                # qty == 0`).
             else:
-                self.resting_exit_bars_waited += 1
-                if self.resting_exit_bars_waited >= pos.exit_ttl_bars:
-                    self._exit_resting_qty = 0
-                    self.resting_exit_bars_waited = 0
-                    events.append(self._close_position(ts, bar.close, IntradayExitReason.TARGET))
-                    self.pending = None
-                    orfa = self._cancelar_resting_orfa(ts)
-                    if orfa is not None:
-                        events.append(orfa)
-            return events
+                pos.resting_exit_bars_waited += 1
+                if pos.resting_exit_bars_waited >= pos.exit_ttl_bars:
+                    fechado = pos.exit_resting_qty
+                    pos.exit_resting_qty = 0
+                    pos.resting_exit_bars_waited = 0
+                    events.append(self._close_position(
+                        pos, ts, bar.close, IntradayExitReason.TARGET, quantity_override=fechado,
+                    ))
+                    if pos not in self.positions:  # essa fatia era o que sobrava
+                        self._clear_stale_enter()
+                    # senao: so' a fatia travada foi a mercado, esta posicao
+                    # (menor) continua aberta -- a proxima fatia arma do
+                    # zero (prazo proprio) na proxima barra que tocar o
+                    # alvo de novo. Fechamento a MERCADO (estouro de prazo)
+                    # nao disputa o orcamento de volume -- e' urgencia, nao
+                    # preenchimento maker.
+            return events, orcamento
 
         if target_hit:
-            self._exit_resting_qty = min(pos.exit_split_unit, pos.quantity)
-            self.resting_exit_bars_waited = 0
+            pos.exit_resting_qty = min(pos.exit_split_unit, pos.quantity)
+            pos.resting_exit_bars_waited = 0
 
-        return events
+        return events, orcamento
 
     # ---------- saida dividida em execucao REAL (Fase 2, 2026-08-22) --------
 
-    def _resolve_live_split_exit(self, ts: pd.Timestamp, bar: Bar) -> list[MachineEvent]:
+    def _resolve_live_split_exit(self, ts: pd.Timestamp, bar: Bar, pos: _Position) -> list[MachineEvent]:
         """Saida por ALVO dividida em fatias, com EXECUCAO REAL -- reusa o
         mesmo padrao `ttl_bars`/`resting_limit_bars_waited` das ordens de
         entrada, do lado da saida (ver `EnterLimit.exit_ttl_bars`). So'
-        chamada quando `self.execution is not None` e `self.position.
-        exit_split_unit is not None` (ver `on_closed_bar`, item 1).
+        chamada quando `self.execution is not None` e `pos.exit_split_unit
+        is not None` (ver `on_closed_bar`, item 1) -- execucao real nunca
+        tem mais de 1 elemento em `self.positions` (ver a docstring da
+        classe), entao `pos` e' sempre a UNICA posicao aberta aqui.
 
         Stop continua tudo-ou-nada a MERCADO, sempre -- protecao/urgencia
         nao espera fatia nenhuma. O alvo arma UMA fatia por vez
@@ -1007,8 +1156,7 @@ class IntradaySessionMachine:
         depois mercado'): a posicao sempre fecha dentro de um tempo
         previsivel, nunca fica exposta indefinidamente esperando a fatia
         final."""
-        pos = self.position
-        assert pos is not None and pos.exit_split_unit is not None and self.execution is not None
+        assert pos.exit_split_unit is not None and self.execution is not None
         if pos.exit_ttl_bars is None:
             raise NotImplementedError(
                 f"{self.strategy.symbol}: saida dividida (`exit_split_unit`) em "
@@ -1021,50 +1169,49 @@ class IntradaySessionMachine:
         stop_hit, target_hit = _stop_target_touch(pos, bar)
 
         if stop_hit:
-            if self._exit_resting_qty > 0:
+            if pos.exit_resting_qty > 0:
                 self.execution.cancel_exit_limit(ts, reason="stop")
-                self._exit_resting_qty = 0
-                self.resting_exit_bars_waited = 0
+                pos.exit_resting_qty = 0
+                pos.resting_exit_bars_waited = 0
             ref_price = _exit_fill_price(pos, bar, "stop")
-            events.append(self._close_position(ts, ref_price, IntradayExitReason.STOP))
+            events.append(self._close_position(pos, ts, ref_price, IntradayExitReason.STOP))
             self.pending = None
             orfa = self._cancelar_resting_orfa(ts)
             if orfa is not None:
                 events.append(orfa)
             return events
 
-        if self._exit_resting_qty > 0:
+        if pos.exit_resting_qty > 0:
             fill = self.execution.exit_fill(pos.side, bar)
             if fill is not None:
-                fechado = min(int(round(fill["quantity"])), self._exit_resting_qty)
+                fechado = min(int(round(fill["quantity"])), pos.exit_resting_qty)
                 events.append(self._close_position(
-                    ts, fill["price"], IntradayExitReason.TARGET,
+                    pos, ts, fill["price"], IntradayExitReason.TARGET,
                     quantity_override=fechado, already_filled_at=fill["price"],
                 ))
-                self._exit_resting_qty -= fechado
-                self.resting_exit_bars_waited = 0
-                if self.position is None:  # ultima fatia (desta ou de outra rodada) fechou agora
-                    self._exit_resting_qty = 0
+                pos.exit_resting_qty -= fechado
+                pos.resting_exit_bars_waited = 0
+                if pos not in self.positions:  # ultima fatia (desta ou de outra rodada) fechou agora
                     self.pending = None
                     orfa = self._cancelar_resting_orfa(ts)
                     if orfa is not None:
                         events.append(orfa)
                 # senao: fechou uma fatia, posicao (menor) continua aberta --
-                # se `_exit_resting_qty` ainda sobrar (fill parcial da propria
+                # se `exit_resting_qty` ainda sobrar (fill parcial da propria
                 # fatia), a MESMA ordem-limite continua vigiada; se zerou, a
                 # proxima barra rearma outra fatia do zero (bloco `target_hit`
-                # abaixo, ja que `_exit_resting_qty == 0` de novo).
+                # abaixo, ja que `exit_resting_qty == 0` de novo).
             else:
-                self.resting_exit_bars_waited += 1
-                if self.resting_exit_bars_waited >= pos.exit_ttl_bars:
+                pos.resting_exit_bars_waited += 1
+                if pos.resting_exit_bars_waited >= pos.exit_ttl_bars:
                     self.execution.cancel_exit_limit(ts, reason="ttl")
-                    self._exit_resting_qty = 0
-                    self.resting_exit_bars_waited = 0
+                    pos.exit_resting_qty = 0
+                    pos.resting_exit_bars_waited = 0
                     # fecha o RESTANTE a mercado -- ainda e' um exit de ALVO
                     # (a decisao continua sendo "sair no alvo"), so' que a
                     # ultima fatia nao esperou a vez dela na fila e saiu pelo
                     # caminho de urgencia.
-                    events.append(self._close_position(ts, bar.close, IntradayExitReason.TARGET))
+                    events.append(self._close_position(pos, ts, bar.close, IntradayExitReason.TARGET))
                     self.pending = None
                     orfa = self._cancelar_resting_orfa(ts)
                     if orfa is not None:
@@ -1077,8 +1224,8 @@ class IntradaySessionMachine:
                 position_side=pos.side, quantity=fatia, limit_price=pos.current_target,
                 current_position_qty=pos.quantity, ts=ts,
             )
-            self._exit_resting_qty = fatia
-            self.resting_exit_bars_waited = 0
+            pos.exit_resting_qty = fatia
+            pos.resting_exit_bars_waited = 0
 
         return events
 
@@ -1150,11 +1297,15 @@ class IntradaySessionMachine:
 
     # ---------- fechamento -------------------------------------------------
 
-    def _close_position(self, exit_ts: pd.Timestamp, exit_ref_price: float,
+    def _close_position(self, position: _Position, exit_ts: pd.Timestamp, exit_ref_price: float,
                         reason: IntradayExitReason,
                         quantity_override: int | None = None,
                         already_filled_at: float | None = None) -> PositionClosed:
-        """`quantity_override`: fecha so' uma FATIA da posicao (o resto
+        """Fecha (total ou parcialmente) `position` -- que precisa estar em
+        `self.positions` (2026-08-24: cada posicao e' independente, entao o
+        chamador diz QUAL fechar em vez de a maquina assumir "a" posicao).
+
+        `quantity_override`: fecha so' uma FATIA da posicao (o resto
         continua aberto) -- existe para o alvo dividido (`EnterLimit.
         exit_split_unit`), onde o volume da barra (backtest/sombra) ou a
         fatia REAL (execucao ao vivo, ver `_resolve_live_split_exit`) pode
@@ -1174,8 +1325,6 @@ class IntradaySessionMachine:
         verdade, ver `_resolve_live_split_exit`) -- qualquer outro
         fechamento parcial em execucao real seria mandar um tamanho que a
         corretora nunca confirmou, falha alto em vez disso."""
-        assert self.position is not None
-        position = self.position
         cfg = self.config
         qty = position.quantity if quantity_override is None else quantity_override
         if self.execution is not None and qty != position.quantity and position.exit_split_unit is None:
@@ -1230,7 +1379,7 @@ class IntradaySessionMachine:
         self.session_pnl += pnl
         self.realized_pnl += pnl
         if qty >= position.quantity:
-            self.position = None
+            self.positions.remove(position)
         else:
             position.quantity -= qty
         return PositionClosed(trade=trade, pnl_brl=pnl)

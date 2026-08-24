@@ -49,6 +49,7 @@ from strategy.daytrade.base import (
     IntradayStrategy,
     barra_diaria,
     capital_minimo_brl,
+    mediana_negocio_diario,
 )
 
 
@@ -139,6 +140,12 @@ def run_intraday_backtest(
 
     previous_session_df: pd.DataFrame | None = None
     previous_daily_bars: deque[Bar] = deque(maxlen=_CAUDA_DIAS_MAXIMA)
+    # Mesmo teto/motivo de `previous_daily_bars` acima -- ver
+    # `seed_typical_trade_size`/`JanelaNegocioTipicoDiaria`. Deque PARALELO
+    # (nao dentro do `Bar`) porque a mediana de evento nao cabe numa barra
+    # OHLCV agregada -- precisa dos eventos CRUS da sessao, que `barra_
+    # diaria` ja descartou ao agregar.
+    previous_daily_medianas: deque[float] = deque(maxlen=_CAUDA_DIAS_MAXIMA)
     sessoes_puladas_por_capital: list[pd.Timestamp] = []
     # Declarado ANTES do loop (nao dentro): se TODA sessao for pulada por
     # `enforce_capital_minimo` (capital insuficiente o backtest inteiro), o
@@ -174,6 +181,9 @@ def run_intraday_backtest(
                 daily_bar = barra_diaria(session_bars_puladas)
                 if daily_bar is not None:
                     previous_daily_bars.append(daily_bar)
+                mediana_dia = mediana_negocio_diario(session_bars_puladas)
+                if mediana_dia is not None:
+                    previous_daily_medianas.append(mediana_dia)
                 continue
         # `seed_volume_window` (RollingVolumeWindow) precisa da CAUDA do
         # pregao anterior para completar a janela de volume rolante logo na
@@ -197,6 +207,11 @@ def run_intraday_backtest(
             # nao o motor -- mesmo espirito de `JanelaVolatilidadeDiaria`
             # descartar sozinha o que passa de `janela_dias`.
             strategy.seed_daily_volatility(list(previous_daily_bars))
+            # `seed_typical_trade_size` -- mesmo espirito de
+            # `seed_daily_volatility` logo acima, so' que para o teto de
+            # CAPACIDADE (`JanelaNegocioTipicoDiaria`) em vez do alvo por
+            # volatilidade.
+            strategy.seed_typical_trade_size(list(previous_daily_medianas))
 
         if is_resumed_session:
             machine.resume_session(session_date, seed_pending=seed_pending)
@@ -240,6 +255,9 @@ def run_intraday_backtest(
         daily_bar = barra_diaria(session_bars)
         if daily_bar is not None:
             previous_daily_bars.append(daily_bar)
+        mediana_dia = mediana_negocio_diario(session_bars)
+        if mediana_dia is not None:
+            previous_daily_medianas.append(mediana_dia)
 
         if wiped_out_at is not None:
             break

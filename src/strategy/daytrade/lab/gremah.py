@@ -33,7 +33,17 @@ de inicio for ANTES de `fixed_anchor_until` -- se nao sobra janela fixa
 real, pular o warm-start e deixar o robo rodar cru desde agora (ele ja se
 comporta como puro modo rolante nesse caso). Ver
 `strategy/daytrade/base.py::warm_start_calibration` e a memoria do
-campeao de day trade PMAM3 para o historico completo da investigacao."""
+campeao de day trade PMAM3 para o historico completo da investigacao.
+
+PENDENTE (2026-08-24): `GremahTick` (mesma familia, motor tick) ganhou um
+teto de CAPACIDADE de caixa -- acima de um certo caixa, mais dinheiro
+piorava o resultado em vez de melhorar, porque `_lotes_por_realocacao`
+mandava usar mais lotes do que a liquidez do ativo sustenta. So' a
+correcao SIMETRICA e de baixo risco (`_fatia_saida` usando a barra tipica
+em vez de `LOTE_PADRAO_B3` fixo) foi portada pra ca' junto; o teto de
+capacidade em si (`capacidade_negocio_mult`/`capacidade_fracao`/
+`JanelaNegocioTipicoDiaria`) ainda NAO foi medido em M1 -- ver
+`gremah_tick.py` para o mecanismo completo antes de portar."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -580,11 +590,11 @@ class Gremah(IntradayStrategy):
         # a descrição não precisa mais carregar a conversão.
         "fixed_anchor_until": "Hora em que a âncora fixa vira rolante.",
         "rolling_reanchor_after_bars": "Barras que uma ordem rolante espera antes de rearmar.",
-        "dividir_entrada": "Divide ENTRADA (em pedaços do tamanho da barra típica recente) E "
-                          "SAÍDA (em fatias de 1 lote, `LOTE_PADRAO_B3`) em vez de exigir tudo "
-                          "de uma vez. Só tem efeito com o motor rodando "
-                          "`limit_fill_capped_by_volume=True` (padrão desde 2026-08-23). Padrão "
-                          "`True` desde 2026-08-23.",
+        "dividir_entrada": "Divide ENTRADA e SAÍDA, ambas em pedaços/fatias do tamanho da barra "
+                          "típica recente (`_fatia_saída` corrigida em 2026-08-24 -- até então a "
+                          "saída usava `LOTE_PADRAO_B3` fixo), em vez de exigir tudo de uma vez. "
+                          "Só tem efeito com o motor rodando `limit_fill_capped_by_volume=True` "
+                          "(padrão desde 2026-08-23). Padrão `True` desde 2026-08-23.",
         "dividir_max_pecas": "Teto de pedaços que `dividir_entrada` cria para uma entrada.",
         "exit_ttl_bars": "Barras (minutos, aqui) que uma fatia de saída espera antes de virar "
                          "ordem a mercado pelo restante. Padrão 8 desde 2026-08-23 (varredura "
@@ -904,6 +914,23 @@ class Gremah(IntradayStrategy):
         lotes_por_peca = [base + (1 if i < resto else 0) for i in range(n_pecas)]
         return tuple(l * LOTE_PADRAO_B3 for l in lotes_por_peca if l > 0)
 
+    def _fatia_saida(self, ts: pd.Timestamp) -> int:
+        """Tamanho de UMA fatia de saida (`EnterLimit.exit_split_unit`) --
+        MESMA correcao aplicada em `GremahTick._fatia_saida` (mesma classe,
+        2026-08-24): barra TIPICA recente (mediana de `_dividir_pecas`
+        acima), nao mais `LOTE_PADRAO_B3` fixo. Ate' entao a saida fatiava
+        em 100 acoes mesmo quando a barra tipica do ativo era maior --
+        negocios de mercado a mais no fluxo do ativo sem ganhar nada de
+        preenchimento com isso (medido em tick na PMAM3; nao remedido em M1
+        -- o teto de POSICAO/CAPACIDADE que a GremahTick tambem ganhou nesta
+        data fica de fora daqui de proposito, so' a correcao simetrica e de
+        baixo risco entrou nos dois). `LOTE_PADRAO_B3` (o minimo, nunca
+        fracionario) enquanto a janela ainda nao tem evento nenhum."""
+        eventos = self._janela_volume.volumes_por_evento(ts)
+        if not eventos:
+            return LOTE_PADRAO_B3
+        return max(LOTE_PADRAO_B3, int(median(eventos)) // LOTE_PADRAO_B3 * LOTE_PADRAO_B3)
+
     def _build_entry(self, side: str, anchor: float, spacing_ticks: int, profit_ticks: int, stop_ticks: int | None, ts: pd.Timestamp) -> EnterLimit:
         self.quantity = self._lotes_por_realocacao(anchor, ts) * LOTE_PADRAO_B3
         split = self._dividir_pecas(self.quantity, ts) if self.dividir_entrada else None
@@ -925,8 +952,10 @@ class Gremah(IntradayStrategy):
             split_quantities=split,
             # Mesmo `dividir_entrada` tambem fatia a SAIDA (mesma logica da
             # `GremahTick`): o alvo tinha o MESMO problema tudo-ou-nada que
-            # a entrada -- ver `EnterLimit.exit_split_unit`.
-            exit_split_unit=LOTE_PADRAO_B3 if self.dividir_entrada else None,
+            # a entrada -- ver `EnterLimit.exit_split_unit`. Fatia do
+            # tamanho da barra TIPICA (`_fatia_saida`), nao mais
+            # `LOTE_PADRAO_B3` fixo (2026-08-24).
+            exit_split_unit=self._fatia_saida(ts) if self.dividir_entrada else None,
             exit_ttl_bars=self.exit_ttl_bars if self.dividir_entrada else None,
         )
 
@@ -934,7 +963,7 @@ class Gremah(IntradayStrategy):
         self,
         ts: pd.Timestamp,
         bar: Bar,
-        position: IntradayOpenPosition | None,
+        positions: list[IntradayOpenPosition],
         session_pnl_brl: float,
     ) -> list[IntradayAction]:
         state = self._state
@@ -963,14 +992,14 @@ class Gremah(IntradayStrategy):
 
         if not state.session_halted and session_pnl_brl <= -state.session_stop_brl_hoje:
             state.session_halted = True
-            if position is not None:
+            if positions:
                 actions.append(Exit(reason="stop_agregado_sessao"))
             return actions
 
         if state.session_halted:
             return actions
 
-        if position is not None:
+        if positions:
             if state.pending_side is not None:
                 if state.pending_side == "long":
                     state.long_fills += 1

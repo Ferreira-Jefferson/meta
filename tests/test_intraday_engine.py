@@ -196,9 +196,9 @@ def test_flatten_forcado_nao_carrega_posicao_para_a_proxima_sessao():
     vistas: dict[pd.Timestamp, object] = {}
     original_on_bar = strat.on_bar
 
-    def _spy(ts, bar, position, session_pnl_brl):
-        vistas[ts] = position
-        return original_on_bar(ts, bar, position, session_pnl_brl)
+    def _spy(ts, bar, positions, session_pnl_brl):
+        vistas[ts] = positions
+        return original_on_bar(ts, bar, positions, session_pnl_brl)
 
     strat.on_bar = _spy
 
@@ -207,7 +207,7 @@ def test_flatten_forcado_nao_carrega_posicao_para_a_proxima_sessao():
     flatten_trades = [t for t in result.trades if t.exit_reason == IntradayExitReason.FORCED_FLATTEN]
     assert len(flatten_trades) == 1
     assert flatten_trades[0].exit_ts.date() == bars_a.index[-1].date()
-    assert vistas[bars_b.index[0]] is None
+    assert vistas[bars_b.index[0]] == []
 
 
 def test_seed_volume_window_recebe_a_cauda_da_sessao_anterior_a_cada_dia():

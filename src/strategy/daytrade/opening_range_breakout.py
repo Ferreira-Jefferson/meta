@@ -69,7 +69,7 @@ class OpeningRangeBreakout(IntradayStrategy):
         self,
         ts: pd.Timestamp,
         bar: Bar,
-        position: IntradayOpenPosition | None,
+        positions: list[IntradayOpenPosition],
         session_pnl_brl: float,
     ) -> list[IntradayAction]:
         if self._session_start is None:
@@ -84,7 +84,7 @@ class OpeningRangeBreakout(IntradayStrategy):
         if self._state.range_high is None or self._state.range_low is None:
             return []  # sessao sem barra suficiente pra formar range (pregao encurtado, etc.)
 
-        if position is not None or self._state.traded_today:
+        if positions or self._state.traded_today:
             return []
 
         range_size = self._state.range_high - self._state.range_low

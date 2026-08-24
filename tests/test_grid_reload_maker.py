@@ -27,7 +27,7 @@ def test_primeira_ordem_carrega_target_e_stop_largo():
     ts = pd.Timestamp("2026-01-05 13:00", tz="UTC")
     bar = Bar(ts=ts, open=1.00, high=1.00, low=1.00, close=1.00, volume=10)
 
-    actions = strat.on_bar(ts, bar, position=None, session_pnl_brl=0.0)
+    actions = strat.on_bar(ts, bar, positions=[], session_pnl_brl=0.0)
 
     assert len(actions) == 1
     assert isinstance(actions[0], EnterLimit)
@@ -43,7 +43,7 @@ def test_stop_ticks_none_desativa_o_stop_de_protecao():
     ts = pd.Timestamp("2026-01-05 13:00", tz="UTC")
     bar = Bar(ts=ts, open=1.00, high=1.00, low=1.00, close=1.00, volume=10)
 
-    actions = strat.on_bar(ts, bar, position=None, session_pnl_brl=0.0)
+    actions = strat.on_bar(ts, bar, positions=[], session_pnl_brl=0.0)
     assert actions[0].initial_stop is None
 
 
@@ -78,5 +78,5 @@ def test_max_trades_per_side_limita_recargas():
     ts = pd.Timestamp("2026-01-05 13:00", tz="UTC")
     bar = Bar(ts=ts, open=1.00, high=1.00, low=1.00, close=1.00, volume=10)
 
-    actions = strat.on_bar(ts, bar, position=None, session_pnl_brl=0.0)
+    actions = strat.on_bar(ts, bar, positions=[], session_pnl_brl=0.0)
     assert actions == []  # os dois lados ja esgotaram o limite de 0

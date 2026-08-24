@@ -1070,14 +1070,18 @@ def test_liga_depois_do_corte_comeca_a_frio_sem_buscar_semente(tmp_path, pregao_
     sessao = [p for p in passos if p.action == "daytrade_sessao"][0]
     assert sessao.detail["inicio"] == "cold"
     # As buscas ao feed sao SEMPRE a cauda de sessoes ANTERIORES (janela de
-    # volume rolante + janela de volatilidade diaria) -- o warm start de HOJE
-    # nao acontece (comeco a frio nunca tenta buscar a semente de HOJE).
+    # volume rolante + janela de volatilidade diaria + janela de negocio
+    # tipico diario, 2026-08-24) -- o warm start de HOJE nao acontece
+    # (comeco a frio nunca tenta buscar a semente de HOJE).
     dias_vol = []
     dia = SESSION
     for _ in range(itr_mod._CAUDA_VOL_DIAS):
         dia = live_clock.previous_session(dia)
         dias_vol.append((dia, itr_mod._FIM_DE_PREGAO_QUALQUER))
-    esperado = [(date(2026, 8, 20), itr_mod._FIM_DE_PREGAO_QUALQUER)] + dias_vol
+    # `_seed_typical_trade_size` reusa a MESMA janela/feed que `_seed_daily_
+    # volatility` (mesmo espirito), entao busca os MESMOS dias de novo --
+    # so' agrega diferente (mediana de evento, nao OHLCV).
+    esperado = [(date(2026, 8, 20), itr_mod._FIM_DE_PREGAO_QUALQUER)] + dias_vol + dias_vol
     assert feed.pedidos_de_semente == esperado
 
 

@@ -109,7 +109,7 @@ class GridBidirecionalTicksMaker2(IntradayStrategy):
         self,
         ts: pd.Timestamp,
         bar: Bar,
-        position: IntradayOpenPosition | None,
+        positions: list[IntradayOpenPosition],
         session_pnl_brl: float,
     ) -> list[IntradayAction]:
         state = self._state
@@ -122,14 +122,14 @@ class GridBidirecionalTicksMaker2(IntradayStrategy):
 
         if not state.session_halted and session_pnl_brl <= -self.session_stop_brl:
             state.session_halted = True
-            if position is not None:
+            if positions:
                 actions.append(Exit(reason="stop_agregado_sessao"))
             return actions
 
         if state.session_halted:
             return actions
 
-        if position is not None:
+        if positions:
             # Confirma o nivel que preencheu (a EnterLimit rastreada). O
             # ALVO ja foi definido no `initial_target` da propria
             # `EnterLimit` -- o motor fecha automaticamente quando tocado,
