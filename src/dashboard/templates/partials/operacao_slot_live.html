@@ -47,7 +47,7 @@
    do console) volta a ligar o poll ao trocar `eventos_full` de volta pra 0. #}
 <div id="ops-slot-live-{{ slot.id }}"
      {% if not s.eventos_full %}hx-get="{{ frag_url }}" hx-trigger="every {{ poll_seconds }}s"{% endif %}
-     hx-swap="outerHTML"
+     hx-swap="outerHTML">
 
 {% if not s.existe %}
 
