@@ -35,7 +35,7 @@ comporta como puro modo rolante nesse caso). Ver
 `strategy/daytrade/base.py::warm_start_calibration` e a memoria do
 campeao de day trade PMAM3 para o historico completo da investigacao.
 
-PORTADO E MEDIDO (2026-08-24): `GremahTick` (mesma familia, motor tick)
+PORTADO E MEDIDO (2026-08-24/25): `GremahTick` (mesma familia, motor tick)
 tinha ganho um teto de CAPACIDADE de caixa -- acima de um certo caixa, mais
 dinheiro piorava o resultado em vez de melhorar, porque `_lotes_por_
 realocacao` mandava usar mais lotes do que a liquidez do ativo sustenta. A
@@ -45,10 +45,15 @@ si (`capacidade_negocio_mult`/`capacidade_fracao`/`JanelaNegocioTipicoDiaria`)
 foi portado no mesmo dia, pedido explicito do dono, com os numeros herdados
 da tick (4.0/0.5) como ponto de partida. Na sequencia, o dono pediu a
 medicao propria: varredura IS + confirmacao OOS (protocolo de sempre) na
-PMAM3, achou um par bem mais apertado (`CAPACIDADE_NEGOCIO_MULT_PADRAO`/
-`CAPACIDADE_FRACAO_PADRAO` abaixo, ver a docstring deles para os numeros)
-batendo o herdado da tick nas duas janelas -- adotado como novo default
-desta classe. Ver `gremah_tick.py` para o mecanismo completo."""
+PMAM3, achou um par bem mais apertado (1.0/0.10) batendo o herdado da tick
+nas duas janelas -- adotado como novo default desta classe. No dia seguinte
+(2026-08-25) o dono pediu a MESMA medicao nos outros 9 simbolos, porque o
+par da PMAM3 nao generalizava (mesmo achado ja visto em `profit_pct`/
+`stop_multiplier`) -- `capacidade_negocio_mult`/`capacidade_fracao` viraram
+tabela POR SIMBOLO (`_CAPACIDADE_BY_SYMBOL`, ver a docstring de
+`CAPACIDADE_NEGOCIO_MULT_PADRAO` abaixo para o resultado completo e a
+ressalva de rigor assimetrico entre este motor e a tick). Ver
+`gremah_tick.py` para o mecanismo completo."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -165,7 +170,7 @@ EXIT_TTL_BARS_PADRAO = 8
 #: do papel sustenta, e caixa extra passa a PIORAR o resultado em vez de
 #: melhorar.
 #:
-#: `capacidade_negocio_mult`/`capacidade_fracao` MEDIDOS NESTE MOTOR
+#: `capacidade_negocio_mult`/`capacidade_fracao` MEDIDOS NESTE MOTOR NA PMAM3
 #: (2026-08-24, pedido do dono, protocolo IS -> confirmacao OOS): a varredura
 #: herdada da tick (mult/fracao 4.0/0.5) rodou primeiro so' no IS da PMAM3
 #: (grade 1.0..8.0 x 0.10..1.00), depois confirmada com 1 passada no OOS, em
@@ -177,13 +182,109 @@ EXIT_TTL_BARS_PADRAO = 8
 #: R$48.919,54 -> R$50.137,96, MaxDD -2,17% -> -0,09%), mas de 1.0/0.10 ate'
 #: o plato o ganho e' ruido (+/-R$1). `1.0/0.10` adotado por ficar no INICIO
 #: do plato (mesmo resultado pratico dos pontos mais apertados, sem
-#: precisar do extremo). MEDIDO SO' NA PMAM3 -- os outros 9 simbolos da
-#: gremah M1 herdam este numero sem medicao propria, mesma ressalva que ja'
-#: valia pra tick.
+#: precisar do extremo).
+#:
+#: 2026-08-25, OS OUTROS 9 SIMBOLOS -- ate' aqui `capacidade_negocio_mult`/
+#: `capacidade_fracao` eram um UNICO VALOR GLOBAL (as duas constantes
+#: abaixo, 1.0/0.10 da PMAM3) aplicado aos 10 simbolos sem medicao propria,
+#: igual `profit_pct`/`stop_multiplier` eram antes de virarem tabela por
+#: simbolo. Pedido do dono: "isto tambem precisa virar tabela por simbolo".
+#: Medido nos 10 simbolos (protocolo de sempre: grid amplo no IS -> 1
+#: passada de confirmacao OOS, so' adota o valor novo se ele bater ou
+#: empatar o atual; se piorar, MANTEM o atual) -- resultado completo em
+#: `_CAPACIDADE_BY_SYMBOL` logo abaixo. O valor da PMAM3 NAO generaliza: em
+#: varios simbolos o par vencedor e' bem MAIOR (KLBN4 2.0/0.8, CSAN3
+#: 3.0/0.05) ou bem MENOR (DASA3 0.1/0.01) que o dela, sem padrao unico --
+#: mesmo achado ja visto em `profit_pct`/`stop_multiplier`: cada ativo tem o
+#: proprio numero, herdar da PMAM3 e' arbitrario, nao neutro.
+#:
+#: RIGOR DA MEDICAO, HONESTO -- os dois motores da familia NAO tiveram o
+#: mesmo rigor, e isso importa pra quem for confiar nestes numeros: este
+#: motor (M1) usou um grid AMPLO de verdade -- 11 valores de mult (0.1 a
+#: 8.0) x 10 valores de fracao (0.01 a 0.80) = 110 combinacoes por simbolo
+#: no IS, caixa de teste R$50.000, `MIN_TRADES_CONFIAVEL=30`, com uma rodada
+#: de EXTENSAO de grade quando o campeao ficou na BORDA (testada
+#: explicitamente em DASA3/KLBN3/KLBN4/LPSB3 -- so' DASA3 e LPSB3 ficaram na
+#: borda de baixo, mult=0.1; KLBN3 e KLBN4 na borda de cima; a extensao NAO
+#: achou nada melhor que o campeao do grid original em nenhum dos 4 casos),
+#: depois 1 passada de confirmacao OOS. A `GremahTick`
+#: (`gremah_tick.CAPACIDADE_NEGOCIO_MULT_PADRAO`, ver a docstring dela) teve
+#: uma medicao mais RASA -- so' 5 pontos FIXOS de referencia (1.0/0.125,
+#: 2.0/0.25, 4.0/0.5, 8.0/1.0, 16.0/2.0, o atual no centro), sem rodada de
+#: extensao de borda -- pode existir um valor ainda melhor fora desses 5
+#: pontos nos simbolos onde um extremo venceu; isso NAO foi verificado na
+#: tick.
+#:
+#: RESULTADO POR SIMBOLO (capital de teste R$50.000; "TROCA" = valor novo
+#: bateu o atual 1.0/0.10 no OOS; "MANTEM" = valor novo empatou ou piorou):
+#:   PMAM3   1.0  / 0.10  -- e' o proprio atual (medicao original acima)
+#:   KLBN4   2.0  / 0.8   TROCA -- OOS R$50.708,06 -> R$52.435,85 (+R$1.727,79)
+#:   CSAN3   3.0  / 0.05  TROCA -- OOS R$55.063,07 -> R$55.736,56   (+R$673,49)
+#:   GRND3   0.75 / 0.3   TROCA -- OOS R$50.679,40 -> R$50.813,65   (+R$134,25)
+#:   PCAR3   1.0  / 0.3   TROCA -- OOS R$50.798,99 -> R$51.020,36   (+R$221,37)
+#:   BMGB4   1.5  / 0.2   TROCA -- OOS R$50.287,54 -> R$50.331,74    (+R$44,20)
+#:   DASA3   0.1  / 0.01  TROCA -- OOS R$50.286,35 -> R$50.288,31     (+R$1,96
+#:           -- margem pequena mas positiva; achado na BORDA baixa da grade,
+#:           a extensao abaixo NAO achou nada melhor)
+#:   KLBN3   MANTEM 1.0/0.10 -- campeao do IS (1.0/0.8) rendeu R$50.150,87 no
+#:           OOS, PIOR que o atual (R$50.184,43, -R$33,56) -- overfitting
+#:           classico, descartado sem repescagem, mesma regra de sempre
+#:   LPSB3   MANTEM 1.0/0.10 -- campeao do IS (0.1/0.5) EMPATOU byte-a-byte
+#:           no OOS (R$50.100,27 nos dois), sem motivo pra trocar
+#:   CLSC4   MANTEM 1.0/0.10 -- so' 14 trades no OOS (janela de apenas 1.004
+#:           barras, historico curto do simbolo), dado insuficiente pra
+#:           confirmar QUALQUER par -- diferente de KLBN3/LPSB3 (empate ou
+#:           piora com dado suficiente), aqui e' "sem informacao", nao "sem
+#:           motivo pra trocar"
+#:
+#: As duas constantes abaixo (`CAPACIDADE_NEGOCIO_MULT_PADRAO`/
+#: `CAPACIDADE_FRACAO_PADRAO`) DEIXAM de ser o default de todo mundo a
+#: partir de 2026-08-25 -- viram so' o VALOR DE REFERENCIA da PMAM3 (a
+#: medicao mais rigorosa da familia), preservadas porque ainda descrevem
+#: essa medicao e porque alguns testes leem essas constantes diretamente.
+#: Quem decide o numero de cada simbolo agora e' `_CAPACIDADE_BY_SYMBOL`
+#: (par de dataclass `_SymbolCapacidade`, mesmo padrao de
+#: `_CALIBRATION_BY_SYMBOL` abaixo) -- `Gremah.__init__` falha alto
+#: (`ValueError`) se o simbolo pedido nao estiver la, em vez de cair de
+#: volta nestas constantes: os 10 simbolos da tabela sao os MESMOS de
+#: `_CALIBRATION_BY_SYMBOL`, entao faltar aqui so' aconteceria se alguem
+#: pedisse profit_pct/stop_multiplier explicitos pra um simbolo novo sem
+#: calibrar capacidade tambem -- falhar alto avisa disso na hora, em vez de
+#: rodar com um teto de capacidade nao medido pra aquele papel.
 CAPACIDADE_NEGOCIO_MULT_PADRAO = 1.0
 CAPACIDADE_FRACAO_PADRAO = 0.10
 CAPACIDADE_JANELA_DIAS_PADRAO = 1
 CAPACIDADE_MIN_EVENTOS_PADRAO = 5
+
+
+@dataclass(frozen=True)
+class _SymbolCapacidade:
+    mult: float
+    fracao: float
+
+
+# Capacidade de caixa POR SIMBOLO, medida 2026-08-25 (ver a docstring de
+# `CAPACIDADE_NEGOCIO_MULT_PADRAO` acima para o protocolo completo, o
+# resultado por simbolo e o aviso de rigor assimetrico entre este motor
+# (M1, grid completo) e a `GremahTick` (5 pontos de referencia)). PMAM3 e' o
+# mesmo par de referencia medido 2026-08-24 (a medicao mais rigorosa da
+# familia); os outros 9 sao o resultado do grid amplo + confirmacao OOS
+# deste motor, TROCADOS so' quando bateram ou empataram o antigo default
+# global (1.0/0.10). KLBN3/LPSB3/CLSC4 mantem 1.0/0.10 DE PROPOSITO
+# (overfitting descartado no OOS, empate exato no OOS, e dado insuficiente
+# no OOS -- respectivamente -- nao "nao medido").
+_CAPACIDADE_BY_SYMBOL: dict[str, _SymbolCapacidade] = {
+    "PMAM3": _SymbolCapacidade(mult=1.0, fracao=0.10),
+    "KLBN4": _SymbolCapacidade(mult=2.0, fracao=0.8),
+    "CSAN3": _SymbolCapacidade(mult=3.0, fracao=0.05),
+    "DASA3": _SymbolCapacidade(mult=0.1, fracao=0.01),
+    "PCAR3": _SymbolCapacidade(mult=1.0, fracao=0.3),
+    "CLSC4": _SymbolCapacidade(mult=1.0, fracao=0.10),
+    "KLBN3": _SymbolCapacidade(mult=1.0, fracao=0.10),
+    "GRND3": _SymbolCapacidade(mult=0.75, fracao=0.3),
+    "LPSB3": _SymbolCapacidade(mult=1.0, fracao=0.10),
+    "BMGB4": _SymbolCapacidade(mult=1.5, fracao=0.2),
+}
 
 
 @dataclass(frozen=True)
@@ -555,12 +656,12 @@ class Gremah(IntradayStrategy):
         "ou 10% do volume do último minuto fechado enquanto a janela ainda não tem "
         "barras suficientes para confiar na mediana.",
         "Além do teto de entrada, existe um teto de CAPACIDADE (portado da irmã de "
-        "tick 2026-08-24, depois medido neste motor): caixa acima do que a liquidez "
-        "do ativo sustenta — medida pela barra típica da sessão ANTERIOR inteira, um "
-        "número estável que não oscila no meio do dia — vira inerte, sem virar "
-        "posição maior. Medido na PMAM3 (IS + confirmação OOS): um par bem mais "
-        "apertado que o herdado da tick (1.0/10% contra 4.0/50%) reduziu o MaxDD de "
-        "-2,17% para -0,09% no OOS com R$ 50 mil de caixa, com capital final maior.",
+        "tick 2026-08-24, depois medido POR ATIVO neste motor): caixa acima do que a "
+        "liquidez do ativo sustenta — medida pela barra típica da sessão ANTERIOR "
+        "inteira, um número estável que não oscila no meio do dia — vira inerte, sem "
+        "virar posição maior. Cada ativo tem o próprio par (múltiplo/fração), medido "
+        "separadamente (IS + confirmação OOS): não transfere entre símbolos, mesmo "
+        "achado de alvo/stop — ver a tabela de ativos.",
         "Cada ativo tem um caixa mínimo próprio para começar a operar: o piso é o "
         "DOBRO do custo de um lote de 100 ações, sem arredondamento. É a diferença "
         "entre poder operar um ativo e não poder — ver a tabela de ativos.",
@@ -657,13 +758,14 @@ class Gremah(IntradayStrategy):
                            "`alvo_por_volatilidade` -- medido isoladamente, é o parâmetro que "
                            "mais mexe no resultado. Vazio = stop pelo `stop_multiplier`.",
         "capacidade_negocio_mult": "Teto de posição (entrada) e de capacidade (caixa), em "
-                                  "múltiplos da barra típica recente. Medido neste motor "
-                                  "2026-08-24 (IS + confirmação OOS, só na PMAM3): 1.0 bate "
-                                  "o 4.0 herdado da tick nas duas janelas.",
+                                  "múltiplos da barra típica recente. Vazio = lookup POR "
+                                  "SÍMBOLO em `_CAPACIDADE_BY_SYMBOL` (medido neste motor, "
+                                  "protocolo IS + confirmação OOS, grid completo -- ver a "
+                                  "docstring de `CAPACIDADE_NEGOCIO_MULT_PADRAO` para o "
+                                  "resultado por símbolo e a ressalva de rigor frente à tick).",
         "capacidade_fracao": "Fração da capacidade deduzida que o robô de fato usa -- o "
-                            "restante fica de caixa parado, disponível pra saque. Mesma "
-                            "medição de `capacidade_negocio_mult` (0.10 bate o 0.5 herdado "
-                            "da tick).",
+                            "restante fica de caixa parado, disponível pra saque. Vazio = "
+                            "mesmo lookup por símbolo de `capacidade_negocio_mult`.",
         "capacidade_janela_dias": "Sessões anteriores usadas pra medir a âncora ESTÁVEL de "
                                  "capacidade (`JanelaNegocioTipicoDiaria`) -- diferente de "
                                  "`realocacao_janela_minutos`, que é intradia e oscila.",
@@ -712,8 +814,8 @@ class Gremah(IntradayStrategy):
         vol_janela_dias: int = VOL_JANELA_DIAS_PADRAO,
         stop_vol_mult: float | None = None,
         stop_frac_range: float | None = None,
-        capacidade_negocio_mult: float = CAPACIDADE_NEGOCIO_MULT_PADRAO,
-        capacidade_fracao: float = CAPACIDADE_FRACAO_PADRAO,
+        capacidade_negocio_mult: float | None = None,
+        capacidade_fracao: float | None = None,
         capacidade_janela_dias: int = CAPACIDADE_JANELA_DIAS_PADRAO,
         capacidade_min_eventos: int = CAPACIDADE_MIN_EVENTOS_PADRAO,
     ):
@@ -815,8 +917,31 @@ class Gremah(IntradayStrategy):
         # `None` (default) = comportamento de sempre, stop pelo
         # `stop_multiplier`/`stop_vol_mult`.
         self.stop_frac_range = stop_frac_range
-        # Mecanismo PORTADO da `GremahTick`, numeros MEDIDOS neste motor
-        # (2026-08-24) -- ver `CAPACIDADE_NEGOCIO_MULT_PADRAO` acima.
+        # Mecanismo PORTADO da `GremahTick`, numeros MEDIDOS por SIMBOLO neste
+        # motor (2026-08-24 na PMAM3, 2026-08-25 nos outros 9) -- mesmo
+        # padrao de `None` = lookup por simbolo que `profit_pct`/
+        # `stop_multiplier` ja usam algumas linhas acima: quem passa um valor
+        # explicito sempre vence a tabela. Ver `_CAPACIDADE_BY_SYMBOL` e a
+        # docstring de `CAPACIDADE_NEGOCIO_MULT_PADRAO` (topo do modulo) pro
+        # protocolo de medicao e o resultado completo por simbolo.
+        if capacidade_negocio_mult is None or capacidade_fracao is None:
+            capacidade = _CAPACIDADE_BY_SYMBOL.get(symbol)
+            if capacidade is None:
+                raise ValueError(
+                    f"gremah: sem capacidade de caixa calibrada para o "
+                    f"simbolo {symbol!r} em _CAPACIDADE_BY_SYMBOL "
+                    "(strategy/daytrade/lab/gremah.py). capacidade_negocio_"
+                    "mult/capacidade_fracao NAO transferem entre simbolos "
+                    "(medido 2026-08-25, mesmo achado de profit_pct/"
+                    "stop_multiplier) -- passe capacidade_negocio_mult= e "
+                    "capacidade_fracao= explicitamente, ou meca este simbolo "
+                    "(IS + confirmacao OOS) e adicione-o a tabela antes de "
+                    "operar com o default."
+                )
+            if capacidade_negocio_mult is None:
+                capacidade_negocio_mult = capacidade.mult
+            if capacidade_fracao is None:
+                capacidade_fracao = capacidade.fracao
         self.capacidade_negocio_mult = abs(capacidade_negocio_mult)
         self.capacidade_fracao = abs(capacidade_fracao)
         self.capacidade_janela_dias = max(1, int(capacidade_janela_dias))

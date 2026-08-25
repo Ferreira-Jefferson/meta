@@ -320,7 +320,16 @@ def test_stop_vol_mult_explicito_vence_o_s_do_override():
 
 
 def test_ambos_explicitos_ignora_a_tabela_mesmo_para_simbolo_desconhecido():
-    strat = Gremah(symbol="ATIVO_INEXISTENTE", profit_pct=0.005, stop_multiplier=8.0)
+    # capacidade_negocio_mult/capacidade_fracao tambem precisam de override
+    # explicito aqui desde 2026-08-25 -- viraram lookup por simbolo igual
+    # profit_pct/stop_multiplier (`_CAPACIDADE_BY_SYMBOL`), com a MESMA
+    # guarda de "simbolo desconhecido falha alto" -- sem os dois, o
+    # construtor falharia no lookup de capacidade mesmo com profit_pct/
+    # stop_multiplier ja resolvidos.
+    strat = Gremah(
+        symbol="ATIVO_INEXISTENTE", profit_pct=0.005, stop_multiplier=8.0,
+        capacidade_negocio_mult=1.0, capacidade_fracao=0.10,
+    )
 
     assert strat.profit_pct == pytest.approx(0.005)
     assert strat.stop_multiplier == pytest.approx(8.0)
