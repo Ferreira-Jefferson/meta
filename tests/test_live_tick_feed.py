@@ -12,7 +12,7 @@ arquivo prova que a segunda politica esta em vigor aqui, e nao a primeira.
 """
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pandas as pd
 import pytest
@@ -130,19 +130,44 @@ def test_ordem_cronologica_mesmo_com_lote_desordenado(monkeypatch):
 def test_limites_da_janela_sao_convertidos_para_o_relogio_do_servidor(monkeypatch):
     """`copy_ticks_range` interpreta os limites que recebe no relogio do
     SERVIDOR, nao em UTC — pedir "desde 13:00 UTC" sem converter pediria, na
-    verdade, 13:00 de Brasilia: tres horas de dado no lugar errado."""
+    verdade, 13:00 de Brasilia: tres horas de dado no lugar errado.
+
+    `after_ts` aqui e' de dois dias atras (mais longe que
+    `_SAFE_FETCH_LOOKBACK`), de proposito: e' o unico jeito de testar a
+    conversao de fuso do LIMITE PEDIDO sem o piso de seguranca (ver
+    `test_janela_estreita_e_alargada_para_alcancar_o_piso_seguro` abaixo)
+    substituir `after_ts` antes que a conversao aconteca."""
     capturado: list = []
     feed = _feed(monkeypatch, _ticks("2026-08-21 13:00:00", 3),
                  "2026-08-21 13:00:10", capturado=capturado)
 
-    feed.closed_bars_since(pd.Timestamp("2026-08-21 13:00:00", tz="UTC"))
+    feed.closed_bars_since(pd.Timestamp("2026-08-19 13:00:00", tz="UTC"))
 
     start, _end, _kw = capturado[0]
-    esperado = (datetime(2026, 8, 21, 13, 0, tzinfo=timezone.utc)
+    esperado = (datetime(2026, 8, 19, 13, 0, tzinfo=timezone.utc)
                 .astimezone(MT5_SERVER_TIMEZONE).replace(tzinfo=None))
     assert start.tzinfo is None  # naive: o pacote MetaTrader5 nao pode reinterpretar
     assert start == esperado
     assert start.hour == 10  # 13:00 UTC == 10:00 em Brasilia
+
+
+def test_janela_estreita_e_alargada_para_alcancar_o_piso_seguro(monkeypatch):
+    """Bug medido 2026-08-24 (Rico/XP): `copy_ticks_range` com `date_from`
+    DENTRO do pregao de hoje devolveu negocios incompletos ou ZERO neste
+    terminal, mesmo com negocios reais dentro da janela pedida -- sem
+    excecao nenhuma, entao a `gremah_tick` ficou o pregao inteiro sem ver
+    UMA barra. `after_ts` recente (ou `None`, cold start) nao pode mais
+    resultar numa janela mais estreita que `_SAFE_FETCH_LOOKBACK`."""
+    capturado: list = []
+    feed = _feed(monkeypatch, _ticks("2026-08-21 13:00:00", 3),
+                 "2026-08-21 13:00:10", capturado=capturado)
+
+    feed.closed_bars_since(pd.Timestamp("2026-08-21 13:00:05", tz="UTC"))
+
+    start, _end, _kw = capturado[0]
+    pedido = (datetime(2026, 8, 21, 13, 0, 5, tzinfo=timezone.utc)
+              .astimezone(MT5_SERVER_TIMEZONE).replace(tzinfo=None))
+    assert start < pedido - timedelta(hours=23)  # bem mais largo que os 5s pedidos
 
 
 def test_conversao_de_volta_e_delegada_ao_mt5_ticks_source(monkeypatch):

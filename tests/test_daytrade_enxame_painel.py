@@ -20,15 +20,34 @@ from strategy.daytrade.registry import get_daytrade_robot, symbols_for_robot
 
 # ---------- identidade do slot (pura, sem banco) ---------------------------
 
-def test_id_do_slot_carrega_robo_e_ativo():
+def test_id_do_slot_carrega_robo_ativo_e_modo():
     """O id É a identidade: `slot_by_id` reconstrói o slot sem consultar banco
-    nenhum — é isso que deixa `run_live.py --slot dt-gremah-pmam3` subir como
-    processo isolado, sem depender do dashboard estar de pé."""
-    assert daytrade_slot_id("gremah", "PMAM3") == "dt-gremah-pmam3"
+    nenhum — é isso que deixa `run_live.py --slot dt-gremah-pmam3-shadow`
+    subir como processo isolado, sem depender do dashboard estar de pé. O
+    MODO (sombra/real) entrou na identidade em 2026-08-24: é o que permite o
+    mesmo robô+ativo ter um cartão sombra e um real, simultâneos."""
+    assert daytrade_slot_id("gremah", "PMAM3", "shadow") == "dt-gremah-pmam3-shadow"
 
-    slot = slot_by_id("dt-gremah-klbn4")
-    assert (slot.robot_key, slot.symbol, slot.kind) == ("gremah", "KLBN4", "intraday")
+    slot = slot_by_id("dt-gremah-klbn4-live")
+    assert (slot.robot_key, slot.symbol, slot.kind, slot.execution_mode) == (
+        "gremah", "KLBN4", "intraday", "live")
     assert slot.is_intraday and slot.is_dynamic
+
+
+def test_mesmo_robo_ativo_modos_diferentes_sao_slots_distintos():
+    """O ponto inteiro da mudança: sombra e real do mesmo robô+ativo não são
+    a mesma conta escolhendo modo depois — são dois slots."""
+    sombra = daytrade_slot("gremah", "PMAM3", "shadow")
+    real = daytrade_slot("gremah", "PMAM3", "live")
+    assert sombra.id != real.id
+    assert sombra.magic != real.magic
+
+
+def test_id_recusa_modo_invalido():
+    with pytest.raises(ValueError, match="modo de execução inválido"):
+        daytrade_slot_id("gremah", "PMAM3", "sombra")
+    with pytest.raises(KeyError):
+        slot_by_id("dt-gremah-pmam3-sombra")
 
 
 def test_slot_estatico_nao_e_removivel():
@@ -39,17 +58,17 @@ def test_id_recusa_hifen_no_robo_ou_ativo():
     """O hífen é o separador — um valor que o contenha tornaria o id ambíguo
     para `slot_by_id` desmontar de volta."""
     with pytest.raises(ValueError, match="separador"):
-        daytrade_slot_id("gre-mah", "PMAM3")
+        daytrade_slot_id("gre-mah", "PMAM3", "shadow")
     with pytest.raises(ValueError, match="separador"):
-        daytrade_slot_id("gremah", "PM-AM3")
+        daytrade_slot_id("gremah", "PM-AM3", "shadow")
 
 
 def test_magic_e_estavel_e_distinto_por_slot():
     """Estável entre reinícios (senão o robô perde de vista as próprias ordens
     ao voltar) e distinto entre slots (senão dois robôs leem as ordens um do
     outro como suas)."""
-    assert daytrade_magic("dt-gremah-pmam3") == daytrade_magic("dt-gremah-pmam3")
-    magics = {daytrade_magic(daytrade_slot_id("gremah", s))
+    assert daytrade_magic("dt-gremah-pmam3-shadow") == daytrade_magic("dt-gremah-pmam3-shadow")
+    magics = {daytrade_magic(daytrade_slot_id("gremah", s, "shadow"))
               for s in symbols_for_robot("gremah")}
     assert len(magics) == len(symbols_for_robot("gremah"))
     assert slot_by_id("swing").magic not in magics

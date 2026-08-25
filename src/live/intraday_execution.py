@@ -97,8 +97,8 @@ class MT5IntradayExecution:
         self._last_known_qty: float = 0.0
         self._last_known_avg: float = 0.0
         # Espelho do lado da SAIDA: a ordem-limite de saida REAL vigiada
-        # agora (`None` = nenhuma armada) e a quantidade da posicao ANTES
-        # dela ser armada (baseline para medir o quanto encolheu).
+        # agora (`None` = nenhuma posicionada) e a quantidade da posicao ANTES
+        # dela ser posicionada (baseline para medir o quanto encolheu).
         self.pending_exit_order: Optional[Order] = None
         self._exit_baseline_qty: float = 0.0
         # Recibos do ultimo fill de entrada e da ultima saida, para o runtime
@@ -118,7 +118,7 @@ class MT5IntradayExecution:
         (para o runtime journalizar) e guarda os tickets para cancelamento.
 
         Se qualquer fatia for recusada, CANCELA as ja enviadas antes de
-        levantar -- nunca deixa uma entrada armada PELA METADE na corretora
+        levantar -- nunca deixa uma entrada posicionada PELA METADE na corretora
         sem o robo saber."""
         self._last_known_qty = 0.0
         self._last_known_avg = 0.0
@@ -141,7 +141,7 @@ class MT5IntradayExecution:
                     f"corretora recusou a fatia {i + 1}/{len(quantities)} ({qty} de "
                     f"{sum(quantities)} acoes) da ordem-limite {side} {self.symbol} @ "
                     f"{limit_price:.4f}: {enviada.note}. As {len(enviadas)} fatia(s) ja "
-                    "enviada(s) foram canceladas -- nunca fica uma entrada armada pela "
+                    "enviada(s) foram canceladas -- nunca fica uma entrada posicionada pela "
                     "metade."
                 )
             enviadas.append(enviada)
@@ -265,7 +265,7 @@ class MT5IntradayExecution:
 
     def exit_fill(self, position_side: str, bar) -> Optional[dict]:
         """A fatia de saida vigiada (`place_exit_limit`) encolheu a posicao
-        desde que foi armada? `{"price", "quantity"}` do que fechou (o preco
+        desde que foi posicionada? `{"price", "quantity"}` do que fechou (o preco
         e' o LIMITE pedido -- uma ordem-limite so' preenche nesse nivel ou
         melhor, e sem consultar deal a deal no terminal nao ha como saber
         "melhor"; usar o limite e' o numero conhecido, nunca inventado), ou

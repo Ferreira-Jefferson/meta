@@ -1403,6 +1403,17 @@
   color: var(--fg-strong);
   font-variant-numeric: tabular-nums;
 }
+.capital-card .v-infinito {
+  /* O glifo "∞" do mono nao preenche o em-box como os digitos -- sem isto
+     ele parece bem menor que o resto dos numeros do card (pedido do dono,
+     2026-08-25). `transform: scale`, nao `font-size`: escalar aumenta so' o
+     desenho, sem crescer a caixa de linha -- `font-size` maior empurrava a
+     linha "DD X%" abaixo dele, desalinhando com "Desde o inicio da conta"
+     dos cards vizinhos (mesmo pedido, reportado logo em seguida). */
+  display: inline-block;
+  transform: scale(1.5);
+  transform-origin: left center;
+}
 .capital-card.peak .v   { color: var(--accent-green); }
 .capital-card.trough .v { color: var(--accent-red); }
 .capital-card.final .v  { color: var(--accent-amber); }
@@ -1417,11 +1428,24 @@
 }
 .capital-card .sub.pos { color: var(--accent-green); }
 .capital-card .sub.neg { color: var(--accent-red); }
+.k-arrow { vertical-align: -1px; margin-right: 1px; }
+.k-arrow--long  { color: var(--accent-green); }
+.k-arrow--short { color: var(--accent-red); }
 
 @media (max-width: 900px) {
   .capital-cards { grid-template-columns: repeat(2, 1fr); }
   .capital-card { border-right: 1px solid var(--grid); border-bottom: 1px solid var(--grid); }
   .capital-card:nth-child(2n) { border-right: none; }
+}
+
+/* Fileira de 3 (painel de `/operacao`, day trade: "desde sempre" tem 3
+   cartões, as outras duas fileiras têm 4 -- ver `operacao_slot_live.html`).
+   Mantém o resto do `.capital-card` igual, só muda quantas colunas a linha
+   reparte. */
+.capital-cards--3 { grid-template-columns: repeat(3, 1fr); }
+@media (max-width: 900px) {
+  .capital-cards--3 { grid-template-columns: repeat(1, 1fr); }
+  .capital-cards--3 .capital-card:nth-child(2n) { border-right: 1px solid var(--grid); }
 }
 
 /* Small polish */
@@ -1511,6 +1535,14 @@
    servidor que não confere cai no segundo caso. */
 .ops-badge.err .dot { background: var(--accent-red); }
 .ops-badge.err strong { color: var(--accent-red); }
+
+/* Resultado do dia (ganhos - perdas): mesma paridade verde/vermelho de
+   `.capital-card.safe`/`.trough`, não `warn`/`err` -- não é um aviso
+   operacional, é o placar do dia. */
+.ops-badge.safe .dot { background: var(--accent-green); }
+.ops-badge.safe strong { color: var(--accent-green); }
+.ops-badge.trough .dot { background: var(--accent-red); }
+.ops-badge.trough strong { color: var(--accent-red); }
 
 /* Camadas de dinheiro do overlay de saque — reaproveita `.capital-cards` do
    resultado de simulação, com dois acentos novos: "safe" (caixa fora do
@@ -2222,6 +2254,45 @@ details[open] > summary .ops-sec-caret::before { content: "\2212"; }
   letter-spacing: 0.14em;
   color: var(--fg-muted);
 }
+/* Modo (sombra/real) e' fixo no slot desde 2026-08-24 -- o MESMO robo+ativo
+   pode ter um cartao sombra e um real ao mesmo tempo, e sem esta etiqueta os
+   dois ficam com titulo identico fechados. Vermelho no "real" pelo mesmo
+   motivo do botao de parar/etiqueta de execucao: e' dinheiro de verdade. */
+.ops-slot-mode {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-metadata);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  padding: 1px var(--s-2);
+  border: 1px solid var(--grid);
+  color: var(--fg-muted);
+}
+.ops-slot-mode.is-live {
+  border-color: var(--accent-red);
+  color: var(--accent-red);
+}
+/* Segurar e arrastar pra reordenar (dono, 2026-08-24) -- vive no
+   `<summary>` de proposito, para funcionar com o cartao FECHADO. `grab`/
+   `grabbing` sao o unico sinal de que o cabo e' arrastavel -- sem seta,
+   sem botao. */
+.ops-slot-drag {
+  flex-shrink: 0;
+  width: 1.4em;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: var(--fs-body-lg);
+  line-height: 1;
+  color: var(--fg-faint);
+  cursor: grab;
+  user-select: none;
+}
+.ops-slot-drag:hover { color: var(--accent-amber); }
+.ops-slot-drag:active { cursor: grabbing; }
+/* O cartao sendo arrastado fica visivelmente "levantado" da lista -- o
+   navegador ja desenha o ghost de arrasto por conta propria, isto so' marca
+   o lugar de origem enquanto ele se move. */
+.ops-slot.ops-robot.is-dragging { opacity: 0.4; }
 .ops-slot-body {
   padding: 0 0 var(--s-5) var(--s-5);
   /* Filete a esquerda: diz "isto pertence ao cabecalho acima" com uma linha,
@@ -2482,15 +2553,42 @@ details[open] > summary .ops-sec-caret::before { content: "\2212"; }
    aberta (nao recolhe) e SEMPRE acima da lista de robos -- ponto fixo da
    secao, enquanto a lista embaixo cresce. O recolhivel e' o robo criado.
    Sem regua propria: quem separa e' o `border-top` do primeiro cartao. */
-.ops-new-robot { padding-bottom: var(--s-5); }
+/* Cartao (mesmo vocabulario do `.capital-card`: fundo elevado + filete de
+   topo) para o formulario ficar reconhecivel como a acao principal da secao
+   -- sem isso ele lia como mais uma linha de campos perdida no meio da
+   pagina (dono, 2026-08-24). O CARTAO ocupa a largura inteira da secao (ela
+   e' a moldura, nao o conteudo); so' o formulario por dentro fica centrado
+   (dono, 2026-08-24: "o conteudo pode ficar centralizado, mas o card que o
+   contorna deve ficar estendido"). */
+.ops-new-robot {
+  position: relative;
+  margin-bottom: var(--s-5);
+  padding: var(--s-5);
+  background: var(--bg-elevated);
+  border: 1px solid var(--grid);
+}
+.ops-new-robot::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 0; right: 0; height: 2px;
+  background: var(--accent-amber);
+}
 .ops-new-robot-form {
   display: flex;
   align-items: flex-end;
+  justify-content: center;
   gap: var(--s-4);
   flex-wrap: wrap;
   margin-bottom: var(--s-4);
 }
-.ops-new-robot-form .ops-asset-field select { min-width: 320px; }
+/* Largura FIXA (nao `min-width`): o texto de cada opcao muda de tamanho ao
+   vivo conforme o Modo selecionado (`atualizaAtivos` em `static/js/
+   operacao.js` acrescenta/tira " · parado"/" · operando"), e com
+   `min-width` o proprio <select> fechado redimensionava a cada troca --
+   ficava "pulando" na tela. 360px cobre a opcao mais longa possivel (ex.:
+   "● CLSC4 — mín. R$ 30.390,00 · operando", a maior combinacao de preco +
+   sufixo de status) com folga pro padding e a seta nativa do navegador. */
+.ops-new-robot-form .ops-asset-field select { width: 360px; }
 .ops-new-robot-form select:disabled { color: var(--fg-muted); cursor: not-allowed; }
 .ops-new-robot-form button {
   background: var(--accent-amber);
@@ -2537,6 +2635,10 @@ details[open] > summary .ops-sec-caret::before { content: "\2212"; }
 }
 .ops-more button:hover { color: var(--accent-amber); border-color: var(--accent-amber); }
 .ops-more .dim { font-family: var(--font-mono); font-size: var(--fs-metadata); }
+/* "Diário Completo"/"Diário do dia" (eventos): botão único, sem contador ao
+   lado — centralizado em vez de alinhado à esquerda como o "ver mais" de
+   posições. */
+.ops-more--center { justify-content: center; }
 
 /* Estado do ativo DENTRO do <select> (2026-08-22, pedido do dono): a lista
    impressa saiu da pagina, e a cor de cada opcao passou a dizer o estado —
@@ -2547,30 +2649,6 @@ details[open] > summary .ops-sec-caret::before { content: "\2212"; }
 .ops-asset-select option.is-running { color: var(--accent-green); }
 .ops-asset-select option.is-idle { color: var(--accent-amber); }
 
-/* Legenda das DUAS cores. Nao e' a lista de ativos de volta: sem ela a cor
-   dentro do select seria um codigo sem decodificador. */
-.ops-asset-key {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--s-3) var(--s-5);
-  margin: var(--s-4) 0 0;
-  font-family: var(--font-mono);
-  font-size: var(--fs-metadata);
-  color: var(--fg-muted);
-}
-.ops-asset-key > span { display: inline-flex; align-items: center; gap: var(--s-2); }
-/* Ponto verde cheio = robo OPERANDO; ponto ambar cheio = robo criado mas
-   parado (o ativo continua reservado, o caixa dele esta la) — ate 2026-08-22
-   este segundo era so' um anel vazio, e o dono pediu o mesmo peso visual do
-   verde. O terceiro estado — livre — e' a AUSENCIA de marca, nao um terceiro
-   ponto: por isso so' dois seletores existem aqui. */
-.ops-asset-dot {
-  width: 7px; height: 7px;
-  border: 1px solid var(--grid-strong);
-  flex-shrink: 0;
-}
-.ops-asset-dot.is-running { background: var(--accent-green); border-color: var(--accent-green); }
-.ops-asset-dot.is-idle { background: var(--accent-amber); border-color: var(--accent-amber); }
 
 @media (max-width: 720px) {
   .ops-new-robot-form .ops-asset-field select { min-width: 0; width: 100%; }

@@ -144,15 +144,19 @@ def _resolve_risk_guard(slot_id: str):
     )
 
 
-def get_status(slot_id: str = DEFAULT_SLOT, eventos_limit: int = 10) -> dict:
+def get_status(slot_id: str = DEFAULT_SLOT, full: bool = False, limit: int = 1000) -> dict:
     """Status da conta deste slot, ou `{"conta": <slot>, "existe": False}` se
     ainda não criada — mesma forma que `LiveRuntime.status()` já devolve
     nesse caso (o template lê `s.existe`, mas manter a chave `conta` evita os
     dois caminhos divergirem de contrato).
 
-    `eventos_limit` é o "ver mais" do painel — quantos eventos recentes o
-    cartão mostra. Chega até o SQL (`recent_events`), e não como corte de uma
-    lista já lida: `live_events` é a tabela que mais cresce no banco."""
+    Eventos recentes vêm por padrão só do pregão atual (ver `.status()` de
+    cada runtime) — não há mais "ver mais" para o cartão de eventos, só o
+    botão "Diário Completo" (`full=True`), que troca para TODO o histórico
+    da conta em vez do dia corrente ("Diário do dia" volta com `full=False`).
+    `limit` é o tamanho da PRIMEIRA página desse histórico — o resto vem sob
+    demanda pelo scroll infinito (ver `app.py::operacao_eventos_mais_antigos`),
+    não por aqui."""
     from dashboard import live_control
 
     slot = slot_by_id(slot_id)
@@ -170,7 +174,7 @@ def get_status(slot_id: str = DEFAULT_SLOT, eventos_limit: int = 10) -> dict:
         return _build_intraday_runtime(
             slot, account.initial_capital, cfg.get("execution_mode") or "shadow",
             account.investment_robot,
-        ).status(eventos_limit=eventos_limit)
+        ).status(full=full, limit=limit)
     return _build_daily_runtime(
         slot, account.mode, account.initial_capital, account.investment_robot
-    ).status(eventos_limit=eventos_limit)
+    ).status(full=full, limit=limit)

@@ -7,10 +7,12 @@
  *    vez de uma ajuda. O estado e' do navegador de proposito: e' preferencia
  *    de visualizacao de quem olha, nao dado do sistema.
  *
- * 2. FILTRAR OS ATIVOS PELO ROBO ESCOLHIDO. O formulario de robo novo tem um
- *    <select> de robo e um de ativo; cada robo aceita a propria lista
- *    (`calibrated_setups`). O <select> de ativos carrega todas as opcoes com
- *    `data-robot`, e aqui se escondem as que nao sao do robo selecionado.
+ * 2. FILTRAR OS ATIVOS PELO ROBO+MODO ESCOLHIDOS. O formulario de robo novo
+ *    pede Robo e Modo ANTES do Ativo (pedido do dono, 2026-08-25 -- ver
+ *    `atualizaAtivos`): o <select> de ativos carrega todas as opcoes com
+ *    `data-robot`/`data-modos-usados`, e aqui se escondem as que nao sao do
+ *    robo selecionado e se desabilitam as que o (robo, ativo, modo) ja
+ *    escolhido tornaria um trio duplicado.
  *
  * Tudo por DELEGACAO no `document`: os nos sao recriados a cada swap do htmx,
  * entao ouvinte preso no elemento morreria no primeiro refresh de fundo.
@@ -23,7 +25,6 @@
   'use strict';
 
   var CHAVE = 'meta-operacao-abertos';
-  var CHAVE_EXECUCAO = 'meta-operacao-execucao';
 
   // Generico: qualquer preferencia que so' existe no navegador (secao aberta,
   // modo de execucao escolhido) mora num mapa proprio dentro do localStorage,
@@ -62,33 +63,71 @@
     grava(CHAVE, mapa);
   }, true);
 
-  function filtraAtivos(form) {
+  // Modo vem PRIMEIRO no formulario, antes de Robo e de Ativo (pedido do
+  // dono, 2026-08-25: a ordem antiga -- Robo, Ativo, Modo -- fazia escolher
+  // um ativo com so' um modo em uso EMPURRAR o Modo sozinho pro outro valor
+  // por baixo dos panos, o que confundia mais do que ajudava: o dono clicava
+  // num ativo marcado "parado" esperando continuar naquele modo e via o
+  // Modo pular sozinho pra "Real"). Com o Modo escolhido PRIMEIRO, ele nunca
+  // muda por causa do Robo ou do Ativo -- sao Robo e Ativo que se ajustam ao
+  // Modo ja escolhido: o trio que ja existe fica so' DESABILITADO (nao
+  // escondido, pra nao sumir a bolinha/status que explica o motivo), e o
+  // dono troca o Modo se quiser aquele ativo mesmo assim.
+  function atualizaAtivos(form) {
     var robo = form.querySelector('select[data-ops-robot-select]');
+    var modo = form.querySelector('select[data-ops-mode-select]');
     var ativos = form.querySelector('select.ops-asset-select');
-    if (!robo || !ativos) return;
-    var escolhido = robo.value;
+    var submit = form.querySelector('[data-ops-submit]');
+    if (!robo || !modo || !ativos) return;
+    var escolhidoRobo = robo.value;
+    var escolhidoModo = modo.value;
     var opts = ativos.querySelectorAll('option[data-robot]');
+    var livre = false;
     for (var i = 0; i < opts.length; i++) {
       var o = opts[i];
-      var meu = o.getAttribute('data-robot') === escolhido;
+      var meu = o.getAttribute('data-robot') === escolhidoRobo;
       o.hidden = !meu;
-      // Ativo de outro robo tambem fica `disabled`: `hidden` sozinho ainda
-      // permite selecionar por teclado em alguns navegadores.
-      o.disabled = !meu || o.hasAttribute('data-em-uso');
+      var label = o.getAttribute('data-label');
+      var usados = ((o.getAttribute('data-modos-usados')) || '').split(',').filter(Boolean);
+      var rodando = ((o.getAttribute('data-modos-rodando')) || '').split(',').filter(Boolean);
+      // "Existe" e' sempre relativo ao Modo JA escolhido -- nao ao ativo
+      // sozinho: PMAM3 com so' a sombra criada aparece livre quando o Modo e'
+      // Real, e so' vira "parado"/desabilitado quando o Modo e'
+      // Simulacao (o trio que o servidor recusaria).
+      var existe = usados.indexOf(escolhidoModo) !== -1;
+      var operando = rodando.indexOf(escolhidoModo) !== -1;
+      if (label) {
+        var sufixo = operando ? ' · operando' : (existe ? ' · parado' : '');
+        o.textContent = (existe ? '●' : '○') + ' ' + label + sufixo;
+      }
+      o.classList.remove('is-running', 'is-idle');
+      if (operando) o.classList.add('is-running');
+      else if (existe) o.classList.add('is-idle');
+      // Ativo de outro robo, ou trio (robo, ativo, modo) ja existente:
+      // `disabled`. `hidden` sozinho ainda permite selecionar por teclado em
+      // alguns navegadores, e aqui o trio existente PRECISA continuar
+      // visivel (so' desabilitado) pro dono entender o motivo pela bolinha.
+      o.disabled = !meu || existe;
+      if (meu && !o.disabled) livre = true;
     }
-    // Trocar de robo invalida o ativo escolhido antes -- ele pode nem existir
-    // na lista nova. Volta para o placeholder em vez de mandar um par que o
-    // servidor recusaria.
-    if (ativos.selectedOptions.length && ativos.selectedOptions[0].hidden) {
-      ativos.value = '';
-    }
+    // Trocar de robo ou de modo pode invalidar o ativo ja escolhido (virou
+    // trio duplicado, ou nem pertence mais a este robo). Volta pro
+    // placeholder em vez de deixar selecionado um valor agora bloqueado.
+    var sel = ativos.selectedOptions[0];
+    if (sel && (sel.hidden || sel.disabled)) ativos.value = '';
+    // Nenhum ativo livre para este (robo, modo): nao ha nada valido para
+    // submeter -- desabilita o botao em vez de deixar o clique estourar no
+    // servidor.
+    if (submit) submit.disabled = !livre;
   }
 
   document.addEventListener('change', function (ev) {
     var sel = ev.target;
-    if (!sel || !sel.matches || !sel.matches('select[data-ops-robot-select]')) return;
-    var form = sel.closest('form');
-    if (form) filtraAtivos(form);
+    if (!sel || !sel.matches) return;
+    if (sel.matches('select[data-ops-robot-select]') || sel.matches('select[data-ops-mode-select]')) {
+      var form = sel.closest('form');
+      if (form) atualizaAtivos(form);
+    }
   });
 
   /* ---- campo de dinheiro: mascara + botao so quando ha o que salvar ------
@@ -136,119 +175,71 @@
     }, 0);
   });
 
-  /* ---- caixa troca de saldo com a execução (pedido do dono, 2026-08-23) --
+  /* ---- arrastar um robo de day trade pra reordenar (pedido do dono, 2026-
+   * 08-24) -----------------------------------------------------------------
    *
-   * "Sombra" e "Real" cada um tem o SEU saldo (`cash_sombra`/`cash`, ver
-   * `AccountState.cash_for`). O `<select execution_mode>` e o `<input>` de
-   * caixa sao FORMS IRMAOS (endpoints diferentes, ver a docstring de
-   * `operacao_body.html`), entao mudar o select nao troca o valor do input
-   * sozinho -- sem isto, o dono via "Sombra" selecionado mas continuava
-   * editando (e submetendo) o caixa REAL, porque so' existe UM `<input>` na
-   * tela e ele nao sabia de qual saldo era.
+   * Drag-and-drop nativo do navegador (`draggable="true"` no cabo dentro do
+   * `<summary>`, ver `partials/operacao_body.html`), nao uma lib de terceiro:
+   * o painel inteiro ja e' HTML simples + htmx, e o navegador ja da o
+   * feedback visual do arrasto (ghost) de graca.
    *
-   * So' troca o VALOR exibido/editavel, lido de `data-cash-live`/
-   * `data-cash-sombra` (que o servidor ja mandou prontos, formatados) -- a
-   * decisao de qual coluna GRAVAR continua so' do servidor
-   * (`app.py::operacao_caixa`, a partir do `execution_mode` que o
-   * `hx-include` do form de caixa manda junto).
+   * O reposicionamento em si acontece durante o proprio `dragover`, movendo
+   * o NO do cartao no DOM (`insertBefore`) conforme o mouse passa da metade
+   * de cima pra metade de baixo do cartao sob o cursor -- e' o que da a
+   * sensacao de arrastar pra "qualquer posicao", nao so trocar com o vizinho.
+   * So' no `dragend` e' que a ordem final (lida do DOM) e' mandada pro
+   * servidor -- gravar a cada `dragover` faria um POST por pixel arrastado.
    */
-  function sincronizaCaixaComExecucao(select) {
-    var sombra = select.value === 'shadow';
-    var barra = select.closest('.ops-bar');
-    if (barra) {
-      var input = barra.querySelector('input[data-ops-money]');
-      if (input) {
-        var bruto = input.getAttribute(sombra ? 'data-cash-sombra' : 'data-cash-live');
-        if (bruto != null) input.value = bruto;
-      }
-      var dica = barra.querySelector('[data-ops-cash-hint]');
-      if (dica) dica.textContent = sombra ? 'sombra' : 'real';
-    }
-    // O resumo do cabeçalho (`ops-sum-<slot>`) mora FORA de `.ops-bar` --
-    // dentro do `<summary>` do cartão, um nó irmão que não desce da mesma
-    // raiz (ver `partials/operacao_resumo.html`). O id do `<select>` é
-    // `ops-exec-<slot>` (ver `operacao_slot_control.html`); o do resumo e'
-    // `ops-sum-<slot>` -- mesmo sufixo, prefixo diferente.
-    var slotId = slotDoSelectExecucao(select);
-    if (!slotId) return;
-    var resumo = document.getElementById('ops-sum-' + slotId);
-    if (!resumo) return;
-    var cash = resumo.querySelector('.ops-sum-cash');
-    if (cash) {
-      var valor = cash.getAttribute(sombra ? 'data-cash-sombra' : 'data-cash-live');
-      if (valor != null) cash.textContent = 'R$ ' + valor;
-    }
-    var hint = resumo.querySelector('.ops-sum-hint');
-    if (hint) {
-      var ok = hint.getAttribute(sombra ? 'data-ok-sombra' : 'data-ok-live');
-      if (ok != null) hint.classList.toggle('is-blocked', ok === '0');
-    }
-    // Cartões de capital (`partials/operacao_slot_live.html`): "Caixa",
-    // "Carteira" e "Patrimônio" trocam de valor junto (TODOS os que derivam
-    // do caixa, não só o primeiro -- reclamação do dono, 2026-08-23: a
-    // primeira versão desta função só cobria o card "Caixa"). "Resultado"
-    // NÃO troca -- é `machine.session_pnl`, o mesmo número nos dois modos
-    // (a máquina processa fill real e simulado do mesmo jeito), então o
-    // card nem carrega `data-cash-*`. As duas visões mostram os MESMOS
-    // cards agora (pedido do dono, 2026-08-23) -- não sobrou nenhum
-    // exclusivo de um modo pra esconder/mostrar.
-    var cartoes = document.getElementById('ops-cards-' + slotId);
-    if (!cartoes) return;
-    var valores = cartoes.querySelectorAll('.v[data-cash-live]');
-    for (var j = 0; j < valores.length; j++) {
-      var v = valores[j].getAttribute(sombra ? 'data-cash-sombra' : 'data-cash-live');
-      if (v != null) valores[j].textContent = 'R$ ' + v;
-    }
+  var arrastando = null;
+
+  function cartoesDayTrade() {
+    return Array.prototype.slice.call(
+      document.querySelectorAll('.ops-slot.ops-robot[data-ops-slot-id]')
+    );
   }
 
-  // Extrai o slot a partir do id `ops-exec-<slot>` (formato fixado em
-  // `operacao_slot_control.html`); `null` se o elemento nao seguir o padrao.
-  function slotDoSelectExecucao(sel) {
-    if (!sel.id || sel.id.indexOf('ops-exec-') !== 0) return null;
-    return sel.id.slice('ops-exec-'.length);
-  }
-
-  document.addEventListener('change', function (ev) {
-    var sel = ev.target;
-    if (!sel || !sel.matches || !sel.matches('select[name="execution_mode"]')) return;
-    sincronizaCaixaComExecucao(sel);
-    // Escolha do dono, nao so' o que a conta rodou da ultima vez: sem isto,
-    // atualizar a pagina com "Real" escolhido (mas ainda nao iniciado) volta
-    // pro default "Sombra" do servidor -- mesma queixa de 2026-08-23 ("todo
-    // recarregar de tela nao guarda o ultimo estado"), agora no select em vez
-    // do <details>. Ver `restauraExecucao`.
-    var slotId = slotDoSelectExecucao(sel);
-    if (!slotId) return;
-    var mapa = lidos(CHAVE_EXECUCAO);
-    mapa[slotId] = sel.value;
-    grava(CHAVE_EXECUCAO, mapa);
+  document.addEventListener('dragstart', function (ev) {
+    var cabo = ev.target.closest('[data-ops-drag-handle]');
+    if (!cabo) return;
+    var artigo = cabo.closest('.ops-slot.ops-robot[data-ops-slot-id]');
+    if (!artigo) return;
+    arrastando = artigo;
+    artigo.classList.add('is-dragging');
+    ev.dataTransfer.effectAllowed = 'move';
+    // `setData` vazio: alguns navegadores exigem que ALGO seja gravado para
+    // o arrasto ser aceito, mas o dado que importa e' lido do DOM no fim
+    // (`dragend`), nao daqui.
+    try { ev.dataTransfer.setData('text/plain', artigo.getAttribute('data-ops-slot-id') || ''); }
+    catch (e) {}
   });
 
-  // Reaplica a escolha salva por cima do default que o servidor renderizou
-  // (`config_anterior.execution_mode`, o modo da ULTIMA PARTIDA DE VERDADE --
-  // nao serve pra lembrar uma escolha que o dono fez e ainda nem iniciou).
-  // Roda em toda troca de `#ops-body`/refresh de fundo, entao tambem cobre a
-  // barra reaparecendo depois que o robo para.
-  function restauraExecucao() {
-    var mapa = lidos(CHAVE_EXECUCAO);
-    var selects = document.querySelectorAll('select[name="execution_mode"]');
-    for (var i = 0; i < selects.length; i++) {
-      var sel = selects[i];
-      var slotId = slotDoSelectExecucao(sel);
-      if (!slotId) continue;
-      var salvo = mapa[slotId];
-      if (salvo !== 'shadow' && salvo !== 'live') continue;   // nunca mexeu
-      if (sel.value === salvo) continue;
-      sel.value = salvo;
-      sincronizaCaixaComExecucao(sel);   // caixa/cartoes/resumo tem que seguir
+  document.addEventListener('dragover', function (ev) {
+    if (!arrastando) return;
+    var sobre = ev.target.closest('.ops-slot.ops-robot[data-ops-slot-id]');
+    if (!sobre || sobre === arrastando) return;
+    ev.preventDefault();  // obrigatorio: sem isto o navegador recusa o drop
+    var caixa = sobre.getBoundingClientRect();
+    var depoisDoMeio = (ev.clientY - caixa.top) > caixa.height / 2;
+    sobre.parentNode.insertBefore(arrastando, depoisDoMeio ? sobre.nextSibling : sobre);
+  });
+
+  document.addEventListener('dragend', function () {
+    if (!arrastando) return;
+    arrastando.classList.remove('is-dragging');
+    var ids = cartoesDayTrade().map(function (a) { return a.getAttribute('data-ops-slot-id'); });
+    arrastando = null;
+    if (window.htmx) {
+      htmx.ajax('POST', '/operacao/daytrade/reordenar', {
+        target: '#ops-body', swap: 'outerHTML',
+        values: { ordem: ids.join(',') },
+      });
     }
-  }
+  });
 
   function aplica() {
     restaura();
-    restauraExecucao();
     var forms = document.querySelectorAll('form.ops-new-robot-form');
-    for (var i = 0; i < forms.length; i++) filtraAtivos(forms[i]);
+    for (var i = 0; i < forms.length; i++) atualizaAtivos(forms[i]);
   }
 
   // `htmx:afterSwap` cobre tanto a troca do `#ops-body` inteiro quanto o

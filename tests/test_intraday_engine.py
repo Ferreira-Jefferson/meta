@@ -456,12 +456,15 @@ def test_patrimonio_zerado_para_o_backtest_e_nao_gera_trade_depois():
 
 
 # ---------- caixa insuficiente para o minimo do ativo (2026-08-23) ---------
-# MESMA regra que `live.intraday_runtime.IntradayLiveRuntime._check_capital`
-# ja aplica ao vivo -- fechando a divergencia backtest/ao vivo que motivou
-# a pergunta do dono ("se o robo tem esse mecanismo, pq no teste ele so nao
-# usa?"). Desligado por padrao (`enforce_capital_minimo=False` no dataclass)
-# para nao quebrar testes com capital sintetico pequeno de proposito;
-# `config_for` liga por padrao para todo backtest real.
+# Ate 2026-08-24 era a MESMA regra que o gate diario de
+# `live.intraday_runtime.IntradayLiveRuntime._check_capital` aplicava ao
+# vivo. O dono pediu para o 2x so' valer na ENTRADA (`live_control.start`);
+# o gate diario ao vivo caiu para 1x o lote, mas este flag de backtest
+# continua em 2x -- dimensiona a calibracao, nao decide se um robo ja
+# rodando pode continuar. Desligado por padrao (`enforce_capital_minimo=
+# False` no dataclass) para nao quebrar testes com capital sintetico
+# pequeno de proposito; `config_for` liga por padrao para todo backtest
+# real.
 
 def test_enforce_capital_minimo_desligado_e_o_default_e_nao_muda_nada():
     bars = _mk_bars("2026-01-05", [

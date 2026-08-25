@@ -17,6 +17,7 @@ from live.clock import (
     b3_holidays,
     easter,
     in_active_window,
+    intraday_session,
     is_half_day,
     is_trading_day,
     next_session,
@@ -290,6 +291,22 @@ def test_session_date_no_sabado_e_a_sexta_anterior() -> None:
     assert is_trading_day(sexta) is True
     now = datetime.combine(sabado, time(12, 0))
     assert session_date(now) == sexta
+
+
+# ---------- intraday_session: dia trade precisa de HOJE, nunca do pregao
+# anterior (ver docstring — `session_date()` durante o continuo aponta pro
+# ultimo pregao encerrado, pensado pro swing; achado ao vivo em
+# 2026-08-24 jornalizando toda operacao do dia com a data de sexta-feira).
+
+def test_intraday_session_durante_pregao_aberto_e_hoje() -> None:
+    now = datetime.combine(_NORMAL_DAY, time(11, 0))
+    assert intraday_session(now) == _NORMAL_DAY
+    assert intraday_session(now) != session_date(now)
+
+
+def test_intraday_session_apos_fechamento_ainda_e_hoje() -> None:
+    now = datetime.combine(_NORMAL_DAY, time(19, 0))
+    assert intraday_session(now) == _NORMAL_DAY
 
 
 # ---------- previous_session / next_session, atravessando feriado + fds -

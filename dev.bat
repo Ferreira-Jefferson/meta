@@ -1,6 +1,6 @@
 @echo off
 REM Sobe o dashboard META em modo dev, auto-bootstrap.
-REM Uso (PowerShell ou cmd): .\dev.bat
+REM Uso (PowerShell ou cmd): .\dev.bat [--kill-robots] [--help]
 REM
 REM O que faz sozinho, na ordem, sempre idempotente:
 REM   1. Cria .venv se faltar (usa `python` do sistema)
@@ -9,9 +9,27 @@ REM   3. Inicializa db/journal.sqlite se ausente
 REM   4. Baixa historico de mercado se data/raw/ vazio
 REM   5. Sobe uvicorn com hot-reload em http://127.0.0.1:8000
 REM   Ctrl+C encerra uvicorn e todos os workers do reloader
+REM
+REM --kill-robots: flag OPT-IN. Por padrao, os robos (`run_live.py loop` dos
+REM slots de swing/day trade) sao processos INDEPENDENTES do dashboard --
+REM `dashboard/live_control.py::start()` os sobe de proposito pra sobreviver
+REM ao dashboard fechar, pra reiniciar o servidor de dev (o que acontece toda
+REM hora, editando codigo) nao parar uma operacao real/sombra em andamento.
+REM So passe esta flag quando VOCE quer matar os robos tambem ao encerrar --
+REM tipico de sessao de ajuste no proprio feed/robo, onde ficar reiniciando
+REM manualmente (ou pedindo pra matar por fora) so' pra testar e' ruido.
+REM
+REM --help / -h / /?: so mostra este resumo e sai, sem bootstrap nenhum.
 
 setlocal EnableExtensions EnableDelayedExpansion
 cd /d "%~dp0"
+
+if /i "%~1"=="--help" goto show_help
+if /i "%~1"=="-h" goto show_help
+if "%~1"=="/?" goto show_help
+
+set "KILL_ROBOTS=0"
+if /i "%~1"=="--kill-robots" set "KILL_ROBOTS=1"
 
 set "VENV=%~dp0.venv"
 set "PY=%VENV%\Scripts\python.exe"
@@ -61,6 +79,18 @@ echo ==^> Hot-reload ativo: edicoes em src/ recarregam automaticamente
 
 "%PY%" -m uvicorn --app-dir src dashboard.app:app --reload --host 127.0.0.1 --port 8000
 
+REM --kill-robots: mata TODO processo run_live.py, rastreado ou orfao (o
+REM bug de double-Popen documentado em live_control.py::start() deixa
+REM duplicados que nao aparecem em db/live_process.json). Casa pela LINHA
+REM DE COMANDO, nao pelo nome do processo -- "python.exe" pegaria qualquer
+REM python do usuario, inclusive este shell/venv. So roda se a flag foi
+REM passada (ver topo do arquivo): sem ela, robo sobrevive ao dashboard
+REM fechar, que e' o comportamento padrao.
+if "%KILL_ROBOTS%"=="1" (
+    echo ==^> --kill-robots: encerrando processos run_live.py ^(rastreados e orfaos^)...
+    powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'run_live\.py' } | ForEach-Object { Write-Host ('  matando PID ' + $_.ProcessId); Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+)
+
 REM Ao voltar (Ctrl+C ou saida normal), garante que nada ficou orfao na porta 8000.
 REM Uvicorn --reload cria master + filho spawn: quando o master morre, o filho
 REM herda o socket. Precisamos matar em loop ate a porta liberar (o `netstat`
@@ -80,3 +110,25 @@ goto cleanup_loop
 :cleanup_done
 echo ==^> Encerrado.
 endlocal
+goto :eof
+
+:show_help
+echo Uso: .\dev.bat [--kill-robots] [--help]
+echo.
+echo Sobe o dashboard META em modo dev (auto-bootstrap: venv, deps, banco,
+echo dados de mercado) e o uvicorn com hot-reload em http://127.0.0.1:8000.
+echo Ctrl+C encerra o uvicorn e os workers do reloader.
+echo.
+echo   --kill-robots   Ao encerrar (Ctrl+C), tambem mata TODO processo
+echo                    run_live.py (robos de swing/day trade), rastreado
+echo                    ou orfao. Sem esta flag (padrao), os robos NAO sao
+echo                    afetados -- eles sao processos independentes do
+echo                    dashboard de proposito (ver live_control.py::start()),
+echo                    pra reiniciar o servidor de dev nao parar uma
+echo                    operacao real/sombra em andamento. So use esta flag
+echo                    numa sessao de ajuste no proprio feed/robo, onde
+echo                    voce QUER derrubar tudo junto pra testar de novo.
+echo.
+echo   --help, -h, /?  Mostra esta ajuda e sai.
+endlocal
+exit /b 0

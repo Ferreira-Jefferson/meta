@@ -30,10 +30,11 @@ from dashboard import live_control
 from journal import live_store
 from live import runtime as live_runtime
 
-# Slot de day trade DINAMICO (`dt-<robo>-<ativo>`), o formato desde
-# 2026-08-22: nao existe mais um slot fixo chamado "daytrade" em
-# `core.config.SLOTS` -- o painel abre quantos o dono quiser, um por ativo.
-DAYTRADE = "dt-gremah-pmam3"
+# Slot de day trade DINAMICO (`dt-<robo>-<ativo>-<modo>`, modo fixo no id
+# desde 2026-08-24): nao existe mais um slot fixo chamado "daytrade" em
+# `core.config.SLOTS` -- o painel abre quantos o dono quiser, um por ativo
+# (e ate dois por ativo, sombra e real, cada um com seu processo/conta).
+DAYTRADE = "dt-gremah-pmam3-shadow"
 
 
 class _FakeProc:
@@ -528,6 +529,72 @@ def test_write_state_de_um_slot_preserva_o_outro(isolated):
     assert live_control._read_state(DAYTRADE) is None
 
 
+def test_write_state_escreve_via_arquivo_temporario_atomico(isolated):
+    """`_write_state` nunca deve deixar o arquivo final pela metade — troca
+    via `Path.replace` a partir de um `.tmp` (achado 2026-08-24: um leitor
+    concorrente pegando o arquivo torto via `write_text` direto via
+    `_read_all` como vazio, e uma escrita seguinte baseada nisso apagava
+    TODOS os outros slots sem que ninguém tivesse chamado
+    `_write_state(slot, None)` para eles)."""
+    live_control._write_state("swing", {"pid": 1, "started_at": None, "config": {}})
+
+    tmp_path = live_control._STATE_PATH.with_suffix(
+        f"{live_control._STATE_PATH.suffix}.tmp"
+    )
+    assert not tmp_path.exists()  # o temporário nunca sobra depois da troca
+    assert live_control._read_state("swing")["pid"] == 1
+
+
+def _falha_tasklist(*a, **k):
+    raise TimeoutError("tasklist não respondeu (simulado)")
+
+
+def test_tasklist_indisponivel_nao_derruba_status_de_ninguem(isolated, monkeypatch):
+    """Achado ao vivo 2026-08-24: um `tasklist` que falha por engasgo
+    passageiro do Windows NÃO prova que os processos morreram, mas
+    `status_all()` tratava a falha como "conjunto vazio" == "todo mundo
+    morreu ao mesmo tempo", e reescrevia `db/live_process.json` zerando
+    `pid`/`started_at` de TODOS os slots numa penada só (PMAM3 e PMAM3-tick
+    caíram juntos no painel no mesmo poll, com os processos reais
+    continuando vivos por fora). `status()`/`status_all()` têm de devolver o
+    estado GRAVADO sem autocorrigir quando a vivacidade é indeterminada."""
+    live_control._write_state("swing", {"pid": 111, "started_at": "t0", "config": {}})
+    live_control._write_state(DAYTRADE, {"pid": 222, "started_at": "t0", "config": {}})
+    monkeypatch.setattr(live_control.subprocess, "run", _falha_tasklist)
+
+    assert live_control.status("swing")["pid"] == 111
+    assert live_control.status(DAYTRADE)["pid"] == 222
+
+    todos = live_control.status_all(["swing", DAYTRADE])
+    assert todos["swing"]["pid"] == 111
+    assert todos[DAYTRADE]["pid"] == 222
+
+    # nada foi reescrito no arquivo por causa da falha indeterminada
+    assert live_control._read_state("swing")["pid"] == 111
+    assert live_control._read_state(DAYTRADE)["pid"] == 222
+
+
+def test_stop_com_tasklist_indisponivel_ainda_tenta_matar(isolated, monkeypatch):
+    """"Parar" é um pedido de MATAR, não "matar só se eu confirmar que está
+    vivo" -- se a vivacidade é indeterminada, `stop()` tem de tentar o
+    `taskkill` mesmo assim (inofensivo contra um PID já morto) em vez de
+    arriscar marcar "parado" no arquivo um processo que continua vivo."""
+    live_control._write_state("swing", {"pid": 333, "started_at": "t0", "config": {}})
+    chamadas: list = []
+
+    def _run(argv, **kwargs):
+        chamadas.append(argv)
+        if argv[0] == "tasklist":
+            raise TimeoutError("tasklist não respondeu (simulado)")
+        return None
+
+    monkeypatch.setattr(live_control.subprocess, "run", _run)
+
+    assert live_control.stop("swing") is True
+    assert any(argv[0] == "taskkill" for argv in chamadas)
+    assert live_control._read_state("swing")["pid"] is None
+
+
 def test_start_concorrente_no_mesmo_slot_apenas_um_vence(isolated, monkeypatch):
     """Correção pós-code-review (crítico nº2): duas chamadas a `start()`
     quase simultâneas (dois cliques em "Iniciar" processados em threads
@@ -611,22 +678,69 @@ def test_assert_slots_disjuntos_recusa_magic_repetido(isolated, monkeypatch):
         live_control._assert_slots_disjuntos(gemeos[0], "x")
 
 
-def test_assert_slots_disjuntos_recusa_simbolo_repetido(isolated, monkeypatch):
+def test_assert_slots_disjuntos_recusa_simbolo_repetido_quando_outro_esta_live(
+    isolated, monkeypatch,
+):
     """Conta NETTING: duas posições no mesmo símbolo se FUNDEM numa só,
     independente de `magic` — e os dois livros-caixa passam a mentir.
 
     Símbolo não é mais campo do slot (removido 2026-08-21) — vem do robô
     ESCOLHIDO. Dois slots intraday resolvendo o MESMO robô (`gremah`, sem
     conta ainda em nenhum dos dois — cai no default do catálogo) colidem no
-    símbolo dele (PMAM3), que é o cenário que este teste cobre."""
+    símbolo dele (PMAM3), que é o cenário que este teste cobre.
+
+    Mode-aware (2026-08-24): o risco só existe com ORDEM REAL concorrente —
+    aqui o "outro" slot ('b') está com um processo de pé em `execution_mode
+    ="live"`, então subir 'a' também em live tem de ser recusado."""
+    from core import config as core_config
+
+    gemeos = (_slot(id="a", kind="intraday", robot_key="gremah", magic=1),
+              _slot(id="b", kind="intraday", robot_key="gremah", magic=2, order=1))
+    monkeypatch.setattr(core_config, "SLOTS", gemeos)
+    monkeypatch.setattr(live_control, "_pid_alive", lambda pid: True)
+    live_control._write_state(
+        "b", {"pid": 1, "started_at": "2026-08-24T00:00:00+00:00",
+              "config": {"execution_mode": "live"}},
+    )
+
+    with pytest.raises(RuntimeError, match="mesmo\\(s\\) símbolo"):
+        live_control._assert_slots_disjuntos(gemeos[0], "gremah", "live")
+
+
+def test_assert_slots_disjuntos_permite_simbolo_repetido_se_outro_e_sombra(
+    isolated, monkeypatch,
+):
+    """Mode-aware (2026-08-24, pedido do dono): sombra nunca manda ordem pra
+    corretora, então dois robôs no mesmo símbolo só colidem de verdade quando
+    os DOIS estão em modo live ao mesmo tempo. Aqui 'b' está rodando, mas em
+    sombra -- subir 'a' em live não pode ser bloqueado."""
+    from core import config as core_config
+
+    gemeos = (_slot(id="a", kind="intraday", robot_key="gremah", magic=1),
+              _slot(id="b", kind="intraday", robot_key="gremah", magic=2, order=1))
+    monkeypatch.setattr(core_config, "SLOTS", gemeos)
+    monkeypatch.setattr(live_control, "_pid_alive", lambda pid: True)
+    live_control._write_state(
+        "b", {"pid": 1, "started_at": "2026-08-24T00:00:00+00:00",
+              "config": {"execution_mode": "shadow"}},
+    )
+
+    live_control._assert_slots_disjuntos(gemeos[0], "gremah", "live")  # não levanta
+
+
+def test_assert_slots_disjuntos_permite_simbolo_repetido_se_outro_nao_roda(
+    isolated, monkeypatch,
+):
+    """Idem, mas com 'b' sem processo nenhum de pé: só ter o CARTÃO criado no
+    mesmo ativo (nunca clicou Iniciar) não é risco nenhum -- nenhuma ordem
+    sai enquanto não houver processo vivo do outro lado."""
     from core import config as core_config
 
     gemeos = (_slot(id="a", kind="intraday", robot_key="gremah", magic=1),
               _slot(id="b", kind="intraday", robot_key="gremah", magic=2, order=1))
     monkeypatch.setattr(core_config, "SLOTS", gemeos)
 
-    with pytest.raises(RuntimeError, match="mesmo\\(s\\) símbolo"):
-        live_control._assert_slots_disjuntos(gemeos[0], "gremah")
+    live_control._assert_slots_disjuntos(gemeos[0], "gremah", "live")  # não levanta
 
 
 def test_catalogo_oficial_de_slots_e_disjunto(isolated):

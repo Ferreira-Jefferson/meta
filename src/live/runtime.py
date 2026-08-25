@@ -1475,7 +1475,7 @@ class LiveRuntime:
             passos.append(StepReport("idle", clock.session_date(now), phase=fase))
         return passos
 
-    def status(self, eventos_limit: int = 10) -> dict:
+    def status(self, full: bool = False, limit: int = 1000) -> dict:
         """Retrato da conta para o dashboard e para a linha de comando.
 
         Checa a EXISTENCIA da conta antes de carregar qualquer dado: sem
@@ -1483,9 +1483,16 @@ class LiveRuntime:
         (`_load`) so para descobrir isso e caro — pago por engano em todo
         poll de uma pagina que ainda mostraria "nao configurado".
 
-        `eventos_limit` e' o "ver mais" do painel. Busca UM a mais do que vai
-        exibir: e' assim que a tela sabe se ainda ha historico atras sem
-        precisar de um `COUNT(*)` numa tabela que so cresce.
+        Eventos: por padrao so o pregao ATUAL (`day=session.isoformat()`),
+        nunca paginado -- o console tem scroll proprio (`.console` em
+        pages.css), entao nao ha "ver mais" para o dono clicar nem risco de
+        acumular historico de dias antigos no cartao. `full=True` (botao
+        "Diario Completo" do painel) troca isso por TODO o historico da
+        conta (`day=None`) -- ai' `limit` vira a PRIMEIRA pagina do scroll
+        infinito (`app.py::OPS_EVENTOS_PAGINA_INICIAL`), nao mais um teto de
+        seguranca de 1000: sob pedido do dono, o clique carrega pouco e
+        rapido, e o restante do historico vem sob demanda conforme rola
+        (`app.py::operacao_eventos_mais_antigos`).
         """
         session = clock.session_date()
         with store.live_journal(self.db_path) as conn:
@@ -1512,7 +1519,8 @@ class LiveRuntime:
             pend = [i for i in store.pending_intents(conn, account.id, clock.next_session(session))
                     if i.kind != IntentKind.WITHDRAW]
             pend_saque = store.pending_withdraw_intents(conn, account.id)
-            eventos = store.recent_events(conn, account.id, limit=eventos_limit + 1)
+            eventos = store.recent_events(conn, account.id, limit=limit,
+                                          day=None if full else session.isoformat())
 
             # Todos os pregoes sem decisao (achado E4) — nao so `session`: um
             # pregao pulado (skip por dado incompleto, processo fora do ar)
@@ -1562,6 +1570,6 @@ class LiveRuntime:
                  "motivo": i.reason, "valor": i.amount, "executa_em": i.execute_on.isoformat()}
                 for i in (pend + pend_saque)
             ],
-            "eventos": eventos[:eventos_limit],
-            "eventos_ha_mais": len(eventos) > eventos_limit,
+            "eventos": eventos,
+            "eventos_full": full,
         }

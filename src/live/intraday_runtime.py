@@ -95,6 +95,7 @@ from backtest.intraday.machine import (
     PositionClosed,
     PositionOpened,
 )
+from core import b3_session
 from core.config import LIVE_DB_PATH, Slot
 from core.live_models import (
     AccountState,
@@ -120,7 +121,6 @@ from strategy.daytrade.base import (
     Bar,
     EnterLimit,
     barra_diaria,
-    capital_minimo_brl,
     mediana_negocio_diario,
     warm_start_calibration,
 )
@@ -186,6 +186,20 @@ class _SessionSnapshot:
     # `_on_limit_placed`).
     ordens_postas: int = 0
     ordens_abandonadas: int = 0
+    # Numero de RODADA (posicionada -> [top-up(s)] -> saida) para o diario poder
+    # ser lido como historico de UMA ordem, e nao uma sopa de linhas soltas
+    # (pedido do dono, 2026-08-24, depois de perguntar 3x "quem disparou
+    # essas ordens?" so' lendo o log). `trade_seq` so' AVANCA (nunca volta
+    # dentro do mesmo pregao); `trade_num` e' o numero EM USO agora --
+    # atribuido na 1a `LimitPlaced` de uma rodada nova (`evento.replaced is
+    # None`) e mantido pelas re-ancoragens da MESMA rodada (`replaced` aponta
+    # pra' ordem anterior -- ainda a mesma tentativa de entrada). Limpo
+    # (`None`) so' quando a posicao fecha de vez (`_on_closed`, nao a
+    # parcial), para a PROXIMA rodada pegar numero novo. Persistido (mesmo
+    # padrao de `ordens_postas`) para sobreviver a um restart no meio do
+    # pregao sem repetir um numero ja usado.
+    trade_seq: int = 0
+    trade_num: Optional[int] = None
     machine: dict = None  # `IntradaySessionMachine.state()`
     # Tickets REAIS (`Order.broker_ref`) da(s) ordem-limite de ENTRADA que
     # `resting_limit`/`_resting_children_qty` da maquina vigiam AGORA --
@@ -215,6 +229,8 @@ class _SessionSnapshot:
             "trades": self.trades,
             "ordens_postas": self.ordens_postas,
             "ordens_abandonadas": self.ordens_abandonadas,
+            "trade_seq": self.trade_seq,
+            "trade_num": self.trade_num,
             "machine": self.machine or {},
             "pending_entry_refs": list(self.pending_entry_refs or []),
         }
@@ -233,6 +249,8 @@ class _SessionSnapshot:
             trades=int(raw.get("trades") or 0),
             ordens_postas=int(raw.get("ordens_postas") or 0),
             ordens_abandonadas=int(raw.get("ordens_abandonadas") or 0),
+            trade_seq=int(raw.get("trade_seq") or 0),
+            trade_num=(int(raw["trade_num"]) if raw.get("trade_num") is not None else None),
             machine=raw.get("machine") or {},
             pending_entry_refs=list(raw.get("pending_entry_refs") or []),
         )
@@ -339,6 +357,174 @@ class IntradayLiveRuntime:
         # `live_capital_signals`); este campo so evita reavaliar a regra e
         # reler parquet a cada barra.
         self._signal_checked_for: Optional[date] = None
+
+    def _numero_ordem_atual(self) -> int:
+        """Numero de rodada em uso agora -- ver o campo `trade_num` em
+        `_SessionSnapshot`. So' atribui um numero NOVO aqui de propósito
+        (fallback): o caminho normal e' `_on_limit_placed` atribuir na
+        arma; isto so' cobre a semente do warm start, que planta a ordem
+        direto em `resting_limit` sem passar por `LimitPlaced` (ver a
+        docstring de `_start_session`), entao pode preencher sem NUNCA ter
+        passado por la'."""
+        if self._snapshot.trade_num is None:
+            self._snapshot.trade_seq += 1
+            self._snapshot.trade_num = self._snapshot.trade_seq
+        return self._snapshot.trade_num
+
+    @staticmethod
+    def _bracket_txt(stop: Optional[float], target: Optional[float]) -> str:
+        """" (stop X / alvo Y)" pra' colar na entrada -- pedido do dono
+        (2026-08-24): saber JA' NA ENTRADA em que preco ela seria estopada,
+        sem esperar a saida pra' descobrir. `None` num dos dois (robo sem
+        alvo, por exemplo) so' omite aquela metade; os dois `None` omite o
+        parentese inteiro."""
+        partes = []
+        if stop is not None:
+            partes.append(f"stop {stop:.4f}")
+        if target is not None:
+            partes.append(f"alvo {target:.4f}")
+        return f" ({' / '.join(partes)})" if partes else ""
+
+    @staticmethod
+    def _resultado_dia_e_acumulado(saidas: list[dict], hoje: str, capital_inicial: float) -> dict:
+        """Ganhos/perdas e retorno/DD do dia e desde o início da conta, a
+        partir do histórico de saídas de `store.daytrade_exit_events`
+        (`_on_closed`/`_on_closed_partial`) -- pedido do dono, 2026-08-24
+        (painel de `/operacao` "com informação repetida e pouco valor").
+
+        "Ret./DD" aqui é RETORNO simples (pnl / capital inicial), não
+        anualizado: já vimos essa distorção em janela curta (ver memória
+        `feedback_cagr_short_window`) e um robô de um símbolo só, rodando há
+        dias ou semanas, é sempre janela curta. DD é o pico-a-vale da curva
+        de pnl ACUMULADO (soma de todas as saídas, uma fatia dividida conta
+        cada pedaço -- o total bate igual), não uma curva de equity com
+        marcação a mercado (o robô normalmente flatten no fim do pregão,
+        então realizado é o que importa).
+
+        `capital_inicial` é `account.initial_capital`, DECLARADO na criação
+        da conta e nunca mais tocado -- tentei somar toda correção manual de
+        caixa como se fosse aporte (2026-08-24), mas o dono apontou o furo:
+        ele também usa o campo "Caixa" pra CORRIGIR/realocar, não só pra
+        aportar, então cada correção sujaria o denominador do retorno. Sem
+        forma confiável de distinguir aporte de correção sem pedir a
+        intenção na hora (fora de escopo por ora), voltar ao valor fixo é
+        mais HONESTO: puxa o resultado de uma conta com `initial_capital`
+        desatualizado, mas não inventa precisão que os dados não têm.
+
+        Acerto por lado é por RODADA (`date`, `round`), não por linha: uma
+        saída dividida em fatias não pode virar 2 "trades" no cômputo de
+        vitória/derrota -- soma-se o pnl das fatias da mesma rodada primeiro,
+        só então classifica ganho/perda pelo total."""
+        rodadas: dict[tuple[str, int], dict] = {}
+        for s in saidas:
+            chave = (s["date"], s["round"])
+            r = rodadas.setdefault(chave, {"pnl": 0.0, "side": None})
+            r["pnl"] += s["pnl_brl"]
+            if s["side"]:
+                r["side"] = s["side"]
+
+        ganhos_dia = sum(s["pnl_brl"] for s in saidas if s["date"] == hoje and s["pnl_brl"] > 0)
+        perdas_dia = -sum(s["pnl_brl"] for s in saidas if s["date"] == hoje and s["pnl_brl"] < 0)
+        lucro_acumulado = sum(s["pnl_brl"] for s in saidas if s["pnl_brl"] > 0)
+        prejuizo_acumulado = -sum(s["pnl_brl"] for s in saidas if s["pnl_brl"] < 0)
+
+        cum = cum_dia = pico = pico_dia = 0.0
+        dd = dd_dia = 0.0
+        for s in saidas:
+            cum += s["pnl_brl"]
+            pico = max(pico, cum)
+            dd = min(dd, cum - pico)
+            if s["date"] == hoje:
+                cum_dia += s["pnl_brl"]
+                pico_dia = max(pico_dia, cum_dia)
+                dd_dia = min(dd_dia, cum_dia - pico_dia)
+
+        base = capital_inicial or 1.0
+        acerto_por_lado = {}
+        for lado in ("long", "short"):
+            rodadas_lado = [r for r in rodadas.values() if r["side"] == lado]
+            acerto_por_lado[lado] = (
+                round(100 * sum(1 for r in rodadas_lado if r["pnl"] > 0) / len(rodadas_lado))
+                if rodadas_lado else None
+            )
+
+        fator_dia_label, fator_dia_valor = IntradayLiveRuntime._fator_lucro_prejuizo(ganhos_dia, perdas_dia)
+        fator_acum_label, fator_acum_valor = IntradayLiveRuntime._fator_lucro_prejuizo(
+            lucro_acumulado, prejuizo_acumulado
+        )
+
+        return {
+            # Nome mantido `aportes_totais` no dict (não `capital_inicial`)
+            # porque o card "Caixa" do painel usa esta chave pra' mostrar
+            # "quanto entrou vs quanto veio de retorno" -- o VALOR agora é
+            # só `account.initial_capital`, sem soma de correções.
+            "aportes_totais": round(capital_inicial, 2),
+            "ganhos_dia": round(ganhos_dia, 2),
+            "perdas_dia": round(perdas_dia, 2),
+            "retorno_dia_pct": round(100 * cum_dia / base, 2),
+            "dd_dia_pct": round(100 * dd_dia / base, 2),
+            "fator_dia_label": fator_dia_label,
+            "fator_dia_valor": fator_dia_valor,
+            "lucro_acumulado": round(lucro_acumulado, 2),
+            "prejuizo_acumulado": round(prejuizo_acumulado, 2),
+            "retorno_acumulado_pct": round(100 * cum / base, 2),
+            "dd_acumulado_pct": round(100 * dd / base, 2),
+            "fator_acumulado_label": fator_acum_label,
+            "fator_acumulado_valor": fator_acum_valor,
+            "acerto_compra_pct": acerto_por_lado["long"],
+            "acerto_venda_pct": acerto_por_lado["short"],
+        }
+
+    @staticmethod
+    def _fator_lucro_prejuizo(lucro: float, prejuizo: float) -> tuple[str, float | None]:
+        """Card que substituiu "Ret./DD" (pedido do dono, 2026-08-25): não é
+        retorno sobre capital, é o LADO QUE DOMINA dividido pelo outro lado
+        -- lucro/prejuízo quando o lado vencedor é o lucro, invertido quando é
+        o prejuízo, pra o número sair sempre >= 1 e o rótulo dizer quem
+        venceu. `None` significa "o outro lado é zero" -- infinito de
+        verdade, exibido como "∞" pelo template, não um retorno percentual
+        (ex.: lucro R$5,92, prejuízo R$0 não é "592%", é lucro puro sem
+        nenhuma perda pra dividir)."""
+        if lucro == 0 and prejuizo == 0:
+            return "Fator de lucro", 0.0
+        if lucro >= prejuizo:
+            return "Fator de lucro", round(lucro / prejuizo, 2) if prejuizo > 0 else None
+        return "Fator de prejuízo", round(prejuizo / lucro, 2) if lucro > 0 else None
+
+    @staticmethod
+    def _ordens_por_lado(ordens_hoje: list[dict]) -> dict:
+        """Compra/venda e preenchida/cancelada de hoje, por lado -- fonte do
+        card "Ordens posicionadas" (pedido do dono, 2026-08-24). `None` na
+        taxa de preenchimento de um lado = nenhuma ordem daquele lado teve
+        desfecho hoje ainda (só tem posta pendente, ou nenhuma ordem).
+
+        `valor_ordens_compra`/`valor_ordens_venda` somam o NOCIONAL
+        (quantidade x preço) das ordens ARMADAS de cada lado -- é o número
+        que o painel mostra como valor principal do card, com a CONTAGEM
+        (`ordens_compra`/`ordens_venda`) virando texto secundário (pedido do
+        dono, 2026-08-24: "deve aparecer os valores, e as quantidades
+        abaixo"). Mesma população da contagem (armadas, não preenchidas),
+        pra o número grande e o texto pequeno descreverem a mesma coisa."""
+        contagem = {lado: {"armada": 0, "preenchida": 0, "cancelada": 0} for lado in ("long", "short")}
+        valor_armada = {"long": 0.0, "short": 0.0}
+        for o in ordens_hoje:
+            lado = o["side"]
+            if lado not in contagem:
+                continue
+            contagem[lado][o["kind"]] += 1
+            if o["kind"] == "armada" and o.get("quantity") is not None and o.get("price") is not None:
+                valor_armada[lado] += o["quantity"] * o["price"]
+
+        resultado = {
+            "ordens_compra": contagem["long"]["armada"], "ordens_venda": contagem["short"]["armada"],
+            "valor_ordens_compra": round(valor_armada["long"], 2),
+            "valor_ordens_venda": round(valor_armada["short"], 2),
+        }
+        for lado, chave in (("long", "preenchida_compra_pct"), ("short", "preenchida_venda_pct")):
+            desfechos = contagem[lado]["preenchida"] + contagem[lado]["cancelada"]
+            resultado[chave] = (round(100 * contagem[lado]["preenchida"] / desfechos)
+                                if desfechos else None)
+        return resultado
 
     # ---------- log + alerta (mesma regra do lado diario) -----------------
 
@@ -475,9 +661,10 @@ class IntradayLiveRuntime:
         """Mesmo espirito/janela de `_seed_daily_volatility` acima, so' que
         para o teto de CAPACIDADE de caixa (`strategy.daytrade.base.
         JanelaNegocioTipicoDiaria`) em vez do alvo por volatilidade -- so'
-        um robo com esse teto (`GremahTick`, 2026-08-24) usa isto; os
-        outros recebem uma lista que nunca consultam (default no-op na
-        base). Reusa `_CAUDA_VOL_DIAS` sessoes de folga (generoso sobre o
+        um robo com esse teto (`GremahTick` desde 2026-08-24, `Gremah`
+        tambem desde 2026-08-24) usa isto; os outros recebem uma lista que
+        nunca consultam (default no-op na base). Reusa `_CAUDA_VOL_DIAS`
+        sessoes de folga (generoso sobre o
         default `janela_dias=1` do robo) e o mesmo feed ja' buscado por
         `_seed_daily_volatility` -- so' agrega diferente (mediana de
         evento, nao OHLCV)."""
@@ -524,7 +711,7 @@ class IntradayLiveRuntime:
                 # registrar a ordem. Registrar aqui e' o que fecha esse buraco.
                 if self.executor is not None and isinstance(pending, EnterLimit):
                     if self._snapshot.pending_entry_refs:
-                        # Restart no meio do pregao com uma ordem ja' armada:
+                        # Restart no meio do pregao com uma ordem ja' posicionada:
                         # `warm_start_calibration` acabou de RECALCULAR a
                         # decisao do zero a partir do dado real, mas o(s)
                         # ticket(s) que o processo ANTERIOR mandou pra
@@ -564,9 +751,8 @@ class IntradayLiveRuntime:
                     marco = max(marco, self._snapshot.last_bar_ts)
                 self._snapshot.last_bar_ts = marco
                 self._log(conn, account.id, "info",
-                          f"sessao {session.isoformat()} calibrada com {len(seed_bars)} barra(s) "
-                          "reais desde a abertura (warm start, nenhum trade fabricado); "
-                          f"ordem em pe apos a calibracao: {'sim' if pending else 'nao'}",
+                          f"{session.isoformat()}: warm start, {len(seed_bars)} barra(s), "
+                          f"ordem {'posicionada' if pending else 'nenhuma'}",
                           {"barras": len(seed_bars), "modo": modo})
         if modo == "cold":
             self.machine.begin_session(session)
@@ -580,9 +766,7 @@ class IntradayLiveRuntime:
                 if ja_fechadas:
                     self._snapshot.last_bar_ts = ja_fechadas[-1].ts
             self._log(conn, account.id, "info",
-                      f"sessao {session.isoformat()} iniciada a frio (sem warm start) — "
-                      "o robo opera com ancora recalculada do preco atual a partir da "
-                      "proxima barra fechada.",
+                      f"{session.isoformat()}: sessao a frio, ancora rolante",
                       {"modo": modo})
 
         if restaurada:
@@ -600,7 +784,7 @@ class IntradayLiveRuntime:
         quando ha barra M1 nova FECHADA dentro de um pregao aberto."""
         now = now or datetime.now(timezone.utc)
         fase = clock.phase(now)
-        hoje = clock.session_date(now)
+        hoje = clock.intraday_session(now)
         passos: list[StepReport] = []
 
         if not clock.is_trading_day(hoje) or fase not in (SessionPhase.OPEN, SessionPhase.CLOSING_AUCTION):
@@ -704,19 +888,23 @@ class IntradayLiveRuntime:
         """O caixa deste slot cobre o lote de hoje? Devolve o motivo, ou
         `None` se cobre.
 
-        O minimo e' `strategy.daytrade.base.capital_minimo_brl` — 2x o custo de
-        1 lote no preco de HOJE. Nao e' regra inventada aqui (AGENTS.md #6
-        proibiria): `live/` so consulta a funcao que a familia intradiaria
-        declara, a MESMA que a ficha do robo exibe e que dimensionou o capital
-        de todo backtest da tabela de calibracao.
+        O minimo aqui e' o custo de 1 lote no preco de HOJE (`preco x
+        default_quantity`) -- NAO o piso de `strategy.daytrade.base.
+        capital_minimo_brl` (2x o lote), que e' a barreira de ENTRADA
+        (`live_control.start()`/`operacao_iniciar`), verificada uma unica vez
+        para deixar o robo subir. Depois de subir, o robo so precisa
+        conseguir COMPRAR o lote de hoje -- exigir 2x de novo, todo pregao,
+        barrava o robo em qualquer dia em que o preco subisse o bastante para
+        o caixa sobrando nao cobrir mais a folga (pedido do dono, 2026-08-24:
+        "a regra do caixa minimo pra operar deve ser aplicado somente para
+        iniciar a operacao").
 
         Uma vez por PREGAO, nao a cada barra: o numero so muda quando o preco
         de referencia do dia muda, e reavaliar a cada minuto sujaria o diario
         com o mesmo evento centenas de vezes. Mas tambem nao da' para decidir
-        uma vez e congelar — CSAN3 saiu de R$7,62 para R$3,64 em 11 meses
-        (minimo de R$1.524 para R$728), e PMAM3 caiu 90%: um piso congelado
-        estaria errado nos dois sentidos, ora barrando um robo que cabe, ora
-        liberando um que nao cabe mais.
+        uma vez e congelar — CSAN3 saiu de R$7,62 para R$3,64 em 11 meses, e
+        PMAM3 caiu 90%: um piso congelado estaria errado nos dois sentidos,
+        ora barrando um robo que cabe, ora liberando um que nao cabe mais.
 
         Quem chama decide o que fazer com o alarme. A politica em `run_once`
         e': sem posicao aberta, nao comeca o pregao; COM posicao aberta (o
@@ -734,7 +922,7 @@ class IntradayLiveRuntime:
         if self._capital_checked_for == session:
             return self._capital_alarm
 
-        minimo = capital_minimo_brl(preco, self.config.default_quantity)
+        minimo = preco * self.config.default_quantity
         self._capital_checked_for = session
         self._capital_minimo_hoje = minimo
         saldo = account.cash_for(self.execution_mode)
@@ -744,10 +932,8 @@ class IntradayLiveRuntime:
             return None
 
         self._capital_alarm = (
-            f"caixa de R$ {saldo:.2f} nao cobre o minimo de R$ {minimo:.2f} "
-            f"para operar {self.strategy.symbol} hoje ({self.config.default_quantity} "
-            f"acoes a R$ {preco:.4f} = R$ {preco * self.config.default_quantity:.2f} "
-            f"por lote, e o piso e' o dobro do lote)"
+            f"caixa R$ {saldo:.2f} nao cobre o minimo de R$ {minimo:.2f} "
+            f"({self.strategy.symbol})"
         )
         self._log(conn, account.id, "error",
                   f"nao vou operar: {self._capital_alarm}",
@@ -845,12 +1031,10 @@ class IntradayLiveRuntime:
                 fechados.append(evento)
             self._apply(conn, account, evento, ultima)
         self._log(conn, account.id, "error",
-                  f"buraco de {parado_ha / 60.0:.0f} minuto(s) sem rodar no pregao "
-                  f"{session.isoformat()} — o processo ficou fora do ar. Nao "
-                  f"reprocessei os {len(barras)} evento(s) acumulados (decisao velha "
-                  "nunca executa, regra 7 do AGENTS.md); "
-                  f"{'posicao achatada e ' if fechados else ''}sessao reiniciada em "
-                  f"{ultima.ts.isoformat()}.",
+                  f"buraco de {parado_ha / 60.0:.0f} min sem rodar; {len(barras)} "
+                  f"barra(s) puladas"
+                  f"{' · posicao achatada' if fechados else ''}; retomado em "
+                  f"{ultima.ts.isoformat()}",
                   {"parado_segundos": round(parado_ha, 1), "eventos": len(barras),
                    "achatou": bool(fechados)})
         self._snapshot.last_bar_ts = ultima.ts
@@ -913,16 +1097,43 @@ class IntradayLiveRuntime:
     def _on_limit_placed(self, conn, account: AccountState, evento: LimitPlaced) -> None:
         """Uma ordem-limite passou a ser vigiada.
 
-        NAO grava evento no diario de proposito: o robo re-ancora a ordem a
-        cada recarga e a cada `rolling_reanchor_after_bars`, entao uma linha
-        por ordem posta afogaria `live_events` (e o painel "Eventos recentes",
-        que mostra 10) em ruido — enterrando exatamente os eventos que exigem
-        acao. O que interessa e' CONTADO (`ordens_postas`/
-        `ordens_abandonadas`, visiveis em `status()`, e a razao
-        postas/preenchidas e' o proprio sinal de prioridade de fila) e a ordem
-        CORRENTE aparece em `status()["daytrade"]["ordem_em_pe"]`. O que
-        preenche, sim, gera `Intent`/`Order`/`Fill` (ver `_on_opened`)."""
+        Grava no diario (2026-08-24, pedido do dono: "quero que o histórico
+        registre qualquer evento feito pelo robô", depois de eu explicar um
+        rearme so' por dedução de código porque nada disso ficava escrito) --
+        antes disto so' era CONTADO (`ordens_postas`/`ordens_abandonadas`,
+        ainda visiveis em `status()`, com a mesma razao postas/preenchidas de
+        prioridade de fila), e a ordem CORRENTE continua tambem em
+        `status()["daytrade"]["ordem_em_pe"]`. O que preenche gera
+        `Intent`/`Order`/`Fill` a parte (ver `_on_opened`).
+
+        O numero (`#NN`, ver `_SessionSnapshot.trade_num`) so' AVANCA aqui
+        numa arma de VERDADE nova (`evento.replaced is None`) -- uma
+        substituicao por reancoragem (`replaced` aponta pra' ordem anterior)
+        continua a MESMA rodada, entao mantem o numero: e' o que deixa
+        "ordem #03 posicionada" e a eventual "entrada #03"/"saida #03" serem
+        reconheciveis como o MESMO evento no diario, mesmo com outras
+        rodadas entrelacadas no meio (pedido do dono, 2026-08-24).
+
+        `trade_num is None` MESMO com `replaced is not None` acontece quando
+        a ordem substituida foi plantada pelo warm start direto em
+        `resting_limit` (ver a docstring de `_start_session`) -- nunca
+        passou por aqui, entao nunca ganhou numero. Trata como rodada nova
+        do ponto de vista do diario: e' a primeira vez que esta rodada
+        aparece nele."""
         self._snapshot.ordens_postas += 1
+        if evento.replaced is None or self._snapshot.trade_num is None:
+            self._snapshot.trade_seq += 1
+            self._snapshot.trade_num = self._snapshot.trade_seq
+        numero = self._snapshot.trade_num
+        qtd = sum(evento.order.children(self.config.default_quantity))
+        self._log(conn, account.id, "info",
+                  f"ordem #{numero:02d} posicionada: {evento.order.side} {qtd} "
+                  f"{self.strategy.symbol} @ {evento.order.limit_price:.4f}"
+                  + (" (substitui)" if evento.replaced is not None else ""),
+                  {"numero_ordem": numero, "side": evento.order.side, "quantity": qtd,
+                   "limit_price": evento.order.limit_price,
+                   "substitui_anterior": evento.replaced is not None,
+                   "sessao": self._snapshot.session.isoformat()})
         if self.executor is None:
             return
         # A maquina SUBSTITUI a ordem vigiada em vez de acumular: se havia uma
@@ -936,7 +1147,7 @@ class IntradayLiveRuntime:
             # maquina colocou -- uma decisao "nova" (`replaced is None`) do
             # ponto de vista dela pode ainda assim ter tickets REAIS sobrando
             # de um PROCESSO ANTERIOR (restart no meio do pregao com uma
-            # ordem armada, ver `pending_entry_refs`). `self.executor` aqui e'
+            # ordem posicionada, ver `pending_entry_refs`). `self.executor` aqui e'
             # sempre uma instancia NOVA (`pending_orders` nasce vazio), entao
             # `cancel_limit` nao teria o que cancelar -- cancela pelo
             # `broker_ref` persistido em vez disso.
@@ -954,14 +1165,37 @@ class IntradayLiveRuntime:
         )
         self._snapshot.pending_entry_refs = [o.broker_ref for o in enviadas if o.broker_ref]
 
+    #: Traducao do `LimitCancelled.reason` da maquina (backtest/intraday/
+    #: machine.py) para o texto que aparece no diario -- ver `_on_limit_
+    #: cancelled`. `.get(..., evento.reason)` cobre um motivo novo que a
+    #: maquina venha a emitir sem quebrar o log (mostra o motivo cru em vez
+    #: de "None").
+    _MOTIVO_CANCELAMENTO_PT = {
+        "flatten": "fim do pregão",
+        "ttl": "esperou demais sem tocar",
+        "superseded": "substituída por nova decisão",
+        "position_closed": "posição fechada",
+    }
+
     def _on_limit_cancelled(self, conn, account: AccountState, evento: LimitCancelled) -> None:
-        """Mesma razao de `_on_limit_placed` para nao gravar evento: e'
-        contado, nao narrado.
+        """Uma ordem-limite vigiada deixou de valer sem preencher.
+
+        Grava no diario -- mesmo pedido do dono de `_on_limit_placed` (ver a
+        docstring la').
 
         Em execucao real, cancelar de verdade no terminal e' obrigatorio: a
         ordem que o robo abandonou continuaria viva na corretora e poderia
         preencher horas depois, contra um preco que o robo ja descartou."""
         self._snapshot.ordens_abandonadas += 1
+        numero = self._numero_ordem_atual()
+        motivo = self._MOTIVO_CANCELAMENTO_PT.get(evento.reason, evento.reason)
+        self._log(conn, account.id, "info",
+                  f"ordem #{numero:02d} cancelada: {evento.order.side} "
+                  f"{sum(evento.order.children(self.config.default_quantity))} "
+                  f"{self.strategy.symbol} @ {evento.order.limit_price:.4f} ({motivo})",
+                  {"numero_ordem": numero, "side": evento.order.side,
+                   "limit_price": evento.order.limit_price, "reason": evento.reason,
+                   "sessao": self._snapshot.session.isoformat()})
         # A medicao de fila e' POR ORDEM: o que negociou no nivel da ordem
         # abandonada nao diz nada sobre o nivel da proxima, que e' outro preco.
         self._volume_no_nivel = 0.0
@@ -1099,16 +1333,28 @@ class IntradayLiveRuntime:
         store.upsert_position(conn, account.id, pos)
         account.positions[pos.ticker] = pos
 
+        # Compromete o capital da entrada -- sem isto, `AccountState.equity()`
+        # (`caixa + invested()`, usada pelo painel para "Carteira") conta o
+        # mesmo dinheiro duas vezes: uma no caixa (nunca debitado) e outra no
+        # valor a mercado da posicao aberta. Espelha `live/runtime.py` (linha
+        # `account.cash -= custo` no swing), que ja faz este debito na
+        # entrada; aqui faltava. Devolvido em `_on_closed`/`_on_closed_partial`.
+        custo = evento.price * evento.quantity
+        if self.execution_mode == "shadow":
+            account.cash_sombra -= custo
+        else:
+            account.cash -= custo
+
+        numero = self._numero_ordem_atual()
         self._log(conn, account.id, "info",
-                  f"{'SOMBRA: ' if self.execution_mode == 'shadow' else ''}entrada "
-                  f"{evento.side} {evento.quantity} {self.strategy.symbol} @ {evento.price:.4f} "
-                  f"({evento.order_kind}; penetracao "
-                  f"{'n/a' if penetration is None else f'{penetration:.2f} tick(s)'}; "
-                  f"{volume_no_nivel:.0f} acoes negociadas no nivel contra as "
-                  f"{evento.quantity} que eu pedi)",
-                  {"side": evento.side, "price": evento.price, "quantity": evento.quantity,
+                  f"{'SOMBRA ' if self.execution_mode == 'shadow' else ''}entrada "
+                  f"#{numero:02d} {evento.side} {evento.quantity} {self.strategy.symbol} "
+                  f"@ {evento.price:.4f}{self._bracket_txt(evento.stop, evento.target)}",
+                  {"numero_ordem": numero, "side": evento.side, "price": evento.price,
+                   "quantity": evento.quantity, "stop": evento.stop, "target": evento.target,
                    "penetration_ticks": penetration, "volume_no_nivel": volume_no_nivel,
-                   "execution_mode": self.execution_mode})
+                   "execution_mode": self.execution_mode,
+                   "sessao": self._snapshot.session.isoformat()})
 
     def _on_opened_top_up(self, conn, account: AccountState, evento: PositionOpened) -> None:
         """Um filho ADICIONAL de `EnterLimit.split_quantities` preencheu com a
@@ -1158,13 +1404,27 @@ class IntradayLiveRuntime:
         store.upsert_position(conn, account.id, pos)
         account.positions[pos.ticker] = pos
 
+        # Mesmo debito de `_on_opened` (ver comentario la') -- so' desta
+        # FATIA nova, nao da posicao inteira (a fatia anterior ja foi
+        # debitada quando ela mesma preencheu).
+        custo = evento.price * evento.quantity
+        if self.execution_mode == "shadow":
+            account.cash_sombra -= custo
+        else:
+            account.cash -= custo
+
+        numero = self._numero_ordem_atual()
         self._log(conn, account.id, "info",
-                  f"{'SOMBRA: ' if self.execution_mode == 'shadow' else ''}TOP-UP de entrada "
-                  f"{evento.side} +{evento.quantity} {self.strategy.symbol} @ {evento.price:.4f} "
-                  f"(posicao agora {pos_total.quantity} @ {pos_total.entry_price:.4f})",
-                  {"side": evento.side, "price": evento.price, "quantity": evento.quantity,
-                   "quantidade_total": pos_total.quantity, "preco_medio_total": pos_total.entry_price,
-                   "execution_mode": self.execution_mode})
+                  f"{'SOMBRA ' if self.execution_mode == 'shadow' else ''}TOP-UP "
+                  f"#{numero:02d} {evento.side} +{evento.quantity} {self.strategy.symbol} "
+                  f"@ {evento.price:.4f} (total {pos_total.quantity})"
+                  f"{self._bracket_txt(pos_total.current_stop, pos_total.current_target)}",
+                  {"numero_ordem": numero, "side": evento.side, "price": evento.price,
+                   "quantity": evento.quantity, "quantidade_total": pos_total.quantity,
+                   "preco_medio_total": pos_total.entry_price,
+                   "stop": pos_total.current_stop, "target": pos_total.current_target,
+                   "execution_mode": self.execution_mode,
+                   "sessao": self._snapshot.session.isoformat()})
 
     def _on_closed(self, conn, account: AccountState, evento: PositionClosed, bar: Bar) -> None:
         """Grava a saida e move o P&L para onde ele PODE ir.
@@ -1230,20 +1490,33 @@ class IntradayLiveRuntime:
         self._open_intent_id = None
         self._snapshot.trades += 1
 
+        # Devolve o capital que `_on_opened`/`_on_opened_top_up` debitaram
+        # (`trade.entry_price` ja e' o preco medio da posicao inteira, o
+        # MESMO usado em `capital_allocated` -- multiplicado pela quantidade
+        # que fecha AQUI, e' exatamente o que foi comprometido por ela) mais
+        # o resultado realizado.
+        liberado = trade.entry_price * trade.quantity
         if self.execution_mode == "shadow":
             self._snapshot.shadow_pnl_brl += evento.pnl_brl
-            account.cash_sombra += evento.pnl_brl
+            account.cash_sombra += liberado + evento.pnl_brl
         else:
-            account.cash += evento.pnl_brl
+            account.cash += liberado + evento.pnl_brl
 
+        numero = self._numero_ordem_atual()
+        # Rodada TERMINADA -- a proxima entrada (nova `LimitPlaced` com
+        # `replaced=None`, ou uma nova semente de warm start) tem de pegar
+        # numero NOVO, nao continuar contando pra esta que acabou de fechar.
+        self._snapshot.trade_num = None
         self._log(conn, account.id, "info",
-                  f"{'SOMBRA: ' if self.execution_mode == 'shadow' else ''}saida "
-                  f"{trade.side} {trade.quantity} {self.strategy.symbol} @ {trade.exit_price:.4f} "
-                  f"({trade.exit_reason.value}) — resultado R$ {evento.pnl_brl:+.2f}",
-                  {"exit_reason": trade.exit_reason.value, "pnl_brl": round(evento.pnl_brl, 4),
-                   "entry_price": trade.entry_price, "exit_price": trade.exit_price,
-                   "execution_mode": self.execution_mode,
-                   "assinado_saida": assinado_saida})
+                  f"{'SOMBRA ' if self.execution_mode == 'shadow' else ''}saida "
+                  f"#{numero:02d} {trade.side} {trade.quantity} {self.strategy.symbol} "
+                  f"@ {trade.exit_price:.4f} ({trade.exit_reason.value}) R$ {evento.pnl_brl:+.2f}",
+                  {"numero_ordem": numero, "side": trade.side,
+                   "exit_reason": trade.exit_reason.value,
+                   "pnl_brl": round(evento.pnl_brl, 4), "entry_price": trade.entry_price,
+                   "exit_price": trade.exit_price, "execution_mode": self.execution_mode,
+                   "assinado_saida": assinado_saida,
+                   "sessao": self._snapshot.session.isoformat()})
 
     def _on_closed_partial(self, conn, account: AccountState, evento: PositionClosed) -> None:
         """Uma FATIA da posicao fechou (saida dividida, `EnterLimit.
@@ -1299,39 +1572,59 @@ class IntradayLiveRuntime:
         account.positions[pos.ticker] = pos
 
         self._snapshot.trades += 1
+        # Mesma devolucao de `_on_closed` (ver comentario la'), so' da FATIA
+        # que fechou aqui -- o resto continua comprometido, a posicao segue
+        # aberta com `pos_total.quantity` restante.
+        liberado = trade.entry_price * trade.quantity
         if self.execution_mode == "shadow":
             self._snapshot.shadow_pnl_brl += evento.pnl_brl
-            account.cash_sombra += evento.pnl_brl
+            account.cash_sombra += liberado + evento.pnl_brl
         else:
-            account.cash += evento.pnl_brl
+            account.cash += liberado + evento.pnl_brl
 
+        numero = self._numero_ordem_atual()
         self._log(conn, account.id, "info",
-                  f"{'SOMBRA: ' if self.execution_mode == 'shadow' else ''}fatia de saida "
-                  f"{trade.side} {trade.quantity} {self.strategy.symbol} @ {trade.exit_price:.4f} "
-                  f"({trade.exit_reason.value}) — resultado R$ {evento.pnl_brl:+.2f}; restam "
-                  f"{pos_total.quantity} acoes na posicao",
-                  {"exit_reason": trade.exit_reason.value, "pnl_brl": round(evento.pnl_brl, 4),
-                   "quantidade_restante": pos_total.quantity,
-                   "execution_mode": self.execution_mode})
+                  f"{'SOMBRA ' if self.execution_mode == 'shadow' else ''}fatia saida "
+                  f"#{numero:02d} {trade.side} {trade.quantity} {self.strategy.symbol} "
+                  f"@ {trade.exit_price:.4f} ({trade.exit_reason.value}) R$ {evento.pnl_brl:+.2f}; "
+                  f"resta {pos_total.quantity}",
+                  {"numero_ordem": numero, "side": trade.side,
+                   "exit_reason": trade.exit_reason.value,
+                   "pnl_brl": round(evento.pnl_brl, 4), "quantidade_restante": pos_total.quantity,
+                   "execution_mode": self.execution_mode,
+                   "sessao": self._snapshot.session.isoformat()})
 
     # ---------- painel -------------------------------------------------------
 
-    def status(self, eventos_limit: int = 10) -> dict:
+    def status(self, full: bool = False, limit: int = 1000) -> dict:
         """Mesmo formato de `LiveRuntime.status()` — o template de `/operacao`
         le as duas fontes pelas mesmas chaves. Campos que so o day trade tem
         (sombra, penetracao) entram em `daytrade`, sem colidir.
 
-        `eventos_limit` e' o "ver mais" do painel. Busca UM a mais do que vai
-        exibir: e' assim que a tela sabe se ainda ha historico atras sem
-        precisar de um `COUNT(*)` numa tabela que so cresce.
+        Eventos: por padrao so o pregao ATUAL (`day=session.isoformat()`),
+        nunca paginado -- o console tem scroll proprio (`.console` em
+        pages.css), entao nao ha "ver mais" para o dono clicar nem risco de
+        acumular historico de dias antigos no cartao. `full=True` (botao
+        "Diario Completo" do painel) troca isso por TODO o historico da
+        conta (`day=None`) -- ai' `limit` vira a PRIMEIRA pagina do scroll
+        infinito (`app.py::OPS_EVENTOS_PAGINA_INICIAL`), nao mais um teto de
+        seguranca de 1000: sob pedido do dono, o clique carrega pouco e
+        rapido, e o restante do historico vem sob demanda conforme rola
+        (`app.py::operacao_eventos_mais_antigos`).
         """
-        session = clock.session_date()
+        session = clock.intraday_session()
         with store.live_journal(self.db_path) as conn:
             account = self._load_account(conn)
             if account is None:
                 return {"conta": self.account_name, "existe": False}
             self._restore(account, session)
-            eventos = store.recent_events(conn, account.id, limit=eventos_limit + 1)
+            eventos = store.recent_events(conn, account.id, limit=limit,
+                                          day=None if full else session.isoformat())
+            saidas = store.daytrade_exit_events(conn, account.id)
+            ordens_hoje = store.daytrade_order_events_on(conn, account.id, session.isoformat())
+
+        resultado = self._resultado_dia_e_acumulado(saidas, session.isoformat(), account.initial_capital)
+        ordens_stats = self._ordens_por_lado(ordens_hoje)
 
         pos = self.machine.position
         marks = {self.strategy.symbol: pos.entry_price} if pos is not None else {}
@@ -1369,8 +1662,8 @@ class IntradayLiveRuntime:
                 for p in account.positions.values()
             ],
             "intencoes_pendentes": [],
-            "eventos": eventos[:eventos_limit],
-            "eventos_ha_mais": len(eventos) > eventos_limit,
+            "eventos": eventos,
+            "eventos_full": full,
             "daytrade": {
                 "execution_mode": self.execution_mode,
                 "simbolo": self.strategy.symbol,
@@ -1387,6 +1680,18 @@ class IntradayLiveRuntime:
                 # (dinheiro real), mesmo com a conta em execution_mode="live".
                 "caixa_sombra": round(account.cash_sombra, 2),
                 "resultado_sessao": round(self.machine.session_pnl, 2),
+                "posicoes_compra": sum(1 for p in account.positions.values() if p.quantity > 0),
+                "posicoes_venda": sum(1 for p in account.positions.values() if p.quantity < 0),
+                # Valor em R$ (capital alocado na entrada) das posições
+                # abertas de cada lado -- número principal do card
+                # "Posições" do painel, com a CONTAGEM acima virando texto
+                # secundário (mesmo pedido de `_ordens_por_lado`, 2026-08-24).
+                "valor_posicoes_compra": round(
+                    sum(p.capital_allocated for p in account.positions.values() if p.quantity > 0), 2),
+                "valor_posicoes_venda": round(
+                    sum(p.capital_allocated for p in account.positions.values() if p.quantity < 0), 2),
+                **resultado,
+                **ordens_stats,
                 "posicao_aberta": None if pos is None else {
                     "lado": pos.side, "qtd": pos.quantity,
                     "entrada": round(pos.entry_price, 4),
@@ -1404,6 +1709,19 @@ class IntradayLiveRuntime:
                 "corte_flatten_utc": self.machine.session_end_time_for(
                     pd.Timestamp(session)
                 ).isoformat(),
+                # BRT de verdade (painel, pedido do dono, 2026-08-24) -- NAO e'
+                # so subtrair 3h de `corte_flatten_utc`: aquele e' o ROTULO da
+                # ultima barra M1 (fica 1min atras do fechamento de verdade, ver
+                # `b3_session.closing_bar_minute_utc`). `continuous_end` da' o
+                # instante real do fim do pregao continuo, ja em Brasilia (sem
+                # fuso para converter -- o Brasil nao tem horario de verao desde
+                # 2019). So' vale com a politica "b3_equities"; a "fixed" (testes
+                # sinteticos) ja guarda `session_end_time` direto em hora local.
+                "corte_flatten_brt": (
+                    b3_session.continuous_end(session).strftime("%H:%M")
+                    if self.config.session_end_policy == "b3_equities"
+                    else self.config.session_end_time.strftime("%H:%M")
+                ),
                 "relogio_alarme": (self.clock_feed.server_clock_alarm
                                    if self.clock_feed is not None else None),
                 # Piso de caixa DE HOJE (ver `_check_capital`). `None` = ainda

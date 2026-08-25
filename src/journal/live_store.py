@@ -309,6 +309,7 @@ def ensure_tables(conn: sqlite3.Connection, schema_path: Path = SCHEMA_PATH) -> 
 _ACCOUNT_COLUMNS_ADICIONADAS = (
     ("symbol", "TEXT NOT NULL DEFAULT ''"),
     ("cash_sombra", "REAL NOT NULL DEFAULT 0"),
+    ("sort_order", "INTEGER NOT NULL DEFAULT 0"),
 )
 
 
@@ -511,8 +512,13 @@ def save_account(conn: sqlite3.Connection, account: AccountState) -> None:
 
 
 def accounts_with_symbol(conn: sqlite3.Connection) -> list[AccountState]:
-    """Todas as contas que declaram um ativo (`symbol != ''`), em ordem de
-    criação — ou seja, as contas de DAY TRADE.
+    """Todas as contas que declaram um ativo (`symbol != ''`) — ou seja, as
+    contas de DAY TRADE — na ordem em que aparecem no painel.
+
+    A ordem é `sort_order` (posição escolhida pelo dono ao arrastar um cartão,
+    ver `set_daytrade_account_order`), com empate em `id` (ordem de criação):
+    toda conta nasce com `sort_order=0`, então até o dono mexer pela primeira
+    vez a lista continua saindo em ordem de criação, como sempre foi.
 
     É a fonte de verdade de "quais ativos já estão alocados", e existe para
     ser lida por DOIS lados independentes: o painel (para desenhar a bolinha
@@ -524,10 +530,35 @@ def accounts_with_symbol(conn: sqlite3.Connection) -> list[AccountState]:
     """
     rows = conn.execute(
         "SELECT name FROM live_accounts WHERE symbol IS NOT NULL AND symbol != '' "
-        "ORDER BY id"
+        "ORDER BY sort_order, id"
     ).fetchall()
     contas = [load_account(conn, row["name"]) for row in rows]
     return [c for c in contas if c is not None]
+
+
+def set_daytrade_account_order(conn: sqlite3.Connection, ordem: list[str]) -> None:
+    """Grava a ordem MANUAL completa das contas de day trade, na sequência
+    de `ordem` (lista de `slot.id` == `live_accounts.name`, de cima pra
+    baixo) — pedido do dono (2026-08-24): arrastar o cartão FECHADO para
+    qualquer posição, e ela sobreviver a F5 e a reiniciar o `dev.bat`.
+
+    Quem monta `ordem` é o JS do painel, lendo o DOM depois do drop (ver
+    `static/js/operacao.js`) — já é a ordem final desejada, então aqui só
+    resta ESCREVER: `sort_order = posição` para cada nome, 0..N-1. Um nome em
+    `ordem` que não estiver mais entre as contas de day trade (aba dupla, F5
+    concorrente que apagou o robô no meio do arrasto) é ignorado em
+    silêncio — não há erro possível que valha a pena mostrar por causa de uma
+    corrida de tela, e as contas que sobrarem de fora de `ordem` só mantêm o
+    `sort_order` antigo delas, sem quebrar a lista.
+    """
+    existentes = {
+        row["name"] for row in conn.execute(
+            "SELECT name FROM live_accounts WHERE symbol IS NOT NULL AND symbol != ''"
+        )
+    }
+    for posicao, nome in enumerate(ordem):
+        if nome in existentes:
+            conn.execute("UPDATE live_accounts SET sort_order = ? WHERE name = ?", (posicao, nome))
 
 
 def delete_account(conn: sqlite3.Connection, name: str) -> bool:
@@ -1314,20 +1345,142 @@ def log_event(
     return int(cur.lastrowid)
 
 
-def recent_events(conn: sqlite3.Connection, account_id: Optional[int] = None, limit: int = 100) -> list[dict]:
-    if account_id is None:
-        rows = conn.execute(
-            "SELECT * FROM live_events ORDER BY ts DESC, id DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            "SELECT * FROM live_events WHERE account_id = ? ORDER BY ts DESC, id DESC LIMIT ?",
-            (account_id, limit),
-        ).fetchall()
+def recent_events(conn: sqlite3.Connection, account_id: Optional[int] = None, limit: int = 100,
+                   day: Optional[str] = None, before_id: Optional[int] = None) -> list[dict]:
+    """`day` (`YYYY-MM-DD`) restringe ao pregão daquele dia (`date(ts)` —
+    mesma comparação de data que `daytrade_order_events_on` faz em `ts[:10]`).
+    Painel de `/operacao` usa isso para o console de eventos nunca acumular
+    dias antigos (ver `IntradayLiveRuntime.status`/`LiveRuntime.status`).
+
+    `before_id` é o cursor do scroll infinito do botão "Diário Completo"
+    (ver `app.py::operacao_eventos_mais_antigos`): pega só eventos com `id`
+    menor que o último já carregado. `id` (autoincrement) é seguro como
+    cursor de "mais antigo que" porque cresce com a ordem de inserção, a
+    mesma ordem de `ts` que o `ORDER BY` já usa como desempate."""
+    clauses = []
+    params: list = []
+    if account_id is not None:
+        clauses.append("account_id = ?")
+        params.append(account_id)
+    if day is not None:
+        clauses.append("date(ts) = ?")
+        params.append(day)
+    if before_id is not None:
+        clauses.append("id < ?")
+        params.append(before_id)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    rows = conn.execute(
+        f"SELECT * FROM live_events {where} ORDER BY ts DESC, id DESC LIMIT ?",
+        (*params, limit),
+    ).fetchall()
     result = []
     for row in rows:
         item = dict(row)
         item["payload"] = _loads(item["payload"])
         result.append(item)
     return result
+
+
+def daytrade_exit_events(conn: sqlite3.Connection, account_id: int) -> list[dict]:
+    """Uma linha por SAÍDA (cheia ou fatia) do day trade desta conta, do
+    início da conta pra cá -- fonte de ganhos/perdas e CAGR/DD do painel de
+    `/operacao` (dia e acumulado, ver `IntradayLiveRuntime.status`). Uma
+    saída dividida em fatias grava mais de uma linha com o MESMO par
+    `(date, round)`; quem precisa do resultado da RODADA inteira soma as
+    linhas com esse par. `_on_closed`/`_on_closed_partial` gravam
+    `numero_ordem`/`side`/`pnl_brl`/`sessao` no payload exatamente para isto
+    -- filtrar por `pnl_brl` presente (só) distingue essas linhas das
+    demais (posicionada/cancelada/entrada não têm `pnl_brl`). `date`
+    prefere o `sessao` GRAVADO no payload (não o `ts` de inserção: o
+    pregão simulado/declarado pode não bater com o relógio da máquina,
+    mesma cautela de `core.b3_session`) mas cai para `ts[:10]` quando
+    `sessao` não existe -- todo evento gravado ANTES deste campo existir
+    (2026-08-24) não tem `sessao` nenhum, e sem o fallback ele
+    desapareceria de "hoje" mesmo tendo acontecido hoje.
+
+    REGRESSÃO CORRIGIDA no mesmo dia: a versão anterior também exigia
+    `numero_ordem` presente para aceitar a linha -- isso é mais NOVO que
+    `pnl_brl` (a numeração de rodada só passou a existir no meio do dia do
+    deploy), então todo trade fechado ANTES da numeração existir tinha
+    `pnl_brl` mas não `numero_ordem`, e desaparecia de "Ganhos do dia"
+    inteiro (não só de "hoje" -- sumia do acumulado também). Achado ao
+    vivo: `policy_state["intraday"]["shadow_pnl_brl"]` (a soma DE VERDADE,
+    incrementada direto por `_on_closed`/`_on_closed_partial`, nunca lida
+    do log) mostrava R$5,92 no dia; este painel mostrava R$1,97 -- só os 2
+    trades fechados DEPOIS da numeração existir. `round` agora cai para o
+    `id` da própria linha quando falta `numero_ordem`: cada linha assim
+    vira uma rodada PRÓPRIA (nunca correlacionada com outra) -- sem o
+    número real não dá pra saber se duas linhas são fatias da MESMA
+    rodada, e assumir que são o mesmo trade juntaria coisas que talvez não
+    tenham nada a ver."""
+    rows = conn.execute(
+        """SELECT id, ts, payload FROM live_events
+           WHERE account_id = ? AND source = 'daytrade'
+           ORDER BY ts, id""",
+        (account_id,),
+    ).fetchall()
+    out = []
+    for row in rows:
+        payload = _loads(row["payload"])
+        if payload.get("pnl_brl") is None:
+            continue
+        out.append({
+            "date": payload.get("sessao") or row["ts"][:10],
+            "round": payload.get("numero_ordem", f"legado-{row['id']}"),
+            "side": payload.get("side"),
+            "pnl_brl": float(payload["pnl_brl"]),
+        })
+    return out
+
+
+def daytrade_order_events_on(conn: sqlite3.Connection, account_id: int, day: str) -> list[dict]:
+    """Uma linha por ordem armada/preenchida/cancelada do day trade desta
+    conta no PREGÃO `day` (`YYYY-MM-DD`) -- fonte do card "Ordens
+    posicionadas" do painel de `/operacao`. `_on_limit_placed`/`_on_opened`/
+    `_on_opened_top_up`/`_on_limit_cancelled` gravam `side` ("long"/"short",
+    vocabulário interno do day trade) no payload; o TIPO do evento distingue
+    pela mensagem, já que não há um campo dedicado para isso no payload.
+
+    `day` casa com `sessao` (payload) quando existe, ou com `ts[:10]` (hora
+    de inserção) em evento gravado ANTES desse campo existir -- mesmo
+    fallback e mesmo motivo de `daytrade_exit_events`. `"armada"` no texto
+    da mensagem é o nome ANTIGO do que virou "posicionada" no mesmo deploy
+    que acrescentou `sessao` -- um evento sem `sessao` nunca vem com
+    "posicionada", então aceitar os dois nomes é o que mantém o histórico
+    de antes do deploy contável."""
+    rows = conn.execute(
+        """SELECT ts, message, payload FROM live_events
+           WHERE account_id = ? AND source = 'daytrade'
+           ORDER BY ts, id""",
+        (account_id,),
+    ).fetchall()
+    out = []
+    for row in rows:
+        payload = _loads(row["payload"])
+        if (payload.get("sessao") or row["ts"][:10]) != day:
+            continue
+        side = payload.get("side")
+        if side is None:
+            continue
+        msg = row["message"]
+        if "posicionada" in msg or "armada" in msg:
+            kind = "armada"
+        elif "cancelada" in msg:
+            kind = "cancelada"
+        elif "entrada" in msg or "TOP-UP" in msg:
+            kind = "preenchida"
+        else:
+            continue
+        # `quantity`/`price` (o preco vem como `limit_price` na armada e
+        # `price` na entrada -- nomes diferentes no payload de cada evento,
+        # ver `_on_limit_placed`/`_on_opened`) alimentam o VALOR em R$ do
+        # card "Ordens" do painel (pedido do dono, 2026-08-24: "deve
+        # aparecer os valores, e as quantidades abaixo") -- `None` quando o
+        # evento nao carrega os dois (ex.: cancelamento antigo sem
+        # `quantity`), e quem soma trata isso como "sem contribuicao".
+        out.append({
+            "side": side, "kind": kind,
+            "quantity": payload.get("quantity"),
+            "price": payload.get("limit_price", payload.get("price")),
+        })
+    return out

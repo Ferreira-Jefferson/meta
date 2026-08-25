@@ -451,12 +451,12 @@ async def strategies_run(
 # ============ OPERAÇÃO AO VIVO ===========================================
 
 OPERACAO_POLL_ACTIVE_SECONDS = 20     # dentro da janela de pregão ±1h
-OPERACAO_POLL_IDLE_CAP_SECONDS = 1800  # teto fora da janela (30 min) — nunca fica cego
+OPERACAO_POLL_IDLE_CAP_SECONDS = 3600  # teto fora da janela (1h, pedido do dono 2026-08-25) — nunca fica cego
 
 
 def _operacao_poll_seconds() -> int:
     """Intervalo do polling HTMX de `/operacao`: 20s dentro da janela ativa
-    de pregão (ver `live.clock`), bem mais espaçado fora dela — sem sentido
+    de pregão (ver `live.clock`), teto de 1h fora dela — sem sentido
     recarregar a tela a cada 20s de madrugada ou no fim de semana, quando
     nada no status muda. Perto da janela abrir, o intervalo encolhe sozinho
     (é o próprio `seconds_until_active_window`), então a tela volta a
@@ -467,20 +467,30 @@ def _operacao_poll_seconds() -> int:
     return min(int(clock.seconds_until_active_window()) + 1, OPERACAO_POLL_IDLE_CAP_SECONDS)
 
 
-#: Quantas linhas de posição/evento um cartão mostra antes do "ver mais".
-#: Mesmo número da lista de simulações da home, de propósito — é o mesmo
-#: gesto na mesma aplicação.
+#: Quantas linhas de posição um cartão mostra antes do "ver mais". Eventos
+#: não usam mais um limite NUMÉRICO como este: o console de eventos sempre
+#: mostra o pregão inteiro (ver `IntradayLiveRuntime.status`/`LiveRuntime.
+#: status`) e rola por dentro (`.console` em pages.css) em vez de paginar —
+#: o botão "Diário Completo"/"Diário do dia" troca esse filtro por um
+#: booleano (`eventos_full`), não por um teto crescente feito este. Mesmo número da
+#: lista de simulações da home, de propósito — é o mesmo gesto na mesma
+#: aplicação.
 OPS_PAGINA = 10
-#: Teto do "ver mais". A URL do fragmento é pública e digitável; sem teto,
-#: `?eventos=99999999` mandaria o SQLite montar em memória uma lista que o
+#: Teto do "ver mais" de posições. A URL do fragmento é pública e digitável;
+#: sem teto, `?posicoes=99999999` mandaria montar em memória uma lista que o
 #: cartão nunca exibiria — e o polling repetiria isso a cada 20 segundos.
 OPS_PAGINA_MAX = 500
 
+#: Primeira página do "Diário Completo" (histórico inteiro da conta, não só
+#: hoje) e tamanho de cada página SEGUINTE, carregada por scroll infinito
+#: (pedido do dono, 2026-08-25: o clique estava lento carregando até 1000
+#: linhas de uma vez só). Ver `operacao_eventos_mais_antigos` e o sentinela
+#: `hx-trigger="revealed"` em `operacao_slot_live.html`.
+OPS_EVENTOS_PAGINA_INICIAL = 30
+OPS_EVENTOS_PAGINA_SEGUINTE = 10
 
-def _slot_ctx(
-    slot, eventos_limit: int = OPS_PAGINA, posicoes_limit: int = OPS_PAGINA,
-    exec_mode_override: str | None = None,
-) -> dict:
+
+def _slot_ctx(slot, posicoes_limit: int = OPS_PAGINA, eventos_full: bool = False) -> dict:
     """Tudo o que UM cartão de slot precisa: status da conta, processo,
     caixa do ledger manual e se o botão "Iniciar" pode estar habilitado.
 
@@ -501,37 +511,48 @@ def _slot_ctx(
     `strategy.registry.get_strategy`, os dois levantam `KeyError` com o
     motivo em texto).
 
-    `exec_mode_override`: eco do `<select execution_mode>` ainda não salvo
-    (ver `_operacao_ctx`) -- SEM ele, o modo efetivo usado para escolher qual
-    caixa mostrar/checar é o do último `config_anterior` (a config do último
-    START de verdade, ou `None`/"shadow" se o robô nunca rodou). `caixa`/
-    `caixa_ok` (piso do botão "Iniciar") passam a ser DESTE saldo -- pedido
-    do dono 2026-08-23: "quando mudar a execução, quero que o frontend mude
-    o saldo para o saldo da execução selecionada e o backend deve ser capaz
-    de rodar com o seu saldo"."""
+    O modo (sombra/real) é fixo desde a criação do slot (`slot.
+    execution_mode`, 2026-08-24) — não é mais escolhido num `<select>` do
+    form de iniciar, então não há eco de escolha-ainda-não-salva pra
+    carregar aqui (havia um `exec_mode_override` antes desta data, removido
+    junto do select).
+
+    `eventos_full` é o botão "Diário Completo"/"Diário do dia" do cartão de
+    eventos: troca nos dois sentidos entre o filtro padrão (só o pregão
+    atual) e TODO o histórico da conta. Vem da URL do fragmento, mesmo
+    motivo de `posicoes_limit` (ver docstring de `operacao_fragment`). Ligado,
+    a PRIMEIRA página vem daqui (`OPS_EVENTOS_PAGINA_INICIAL`) e o resto do
+    histórico é scroll infinito (`operacao_eventos_mais_antigos`) — por isso
+    o poll de fundo deste cartão fica PAUSADO enquanto `eventos_full` está
+    ligado (ver `frag_url`/`hx-trigger` condicional em
+    `operacao_slot_live.html`): sem pausar, o refresh a cada 20s recriaria o
+    nó inteiro e resetaria de volta pra página inicial o que o dono já tinha
+    rolado pra baixo."""
     from journal import live_store
 
     erro = None
     try:
-        status_payload = live_service.get_status(slot.id, eventos_limit=eventos_limit)
+        status_payload = live_service.get_status(
+            slot.id, full=eventos_full,
+            limit=OPS_EVENTOS_PAGINA_INICIAL if eventos_full else 1000,
+        )
     except (live_store.LegacyPaperAccountError, live_store.LegacyManualAccountError) as e:
         status_payload = {"conta": slot.id, "existe": False, "kind": slot.kind}
         erro = str(e)
     except KeyError as e:
         status_payload = {"conta": slot.id, "existe": False, "kind": slot.kind}
         erro = str(e)
+    # Sentinela do scroll infinito só faz sentido se a página VEIO CHEIA --
+    # menos que isso e' o fim do historico (nao ha mais nada mais antigo pra
+    # buscar), mesmo criterio que `operacao_eventos_mais_antigos` usa pra
+    # decidir se emite a proxima sentinela.
+    if eventos_full:
+        status_payload["eventos_mais"] = (
+            len(status_payload.get("eventos") or []) == OPS_EVENTOS_PAGINA_INICIAL
+        )
     config_anterior = live_control.last_config(slot.id)
-    if exec_mode_override is not None:
-        config_anterior = {**(config_anterior or {}), "execution_mode": exec_mode_override}
-    # Swing nunca teve modo sombra (`slot.is_intraday` guarda isso em todo
-    # outro lugar que decide "live" vs "shadow" -- ver `operacao_iniciar`,
-    # `live_control.start`); aqui repete a mesma regra para não deixar um
-    # `config_anterior` de outro slot (ou um form adulterado) fazer o caixa
-    # do swing mostrar `cash_sombra`, que ele nem tem.
-    execution_mode = (
-        ((config_anterior or {}).get("execution_mode") or "shadow")
-        if slot.is_intraday else "live"
-    )
+    # Swing nunca teve modo sombra; day trade sempre tem (fixo no slot).
+    execution_mode = slot.execution_mode if slot.is_intraday else "live"
     caixa = live_control.available_cash(slot.id, execution_mode) or 0.0
     proc = live_control.status(slot.id)
     # Robô que vai de fato rodar: o da conta já existente, ou o default
@@ -548,31 +569,14 @@ def _slot_ctx(
     status_payload["posicoes_total"] = len(posicoes)
     status_payload["posicoes_ha_mais"] = len(posicoes) > posicoes_limit
     status_payload["posicoes"] = posicoes[:posicoes_limit]
-    caixa_real = live_control.available_cash(slot.id, "live") or 0.0
-    caixa_sombra = (
-        live_control.available_cash(slot.id, "shadow") or 0.0
-        if slot.is_intraday else 0.0
-    )
     return {
         "slot": slot,
         "status": status_payload,
         "proc": proc,
-        "eventos_limit": eventos_limit,
         "posicoes_limit": posicoes_limit,
+        "eventos_full": eventos_full,
         "config_anterior": config_anterior,
         "caixa_ledger": caixa,
-        # Os dois saldos crus (2026-08-23): o template usa para o `<input>`
-        # de caixa E o resumo do cabeçalho (`partials/operacao_resumo.html`)
-        # trocarem de valor no cliente, sem round-trip, quando o dono muda o
-        # `<select execution_mode>` -- ver `operacao_body.html` e
-        # `static/js/operacao.js`. `caixa_ok_*` acompanha, para o resumo
-        # também trocar o destaque vermelho de "abaixo do mínimo" — o piso
-        # (`caixa_minima`) não muda com o modo, só qual saldo é comparado a
-        # ele.
-        "caixa_real_ledger": caixa_real,
-        "caixa_sombra_ledger": caixa_sombra,
-        "caixa_ok_real": caixa_real >= piso,
-        "caixa_ok_sombra": caixa_sombra >= piso,
         "caixa_minima": piso,
         "caixa_ok": caixa >= piso,
         "erro_slot": erro,
@@ -615,32 +619,64 @@ def _novo_robo_ctx(conn) -> dict:
     e fingir R$0 o colocaria em primeiro lugar — o pior lugar possível para
     uma informação ausente.
 
-    `em_uso` é o que o painel desenha como bolinha verde/anel. Vem das CONTAS
-    (`dashboard.slots.symbols_in_use`), não dos processos vivos: um robô
-    parado continua dono do ativo dele, porque o caixa está lá.
+    `em_uso` é o que o painel desenha como bolinha verde/anel — e é POR ROBÔ,
+    não por símbolo sozinho (pedido do dono, 2026-08-24): se `gremah` já
+    opera PMAM3, isso marca a opção "gremah · PMAM3" (evita recriar o mesmo
+    cartão à toa), mas NÃO marca "gremah_tick · PMAM3" — dois robôs
+    DIFERENTES no mesmo ativo é uma comparação válida (ambos em sombra, por
+    exemplo) e só vira problema se os dois tentarem operar dinheiro de
+    verdade ao mesmo tempo, o que é checado (e bloqueado, com o motivo
+    específico) em `live_control._assert_slots_disjuntos` na hora de
+    Iniciar — não aqui, onde bloquear cedo demais escondia uma combinação
+    que podia ser perfeitamente segura.
+
+    `modos_usados` é o que falta para o MODO não repetir: o índice é
+    agrupado por (robô, ativo, modo) — antes disto era só por `symbol`, que
+    colapsava dois slots do mesmo ativo (sombra e real, ou dois robôs
+    diferentes) num só e podia deixar `em_uso` apagado justamente para o
+    slot que ficou de fora da colisão, deixando o painel oferecer "Criar" num
+    par (robô, ativo, modo) que já existe e que `operacao_novo_robo` só ia
+    recusar depois do clique.
     """
     from dashboard import slots as slots_mod
     from dashboard.robot_view import _ultimo_preco
     from strategy.daytrade.base import capital_minimo_brl
     from strategy.daytrade.registry import list_daytrade_robots, symbols_for_robot
 
-    em_uso = slots_mod.symbols_in_use(conn)
-    rodando = live_control.status_all(list(em_uso.values()))
+    slots_por_robo_ativo: dict[tuple[str, str], dict[str, object]] = {}
+    for slot in slots_mod.daytrade_slots(conn):
+        if not slot.symbol:
+            continue
+        slots_por_robo_ativo.setdefault((slot.robot_key, slot.symbol), {})[slot.execution_mode] = slot
+
+    todos_slot_ids = [s.id for modos in slots_por_robo_ativo.values() for s in modos.values()]
+    rodando = live_control.status_all(todos_slot_ids)
     robos = []
     for info in list_daytrade_robots():
         ativos = []
         for symbol in symbols_for_robot(info.key):
             preco, data = _ultimo_preco(symbol)
             minimo = capital_minimo_brl(preco) if preco else None
-            slot_id = em_uso.get(symbol)
+            modos = slots_por_robo_ativo.get((info.key, symbol), {})
+            modos_usados = sorted(modos)
+            algum_slot = next(iter(modos.values()), None)
             ativos.append({
                 "symbol": symbol,
                 "preco": preco,
                 "preco_data": data,
                 "minimo": minimo,
-                "em_uso": slot_id is not None,
-                "slot_id": slot_id,
-                "rodando": bool(slot_id and rodando.get(slot_id)),
+                "em_uso": bool(modos_usados),
+                "modos_usados": modos_usados,
+                # Por MODO, não por par -- é o que permite o rótulo do
+                # `<option>` mudar em cima do hora (`static/js/operacao.js`,
+                # `atualizaAtivos`) conforme o dono troca o Modo: o
+                # mesmo PMAM3 mostra "parado" quando Simulação está
+                # selecionado (o slot sombra existe e está parado) e "○ sem
+                # aviso nenhum" quando troca pra Real (aquele trio ainda nem
+                # existe) -- ver o pedido do dono de 2026-08-25.
+                "modos_rodando": sorted(m for m, s in modos.items() if rodando.get(s.id)),
+                "slot_id": algum_slot.id if algum_slot else None,
+                "rodando": any(rodando.get(s.id) for s in modos.values()),
             })
         ativos.sort(key=lambda a: (a["minimo"] is None, a["minimo"] or 0.0))
         # `rank` e `feed_kind` vêm do registry (ver o comentário sobre
@@ -655,28 +691,11 @@ def _novo_robo_ctx(conn) -> dict:
         1 for r in robos for a in r["ativos"] if not a["em_uso"])}
 
 
-def _operacao_ctx(exec_mode_override: dict[str, str] | None = None, **extra) -> dict:
+def _operacao_ctx(**extra) -> dict:
     """Contexto comum a toda rota que renderiza `operacao.html`/
     `operacao_body.html`: um bloco por slot existente (day trade em cima),
     o formulário de robô novo, os avisos de capital, e o que é global
-    (credenciais, poll).
-
-    `exec_mode_override`: eco da escolha AINDA NÃO SALVA do `<select
-    name=execution_mode>` do slot (dono, 2026-08-23) -- só usado por
-    `POST /operacao/{slot}/caixa`, que troca o `#ops-body` inteiro por um
-    endpoint que não tem nada a ver com modo de execução. Sem isto, o select
-    voltava para `config_anterior.execution_mode` (a config do último START
-    de verdade) a cada clique em "atualizar saldo", fazendo "Real"
-    selecionado sumir e reaparecer como "Sombra" -- vide reclamação do dono
-    2026-08-23. O valor não é PERSISTIDO em lugar nenhum: é só o que o
-    formulário de caixa recebeu de volta do próprio `<select>` (via
-    `hx-include` no template) e devolve ecoado na resposta.
-
-    Passado para `_slot_ctx` (não aplicado depois, por cima do resultado
-    dela): `caixa_ledger`/`caixa_ok` daquele bloco DEPENDEM do modo efetivo
-    (ver a docstring de `_slot_ctx`), então o eco precisa entrar ANTES da
-    escolha de qual saldo (`cash`/`cash_sombra`) mostrar, não só no `<select>`
-    renderizado depois."""
+    (credenciais, poll)."""
     from core.config import ordered_slots
     from dashboard import slots as slots_mod
     from journal import live_store
@@ -698,10 +717,7 @@ def _operacao_ctx(exec_mode_override: dict[str, str] | None = None, **extra) -> 
         novo_robo = {"robos": [], "livres": 0}
         avisos = []
 
-    slots = [
-        _slot_ctx(s, exec_mode_override=(exec_mode_override or {}).get(s.id))
-        for s in todos
-    ]
+    slots = [_slot_ctx(s) for s in todos]
     for bloco in slots:
         if bloco["erro_slot"]:
             extra.setdefault("erro", bloco["erro_slot"])
@@ -813,7 +829,8 @@ def operacao(request: Request):
 
 @app.get("/operacao/{slot_id}/fragment", response_class=HTMLResponse)
 def operacao_fragment(request: Request, slot_id: str,
-                      eventos: int = OPS_PAGINA, posicoes: int = OPS_PAGINA,
+                      posicoes: int = OPS_PAGINA,
+                      eventos_full: int = 0,
                       rodando: int | None = None):
     """Fragmento que o polling HTMX troca (ver `hx-trigger` em
     `operacao_slot_live.html`) -- só o painel operacional DESTE slot (status,
@@ -830,21 +847,27 @@ def operacao_fragment(request: Request, slot_id: str,
     Um poll por slot (não um poll global): cada cartão troca só o seu nó,
     então o refresh de um robô não recria o DOM do outro.
 
-    `eventos`/`posicoes` são o "ver mais" das duas listas. Eles vêm na URL, e
-    não num estado guardado no servidor, por causa do polling: o botão "ver
-    mais" aponta para ESTA rota com o limite maior e troca o mesmo nó, e o nó
-    novo já nasce com o `hx-get` do poll carregando o limite novo. Sem isso, o
-    "ver mais" duraria até o refresh seguinte apagá-lo — que é o que
-    aconteceria copiando o `hx-swap="beforeend"` da lista de simulações da
-    home, que não tem polling nenhum."""
+    `posicoes` é o "ver mais" da lista de posições (eventos não pagina mais —
+    ver `OPS_PAGINA`). Vem na URL, e não num estado guardado no servidor, por
+    causa do polling: o botão "ver mais" aponta para ESTA rota com o limite
+    maior e troca o mesmo nó, e o nó novo já nasce com o `hx-get` do poll
+    carregando o limite novo. Sem isso, o "ver mais" duraria até o refresh
+    seguinte apagá-lo — que é o que aconteceria copiando o `hx-swap=
+    "beforeend"` da lista de simulações da home, que não tem polling nenhum.
+
+    `eventos_full` é o mesmo gesto para o cartão de eventos, nos dois
+    sentidos: "Diário Completo" aponta para ESTA rota com `eventos_full=1`,
+    "Diário do dia" com `eventos_full=0`, e o `frag_url` do nó novo carrega o
+    valor escolhido adiante — senão o polling seguinte reverteria a escolha
+    sozinho."""
     if _slot_sumiu(slot_id):
         return _recarrega_a_pagina()
     slot = _slot_or_404(slot_id)
-    # Teto: a URL é digitável, e `?eventos=999999999` faria o SQLite montar em
+    # Teto: a URL é digitável, e `?posicoes=999999999` faria montar em
     # memória uma lista que o cartão nunca vai mostrar.
     bloco = _slot_ctx(slot,
-                      eventos_limit=max(OPS_PAGINA, min(int(eventos), OPS_PAGINA_MAX)),
-                      posicoes_limit=max(OPS_PAGINA, min(int(posicoes), OPS_PAGINA_MAX)))
+                      posicoes_limit=max(OPS_PAGINA, min(int(posicoes), OPS_PAGINA_MAX)),
+                      eventos_full=bool(eventos_full))
     ctx = {
         **bloco,
         "poll_seconds": _operacao_poll_seconds(),
@@ -870,6 +893,33 @@ def operacao_fragment(request: Request, slot_id: str,
         "controle_mudou": rodando is not None and bool(rodando) != bool(bloco["proc"]),
     }
     return TEMPLATES.TemplateResponse(request, "partials/operacao_slot_live.html", ctx)
+
+
+@app.get("/operacao/{slot_id}/eventos", response_class=HTMLResponse)
+def operacao_eventos_mais_antigos(request: Request, slot_id: str, before_id: int):
+    """Próxima página do scroll infinito do "Diário Completo" (ver o
+    sentinela `hx-trigger="revealed"` em `operacao_slot_live.html` e
+    `operacao_eventos_lote.html`) -- pega os `OPS_EVENTOS_PAGINA_SEGUINTE`
+    eventos mais antigos que `before_id` e devolve o lote junto da PRÓXIMA
+    sentinela (ou nenhuma, se acabou o histórico da conta).
+
+    De propósito NÃO passa por `_slot_ctx`/`live_service.get_status()`: essa
+    rota só existe pra ler mais log velho, então não há por que reconstruir o
+    runtime inteiro (posições, feed, disjuntor...) a cada 10 linhas de
+    scroll -- só a conta (pra achar `account_id`) e a fatia de eventos
+    pedida."""
+    from journal import live_store as store
+
+    slot = _slot_or_404(slot_id)
+    with store.live_journal() as conn:
+        account = store.load_account(conn, slot.id)
+        eventos = (
+            store.recent_events(conn, account.id, limit=OPS_EVENTOS_PAGINA_SEGUINTE,
+                                before_id=before_id)
+            if account is not None else []
+        )
+    ctx = {"slot": slot, "eventos": eventos, "pagina": OPS_EVENTOS_PAGINA_SEGUINTE}
+    return TEMPLATES.TemplateResponse(request, "partials/operacao_eventos_lote.html", ctx)
 
 
 @app.post("/operacao/{slot_id}/iniciar", response_class=HTMLResponse)
@@ -947,20 +997,15 @@ async def operacao_iniciar(request: Request, slot_id: str):
         elif strategy_key not in valid_keys:
             erro = "Escolha um robô da lista antes de iniciar."
 
-    # Escolha explícita do dono na tela (pedido 2026-08-22, revertendo "sombra
-    # sempre, sem opção nenhuma"): só o slot intradiário honra este campo --
-    # swing sempre envia de verdade, nunca teve modo sombra. Um valor fora de
-    # {"shadow", "live"} (form adulterado/desatualizado) cai pro default
-    # SEGURO (shadow), nunca vira erro que bloqueia o início nem escorrega
-    # para "live" por omissão.
+    # O modo é fixo desde a CRIAÇÃO do slot (2026-08-24) — parte do próprio
+    # `slot.id` (`dt-<robô>-<ativo>-<modo>`), não mais uma escolha feita
+    # aqui em "Iniciar". Só o slot intradiário tem modo; swing sempre envia
+    # de verdade, nunca teve modo sombra.
     #
     # Calculado AQUI (e não mais logo antes do `ProcessConfig`, ver histórico
     # git): o piso de caixa abaixo precisa saber o modo ANTES de escolher
     # qual saldo (`cash`/`cash_sombra`) checar (dono, 2026-08-23).
-    execution_mode = "live"
-    if erro is None and slot.is_intraday:
-        candidato = form.get("execution_mode")
-        execution_mode = candidato if candidato in ("shadow", "live") else "shadow"
+    execution_mode = slot.execution_mode if slot.is_intraday else "live"
 
     # "Ações por lote" é parâmetro do TERMINAL MT5 do usuário, não da
     # estratégia nem da sessão -- detectado sozinho a cada clique em
@@ -999,12 +1044,25 @@ async def operacao_iniciar(request: Request, slot_id: str):
         # de qualquer jeito, porque `IntradayLiveRuntime._check_capital` já
         # confere o mesmo saldo (ver `AccountState.cash_for`).
         ledger = live_control.available_cash(slot.id, execution_mode) or 0.0
-        if ledger < piso:
+        # Soma o que já está comprometido numa posição aberta deste slot
+        # (2026-08-24, mesmo dia da correção que passou a debitar o custo da
+        # entrada do caixa em `live.intraday_runtime._on_opened`) -- mesma
+        # regra de `live_control.start()` (ver o comentário lá para o
+        # raciocínio completo): sem isto, reiniciar o processo para só
+        # continuar vigiando uma posição que já existe ficava bloqueado pelo
+        # piso, porque o caixa LIVRE caiu abaixo dele assim que a entrada
+        # começou a ser debitada.
+        comprometido = (
+            sum(abs(p.quantity) * p.entry_price for p in conta.positions.values())
+            if conta is not None else 0.0
+        )
+        if (ledger + comprometido) < piso:
             rotulo_saldo = "sombra" if execution_mode == "shadow" else "real"
             erro = (
                 f"Informe o caixa {rotulo_saldo} destinado a este robô (mínimo "
                 f"R$ {piso:.2f}) antes de iniciar — o valor atual é "
-                f"R$ {ledger:.2f}."
+                f"R$ {ledger:.2f}"
+                f"{f' (+ R$ {comprometido:.2f} já em posição aberta)' if comprometido else ''}."
             )
         else:
             # Capital que dimensiona a posição (`ProcessConfig.capital` ->
@@ -1096,23 +1154,37 @@ async def operacao_novo_robo(request: Request):
     explícitos — abrir o cartão não pode ser o mesmo gesto que começar a
     operar dinheiro.
 
-    Recusa um ativo que já tem robô. A checagem é aqui, e não só no
-    `disabled` do `<select>`: a conta da Rico é NETTING, dois robôs no mesmo
-    papel virariam UMA posição na corretora e os dois caixas passariam a
-    mentir — e um `disabled` no HTML não cobre POST repetido nem fragmento
-    velho.
+    Aceita um ativo que já tem robô (2026-08-24, pedido do dono): criar o
+    cartão nunca manda ordem nenhuma, então dois robôs DIFERENTES no mesmo
+    ativo (ex.: gremah e gremah_tick em PMAM3, ambos em sombra) é uma
+    comparação válida, e bloquear aqui escondia essa combinação mesmo quando
+    era perfeitamente segura. O risco real -- a conta da Rico é NETTING, dois
+    robôs mandando ordem de verdade no mesmo papel viram uma posição só e os
+    dois caixas passam a mentir -- só existe quando algum dos dois de fato
+    tenta operar dinheiro, e é isso que `live_control._assert_slots_disjuntos`
+    checa (e bloqueia, com o motivo específico) na hora de Iniciar.
+
+    MODO entra aqui, não mais em "Iniciar" (2026-08-24, pedido do dono): faz
+    parte da identidade do slot (`daytrade_slot_id`), o que permite o MESMO
+    robô no MESMO ativo ter um cartão sombra e um cartão real, cada um com
+    processo/conta/caixa próprios. Por isso, ao contrário do robô+ativo, o
+    par completo (robô, ativo, modo) NÃO pode repetir — `ensure_account`
+    sozinho seria um no-op silencioso (`ON CONFLICT DO NOTHING`, mesmo
+    `slot.id`) e o dono clicaria "Criar" sem nada aparecer de novo.
     """
-    from core.config import daytrade_slot
-    from dashboard import slots as slots_mod
+    from core.config import DAYTRADE_EXECUTION_MODES, daytrade_slot
     from journal import live_store
     from strategy.daytrade.registry import get_daytrade_robot
 
     form = await request.form()
     robot_key = (form.get("robot") or "").strip()
     symbol = (form.get("symbol") or "").strip().upper()
+    execution_mode = (form.get("execution_mode") or "").strip().lower()
     erro = None
     if not robot_key or not symbol:
         erro = "Escolha o robô e o ativo."
+    elif execution_mode not in DAYTRADE_EXECUTION_MODES:
+        erro = "Escolha o modo (sombra ou real)."
     else:
         try:
             # O ROBÔ é quem valida o ativo: `Gremah.__init__` levanta
@@ -1120,20 +1192,19 @@ async def operacao_novo_robo(request: Request):
             # herdar a de outro papel. Instanciar aqui é o que impede o painel
             # de criar um cartão que nunca conseguiria subir.
             get_daytrade_robot(robot_key, symbol=symbol)
-            slot = daytrade_slot(robot_key, symbol)
+            slot = daytrade_slot(robot_key, symbol, execution_mode)
             with live_store.live_journal() as conn:
-                em_uso = slots_mod.symbols_in_use(conn)
-                if symbol in em_uso:
-                    raise ValueError(
-                        f"{symbol} já é operado pelo robô '{em_uso[symbol]}'. "
-                        "A conta da corretora é NETTING: dois robôs no mesmo "
-                        "papel viram uma posição só e os dois caixas passam a "
-                        "mentir. Remova o robô existente antes."
+                if live_store.load_account(conn, slot.id) is not None:
+                    erro = (
+                        f"o robô '{robot_key}' já existe em {symbol} no modo "
+                        f"{'sombra' if execution_mode == 'shadow' else 'real'} "
+                        "— escolha outro ativo, outro robô ou o outro modo."
                     )
-                live_store.ensure_account(
-                    conn, name=slot.id, mode="mt5", initial_capital=0.0,
-                    investment_robot=robot_key, withdrawal_robot="", symbol=symbol,
-                )
+                else:
+                    live_store.ensure_account(
+                        conn, name=slot.id, mode="mt5", initial_capital=0.0,
+                        investment_robot=robot_key, withdrawal_robot="", symbol=symbol,
+                    )
         except (KeyError, ValueError, RuntimeError) as e:
             erro = str(e)
 
@@ -1167,6 +1238,28 @@ async def operacao_remover_robo(request: Request, slot_id: str):
 
     ctx = _operacao_ctx(erro=erro)
     return TEMPLATES.TemplateResponse(request, "partials/operacao_body.html", ctx)
+
+
+@app.post("/operacao/daytrade/reordenar", response_class=HTMLResponse)
+async def operacao_reordenar_daytrade(request: Request):
+    """Grava a ordem dos cartões de day trade depois de o dono arrastar um
+    cartão FECHADO para outra posição (pedido do dono, 2026-08-24) — a ordem
+    tem de sobreviver a F5 e a reiniciar o `dev.bat`, então mora no banco
+    (`live_accounts.sort_order`), não no navegador.
+
+    `ordem` chega como uma string só, ids separados por vírgula, na ordem
+    final desejada de cima pra baixo — é o próprio JS do painel
+    (`static/js/operacao.js`) que lê essa ordem do DOM depois do drop e
+    manda aqui; não há "vizinho" para trocar feito um botão de mover, o
+    cartão pode ser largado em QUALQUER posição.
+    """
+    form = await request.form()
+    ordem = [nome for nome in str(form.get("ordem", "")).split(",") if nome]
+    from journal import live_store
+
+    with live_store.live_journal() as conn:
+        live_store.set_daytrade_account_order(conn, ordem)
+    return TEMPLATES.TemplateResponse(request, "partials/operacao_body.html", _operacao_ctx())
 
 
 @app.post("/operacao/avisos/{signal_id}/feito", response_class=HTMLResponse)
@@ -1222,15 +1315,6 @@ async def operacao_caixa(request: Request, slot_id: str):
 
     erro = None
     caixa_msg = None
-    # Eco do `<select name=execution_mode>` deste slot (via `hx-include` no
-    # form de caixa) -- este endpoint não decide nada com isso, só devolve
-    # pro template pra a escolha ainda-não-salva do dono sobreviver ao
-    # outerHTML que este POST provoca em `#ops-body`. Ver docstring de
-    # `_operacao_ctx`.
-    exec_mode_override = {}
-    exec_mode_form = form.get("execution_mode")
-    if slot.is_intraday and exec_mode_form in ("shadow", "live"):
-        exec_mode_override[slot.id] = exec_mode_form
     valor = _valor_brl(form.get("caixa", ""))
     if valor is None or valor < 0:
         erro = "Informe o caixa destinado a este robô (maior ou igual a zero)."
@@ -1264,11 +1348,10 @@ async def operacao_caixa(request: Request, slot_id: str):
                     )
                 # Modo "shadow" edita `cash_sombra`, nunca `cash` -- pedido do
                 # dono (2026-08-23): "separação dos campos de saldo, pra o
-                # sombra ter seu saldo e o real o seu". So' para slot
-                # intradiário: swing não tem `cash_sombra` nem seleção de
-                # modo (ver `exec_mode_override` acima, que já ignora o
-                # campo do form pra quem não é intradiário).
-                editando_sombra = slot.is_intraday and exec_mode_form == "shadow"
+                # sombra ter seu saldo e o real o seu". O modo é fixo no
+                # próprio slot desde 2026-08-24 (não mais um campo de form) --
+                # swing não tem `cash_sombra` nem modo.
+                editando_sombra = slot.is_intraday and slot.execution_mode == "shadow"
                 if editando_sombra:
                     diff, aplicado = live_store.reconcile_cash_sombra(
                         conn, conta, valor, tolerance=0.005,
@@ -1297,7 +1380,7 @@ async def operacao_caixa(request: Request, slot_id: str):
         except (live_store.LegacyPaperAccountError, live_store.LegacyManualAccountError) as e:
             erro = str(e)
 
-    ctx = _operacao_ctx(erro=erro, caixa_msg=caixa_msg, exec_mode_override=exec_mode_override)
+    ctx = _operacao_ctx(erro=erro, caixa_msg=caixa_msg)
     return TEMPLATES.TemplateResponse(request, "partials/operacao_body.html", ctx)
 
 

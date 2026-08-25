@@ -86,7 +86,7 @@ class _Position:
     # `IntradaySessionMachine._resolve_live_split_exit`). Herdado da mesma
     # ordem que `exit_split_unit`, nao muda depois.
     exit_ttl_bars: int | None = None
-    # Fatia de SAIDA vigiada agora PARA ESTA POSICAO (0 = nenhuma armada) --
+    # Fatia de SAIDA vigiada agora PARA ESTA POSICAO (0 = nenhuma posicionada) --
     # 2026-08-24, migrado de campo unico da maquina (`_exit_resting_qty`) para
     # AQUI: com posicoes independentes (`IntradaySessionMachine.positions`,
     # ver a docstring da classe), cada posicao tem seu PROPRIO relogio de
@@ -611,7 +611,7 @@ class IntradaySessionMachine:
             if qtd_pendente > 0 and self.execution is not None:
                 raise RuntimeError(
                     f"{self.strategy.symbol}: reinicio encontrou uma FATIA DE SAIDA "
-                    f"armada ({qtd_pendente} acoes) em execucao REAL, mas o ticket "
+                    f"posicionada ({qtd_pendente} acoes) em execucao REAL, mas o ticket "
                     "dessa ordem-limite vive so' em memoria e nao sobrevive a um "
                     "restart do processo -- a corretora e' a unica fonte de verdade "
                     "sobre ele. Resumir aqui sem saber se a ordem ainda esta no book "
@@ -1052,7 +1052,7 @@ class IntradaySessionMachine:
         "orfa" so' porque UMA posicao do grupo fechou.
 
         MESMA estrutura de `_resolve_live_split_exit`, de proposito -- checa
-        primeiro a fatia JA armada (se houver), arma uma fatia NOVA so' no
+        primeiro a fatia JA posicionada (se houver), arma uma fatia NOVA so' no
         final. Isso da' ao arme o MESMO atraso estrutural de 1 barra que a
         execucao real tem (mandar a ordem e so' poder checar o fill dela na
         barra SEGUINTE): a fatia arma no primeiro toque do alvo mas nunca

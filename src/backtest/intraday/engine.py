@@ -71,11 +71,15 @@ class IntradayBacktestResult:
     wiped_out_at: pd.Timestamp | None = None
     # Sessoes PULADAS por `config.enforce_capital_minimo` -- o caixa
     # disponivel na abertura nao cobria `capital_minimo_brl` no preco do
-    # dia, entao a sessao inteira roda em branco (nenhuma decisao do robo),
-    # MESMA regra que `live.intraday_runtime.IntradayLiveRuntime.
-    # _check_capital` ja aplicava ao vivo. Vazio quando o flag esta
-    # desligado (default de quem monta `IntradayBacktestConfig` na mao) ou
-    # quando o caixa sempre cobriu o minimo.
+    # dia, entao a sessao inteira roda em branco (nenhuma decisao do robo).
+    # Ate 2026-08-24 esta era a MESMA regra do gate diario de
+    # `live.intraday_runtime.IntradayLiveRuntime._check_capital`; o dono
+    # pediu para o 2x so' valer na ENTRADA (`live_control.start`), entao o
+    # gate diario ao vivo passou a exigir so' 1x o lote -- este flag de
+    # backtest continua em 2x (dimensiona a calibracao, nao decide se um
+    # robo ja rodando pode continuar). Vazio quando o flag esta desligado
+    # (default de quem monta `IntradayBacktestConfig` na mao) ou quando o
+    # caixa sempre cobriu o minimo.
     sessoes_puladas_por_capital: list = field(default_factory=list)
 
 

@@ -303,6 +303,23 @@ def session_date(now: datetime | None = None) -> date:
     return previous_session(d)
 
 
+def intraday_session(now: datetime | None = None) -> date:
+    """Pregao de day trade EM CURSO em `now` (default: agora) — o dia-
+    calendario real, nunca o pregao anterior.
+
+    Diferente de `session_date()`: aquela e a referencia do SWING, que decide
+    sobre um fecho ja completo (por isso aponta pro ULTIMO pregao encerrado
+    enquanto o continuo de hoje ainda esta aberto). Day trade decide dentro do
+    proprio pregao que esta rolando agora — chamar `session_date()` dali
+    devolvia o pregao anterior o dia inteiro (confirmado ao vivo em
+    2026-08-24: mercado aberto, `session_date()` apontando pra sexta-feira),
+    o que journalizava toda operacao de hoje com a data de ontem e desalinhava
+    a janela de semente (`_seed_volume_window`/`_seed_daily_volatility`) em um
+    pregao. So faz sentido chamar isto durante `OPEN`/`CLOSING_AUCTION` — quem
+    chama fora dessa janela ja devolveu `idle` antes."""
+    return _normalize(now).date()
+
+
 def sessions_between(start: date, end: date) -> list[date]:
     """Lista (ordenada, crescente) de pregoes com `start <= d <= end`.
 

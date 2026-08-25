@@ -40,11 +40,14 @@ def test_todo_simbolo_calibrado_da_gremah_tick_tem_perfil_para_operar_ao_vivo():
 
 
 # ---------- enforce_capital_minimo (2026-08-23) -----------------------------
-# `config_for` e' o caminho que TODO backtest/sombra real usa -- fecha a
-# divergencia com `live.intraday_runtime.IntradayLiveRuntime._check_capital`,
-# que ja recusava operar sem caixa suficiente. O campo em si comeca `False`
-# em `IntradayBacktestConfig` (preserva testes com capital sintetico
-# pequeno de proposito); e' `config_for` quem liga o padrao seguro.
+# `config_for` e' o caminho que TODO backtest/sombra real usa -- historicamente
+# a mesma regra que `live.intraday_runtime.IntradayLiveRuntime._check_capital`
+# aplicava ao vivo (2x o lote); desde 2026-08-24 o gate diario ao vivo caiu
+# para 1x (o 2x agora so' vale na ENTRADA, ver `live_control.start`), mas o
+# flag de backtest continua em 2x -- dimensiona a calibracao, nao decide se um
+# robo ja rodando pode continuar. O campo em si comeca `False` em
+# `IntradayBacktestConfig` (preserva testes com capital sintetico pequeno de
+# proposito); e' `config_for` quem liga o padrao seguro.
 
 def test_config_for_liga_enforce_capital_minimo_por_padrao():
     profile = PROFILES["PMAM3"]

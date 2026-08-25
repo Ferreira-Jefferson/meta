@@ -74,10 +74,14 @@ def client():
 # PROPRIO de day trade (`strategy.daytrade.registry`, sempre disponivel, sem
 # ranking recalculado por hora) -- ver `tests/test_dashboard_daytrade_robot.py`.
 SWING = "swing"
-# Slot de day trade DINAMICO (`dt-<robo>-<ativo>`) -- desde 2026-08-22 nao ha
-# mais um slot fixo "daytrade": o dono abre quantos quiser, um por ativo.
-DAYTRADE = "dt-gremah-pmam3"
+# Slot de day trade DINAMICO (`dt-<robo>-<ativo>-<modo>`, modo fixo no id
+# desde 2026-08-24) -- desde 2026-08-22 nao ha mais um slot fixo "daytrade":
+# o dono abre quantos quiser, um por ativo (e por modo).
+DAYTRADE = "dt-gremah-pmam3-shadow"
 DAYTRADE_SYMBOL = "PMAM3"
+# Mesmo robo+ativo de `DAYTRADE`, em modo REAL -- desde 2026-08-24 os dois
+# coexistem como slots/contas independentes.
+DAYTRADE_LIVE = "dt-gremah-pmam3-live"
 
 
 def _create_mt5_account(
@@ -95,10 +99,12 @@ def _create_mt5_account(
             withdrawal_robot="official_policy",
             # O ativo E' parte da identidade da conta de day trade: sem ele a
             # conta nao vira slot e o cartao nao aparece no painel. Sai do
-            # PROPRIO id (`dt-<robo>-<ativo>`) e nao de uma constante, senao
-            # dois slots diferentes nasceriam com o mesmo papel -- exatamente o
-            # que o painel proibe (conta NETTING).
-            symbol=slot.rsplit("-", 1)[-1].upper() if eh_daytrade else "",
+            # PROPRIO id (`dt-<robo>-<ativo>-<modo>`) e nao de uma constante,
+            # senao dois slots diferentes nasceriam com o mesmo papel --
+            # exatamente o que o painel proibe (conta NETTING). O ativo e' o
+            # penultimo segmento (o ultimo e' o modo, fixo no id desde
+            # 2026-08-24).
+            symbol=slot.rsplit("-", 2)[-2].upper() if eh_daytrade else "",
         )
         return acc.id
 
@@ -581,37 +587,35 @@ def test_operacao_caixa_valor_negativo_bloqueia(isolated_journal, client):
     assert conta.cash == pytest.approx(1_000.0)  # nao mexeu
 
 
-def test_operacao_caixa_ecoa_execution_mode_ainda_nao_salvo(isolated_journal, client):
-    """Reclamacao do dono (2026-08-23): com "Real" escolhido no `<select>`
-    (mas o robo nunca foi de fato iniciado nesse modo), digitar um novo caixa
-    e confirmar recarregava `#ops-body` inteiro e o select voltava para
-    "Sombra" -- o unico modo gravado em `live_control.last_config`. O form
-    de caixa manda `execution_mode` junto (via `hx-include` no template) e a
-    rota tem de devolver o MESMO valor selecionado, nao o ultimo config
-    realmente iniciado."""
-    _create_mt5_account(isolated_journal, capital=10.0, slot=DAYTRADE)
+def test_operacao_caixa_ignora_execution_mode_forjado_no_form(isolated_journal, client):
+    """O modo é fixo no slot desde 2026-08-24 (não há mais `<select
+    execution_mode>` nem eco de escolha-ainda-não-salva pra sobreviver a este
+    POST): um `execution_mode` forjado no form (form adulterado, ou o antigo
+    comportamento tentando voltar) é ignorado -- `DAYTRADE` termina em
+    '-shadow', então o caixa digitado vai sempre para `cash_sombra`, mesmo
+    pedindo "live" no form."""
+    _create_mt5_account(isolated_journal, capital=10.0, slot=DAYTRADE)  # cash=cash_sombra=10
 
     resp = client.post(f"/operacao/{DAYTRADE}/caixa",
                         data={"caixa": "80", "execution_mode": "live"})
 
     assert resp.status_code == 200
-    exec_select = resp.text[resp.text.index(f'id="ops-exec-{DAYTRADE}"'):]
-    exec_select = exec_select[:exec_select.index("</select>")]
-    assert 'value="live" selected' in exec_select
-    assert 'value="shadow" selected' not in exec_select
+    with live_store.live_journal(isolated_journal) as conn:
+        conta = live_store.load_account(conn, DAYTRADE)
+    assert conta.cash_sombra == pytest.approx(80.0)
+    assert conta.cash == pytest.approx(10.0)  # real intacto
 
 
 def test_operacao_caixa_com_execution_mode_shadow_mexe_so_no_cash_sombra(
     isolated_journal, client,
 ):
     """O pedido do dono (2026-08-23): "separação dos campos de saldo, pra o
-    sombra ter seu saldo e o real o seu". Com "Sombra" selecionado no form de
-    caixa, o valor digitado tem de ir para `cash_sombra` -- `cash` (o
-    dinheiro real) fica intocado."""
+    sombra ter seu saldo e o real o seu". `DAYTRADE` é '-shadow': o valor
+    digitado tem de ir para `cash_sombra` -- `cash` (o dinheiro real) fica
+    intocado."""
     _create_mt5_account(isolated_journal, capital=10.0, slot=DAYTRADE)  # cash=cash_sombra=10
 
-    resp = client.post(f"/operacao/{DAYTRADE}/caixa",
-                        data={"caixa": "500", "execution_mode": "shadow"})
+    resp = client.post(f"/operacao/{DAYTRADE}/caixa", data={"caixa": "500"})
 
     assert resp.status_code == 200
     with live_store.live_journal(isolated_journal) as conn:
@@ -620,19 +624,19 @@ def test_operacao_caixa_com_execution_mode_shadow_mexe_so_no_cash_sombra(
     assert conta.cash == pytest.approx(10.0)  # real intacto
 
 
-def test_operacao_caixa_com_execution_mode_live_mexe_so_no_cash_real(
+def test_operacao_caixa_no_slot_live_mexe_so_no_cash_real(
     isolated_journal, client,
 ):
-    """Contraprova: com "Real" selecionado, o de sempre -- só `cash` muda,
-    `cash_sombra` fica intocado."""
-    _create_mt5_account(isolated_journal, capital=10.0, slot=DAYTRADE)  # cash=cash_sombra=10
+    """Contraprova: no slot `-live` (mesmo robô+ativo de `DAYTRADE`, mas outra
+    conta), o caixa digitado vai sempre para `cash`, `cash_sombra` fica
+    intocado -- os dois slots nunca se cruzam."""
+    _create_mt5_account(isolated_journal, capital=10.0, slot=DAYTRADE_LIVE)  # cash=cash_sombra=10
 
-    resp = client.post(f"/operacao/{DAYTRADE}/caixa",
-                        data={"caixa": "500", "execution_mode": "live"})
+    resp = client.post(f"/operacao/{DAYTRADE_LIVE}/caixa", data={"caixa": "500"})
 
     assert resp.status_code == 200
     with live_store.live_journal(isolated_journal) as conn:
-        conta = live_store.load_account(conn, DAYTRADE)
+        conta = live_store.load_account(conn, DAYTRADE_LIVE)
     assert conta.cash == pytest.approx(500.0)
     assert conta.cash_sombra == pytest.approx(10.0)  # sombra intacto
 
@@ -699,14 +703,14 @@ def test_robos_ficam_abaixo_do_form_e_em_ordem_de_criacao(isolated_journal, clie
     alfabetica do id. Criar KLBN4 depois de PMAM3 punha o novo ACIMA do antigo.
     Este teste so distingue as duas ordens porque cria na ordem CONTRARIA a
     alfabetica."""
-    _create_mt5_account(isolated_journal, capital=10.0, slot="dt-gremah-pmam3")
-    _create_mt5_account(isolated_journal, capital=10.0, slot="dt-gremah-klbn4")
+    _create_mt5_account(isolated_journal, capital=10.0, slot="dt-gremah-pmam3-shadow")
+    _create_mt5_account(isolated_journal, capital=10.0, slot="dt-gremah-klbn4-shadow")
 
     html = client.get("/operacao").text
 
     i_form = html.index('class="ops-new-robot-form"')
-    i_pmam = html.index('data-ops-key="slot:dt-gremah-pmam3"')
-    i_klbn = html.index('data-ops-key="slot:dt-gremah-klbn4"')
+    i_pmam = html.index('data-ops-key="slot:dt-gremah-pmam3-shadow"')
+    i_klbn = html.index('data-ops-key="slot:dt-gremah-klbn4-shadow"')
     assert i_form < i_pmam, "o form tem de ficar ACIMA dos cartoes"
     assert i_pmam < i_klbn, "ordem de criacao, mais recente por ultimo"
 
@@ -723,37 +727,31 @@ def test_cartao_de_day_trade_nao_repete_a_descricao_do_robo(isolated_journal, cl
     assert "rotação mensal por liquidez" in html        # dek do swing, fica
 
 
-def test_etiqueta_de_execucao_diz_o_modo_REAL_do_processo(isolated_journal, client):
+def test_etiqueta_de_modo_diz_o_execution_mode_do_slot(isolated_journal, client):
     """A faixa "Modo sombra" saiu, mas o FATO nao podia sair junto: sem ele um
     robo mandando ordem de verdade fica indistinguivel de um que nao manda
     nada.
 
     REGRESSAO que a faixa carregava: ela era condicionada a `slot.is_intraday`
     e escrevia "nenhuma ordem e' enviada a corretora" mesmo com o robo
-    iniciado em Real. A etiqueta le `s.daytrade.execution_mode`, que vem do
-    processo."""
+    iniciado em Real. A garantia morou um tempo numa etiqueta a parte dentro
+    do fragmento de polling (lendo `s.daytrade.execution_mode`, o processo);
+    saiu de la' (dono, 2026-08-24: duplicava o pill abaixo) e passou a viver
+    so' no `.ops-slot-mode` do cabecalho do cartao (`operacao_body.html`),
+    que le `slot.execution_mode` -- o mesmo valor com que o processo e'
+    sempre iniciado (`live_control.py::start`, `--execution-mode`), entao os
+    dois nunca divergem."""
     _create_mt5_account(isolated_journal, capital=10.0, slot=DAYTRADE)
 
-    html = client.get(f"/operacao/{DAYTRADE}/fragment").text
+    html = client.get("/operacao").text
     assert "Nenhuma ordem é enviada à corretora" not in html   # a prosa saiu
-    assert "Execução" in html and "sombra" in html
+    assert "ops-slot-mode" in html and "simulação" in html
+    assert "is-live" not in html            # simulação: sem vermelho
 
-    import dashboard.live_service as svc
-    real = svc.get_status
-
-    def _live(slot_id, **kw):
-        st = real(slot_id, **kw)
-        if st.get("daytrade"):
-            st["daytrade"]["execution_mode"] = "live"
-        return st
-
-    svc.get_status = _live
-    try:
-        html = client.get(f"/operacao/{DAYTRADE}/fragment").text
-    finally:
-        svc.get_status = real
-    assert "real — envia ordem" in html
-    assert "ops-badge err" in html          # vermelho: dinheiro de verdade
+    _create_mt5_account(isolated_journal, capital=10.0, slot="dt-gremah-klbn4-live")
+    html = client.get("/operacao").text
+    assert "real" in html
+    assert "ops-slot-mode is-live" in html  # vermelho: dinheiro de verdade
 
 
 def test_caixa_e_controle_na_mesma_linha_fora_do_polling(isolated_journal, client):

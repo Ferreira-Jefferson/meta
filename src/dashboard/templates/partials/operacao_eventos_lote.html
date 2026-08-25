@@ -1,0 +1,16 @@
+{# Um lote de eventos MAIS ANTIGOS do scroll infinito ("Diário Completo",
+   ver `app.py::operacao_eventos_mais_antigos`). Padrão htmx de "infinite
+   scroll": a sentinela troca A SI MESMA (`hx-swap="outerHTML"`) por este
+   fragmento -- as linhas novas ficam onde a sentinela estava, e a sentinela
+   nova (se ainda houver histórico) nasce mais pra baixo, pronta pro próximo
+   `revealed`. Sem sentinela nova quando o lote veio incompleto: é o mesmo
+   sinal de "acabou o histórico" que `.eventos_mais` usa no primeiro
+   carregamento (`app.py::_slot_ctx`). Sem quebra de linha depois do
+   `{% raw %}{% endif %}{% endraw %}`, e `{% raw %}{%-{% endraw %}` (com
+   hífen) antes do `for`: isto é anexado DENTRO de um `<pre>` já aberto, e
+   qualquer `\n` sobrando (o do comentário acima, ou o do fim do arquivo)
+   viraria linha em branco a mais no console a cada lote carregado. #}
+{%- for e in eventos %}[{{ e.ts }}] {{ e.level | upper }} {{ e.source }}: {{ e.message }}
+{% endfor %}{% if eventos | length == pagina %}<span id="ops-events-sentinel-{{ slot.id }}"
+      hx-get="/operacao/{{ slot.id }}/eventos?before_id={{ eventos[-1].id }}"
+      hx-trigger="revealed" hx-swap="outerHTML" hx-target="this"></span>{% endif %}

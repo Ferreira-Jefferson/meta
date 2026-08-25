@@ -11,21 +11,9 @@
    nunca seria trocado pelo refresh de fundo. Sem isto, um cartão recolhido
    continuaria escrito "operando" depois de o robô parar — e um painel que
    mente sobre dinheiro é pior que um painel que não resume. #}
-{% macro resumo(slot_id, caixa, proc, caixa_minima=none, caixa_ok=True, oob=False,
-                cash_live=none, cash_sombra=none, caixa_ok_live=none, caixa_ok_sombra=none) %}
+{% macro resumo(slot_id, caixa, proc, caixa_minima=none, caixa_ok=True, oob=False) %}
 <span id="ops-sum-{{ slot_id }}" class="ops-sum"{% if oob %} hx-swap-oob="true"{% endif %}>
-  {# `data-cash-live`/`data-cash-sombra`/`data-ok-live`/`data-ok-sombra`
-     (2026-08-23): só em slot intradiário (`cash_live is not none`, ver os
-     chamadores) -- deixam `static/js/operacao.js::sincronizaCaixaComExecucao`
-     trocar ESTE número (e o destaque de bloqueio) junto com o `<input>` de
-     caixa quando o dono muda o `<select execution_mode>`, sem round-trip.
-     Sem isto o resumo do cabeçalho ficava preso no modo com que a página
-     nasceu -- "Real" selecionado, mas o número ao lado continuava sendo o
-     de sombra (reclamação do dono, 2026-08-23). #}
-  <span class="ops-sum-cash num"
-        {% if cash_live is not none %}
-        data-cash-live="{{ cash_live | num_br }}" data-cash-sombra="{{ cash_sombra | num_br }}"
-        {% endif %}>R$ {{ caixa | num_br }}</span>
+  <span class="ops-sum-cash num">R$ {{ caixa | num_br }}</span>
   {# O mínimo mudou de lugar (dono, 2026-08-22): ficava ao lado do campo de
      caixa, longe de onde o cartão já mostra o próprio caixa. `caixa_minima`
      é `none` só na chamada sem esse dado (não deveria haver mais nenhuma,
@@ -35,10 +23,7 @@
      confirma que o robô não está rodando — repetir "não opera" por extenso
      era dizer a mesma coisa três vezes na mesma linha. #}
   {% if caixa_minima is not none %}
-  <span class="ops-sum-hint{% if not caixa_ok %} is-blocked{% endif %}"
-        {% if caixa_ok_live is not none %}
-        data-ok-live="{{ 1 if caixa_ok_live else 0 }}" data-ok-sombra="{{ 1 if caixa_ok_sombra else 0 }}"
-        {% endif %}>mín. R$ {{ caixa_minima | num_br }}</span>
+  <span class="ops-sum-hint{% if not caixa_ok %} is-blocked{% endif %}">mín. R$ {{ caixa_minima | num_br }}</span>
   {% endif %}
   <span class="ops-sum-state{{ ' is-running' if proc else '' }}">
     {# O ponto repete o que a palavra já diz, de propósito: cor sozinha não

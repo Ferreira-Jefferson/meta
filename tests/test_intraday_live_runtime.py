@@ -36,10 +36,11 @@ from live.intraday_runtime import MAX_GAP_SECONDS, IntradayLiveRuntime
 from strategy.daytrade.base import Bar, EnterLimit, IntradayStrategy
 
 # O slot de day trade e' DINAMICO desde 2026-08-22: o id carrega robo+ativo
-# (`dt-<robo>-<ativo>`) e o painel abre quantos o dono quiser. Nao existe mais
-# um slot fixo chamado "daytrade".
+# e, desde 2026-08-24, o modo de execucao (`dt-<robo>-<ativo>-<modo>`) -- o
+# painel abre quantos o dono quiser. Nao existe mais um slot fixo chamado
+# "daytrade".
 SYMBOL = "PMAM3"
-SLOT = slot_by_id("dt-gremah-pmam3")
+SLOT = slot_by_id("dt-gremah-pmam3-shadow")
 SESSION = date(2026, 8, 21)
 
 
@@ -151,7 +152,7 @@ def pregao_aberto(monkeypatch):
     monkeypatch.setattr(live_clock, "session_date", lambda *a, **k: SESSION)
     monkeypatch.setattr(itr_mod.clock, "phase", lambda *a, **k: SessionPhase.OPEN)
     monkeypatch.setattr(itr_mod.clock, "is_trading_day", lambda d: True)
-    monkeypatch.setattr(itr_mod.clock, "session_date", lambda *a, **k: SESSION)
+    monkeypatch.setattr(itr_mod.clock, "intraday_session", lambda *a, **k: SESSION)
 
 
 def _agora(hhmm: str) -> datetime:
@@ -188,6 +189,83 @@ def test_sombra_journaliza_entrada_e_saida_sem_tocar_a_corretora(tmp_path, prega
     assert len(ordens) == 2                       # entrada + saida
     assert all(o["broker_ref"] is None for o in ordens)
     assert all("SHADOW" in (o["note"] or "") for o in ordens)
+
+
+# ---------- numero de rodada no diario (2026-08-24) -------------------------
+
+def test_numero_de_ordem_e_o_mesmo_do_armar_ate_a_saida_e_avanca_na_proxima_rodada(
+    tmp_path, pregao_aberto,
+):
+    """Pedido do dono: o diario tem de deixar claro qual `entrada`/`saida`
+    pertence a qual `ordem posicionada`, mesmo com mais de uma rodada no mesmo
+    pregao -- sem isto, so' dava pra saber "quem disparou" lendo o codigo
+    (o que motivou a pergunta 3x numa mesma conversa). A 1a rodada (long,
+    alvo 9.90) tem de carimbar `#01` em posicionada/entrada/saida; a 2a rodada
+    (short, o robo se re-arma sozinho depois de fechar a 1a) tem de vir com
+    `#02` do jeito, mesmo entrelacada no mesmo `run_once`."""
+    barras = [
+        _bar("13:00", 10.00, 10.00, 10.00, 10.00),  # abertura: arma a 1a (long)
+        _bar("13:01", 10.00, 10.00, 9.79, 9.85),    # toca o nivel long (9.80)
+        _bar("13:02", 9.85, 9.91, 9.85, 9.90),      # toca o alvo (9.90) -- fecha #01
+        _bar("13:03", 9.90, 9.90, 9.90, 9.90),
+        _bar("13:04", 9.90, 10.21, 9.90, 10.15),    # sobe e toca o novo nivel (short arma #02)
+        _bar("13:05", 10.15, 10.10, 9.95, 10.00),   # cai de volta pro alvo do short
+        _bar("13:06", 10.00, 10.00, 9.95, 9.98),
+    ]
+    rt, _feed = _runtime(tmp_path, barras)
+
+    passos = rt.run_once(now=_agora("13:07:00"))
+
+    passo = [p for p in passos if p.action == "daytrade"][0]
+    assert passo.detail["entradas"] == 2 and passo.detail["saidas"] == 2
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        eventos = [e["message"] for e in reversed(store.recent_events(conn, acc.id, limit=50))]
+
+    # So' os 5 eventos de ORDEM, na ordem em que aconteceram -- o resto (aviso
+    # de capital para outro ativo, sessao) nao carrega numero.
+    de_ordem = [m for m in eventos if "#0" in m]
+    assert de_ordem == [
+        "SOMBRA entrada #01 long 100 PMAM3 @ 9.8000 (stop 7.8000 / alvo 9.9000)",
+        "SOMBRA saida #01 long 100 PMAM3 @ 9.9000 (target) R$ +10.00",
+        "ordem #02 posicionada: short 100 PMAM3 @ 10.2000",
+        "SOMBRA entrada #02 short 100 PMAM3 @ 10.2000 (stop 12.2000 / alvo 10.1000)",
+        "SOMBRA saida #02 short 100 PMAM3 @ 10.1000 (target) R$ +10.00",
+        # o robo se rearma de novo com a ultima barra do roteiro -- rodada
+        # #03, ainda sem fill: prova que o numero segue avancando (nao
+        # empaca em #02) mesmo sem uma saida fechando-a antes do fim do teste.
+        "ordem #03 posicionada: long 100 PMAM3 @ 9.8000",
+    ], de_ordem
+
+
+def test_numero_de_ordem_sobrevive_a_restart_do_processo(tmp_path, pregao_aberto):
+    """O numero de rodada precisa sobreviver a um restart no MEIO do pregao
+    (`_SessionSnapshot.trade_seq`/`trade_num`, persistidos em
+    `policy_state["intraday"]`, mesmo padrao de `ordens_postas`) -- senao um
+    processo que cai e volta depois da rodada #03 recomecaria contando de
+    #01, e duas rodadas DIFERENTES do mesmo dia apareceriam com o MESMO
+    numero no diario, exatamente o problema que este numero existe pra
+    resolver."""
+    rt, _feed = _runtime(tmp_path, [_bar("13:00", 10.00, 10.00, 10.00, 10.00)])
+    rt._snapshot.session = SESSION
+    rt._snapshot.trade_seq = 3
+    rt._snapshot.trade_num = None  # rodada #3 ja fechou, ninguem armado agora
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        rt._persist(conn, acc)
+
+    # "reinicia o processo": runtime NOVO, mesmo banco -- sem nenhuma memoria
+    # em Python do que o processo anterior tinha contado.
+    rt_novo, _feed2 = _runtime(tmp_path, [_bar("13:00", 10.00, 10.00, 10.00, 10.00)])
+    with store.live_journal(rt_novo.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+    rt_novo._restore(acc, SESSION)
+
+    assert rt_novo._snapshot.trade_seq == 3
+    assert rt_novo._numero_ordem_atual() == 4, (
+        "a proxima rodada tem que continuar a contagem, nao reiniciar em #01"
+    )
 
 
 def test_sombra_nao_debita_o_caixa_do_dono(tmp_path, pregao_aberto):
@@ -500,7 +578,7 @@ def test_restart_dentro_da_janela_de_ancora_fixa_cancela_o_ticket_antigo_antes_d
 ):
     """O PROCESSO inteiro reinicia (novo `IntradayLiveRuntime`, mesmo
     banco/corretora) ainda dentro da janela de ancora fixa, com uma ordem de
-    entrada ja armada e SEM fill nenhum. O warm start do processo novo
+    entrada ja posicionada e SEM fill nenhum. O warm start do processo novo
     recalcula a decisao do zero (nao sabe do ticket antigo por conta propria)
     -- sem a correcao, mandaria uma SEGUNDA ordem de compra por cima da que o
     processo velho ja tinha no terminal."""
@@ -721,7 +799,10 @@ def test_live_saida_dividida_confirma_fatia_e_estoura_prazo_pro_resto_a_mercado(
     with store.live_journal(rt.db_path) as conn:
         acc = store.load_account(conn, SLOT.id)
     assert acc.positions["PMAM3"].quantity == 1, "live_positions ATUALIZADA, nao apagada"
-    assert acc.cash == pytest.approx(101.0), "lucro da fatia (11.00-10.00)*1 ja' creditado"
+    # 100 (inicial) - 20 (2 acoes @ 10.00 debitadas na entrada) + 10 (capital
+    # da fatia fechada, devolvido) + 1 (lucro da fatia, 11.00-10.00) = 91;
+    # os outros 10 continuam comprometidos na acao que ainda esta aberta.
+    assert acc.cash == pytest.approx(91.0), "capital da fatia devolvido + lucro (11.00-10.00)*1 creditado"
 
     # a 2a fatia arma (o preco continua no alvo) e NAO preenche por 2 barras
     feed._barras.append(_bar("13:05", 11.00, 11.05, 10.95, 11.00))
@@ -740,8 +821,8 @@ def test_live_saida_dividida_confirma_fatia_e_estoura_prazo_pro_resto_a_mercado(
     assert "PMAM3" not in acc.positions
 
 
-def test_restart_com_fatia_de_saida_armada_em_execucao_real_falha_alto(tmp_path, pregao_aberto):
-    """Gap de restart no meio de uma fatia armada (2026-08-23): o PROCESSO
+def test_restart_com_fatia_de_saida_posicionada_em_execucao_real_falha_alto(tmp_path, pregao_aberto):
+    """Gap de restart no meio de uma fatia posicionada (2026-08-23): o PROCESSO
     inteiro reinicia (novo `IntradayLiveRuntime`, mesmo banco) enquanto a 1a
     fatia da saida dividida ainda esta pendente na corretora, sem fill
     confirmado. O ticket dessa ordem vivia so' em memoria no processo velho --
@@ -1256,7 +1337,7 @@ def test_fora_da_fase_open_nao_le_barra_nenhuma(tmp_path, monkeypatch):
 
     monkeypatch.setattr(itr_mod.clock, "phase", lambda *a, **k: SessionPhase.POST_CLOSE)
     monkeypatch.setattr(itr_mod.clock, "is_trading_day", lambda d: True)
-    monkeypatch.setattr(itr_mod.clock, "session_date", lambda *a, **k: SESSION)
+    monkeypatch.setattr(itr_mod.clock, "intraday_session", lambda *a, **k: SESSION)
 
     barras = [_bar("13:00", 10.00, 10.00, 10.00, 10.00)]
     rt, _feed = _runtime(tmp_path, barras)
@@ -1271,7 +1352,7 @@ def test_dia_sem_pregao_nao_faz_nada(tmp_path, monkeypatch):
 
     monkeypatch.setattr(itr_mod.clock, "phase", lambda *a, **k: SessionPhase.OPEN)
     monkeypatch.setattr(itr_mod.clock, "is_trading_day", lambda d: False)
-    monkeypatch.setattr(itr_mod.clock, "session_date", lambda *a, **k: SESSION)
+    monkeypatch.setattr(itr_mod.clock, "intraday_session", lambda *a, **k: SESSION)
 
     rt, _feed = _runtime(tmp_path, [_bar("13:00", 10.0, 10.0, 10.0, 10.0)])
 
@@ -1478,7 +1559,7 @@ def test_conta_de_day_trade_nao_tem_robo_de_saque(tmp_path, pregao_aberto):
     assert acc.investment_robot == "gremah"
 
 
-# ---------- caixa minimo do dia (2x o lote, reavaliado a cada pregao) -------
+# ---------- caixa minimo do dia (1x o lote, reavaliado a cada pregao) -------
 
 def _set_cash(rt, valor: float) -> None:
     """Mexe nos DOIS saldos (2026-08-23, ver `AccountState.cash_for`): estes
@@ -1494,15 +1575,16 @@ def _set_cash(rt, valor: float) -> None:
 
 
 def test_caixa_abaixo_do_minimo_do_dia_nao_opera(tmp_path, pregao_aberto):
-    """Regra do dono (2026-08-22): o piso e' 2x o custo do lote NO PRECO DE
-    HOJE, e o robo tem de saber sozinho que nao cabe. Com `default_quantity=1`
-    a R$10,00, o minimo e' R$20,00 -- R$10,00 em caixa nao pode operar."""
+    """Regra do dono (2026-08-24): depois de iniciado, o piso do dia e' so' o
+    custo do lote NO PRECO DE HOJE (o 2x fica so' na barreira de entrada, ver
+    `live_control.start`). Com `default_quantity=1` a R$10,00, o minimo e'
+    R$10,00 -- R$5,00 em caixa nao pode operar."""
     barras = [
         _bar("13:00", 10.00, 10.00, 10.00, 10.00),
         _bar("13:01", 10.00, 10.00, 9.79, 9.85),
     ]
     rt, _feed = _runtime(tmp_path, barras)
-    _set_cash(rt, 10.00)
+    _set_cash(rt, 5.00)
 
     passos = rt.run_once(now=_agora("13:02:30"))
 
@@ -1521,7 +1603,7 @@ def test_caixa_suficiente_opera_normalmente(tmp_path, pregao_aberto):
         _bar("13:01", 10.00, 10.00, 9.79, 9.85),
     ]
     rt, _feed = _runtime(tmp_path, barras)
-    _set_cash(rt, 20.00)  # exatamente o minimo: 1 acao a R$10 x 2
+    _set_cash(rt, 10.00)  # exatamente o minimo: 1 acao a R$10
 
     passos = rt.run_once(now=_agora("13:02:30"))
 
@@ -1550,8 +1632,8 @@ def test_gate_de_caixa_em_sombra_le_cash_sombra_nao_cash(tmp_path, pregao_aberto
     dublê de corretora que so' entende sombra."""
     rt, _feed = _runtime(tmp_path, [_bar("13:00", 10.00, 10.00, 10.00, 10.00)],
                         execution_mode="shadow")
-    _set_cash(rt, 0.0)            # caixa real: nao cobriria o minimo de R$20
-    _set_cash_sombra(rt, 20.00)   # saldo de sombra: cobre exatamente
+    _set_cash(rt, 0.0)            # caixa real: nao cobriria o minimo de R$10
+    _set_cash_sombra(rt, 10.00)   # saldo de sombra: cobre exatamente
 
     with store.live_journal(rt.db_path) as conn:
         acc = store.load_account(conn, SLOT.id)
@@ -1566,7 +1648,7 @@ def test_gate_de_caixa_em_live_le_cash_nao_cash_sombra(tmp_path, pregao_aberto):
     verdade que nao existe."""
     rt, _feed = _runtime(tmp_path, [_bar("13:00", 10.00, 10.00, 10.00, 10.00)],
                         execution_mode="live")
-    _set_cash(rt, 10.00)          # caixa real: nao cobre o minimo de R$20
+    _set_cash(rt, 5.00)           # caixa real: nao cobre o minimo de R$10
     _set_cash_sombra(rt, 1_000.00)  # saldo de sombra: irrelevante em live
 
     with store.live_journal(rt.db_path) as conn:
@@ -1578,9 +1660,9 @@ def test_gate_de_caixa_em_live_le_cash_nao_cash_sombra(tmp_path, pregao_aberto):
 
 
 def test_minimo_do_dia_sai_do_preco_e_da_quantidade_reais(tmp_path, pregao_aberto):
-    """O piso nao e' um numero fixo em lugar nenhum: sai de
-    `capital_minimo_brl(preco_de_hoje, quantidade_do_robo)`. Um papel que
-    dobrou de preco exige o dobro de caixa no mesmo robo."""
+    """O piso nao e' um numero fixo em lugar nenhum: sai de `preco_de_hoje x
+    quantidade_do_robo`. Um papel que dobrou de preco exige o dobro de caixa
+    no mesmo robo."""
     barras = [
         _bar("13:00", 40.00, 40.00, 40.00, 40.00),  # semente (warm start)
         _bar("13:01", 40.00, 40.00, 39.90, 40.00),  # a consumida: e o close DELA que vale
@@ -1590,10 +1672,10 @@ def test_minimo_do_dia_sai_do_preco_e_da_quantidade_reais(tmp_path, pregao_abert
 
     rt.run_once(now=_agora("13:02:30"))
 
-    # 1 acao (default_quantity do harness) a R$40,00 -> lote R$40 -> piso R$80.
+    # 1 acao (default_quantity do harness) a R$40,00 -> piso R$40.
     # O preco vem do close da ULTIMA barra fechada -- o mais recente que existe.
-    assert rt._capital_minimo_hoje == pytest.approx(80.0)
-    assert "80.00" in rt._capital_alarm
+    assert rt._capital_minimo_hoje == pytest.approx(40.0)
+    assert "40.00" in rt._capital_alarm
 
 
 def test_caixa_e_conferido_uma_vez_por_pregao_nao_a_cada_barra(tmp_path, pregao_aberto):
@@ -1606,7 +1688,7 @@ def test_caixa_e_conferido_uma_vez_por_pregao_nao_a_cada_barra(tmp_path, pregao_
         _bar("13:02", 9.85, 9.90, 9.80, 9.88),
     ]
     rt, feed = _runtime(tmp_path, barras)
-    _set_cash(rt, 10.00)
+    _set_cash(rt, 5.00)
 
     rt.run_once(now=_agora("13:02:30"))
     rt.run_once(now=_agora("13:03:30"))
@@ -1657,7 +1739,7 @@ def test_status_mostra_o_minimo_do_dia_e_o_alarme(tmp_path, pregao_aberto):
 
     dt = rt.status()["daytrade"]
 
-    assert dt["capital_minimo_hoje"] == pytest.approx(20.0)
+    assert dt["capital_minimo_hoje"] == pytest.approx(10.0)
     assert "nao cobre o minimo" in dt["capital_alarme"]
 
 
@@ -1748,3 +1830,279 @@ def test_falha_ao_avaliar_sugestao_nunca_derruba_o_robo(tmp_path, pregao_aberto,
         avisos_log = [r["message"] for r in conn.execute(
             "SELECT message FROM live_events WHERE level = 'warn'")]
     assert any("sugestao de capital" in m for m in avisos_log)
+
+
+# ---------- cards do painel: ganhos/perdas, CAGR/DD, acerto por lado (2026-08-24) ----------
+
+def test_resultado_dia_e_acumulado_separa_hoje_do_historico():
+    saidas = [
+        {"date": "2026-08-21", "round": 1, "side": "long", "pnl_brl": 20.0},
+        {"date": "2026-08-21", "round": 2, "side": "long", "pnl_brl": -8.0},
+        {"date": "2026-08-24", "round": 1, "side": "long", "pnl_brl": 10.0},
+        # rodada dividida em 2 fatias -- soma antes de contar ganho/perda
+        {"date": "2026-08-24", "round": 2, "side": "short", "pnl_brl": -5.0},
+        {"date": "2026-08-24", "round": 2, "side": "short", "pnl_brl": -3.0},
+    ]
+    r = IntradayLiveRuntime._resultado_dia_e_acumulado(saidas, "2026-08-24", 1000.0)
+
+    assert r["ganhos_dia"] == 10.0
+    assert r["perdas_dia"] == 8.0
+    assert r["lucro_acumulado"] == 30.0
+    assert r["prejuizo_acumulado"] == 16.0
+    # do dia: +10, depois -5 (pico 10 -> 5), depois -3 (5 -> 2) = DD -8 sobre pico 10
+    assert r["retorno_dia_pct"] == 0.2
+    assert r["dd_dia_pct"] == -0.8
+    # acumulado: +20, -8 (DD -8), +10 (pico 22), -5, -3 (22 -> 14, DD -8)
+    assert r["retorno_acumulado_pct"] == 1.4
+    assert r["dd_acumulado_pct"] == -0.8
+
+
+def test_acerto_por_lado_e_por_rodada_nao_por_fatia():
+    """A rodada #02 fecha em 2 fatias (-5 e -3): precisa contar como UMA
+    derrota de venda, nao duas."""
+    saidas = [
+        {"date": "2026-08-24", "round": 1, "side": "long", "pnl_brl": 10.0},
+        {"date": "2026-08-24", "round": 2, "side": "short", "pnl_brl": -5.0},
+        {"date": "2026-08-24", "round": 2, "side": "short", "pnl_brl": -3.0},
+        {"date": "2026-08-21", "round": 1, "side": "long", "pnl_brl": 20.0},
+        {"date": "2026-08-21", "round": 2, "side": "long", "pnl_brl": -8.0},
+    ]
+    r = IntradayLiveRuntime._resultado_dia_e_acumulado(saidas, "2026-08-24", 1000.0)
+
+    assert r["acerto_compra_pct"] == 67  # 2 de 3 rodadas de compra ganharam
+    assert r["acerto_venda_pct"] == 0    # a unica rodada de venda perdeu
+
+
+def test_acerto_por_lado_sem_historico_e_none():
+    r = IntradayLiveRuntime._resultado_dia_e_acumulado([], "2026-08-24", 1000.0)
+    assert r["acerto_compra_pct"] is None
+    assert r["acerto_venda_pct"] is None
+
+
+def test_ordens_por_lado_conta_armada_preenchida_e_cancelada():
+    ordens = [
+        {"side": "long", "kind": "armada", "quantity": 100, "price": 10.0},
+        {"side": "long", "kind": "preenchida", "quantity": 100, "price": 10.0},
+        {"side": "short", "kind": "armada", "quantity": 100, "price": 20.0},
+        {"side": "short", "kind": "cancelada", "quantity": 100, "price": 20.0},
+        {"side": "short", "kind": "armada", "quantity": 50, "price": 21.0},
+    ]
+    r = IntradayLiveRuntime._ordens_por_lado(ordens)
+
+    assert r["ordens_compra"] == 1
+    assert r["ordens_venda"] == 2
+    assert r["preenchida_compra_pct"] == 100
+    assert r["preenchida_venda_pct"] == 0
+    # nocional das ARMADAS, mesma populacao da contagem acima -- nao soma a
+    # preenchida/cancelada, que sao a MESMA rodada contada de outro jeito.
+    assert r["valor_ordens_compra"] == 1000.0  # 100 x 10.0
+    assert r["valor_ordens_venda"] == 3050.0   # 100 x 20.0 + 50 x 21.0
+
+
+def test_ordens_por_lado_sem_desfecho_ainda_e_none():
+    r = IntradayLiveRuntime._ordens_por_lado([{"side": "long", "kind": "armada"}])
+    assert r["preenchida_compra_pct"] is None
+    assert r["preenchida_venda_pct"] is None
+    # evento sem quantity/price (ex.: payload antigo) nao contribui pro
+    # valor, mas tambem nao quebra a soma.
+    assert r["valor_ordens_compra"] == 0.0
+    assert r["valor_ordens_venda"] == 0.0
+
+
+def test_status_traz_ganhos_perdas_cagr_dd_e_acerto_por_lado_de_ponta_a_ponta(
+    tmp_path, pregao_aberto,
+):
+    """Mesmo roteiro do teste de numeracao (2 rodadas fechadas com lucro, uma
+    3a so' posicionada) -- aqui o alvo e' `status()` de ponta a ponta:
+    `live_store.daytrade_exit_events`/`daytrade_order_events_on` lendo os
+    EVENTOS DE VERDADE gravados no sqlite (nao dados de teste inventados),
+    provando que o filtro por texto de mensagem (`"posicionada"` etc.) e' o
+    mesmo texto que o runtime realmente grava."""
+    barras = [
+        _bar("13:00", 10.00, 10.00, 10.00, 10.00),  # abertura: posiciona a 1a (long)
+        _bar("13:01", 10.00, 10.00, 9.79, 9.85),    # toca o nivel long (9.80)
+        _bar("13:02", 9.85, 9.91, 9.85, 9.90),      # toca o alvo (9.90) -- fecha #01 (+10)
+        _bar("13:03", 9.90, 9.90, 9.90, 9.90),
+        _bar("13:04", 9.90, 10.21, 9.90, 10.15),    # sobe e toca o novo nivel (short posiciona #02)
+        _bar("13:05", 10.15, 10.10, 9.95, 10.00),   # cai de volta pro alvo do short -- fecha #02 (+10)
+        _bar("13:06", 10.00, 10.00, 9.95, 9.98),
+    ]
+    rt, _feed = _runtime(tmp_path, barras)
+    rt.run_once(now=_agora("13:07:00"))
+
+    s = rt.status()["daytrade"]
+
+    assert s["ganhos_dia"] == 20.0
+    assert s["perdas_dia"] == 0.0
+    assert s["lucro_acumulado"] == 20.0
+    assert s["prejuizo_acumulado"] == 0.0
+    # capital inicial de teste = R$100 (ver `_runtime`); +10 e' 10% de retorno
+    assert s["retorno_dia_pct"] == 20.0
+    assert s["dd_dia_pct"] == 0.0
+    assert s["retorno_acumulado_pct"] == 20.0
+    assert s["dd_acumulado_pct"] == 0.0
+    assert s["acerto_compra_pct"] == 100  # rodada #01 (long) ganhou
+    assert s["acerto_venda_pct"] == 100   # rodada #02 (short) ganhou
+
+    # #01 nasce do WARM START (planta direto em `resting_limit`, sem passar
+    # por `_on_limit_placed` -- nunca loga "posicionada", ver a docstring de
+    # `_numero_ordem_atual`), entao so' #02 (short) e #03 (long) contam como
+    # ARMADAS aqui. `_on_opened` grava "entrada" independente da origem da
+    # ordem, entao o preenchimento de #01 ainda entra no numerador/
+    # denominador da taxa de preenchimento de compra (so' nao no de armadas).
+    assert s["ordens_compra"] == 1   # so' #03 (long) -- #01 (long) foi warm start
+    assert s["ordens_venda"] == 1    # #02 (short)
+    assert s["preenchida_compra_pct"] == 100  # entrada #01 (long) preencheu
+    assert s["preenchida_venda_pct"] == 100   # entrada #02 (short) preencheu
+    # nocional das armadas -- #03 (long) e #02 (short) tem quantidade x
+    # preco > 0, nao precisa do valor exato aqui (isso ja' e' coberto por
+    # `test_ordens_por_lado_conta_armada_preenchida_e_cancelada`).
+    assert s["valor_ordens_compra"] > 0
+    assert s["valor_ordens_venda"] > 0
+
+    # sem posicao aberta no fim do roteiro (so' uma ordem #03 pendente)
+    assert s["posicoes_compra"] == 0
+    assert s["posicoes_venda"] == 0
+    assert s["valor_posicoes_compra"] == 0.0
+    assert s["valor_posicoes_venda"] == 0.0
+
+
+def test_valor_posicoes_reflete_capital_alocado_da_posicao_aberta(tmp_path, pregao_aberto):
+    """`valor_posicoes_compra`/`valor_posicoes_venda` (pedido do dono,
+    2026-08-24: "deve aparecer os valores, e as quantidades abaixo") tem de
+    bater com o capital de verdade alocado na posicao aberta, nao so'
+    contar 1 posicao como o card mostrava antes."""
+    barras = [
+        _bar("13:00", 10.00, 10.00, 10.00, 10.00),  # abertura: posiciona (long)
+        _bar("13:01", 10.00, 10.00, 9.79, 9.85),    # toca o nivel long (9.80) -- entra, ainda aberta
+    ]
+    rt, _feed = _runtime(tmp_path, barras)
+    rt.run_once(now=_agora("13:02:00"))
+
+    full = rt.status()
+    s = full["daytrade"]
+
+    assert s["posicoes_compra"] == 1
+    assert s["posicoes_venda"] == 0
+    assert full["posicoes"][0]["qtd"] > 0
+    esperado = full["posicoes"][0]["qtd"] * full["posicoes"][0]["entrada"]
+    assert s["valor_posicoes_compra"] == pytest.approx(esperado)
+    assert s["valor_posicoes_venda"] == 0.0
+
+
+def test_retorno_usa_initial_capital_fixo_ignora_correcoes_manuais_de_caixa(tmp_path, pregao_aberto):
+    """DECISÃO REVERTIDA no mesmo dia (2026-08-24): cheguei a somar toda
+    correção manual de caixa (`live_events` "definido manualmente") como se
+    fosse aporte, pra fugir de `initial_capital=0` virando "592% de
+    retorno" numa conta real. O dono apontou o furo: ele também usa o campo
+    "Caixa" pra CORRIGIR/realocar, não só pra aportar -- então cada
+    correção sujaria o denominador. Sem como distinguir aporte de correção
+    sem perguntar a intenção na hora (fora de escopo por ora), a base
+    voltou a ser só `account.initial_capital`, declarado na criação da
+    conta e nunca mais tocado -- mesmo que isso deixe uma conta antiga com
+    `initial_capital` desatualizado sem correção automática."""
+    barras = [
+        _bar("13:00", 10.00, 10.00, 10.00, 10.00),
+        _bar("13:01", 10.00, 10.00, 9.79, 9.85),
+        _bar("13:02", 9.85, 9.91, 9.85, 9.90),  # fecha #01 (+10)
+        _bar("13:03", 9.90, 9.90, 9.90, 9.90),
+    ]
+    rt, _feed = _runtime(tmp_path, barras)
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        acc.initial_capital = 50.0
+        store.save_account(conn, acc)
+        # correção manual de R$100 no meio do caminho -- NÃO pode mudar o
+        # denominador do retorno (é exatamente o cenário que motivou reverter).
+        store.log_event(
+            conn, acc.id, "info", "operacao",
+            "caixa sombra do slot 'x' definido manualmente: 50.00 -> 150.00 (diferença R$ 100.00)",
+            {"diferenca": 100.0, "slot": SLOT.id, "sombra": True},
+        )
+
+    rt.run_once(now=_agora("13:05:00"))
+    s = rt.status()["daytrade"]
+
+    assert s["aportes_totais"] == 50.0  # so' o initial_capital, a correcao de 100 foi ignorada
+    assert s["retorno_acumulado_pct"] == 20.0  # 10 / 50 * 100
+
+
+def test_eventos_gravados_antes_do_campo_sessao_existir_ainda_contam_no_dia(tmp_path):
+    """ACHADO AO VIVO no dia do deploy (2026-08-24): o robô real vinha
+    rodando desde a abertura com o código ANTERIOR a este -- sem `sessao`
+    no payload e com a palavra "armada" (virou "posicionada" no mesmo
+    deploy). Depois de reiniciar com o código novo, "Ganhos do dia" mostrou
+    R$0,00 com um trade fechado 2 minutos antes: o evento de hoje, sem
+    `sessao`, não batia com `hoje` e sumia da soma do dia (ainda contava no
+    acumulado, que não filtra data -- por isso o sintoma era só no card do
+    dia). `daytrade_exit_events`/`daytrade_order_events_on` têm de cair
+    para `ts[:10]` quando `sessao` não existe, e reconhecer "armada" como
+    o mesmo evento de "posicionada"."""
+    with store.live_journal(tmp_path / "live.sqlite") as conn:
+        cur = conn.execute(
+            "INSERT INTO live_accounts (name, mode, initial_capital, cash, symbol) "
+            "VALUES ('conta-antiga', 'mt5', 100.0, 100.0, 'PMAM3')"
+        )
+        acc_id = cur.lastrowid
+        hoje = "2026-08-24"
+        # ordem + saida gravadas pelo codigo ANTIGO: sem "sessao", "armada"
+        conn.execute(
+            "INSERT INTO live_events (account_id, ts, level, source, message, payload) "
+            "VALUES (?, ?, 'info', 'daytrade', ?, ?)",
+            (acc_id, f"{hoje} 10:00:00", "ordem #01 armada: long 100 PMAM3 @ 9.8000",
+             '{"numero_ordem": 1, "side": "long", "quantity": 100, "limit_price": 9.8}'),
+        )
+        conn.execute(
+            "INSERT INTO live_events (account_id, ts, level, source, message, payload) "
+            "VALUES (?, ?, 'info', 'daytrade', ?, ?)",
+            (acc_id, f"{hoje} 10:05:00", "SOMBRA saida #01 long 100 PMAM3 @ 9.9000 (target) R$ +10.00",
+             '{"numero_ordem": 1, "side": "long", "pnl_brl": 10.0}'),
+        )
+
+        saidas = store.daytrade_exit_events(conn, acc_id)
+        ordens = store.daytrade_order_events_on(conn, acc_id, hoje)
+
+    assert saidas == [{"date": hoje, "round": 1, "side": "long", "pnl_brl": 10.0}]
+    # so' a "armada" -- nao gravei uma "entrada"
+    assert ordens == [{"side": "long", "kind": "armada", "quantity": 100, "price": 9.8}]
+
+    r = IntradayLiveRuntime._resultado_dia_e_acumulado(saidas, hoje, 100.0)
+    assert r["ganhos_dia"] == 10.0  # nao pode sumir so' por faltar "sessao"
+
+
+def test_saida_sem_numero_de_rodada_ainda_conta_no_ganho(tmp_path):
+    """REGRESSAO achada ao vivo (2026-08-24, poucos minutos depois do
+    deploy): a numeração de rodada (`numero_ordem`) é MAIS NOVA que o
+    próprio `pnl_brl` no payload -- todo trade fechado ANTES da numeração
+    existir tem `pnl_brl` mas NÃO tem `numero_ordem`. A versão anterior de
+    `daytrade_exit_events` exigia os dois campos presentes, então esses
+    trades desapareciam de "Ganhos do dia" (e do acumulado) inteiro --
+    `policy_state["intraday"]["shadow_pnl_brl"]` (a soma de verdade, nunca
+    lida do log) mostrava R$5,92 no dia; o painel mostrava R$1,97, só os 2
+    trades fechados DEPOIS da numeração existir. `round` tem que cair para
+    um valor SINTÉTICO (não pode ser `None` nem um número fixo -- duas
+    linhas assim juntas por engano contariam como fatias da MESMA rodada)."""
+    with store.live_journal(tmp_path / "live.sqlite") as conn:
+        cur = conn.execute(
+            "INSERT INTO live_accounts (name, mode, initial_capital, cash, symbol) "
+            "VALUES ('conta-sem-numero', 'mt5', 100.0, 100.0, 'PMAM3')"
+        )
+        acc_id = cur.lastrowid
+        hoje = "2026-08-24"
+        # 3 saidas SEM numero_ordem (pre-deploy da numeracao), sem side --
+        # so' `exit_reason`/`pnl_brl`/etc, exatamente como o robo real gravou.
+        for i, pnl in enumerate((1.985, 0.9845, 0.9845)):
+            conn.execute(
+                "INSERT INTO live_events (account_id, ts, level, source, message, payload) "
+                "VALUES (?, ?, 'info', 'daytrade', 'SOMBRA: saida long 100 PMAM3 (target)', ?)",
+                (acc_id, f"{hoje} 1{i}:00:00",
+                 f'{{"exit_reason": "target", "pnl_brl": {pnl}, "execution_mode": "shadow"}}'),
+            )
+        saidas = store.daytrade_exit_events(conn, acc_id)
+
+    assert len(saidas) == 3
+    assert all(s["date"] == hoje for s in saidas)
+    assert len({s["round"] for s in saidas}) == 3  # 3 rodadas DISTINTAS, nunca fundidas
+
+    r = IntradayLiveRuntime._resultado_dia_e_acumulado(saidas, hoje, 100.0)
+    assert r["ganhos_dia"] == pytest.approx(3.95, abs=0.01)  # 1.985 + 0.9845*2

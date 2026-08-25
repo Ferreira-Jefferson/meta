@@ -211,14 +211,29 @@ def _read_state(slot: str) -> Optional[dict]:
 def _write_state(slot: str, state: Optional[dict]) -> None:
     """Grava (ou apaga) o estado de UM slot, preservando os outros. Chamado
     sempre de dentro de `_start_lock` nos caminhos concorrentes — ver
-    docstring do lock."""
+    docstring do lock.
+
+    Escreve em ARQUIVO TEMPORÁRIO e troca com `os.replace` (achado
+    2026-08-24: `write_text` direto no arquivo final deixa uma janela onde um
+    leitor concorrente — outro poll HTMX, outra thread deste mesmo processo,
+    já que o dashboard roda single-process — pode pegar o arquivo pela
+    METADE. `_read_all` trata JSON inválido como "arquivo vazio"
+    (`{"slots": {}}`), e uma escrita subsequente baseada nessa leitura vazia
+    APAGA DE VEZ todo slot que não seja o que está sendo tocado agora — foi
+    assim que `dt-gremah-pmam3-shadow` sumiu inteiro do arquivo (config
+    incluída) sem nenhum `_write_state(slot, None)` ter sido chamado para
+    ele. `os.replace`/`Path.replace` é atômico no mesmo sistema de arquivos
+    (Windows e POSIX): quem lê vê o arquivo INTEIRO antigo ou o INTEIRO novo,
+    nunca um caroço no meio."""
     todos = _read_all()
     if state is None:
         todos["slots"].pop(slot, None)
     else:
         todos["slots"][slot] = state
     _STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _STATE_PATH.write_text(json.dumps(todos, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp_path = _STATE_PATH.with_suffix(f"{_STATE_PATH.suffix}.tmp")
+    tmp_path.write_text(json.dumps(todos, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp_path.replace(_STATE_PATH)
 
 
 def _tail_log(slot: str, max_chars: int = 2_000) -> str:
@@ -234,9 +249,17 @@ def _tail_log(slot: str, max_chars: int = 2_000) -> str:
     return text[-max_chars:]
 
 
+class _TasklistUnavailable(Exception):
+    """`tasklist` não respondeu (ou estourou o timeout) — vivacidade
+    INDETERMINADA, não confirmadamente morta. Ver `_pids_alive`."""
+
+
 def _pid_alive(pid: int) -> bool:
     """Windows não tem um `os.kill(pid, 0)` confiável para checar
-    vivacidade — consulta o `tasklist` do próprio sistema."""
+    vivacidade — consulta o `tasklist` do próprio sistema.
+
+    Propaga `_TasklistUnavailable` em vez de engolir — ver a mudança de
+    2026-08-24 na docstring de `_pids_alive` para o motivo."""
     return pid in _pids_alive([pid])
 
 
@@ -250,7 +273,20 @@ def _pids_alive(pids) -> set[int]:
     mostra status — custo puro, e num Windows carregado o `tasklist` chega a
     demorar. Um filtro `/FI` por PID não aceita lista, então pedimos a tabela
     toda em CSV e cruzamos aqui.
-    """
+
+    Levanta `_TasklistUnavailable` se o `tasklist` não responder, em vez de
+    devolver conjunto vazio (mudança 2026-08-24, achado ao vivo: um `tasklist`
+    que falha por engasgo passageiro do Windows NÃO prova que os processos
+    morreram, mas `status_all()` tratava "conjunto vazio" como "todo mundo
+    morreu ao mesmo tempo" e reescrevia `db/live_process.json` apagando
+    `pid`/`started_at` de TODOS os slots de uma vez — o painel passava a
+    mostrar "parado" para robôs que continuavam rodando de verdade, e um
+    clique em "Iniciar" ali subiria um SEGUNDO processo concorrente para a
+    mesma conta. "Não sei" tem de significar "não decida agora, tente nas
+    próxima leitura" — nunca "vivo" (senão o botão "Parar" nunca teria o que
+    matar) nem "morto" (senão um engasgo isolado do `tasklist` derruba o
+    estado de todo mundo). Quem chama decide o que fazer com a indeterminação
+    — ver `status()`/`status_all()`."""
     pids = {int(p) for p in pids if p is not None}
     if not pids:
         return set()
@@ -259,12 +295,8 @@ def _pids_alive(pids) -> set[int]:
             ["tasklist", "/FO", "CSV", "/NH"],
             capture_output=True, text=True, timeout=10,
         )
-    except (OSError, subprocess.SubprocessError):
-        # Sem resposta do sistema, a leitura honesta é "não sei" — e "não sei"
-        # tem de ser tratado como MORTO, nunca como vivo: um processo dado
-        # como vivo por engano faz o painel mostrar "rodando" para sempre e o
-        # botão "Parar" não ter o que matar.
-        return set()
+    except (OSError, subprocess.SubprocessError) as e:
+        raise _TasklistUnavailable(str(e)) from e
     vivos: set[int] = set()
     for linha in out.stdout.splitlines():
         campos = [c.strip('"') for c in linha.split('","')]
@@ -285,11 +317,20 @@ def status(slot: str) -> Optional[dict]:
     Autocorrige: se o arquivo aponta para um PID que já morreu (processo
     caiu, servidor reiniciou sem o serviço) sem ter passado por `stop()`,
     marca como parado em vez de dizer que está rodando quando não está —
-    mas preserva a `config`, para `last_config()` continuar funcionando."""
+    mas preserva a `config`, para `last_config()` continuar funcionando.
+
+    Se o `tasklist` não responder (`_TasklistUnavailable`), a vivacidade é
+    INDETERMINADA agora — devolve o estado gravado tal como está, sem
+    autocorrigir; a próxima chamada tenta de novo. Ver a docstring de
+    `_pids_alive` para o incidente que motivou isto."""
     state = _read_state(slot)
     if state is None or state.get("pid") is None:
         return None
-    if not _pid_alive(state["pid"]):
+    try:
+        alive = _pid_alive(state["pid"])
+    except _TasklistUnavailable:
+        return state
+    if not alive:
         _write_state(slot, {**state, "pid": None, "started_at": None})
         return None
     return state
@@ -303,15 +344,28 @@ def status_all(slot_ids=None) -> dict[str, Optional[dict]]:
     vez de um `tasklist` por slot: o painel repinta a cada 20s e a lista de
     slots agora é aberta. Autocorrige do mesmo jeito que `status()` — PID
     morto vira "parado" no arquivo de estado, preservando a `config`.
+
+    Se o `tasklist` falhar (`_TasklistUnavailable`), NENHUM slot é
+    autocorrigido nesta chamada — devolve o que está gravado, como se a
+    varredura não tivesse acontecido. Antes disto, uma falha isolada do
+    `tasklist` fazia `_pids_alive` devolver conjunto vazio, e este laço
+    concluía "todo mundo morreu ao mesmo tempo": TODOS os slots eram
+    marcados como parados numa penada só, mesmo com os processos reais
+    (confirmados vivos por fora, via Get-Process) continuando a rodar —
+    achado ao vivo 2026-08-24, PMAM3 e PMAM3-tick caindo juntos no painel no
+    mesmo poll. Ver a docstring de `_pids_alive`.
     """
     if slot_ids is None:
         from dashboard.slots import all_slots
 
         slot_ids = [slot.id for slot in all_slots()]
     estados = {sid: _read_state(sid) for sid in slot_ids}
-    vivos = _pids_alive(
-        est["pid"] for est in estados.values() if est and est.get("pid") is not None
-    )
+    try:
+        vivos = _pids_alive(
+            est["pid"] for est in estados.values() if est and est.get("pid") is not None
+        )
+    except _TasklistUnavailable:
+        return estados
     resultado: dict[str, Optional[dict]] = {}
     for sid, est in estados.items():
         if est is None or est.get("pid") is None:
@@ -554,13 +608,24 @@ def create_account(config: ProcessConfig):
     return rt.ensure_account()
 
 
-def _assert_slots_disjuntos(slot, robot_key: str) -> None:
+def _assert_slots_disjuntos(slot, robot_key: str, execution_mode: str = "live") -> None:
     """A conta da Rico é NETTING (`margin_mode=0`, verificado no terminal
-    real em 2026-08-21): duas ordens no MESMO símbolo se FUNDEM numa posição
-    única na corretora, independente de `magic`. Dois slots compartilhando
-    símbolo transformariam os dois livros-caixa em ficção — um venderia a
-    posição do outro sem saber. Checado aqui (e não só no catálogo) porque
-    `SLOTS` é editável e o custo do erro é dinheiro real.
+    real em 2026-08-21): duas ordens REAIS no MESMO símbolo se FUNDEM numa
+    posição única na corretora, independente de `magic`. Dois slots
+    compartilhando símbolo transformariam os dois livros-caixa em ficção —
+    um venderia a posição do outro sem saber. Checado aqui (e não só no
+    catálogo) porque `SLOTS` é editável e o custo do erro é dinheiro real.
+
+    Mode-aware (2026-08-24, pedido do dono): o risco é da ORDEM chegando na
+    corretora, não do símbolo compartilhado em si — modo sombra nunca manda
+    ordem, então dois robôs sombra (ou um sombra + um parado) no mesmo papel
+    não fundem posição nenhuma. Só bloqueia quando ESTE slot vai subir em
+    `execution_mode="live"` E o outro slot que compartilha o símbolo está
+    RODANDO agora em `"live"` também — as duas condições precisam valer ao
+    mesmo tempo para existir ordem real concorrente. Criar dois cartões no
+    mesmo ativo para comparar robôs em sombra (ex.: gremah vs gremah_tick em
+    PMAM3) deixou de ser bloqueado por isso; o gate real só aparece quando
+    algum dos dois de fato tentar operar dinheiro.
 
     `robot_key` é o robô que ESTE slot está prestes a rodar — desde que o
     símbolo deixou de ser campo do slot (2026-08-21), a única forma de saber
@@ -588,12 +653,20 @@ def _assert_slots_disjuntos(slot, robot_key: str) -> None:
         conta_outro = contas.get(outro.id)
         outro_robot_key = (conta_outro.investment_robot if conta_outro else None) or outro.robot_key
         colisao = meu_universo & set(universe_for_slot(outro.id, outro_robot_key))
-        if colisao:
-            raise RuntimeError(
-                f"slots {slot.id!r} e {outro.id!r} negociam o(s) mesmo(s) símbolo(s) "
-                f"({', '.join(sorted(colisao))}) numa conta NETTING — as posições se "
-                "fundiriam numa só e os dois caixas passariam a mentir."
-            )
+        if not colisao:
+            continue
+        if execution_mode != "live":
+            continue
+        estado_outro = status(outro.id)
+        outro_mode = (estado_outro or {}).get("config", {}).get("execution_mode", "live")
+        if estado_outro is None or outro_mode != "live":
+            continue
+        raise RuntimeError(
+            f"slots {slot.id!r} e {outro.id!r} negociam o(s) mesmo(s) símbolo(s) "
+            f"({', '.join(sorted(colisao))}) numa conta NETTING, os dois em modo "
+            "'live' — as posições se fundiriam numa só e os dois caixas "
+            "passariam a mentir. Pare um dos dois, ou rode em modo sombra."
+        )
 
 
 def available_cash(slot_id: str, execution_mode: str = "live") -> Optional[float]:
@@ -712,7 +785,7 @@ def start(config: ProcessConfig) -> dict:
         # Depende de `config.strategy` já resolvido (o robô decide o
         # universo/símbolo, ver docstring da função) — por isso checado
         # DEPOIS do guard acima, nunca antes.
-        _assert_slots_disjuntos(slot, config.strategy)
+        _assert_slots_disjuntos(slot, config.strategy, config.execution_mode)
         if config.mt5_shares_per_lot is None or config.mt5_shares_per_lot <= 0:
             raise RuntimeError(
                 "modo mt5 exige 'ações por lote' (mt5_shares_per_lot) — não foi "
@@ -736,13 +809,32 @@ def start(config: ProcessConfig) -> dict:
         # mode` já veio corrigido; refaz a mesma regra aqui.
         modo_do_gate = config.execution_mode if slot.is_intraday else "live"
         caixa = available_cash(config.slot, modo_do_gate)
-        if caixa is None or caixa < piso:
+        # Soma o capital JA' comprometido numa posicao aberta deste slot
+        # (2026-08-24, mesmo dia da correcao que passou a debitar o custo da
+        # entrada do caixa -- ver `live.intraday_runtime._on_opened`): sem
+        # isto, reiniciar o processo para so' continuar vigiando uma posicao
+        # que ja existe (restart no meio do pregao, deploy, etc.) ficava
+        # bloqueado pelo piso, porque o caixa LIVRE caiu abaixo dele assim
+        # que a entrada comecou a ser debitada -- mas o CAIXA + A POSICAO
+        # continuam valendo o mesmo de antes.
+        if slot.is_intraday:
+            from journal import live_store
+            with live_store.live_journal() as conn:
+                conta = live_store.load_account(conn, config.slot)
+            comprometido = (
+                sum(abs(p.quantity) * p.entry_price for p in conta.positions.values())
+                if conta is not None else 0.0
+            )
+        else:
+            comprometido = 0.0
+        if caixa is None or (caixa + comprometido) < piso:
             rotulo_saldo = "sombra" if modo_do_gate == "shadow" else "real"
             raise RuntimeError(
                 f"caixa {rotulo_saldo} do slot '{slot.label}' é R$ "
-                f"{0.0 if caixa is None else caixa:.2f}, abaixo do mínimo de "
-                f"R$ {piso:.2f} para operar — informe o caixa destinado a "
-                "este robô no painel antes de iniciar."
+                f"{0.0 if caixa is None else caixa:.2f}"
+                f"{f' (+ R$ {comprometido:.2f} ja em posicao aberta)' if comprometido else ''}"
+                f", abaixo do mínimo de R$ {piso:.2f} para operar — informe o "
+                "caixa destinado a este robô no painel antes de iniciar."
             )
 
         argv = [
@@ -803,12 +895,23 @@ def stop(slot: str) -> bool:
 
     Mantém a `config` no arquivo de estado (só zera `pid`/`started_at`) para
     o formulário de retomada continuar pré-preenchido depois de parar —
-    só `create_account`/CLI podem apagar de vez."""
+    só `create_account`/CLI podem apagar de vez.
+
+    Um clique em "Parar" pede para MATAR, não para "matar só se eu
+    confirmar que está vivo" — se `_pid_alive` não conseguir responder
+    (`_TasklistUnavailable`), tenta o `taskkill` do mesmo jeito: matar um
+    PID que já morreu é inofensivo (o comando só falha silenciosamente),
+    enquanto PULAR o `taskkill` por indeterminação arrisca marcar "parado"
+    no arquivo um processo que continua vivo de verdade."""
     state = _read_state(slot)
     if state is None or state.get("pid") is None:
         return False
     pid = state["pid"]
-    if _pid_alive(pid):
+    try:
+        deve_matar = _pid_alive(pid)
+    except _TasklistUnavailable:
+        deve_matar = True
+    if deve_matar:
         subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
                        capture_output=True, timeout=10)
     _write_state(slot, {**state, "pid": None, "started_at": None})

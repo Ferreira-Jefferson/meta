@@ -1,5 +1,7 @@
 {# Barra de controle de UM slot: iniciar/parar, e o que o iniciar precisa
-   perguntar (robô numa conta nova, modo de execução no day trade).
+   perguntar (robô numa conta nova -- day trade não pergunta modo de
+   execução aqui desde 2026-08-24, ele é fixo no próprio slot, escolhido na
+   criação do cartão).
 
    POR QUE FICA FORA DO NÓ COM POLLING
    -----------------------------------
@@ -10,10 +12,8 @@
 
    E POR QUE NÃO É ATUALIZADA A CADA POLL
    --------------------------------------
-   Tem um `<select name="execution_mode">` dentro. Um swap a cada 20s
-   resetaria a escolha do dono no meio dela — e nas duas direções isso é
-   perigoso: escolher "Real", o poll voltar para "Sombra" e o clique iniciar
-   em sombra achando que é real; ou o inverso, que manda ordem de verdade.
+   Tem um `<select name="robo">` dentro (conta nova, ver abaixo). Um swap a
+   cada 20s resetaria a escolha do dono no meio dela.
 
    Então o fragmento só reemite esta barra (fora de banda) quando o estado do
    PROCESSO muda de verdade — ver `rodando` em `app.py::operacao_fragment`.
@@ -57,28 +57,6 @@
             {{ opt.label }}
           </option>
           {% endfor %}
-        </select>
-      </label>
-      {% endif %}
-      {% if slot.is_intraday %}
-      <label class="ops-inline-field">
-        <span class="k">Execução</span>
-        {# Escolha explícita do dono (pedido 2026-08-22): antes era sempre
-           "shadow", sem opção nenhuma na tela. Não é campo da CONTA (como
-           o robô) -- é config do PROCESSO, então fica disponível em toda
-           partida, inclusive retomando uma conta já existente. "live" manda
-           ordem de verdade -- ver a docstring de `live/intraday_runtime.py`
-           sobre o que ainda não foi medido contra o mercado real. #}
-        {# `id` existe só para o form de caixa (form irmão, fora deste nó)
-           conseguir ecoar este valor de volta via `hx-include` -- ver
-           `partials/operacao_body.html` e a docstring de
-           `app.py::_operacao_ctx` sobre por que isto é necessário: sem o
-           eco, clicar "atualizar saldo" troca `#ops-body` inteiro e a
-           escolha ainda-não-salva aqui volta pro último modo REALMENTE
-           iniciado (dono, 2026-08-23). #}
-        <select name="execution_mode" id="ops-exec-{{ slot.id }}" required>
-          <option value="shadow"{% if (config_anterior.execution_mode or "shadow") == "shadow" %} selected{% endif %}>Sombra — não envia ordem</option>
-          <option value="live"{% if config_anterior.execution_mode == "live" %} selected{% endif %}>Real — envia ordem ao MT5</option>
         </select>
       </label>
       {% endif %}

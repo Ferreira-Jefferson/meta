@@ -830,8 +830,8 @@ def test_alvo_dividido_com_prazo_stop_fecha_tudo_e_zera_o_prazo():
     assert m.position is None
 
 
-def test_state_restore_preserva_fatia_de_saida_armada_em_sombra():
-    """Gap de restart no meio de uma fatia armada (2026-08-23): em modo
+def test_state_restore_preserva_fatia_de_saida_posicionada_em_sombra():
+    """Gap de restart no meio de uma fatia posicionada (2026-08-23): em modo
     SIMULADO (`execution is None`, backtest/sombra) nao ha' ordem real para
     perder o rastro -- restaurar `exit_resting_qty`/`resting_exit_bars_waited`
     e' o bastante para o prazo continuar contando de onde parou."""
@@ -869,7 +869,7 @@ def test_state_restore_preserva_fatia_de_saida_armada_em_sombra():
     assert outra.position.quantity == 200
 
 
-def test_restore_com_fatia_de_saida_armada_em_execucao_real_falha_alto():
+def test_restore_com_fatia_de_saida_posicionada_em_execucao_real_falha_alto():
     """O mesmo restart em execucao REAL nao pode resumir silenciosamente: o
     ticket da ordem-limite de saida vive so' em `MT5IntradayExecution`
     (nunca persistido), entao um processo novo nao tem como saber se ela

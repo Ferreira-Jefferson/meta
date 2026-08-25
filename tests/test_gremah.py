@@ -77,13 +77,13 @@ def test_ordem_fixa_nao_tocada_e_abandonada_ao_cruzar_para_a_fase_rolante():
     strat.on_session_start(None)
     ts0 = pd.Timestamp("2026-01-05 13:00", tz="UTC")
     actions0 = strat.on_bar(ts0, Bar(ts=ts0, open=5.00, high=5.00, low=5.00, close=5.00, volume=0), None, 0.0)
-    assert actions0[0].limit_price == pytest.approx(4.90)  # ordem fixa armada, nunca tocada
+    assert actions0[0].limit_price == pytest.approx(4.90)  # ordem fixa posicionada, nunca tocada
     assert strat._state.pending_side == "long"
     assert strat._state.pending_mode == "fixed"
 
     # preco deriva bem longe do nivel fixo (nunca tocou) e o relogio passa
     # do corte das 14:00 -- a ordem fixa parada em 4.90 deveria ser
-    # abandonada e re-armada ancorada no preco atual (9.00), nao continuar
+    # abandonada e re-posicionada ancorada no preco atual (9.00), nao continuar
     # esperando ali indefinidamente.
     ts1 = pd.Timestamp("2026-01-05 14:30", tz="UTC")
     actions1 = strat.on_bar(ts1, Bar(ts=ts1, open=9.00, high=9.00, low=9.00, close=9.00, volume=0), None, 0.0)
@@ -383,7 +383,14 @@ def test_seed_volume_window_usa_a_cauda_do_pregao_anterior_na_abertura():
     `backtest/`) entrega essa cauda (a estrategia nunca busca historico
     sozinha, AGENTS.md: `strategy/` so' importa `core`). Janela explicita em
     30min so' para a aritmetica do teste ficar redonda -- o default de
-    verdade do robo e' 1min."""
+    verdade do robo e' 1min.
+
+    Teto pela BARRA TIPICA (mediana), nao pela media/minuto, desde
+    2026-08-24 (mesmo mecanismo portado da `GremahTick`, ver
+    `Gremah._lotes_por_realocacao`) -- com as 30 barras da cauda mais a de
+    hoje (31 >= `capacidade_min_eventos`), a mediana (10.000 acoes) e' o
+    fluxo REAL observado, sem diluir pelo tamanho NOMINAL da janela como a
+    media fazia."""
     strat = _strat(realocacao_teto_pct_volume_minuto=0.10, realocacao_limiar_caixa=0.0001,
                     realocacao_janela_minutos=30.0)
     ontem_fim = pd.Timestamp("2026-01-05 20:55", tz="UTC")
@@ -398,10 +405,12 @@ def test_seed_volume_window_usa_a_cauda_do_pregao_anterior_na_abertura():
     ts0 = pd.Timestamp("2026-01-06 13:00", tz="UTC")
     actions = strat.on_bar(ts0, Bar(ts=ts0, open=5.00, high=5.00, low=5.00, close=5.00, volume=0.0), None, 0.0)
 
-    # media = 300.000 da cauda / 30 = 10.000 acoes/min; teto 10% = 1.000
-    # acoes = 10 lotes -- nao o minimo de 1 lote que "sem cauda" produziria.
+    # mediana das 31 barras (30 da cauda a 10.000 + a de hoje a 0) = 10.000
+    # acoes; teto = 10.000 x capacidade_negocio_mult (1.0, default medido
+    # 2026-08-24) = 10.000 acoes -- bem mais que o minimo de 1 lote que
+    # "sem cauda" produziria.
     assert len(actions) == 1
-    assert actions[0].quantity == 1_000
+    assert actions[0].quantity == 10_000
 
 
 def test_janela_do_teto_de_volume_e_1min_por_decisao_do_dono_2026_08_22():

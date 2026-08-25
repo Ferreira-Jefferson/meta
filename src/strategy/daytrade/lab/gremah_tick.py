@@ -29,7 +29,7 @@ parede:
 
   1. `rolling_reanchor_after_bars` (30 barras M1 = 30 min) virou
      `rolling_reanchor_after_seconds` -- compara `ts` do tick atual contra o
-     `ts` de quando a ordem foi armada, em vez de contar quantas vezes
+     `ts` de quando a ordem foi posicionada, em vez de contar quantas vezes
      `on_bar` rodou.
   2. O teto de posicao (`RollingVolumeWindow`, `strategy/daytrade/base.py`)
      e' resolution-agnostic por construcao: soma volume por EVENTO (tick ou
@@ -258,6 +258,19 @@ EXIT_TTL_BARS_PADRAO = 8
 #: menor reduz ainda mais o lucro dentro da faixa boa mas encolhe o
 #: MaxDD -- nao e' so' upside.
 #:
+#: REMEDIDO 2026-08-24 (pedido do dono, depois de achar 1.0/0.10 na `Gremah`
+#: M1 -- ver la' se o mesmo valia aqui): grade ampla em IS (mult 0.10..24.0 x
+#: fracao 0.01..2.00, PMAM3, dois niveis de caixa). Ao contrario da M1, o
+#: gradiente em TICK vai no sentido OPOSTO -- valores MAIORES venceram no IS,
+#: com "campeao" aparente em 10.0/1.5 (capital final maior, mas MaxDD ~4x
+#: pior que o atual: -1,52% vs -0,35% em R$50 mil). Na confirmacao OOS (1
+#: passada) esse "campeao" NAO se sustentou: o atual (4.0/0.5) venceu os
+#: candidatos maiores tanto em capital final quanto em MaxDD nos dois niveis
+#: de caixa (R$50.327,11/-0,23% contra R$49.596,51/-1,89% do 10.0/1.5) --
+#: dominio total, nao trade-off. Ou seja: 4.0/0.5 nao e' so' o ponto de
+#: partida generico portado da formula antiga -- e' o melhor valor
+#: encontrado numa varredura de verdade (IS + confirmacao OOS) nesta janela.
+#:
 #: `CAPACIDADE_JANELA_DIAS_PADRAO=1`: a ANCORA de capacidade e' a mediana de
 #: negocio da sessao ANTERIOR (nao a janela intradia de
 #: `REALOCACAO_JANELA_MINUTOS_PADRAO`, que oscila e por isso vazava o teto
@@ -267,10 +280,13 @@ EXIT_TTL_BARS_PADRAO = 8
 #: medido.
 #:
 #: MEDIDO SO' NA PMAM3, so' no motor TICK -- nao remedido nos outros 9
-#: simbolos de `TICK_CONFIRMED_SYMBOLS` nem na `Gremah` M1. Mecanismo
-#: aplicado a todos por ser estrutural (a formula de realocacao antiga tinha
-#: o mesmo defeito em qualquer simbolo iliquido), mas os NUMEROS (4.0/0.5/1)
-#: sao ponto de partida, nao calibracao por ativo.
+#: simbolos de `TICK_CONFIRMED_SYMBOLS` nem na `Gremah` M1 (que usa seu
+#: proprio par, `1.0`/`0.10`, medido e adotado separadamente -- os dois
+#: motores NAO convergem pro mesmo numero, e a remedicao acima confirma que
+#: nao e' por falta de tentar). Mecanismo aplicado a todos por ser estrutural
+#: (a formula de realocacao antiga tinha o mesmo defeito em qualquer simbolo
+#: iliquido), mas os NUMEROS (4.0/0.5/1) so' tem medicao de verdade na
+#: PMAM3 -- nos outros 9 simbolos continuam sendo ponto de partida.
 CAPACIDADE_NEGOCIO_MULT_PADRAO = 4.0
 CAPACIDADE_FRACAO_PADRAO = 0.5
 CAPACIDADE_JANELA_DIAS_PADRAO = 1
@@ -512,7 +528,7 @@ class GremahTick(IntradayStrategy):
         "O preco de abertura do dia, que ancora os niveis das primeiras horas.",
         "O relogio do pregao — e' ele que decide se a ancora e' a abertura ou o preco "
         "do momento.",
-        "O tempo de relogio desde que a ordem parada foi armada (30 minutos), e nao "
+        "O tempo de relogio desde que a ordem parada foi posicionada (30 minutos), e nao "
         "quantos negocios passaram desde entao.",
         "O volume do ultimo minuto FECHADO, somado negocio a negocio, para o teto de "
         "tamanho da PROXIMA entrada.",

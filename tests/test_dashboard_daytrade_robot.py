@@ -20,11 +20,16 @@ from dashboard import app as dashboard_app
 from dashboard import live_control, live_service
 from journal import live_store
 
-# Slot de day trade DINAMICO desde 2026-08-22: o id carrega robo+ativo
-# (`dt-<robo>-<ativo>`) e o painel abre quantos o dono quiser. Nao existe
-# mais um slot fixo chamado "daytrade" em `core.config.SLOTS`.
+# Slot de day trade DINAMICO desde 2026-08-22: o id carrega robo+ativo+modo
+# (`dt-<robo>-<ativo>-<modo>`, modo fixo no id desde 2026-08-24) e o painel
+# abre quantos o dono quiser. Nao existe mais um slot fixo chamado
+# "daytrade" em `core.config.SLOTS`.
 SYMBOL = "PMAM3"
-DAYTRADE = "dt-gremah-pmam3"
+DAYTRADE = "dt-gremah-pmam3-shadow"
+# Par de slots do MESMO robô+ativo em modos diferentes (2026-08-24): dois
+# cartões/contas/processos independentes -- ver alguns testes abaixo que
+# exercitam justamente essa coexistência.
+DAYTRADE_LIVE = "dt-gremah-pmam3-live"
 
 
 @pytest.fixture
@@ -53,10 +58,12 @@ def client():
     return TestClient(dashboard_app.app)
 
 
-def _create_daytrade_account(db_path, capital: float = 100.0, investment_robot: str = "gremah") -> int:
+def _create_daytrade_account(
+    db_path, capital: float = 100.0, investment_robot: str = "gremah", name: str = DAYTRADE,
+) -> int:
     with live_store.live_journal(db_path) as conn:
         acc = live_store.ensure_account(
-            conn, name=DAYTRADE, mode="mt5",
+            conn, name=name, mode="mt5",
             initial_capital=capital, investment_robot=investment_robot,
             withdrawal_robot="", symbol=SYMBOL,
         )
@@ -208,11 +215,12 @@ def test_operacao_iniciar_daytrade_usa_piso_do_robo_nao_o_piso_generico_do_slot(
     assert called == []
 
 
-def test_operacao_iniciar_daytrade_sem_escolha_no_form_cai_no_shadow(
+def test_operacao_iniciar_daytrade_usa_o_modo_fixo_do_slot(
     isolated_journal, client, monkeypatch,
 ):
-    """Sem `execution_mode` no form (form antigo, ou fragmento HTMX velho),
-    o default continua SEGURO -- nunca escorrega pra "live" por omissão."""
+    """O modo vem do PRÓPRIO SLOT (fixo desde a criação, 2026-08-24) --
+    `DAYTRADE` termina em '-shadow', então "Iniciar" tem de rodar em sombra
+    mesmo sem nenhum campo de modo no form (não existe mais)."""
     captured: list = []
     monkeypatch.setattr(live_control, "start", lambda cfg: captured.append(cfg))
     monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot, robot_key=None: 1.0)
@@ -226,11 +234,34 @@ def test_operacao_iniciar_daytrade_sem_escolha_no_form_cai_no_shadow(
     assert captured[0].execution_mode == "shadow"
 
 
-def test_operacao_iniciar_daytrade_escolha_explicita_de_live_e_respeitada(
+def test_operacao_iniciar_daytrade_slot_live_ignora_campo_de_form_forjado(
     isolated_journal, client, monkeypatch,
 ):
-    """O ponto central do pedido (2026-08-22): o dono escolhe na tela, não é
-    mais uma decisão hardcoded no handler."""
+    """O ponto central da mudança (2026-08-24): o modo não é mais escolhido
+    no form de "Iniciar" -- é o `slot.id`. Um campo `execution_mode` forjado
+    no POST (form adulterado, ou o antigo comportamento tentando voltar) é
+    simplesmente ignorado; o slot `-live` roda em live mesmo pedindo
+    "shadow" no form, e vice-versa (ver o teste seguinte)."""
+    _create_daytrade_account(isolated_journal, capital=100.0, name=DAYTRADE_LIVE)
+    captured: list = []
+    monkeypatch.setattr(live_control, "start", lambda cfg: captured.append(cfg))
+    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot, robot_key=None: 1.0)
+    monkeypatch.setattr(live_control, "detect_fractional_symbol_map", lambda slot, robot_key=None: None)
+
+    resp = client.post(f"/operacao/{DAYTRADE_LIVE}/iniciar",
+                       data={"robo": "gremah", "execution_mode": "shadow"})
+
+    assert resp.status_code == 200
+    assert len(captured) == 1, resp.text
+    assert captured[0].execution_mode == "live"
+    assert captured[0].slot == DAYTRADE_LIVE
+
+
+def test_operacao_iniciar_daytrade_slot_shadow_ignora_campo_de_form_forjado(
+    isolated_journal, client, monkeypatch,
+):
+    """Contraprova do teste anterior: o slot `-shadow` roda em sombra mesmo
+    que o form (adulterado) peça "live"."""
     captured: list = []
     monkeypatch.setattr(live_control, "start", lambda cfg: captured.append(cfg))
     monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot, robot_key=None: 1.0)
@@ -239,25 +270,6 @@ def test_operacao_iniciar_daytrade_escolha_explicita_de_live_e_respeitada(
     client.post(f"/operacao/{DAYTRADE}/caixa", data={"caixa": "100.00"})
     resp = client.post(f"/operacao/{DAYTRADE}/iniciar",
                        data={"robo": "gremah", "execution_mode": "live"})
-
-    assert resp.status_code == 200
-    assert len(captured) == 1
-    assert captured[0].execution_mode == "live"
-
-
-def test_operacao_iniciar_daytrade_valor_invalido_no_form_cai_no_shadow(
-    isolated_journal, client, monkeypatch,
-):
-    """Form adulterado com um valor fora de {"shadow", "live"} nunca vira
-    "live" por acidente -- cai no default seguro."""
-    captured: list = []
-    monkeypatch.setattr(live_control, "start", lambda cfg: captured.append(cfg))
-    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot, robot_key=None: 1.0)
-    monkeypatch.setattr(live_control, "detect_fractional_symbol_map", lambda slot, robot_key=None: None)
-
-    client.post(f"/operacao/{DAYTRADE}/caixa", data={"caixa": "100.00"})
-    resp = client.post(f"/operacao/{DAYTRADE}/iniciar",
-                       data={"robo": "gremah", "execution_mode": "sim-por-favor"})
 
     assert resp.status_code == 200
     assert len(captured) == 1
@@ -297,11 +309,13 @@ def test_operacao_iniciar_daytrade_sombra_usa_cash_sombra_para_piso_e_capital(
 def test_operacao_iniciar_daytrade_live_usa_cash_real_mesmo_com_sombra_alto(
     isolated_journal, client, monkeypatch,
 ):
-    """Contraprova: em LIVE, o saldo de sombra generoso é irrelevante -- o
-    piso e o capital continuam vindo do caixa real."""
-    _create_daytrade_account(isolated_journal, capital=10.0)  # cash=cash_sombra=10
+    """Contraprova: no slot `-live`, o saldo de sombra generoso na MESMA
+    linha (herdado do schema que ainda guarda os dois campos, ver
+    `AccountState.cash_for`) é irrelevante -- o piso e o capital continuam
+    vindo do caixa real."""
+    _create_daytrade_account(isolated_journal, capital=10.0, name=DAYTRADE_LIVE)  # cash=cash_sombra=10
     with live_store.live_journal(isolated_journal) as conn:
-        conta = live_store.load_account(conn, DAYTRADE)
+        conta = live_store.load_account(conn, DAYTRADE_LIVE)
         conta.cash_sombra = 500.0
         live_store.save_account(conn, conta)
     monkeypatch.setattr(live_control, "min_cash_for", lambda slot, robot_key=None: 100.0)
@@ -310,8 +324,7 @@ def test_operacao_iniciar_daytrade_live_usa_cash_real_mesmo_com_sombra_alto(
     monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot, robot_key=None: 1.0)
     monkeypatch.setattr(live_control, "detect_fractional_symbol_map", lambda slot, robot_key=None: None)
 
-    resp = client.post(f"/operacao/{DAYTRADE}/iniciar",
-                       data={"robo": "gremah", "execution_mode": "live"})
+    resp = client.post(f"/operacao/{DAYTRADE_LIVE}/iniciar", data={"robo": "gremah"})
 
     assert resp.status_code == 200
     assert "100" in resp.text
@@ -355,7 +368,8 @@ def test_novo_robo_fora_do_registry_nao_cria_conta(isolated_journal, client):
     mudou de lugar em 2026-08-22 — o robô passou a ser escolhido ao CRIAR o
     cartão, não ao iniciar (o cartão já nasce com robô+ativo no id)."""
     resp = client.post("/operacao/daytrade/novo",
-                       data={"robot": "robo_fora_do_catalogo", "symbol": "PMAM3"})
+                       data={"robot": "robo_fora_do_catalogo", "symbol": "PMAM3",
+                             "execution_mode": "shadow"})
 
     assert resp.status_code == 200
     assert "desconhecido" in resp.text.lower()
@@ -368,7 +382,8 @@ def test_novo_robo_com_ativo_sem_calibracao_nao_cria_conta(isolated_journal, cli
     para símbolo sem calibração própria em vez de herdar a de outro papel. O
     painel não pode criar um cartão que nunca conseguiria subir."""
     resp = client.post("/operacao/daytrade/novo",
-                       data={"robot": "gremah", "symbol": "PETR4"})
+                       data={"robot": "gremah", "symbol": "PETR4",
+                             "execution_mode": "shadow"})
 
     assert resp.status_code == 200
     assert "calibracao" in resp.text.lower() or "calibração" in resp.text.lower()
@@ -376,33 +391,100 @@ def test_novo_robo_com_ativo_sem_calibracao_nao_cria_conta(isolated_journal, cli
         assert live_store.accounts_with_symbol(conn) == []
 
 
-def test_novo_robo_recusa_ativo_ja_em_uso(isolated_journal, client):
-    """Conta NETTING: dois robôs no mesmo papel viram uma posição só na
-    corretora e os dois caixas passam a mentir. O `disabled` do `<select>` não
-    cobre POST repetido nem fragmento velho — a recusa é do servidor."""
+def test_novo_robo_aceita_ativo_ja_usado_por_outro_robo(isolated_journal, client):
+    """Criar o cartão nunca manda ordem nenhuma -- dois robôs DIFERENTES no
+    mesmo ativo (aqui: gremah_tick junto de um gremah já existente em PMAM3)
+    é uma comparação válida (ex.: os dois em sombra), e passou a ser aceita
+    (2026-08-24). O risco real (conta NETTING, dois robôs mandando ordem de
+    verdade no mesmo papel) só existe no `Iniciar`, checado por
+    `live_control._assert_slots_disjuntos`."""
     _create_daytrade_account(isolated_journal)
 
     resp = client.post("/operacao/daytrade/novo",
-                       data={"robot": "gremah", "symbol": SYMBOL})
+                       data={"robot": "gremah_tick", "symbol": SYMBOL,
+                             "execution_mode": "shadow"})
 
-    assert resp.status_code == 200
-    assert "NETTING" in resp.text
+    assert resp.status_code == 200, resp.text
+    with live_store.live_journal(isolated_journal) as conn:
+        contas = {c.investment_robot for c in live_store.accounts_with_symbol(conn)}
+    assert contas == {"gremah", "gremah_tick"}
+
+
+def test_novo_robo_recriar_o_mesmo_par_robo_ativo_e_modo_nao_duplica(isolated_journal, client):
+    """Reenviar o MESMO par robô+ativo+modo (POST repetido, fragmento HTMX
+    velho) não cria uma segunda linha nem apaga a conta existente -- o
+    handler recusa com mensagem antes de chamar `ensure_account` de novo
+    (2026-08-24: só o par completo, agora COM modo, precisa ser único)."""
+    _create_daytrade_account(isolated_journal)
+
+    resp = client.post("/operacao/daytrade/novo",
+                       data={"robot": "gremah", "symbol": SYMBOL, "execution_mode": "shadow"})
+
+    assert resp.status_code == 200, resp.text
+    assert "já existe" in resp.text
     with live_store.live_journal(isolated_journal) as conn:
         assert len(live_store.accounts_with_symbol(conn)) == 1
 
 
-def test_novo_robo_cria_a_conta_com_robo_e_ativo(isolated_journal, client):
-    """O caminho feliz: cria a LINHA da conta (caixa zero, nada rodando) com
-    robô e ativo gravados — é a conta que faz o cartão existir."""
+def test_novo_robo_mesmo_robo_ativo_em_outro_modo_cria_cartao_novo(isolated_journal, client):
+    """O ponto central do pedido (2026-08-24): o MESMO robô+ativo em sombra E
+    em real coexistem como dois cartões/contas/processos independentes --
+    dois slots.id diferentes, sem colisão nenhuma."""
+    _create_daytrade_account(isolated_journal)  # gremah + PMAM3 em sombra
+
     resp = client.post("/operacao/daytrade/novo",
-                       data={"robot": "gremah", "symbol": "KLBN4"})
+                       data={"robot": "gremah", "symbol": SYMBOL, "execution_mode": "live"})
+
+    assert resp.status_code == 200, resp.text
+    with live_store.live_journal(isolated_journal) as conn:
+        nomes = {c.name for c in live_store.accounts_with_symbol(conn)}
+    assert nomes == {DAYTRADE, DAYTRADE_LIVE}
+
+
+def test_form_novo_robo_marca_os_dois_modos_ja_usados(isolated_journal, client):
+    """REGRESSÃO: `_novo_robo_ctx` indexava os slots existentes só por
+    `symbol`, então o segundo slot do mesmo par robô+ativo (aqui: gremah em
+    PMAM3, sombra E real) apagava o primeiro no dicionário -- o formulário
+    "novo robô" perdia o rastro de um dos dois modos e deixava o dono clicar
+    "Criar robô" num trio (robô, ativo, modo) que já existia, pro servidor só
+    recusar DEPOIS do clique (ver `test_novo_robo_recriar_o_mesmo_par_robo_
+    ativo_e_modo_nao_duplica`). Com os dois slots existindo, o <option> de
+    PMAM3 para 'gremah' tem que carregar os dois modos em `data-modos-
+    usados`, não só o último criado."""
+    _create_daytrade_account(isolated_journal, name=DAYTRADE)
+    _create_daytrade_account(isolated_journal, name=DAYTRADE_LIVE)
+
+    html = client.get("/operacao").text
+
+    gremah_opt = re.search(rf'<option value="{SYMBOL}" data-robot="gremah"[^>]*>', html)
+    assert gremah_opt
+    modos = re.search(r'data-modos-usados="([^"]*)"', gremah_opt.group(0))
+    assert modos and set(modos.group(1).split(",")) == {"shadow", "live"}
+
+
+def test_novo_robo_cria_a_conta_com_robo_ativo_e_modo(isolated_journal, client):
+    """O caminho feliz: cria a LINHA da conta (caixa zero, nada rodando) com
+    robô, ativo e MODO gravados — é a conta que faz o cartão existir, e o
+    modo faz parte do id desde 2026-08-24."""
+    resp = client.post("/operacao/daytrade/novo",
+                       data={"robot": "gremah", "symbol": "KLBN4", "execution_mode": "shadow"})
 
     assert resp.status_code == 200
     with live_store.live_journal(isolated_journal) as conn:
         contas = live_store.accounts_with_symbol(conn)
         assert [(c.name, c.investment_robot, c.symbol, c.cash) for c in contas] == [
-            ("dt-gremah-klbn4", "gremah", "KLBN4", 0.0)
+            ("dt-gremah-klbn4-shadow", "gremah", "KLBN4", 0.0)
         ]
+
+
+def test_novo_robo_sem_modo_recusa(isolated_journal, client):
+    resp = client.post("/operacao/daytrade/novo",
+                       data={"robot": "gremah", "symbol": "KLBN4"})
+
+    assert resp.status_code == 200
+    assert "modo" in resp.text.lower()
+    with live_store.live_journal(isolated_journal) as conn:
+        assert live_store.accounts_with_symbol(conn) == []
 
 
 def test_operacao_iniciar_daytrade_conta_existente_ignora_robo_do_form(
@@ -460,21 +542,30 @@ def test_painel_mostra_o_form_de_robo_novo_com_ativos_por_capital_minimo(
         assert symbol in html
 
 
-def test_ativo_ja_usado_aparece_marcado_e_desabilitado(isolated_journal, client):
+def test_ativo_ja_usado_aparece_marcado_so_pro_mesmo_robo(isolated_journal, client):
     """A bolinha do pedido, agora DENTRO do <select> (2026-08-22): a lista de
     ativos saiu da página — "pra ver a lista é só clicar no select".
 
-    Um ativo que já tem robô não pode ser escolhido de novo (conta NETTING: as
-    duas posições se fundiriam na corretora) e o estado dele viaja na própria
-    opção: classe de cor MAIS texto, porque cor sozinha não pode carregar
-    informação."""
-    _create_daytrade_account(isolated_journal)
+    `em_uso` é POR ROBÔ (2026-08-24): a conta existente é de 'gremah' em
+    PMAM3, então só a opção "gremah · PMAM3" carrega `data-em-uso` (o estado
+    viaja na própria opção: classe de cor MAIS texto, porque cor sozinha não
+    pode carregar informação) -- a opção "gremah_tick · PMAM3" (robô
+    DIFERENTE) aparece livre, sem marca nenhuma, porque criar um segundo
+    cartão nesse ativo com outro robô é uma combinação válida (o bloqueio de
+    verdade é no `Iniciar`, não aqui). Nenhuma opção nasce `disabled` no HTML
+    do servidor -- quem desabilita em cima do `data-em-uso` é o JS do robô
+    escolhido no `<select>` (ver `operacao.js`)."""
+    _create_daytrade_account(isolated_journal)  # gremah + PMAM3
 
     html = client.get("/operacao").text
 
-    assert re.search(rf'value="{SYMBOL}"[^>]*\bdisabled\b', html)
+    gremah_opt = re.search(rf'<option value="{SYMBOL}" data-robot="gremah"[^>]*>', html)
+    gremah_tick_opt = re.search(rf'<option value="{SYMBOL}" data-robot="gremah_tick"[^>]*>', html)
+    assert gremah_opt and 'data-em-uso="1"' in gremah_opt.group(0)
+    assert gremah_tick_opt and 'data-em-uso' not in gremah_tick_opt.group(0)
+    assert not re.search(rf'value="{SYMBOL}"[^>]*\bdisabled\b', html)
     assert 'class="is-idle"' in html          # âmbar: tem robô, está parado
-    assert "robô parado" in html
+    assert "· parado" in html
     # a lista impressa de todos os ativos deixou de existir
     assert "ops-asset-legend" not in html
 
@@ -493,15 +584,26 @@ def test_fragmento_daytrade_com_conta_mostra_badge_de_ativo(
     assert "PMAM3" in html
 
 
-def test_fragmento_daytrade_caixa_carteira_patrimonio_carregam_os_dois_saldos(
+def test_fragmento_daytrade_caixa_carteira_patrimonio_mostram_so_o_saldo_do_modo_fixo(
     isolated_journal, client,
 ):
-    """Reclamação do dono (2026-08-23, segunda volta): a primeira correção só
-    trocava o card "Caixa" com o `<select execution_mode>` -- "Carteira" e
-    "Patrimônio" continuavam presos no caixa real mesmo com "Sombra"
-    selecionado. Os TRÊS cards que derivam do caixa têm de carregar
-    `data-cash-live`/`data-cash-sombra` (o JS troca os três juntos, ver
-    `static/js/operacao.js::sincronizaCaixaComExecucao`)."""
+    """O modo é fixo no slot desde 2026-08-24 -- não há mais `<select
+    execution_mode>` nem par `data-cash-live`/`data-cash-sombra` pra
+    alternar em runtime. `DAYTRADE` é '-shadow': o card Caixa e o resumo do
+    cabeçalho têm de mostrar o saldo de SOMBRA, nunca o real, mesmo que o
+    real seja diferente na mesma linha (coluna que este slot nunca usa).
+
+    Carteira/Patrimônio saíram do painel de day trade no redesenho de
+    2026-08-24 (pedido do dono: "informação repetida e com pouco valor" --
+    num robô de um símbolo só, que flatten no fim do pregão, os dois quase
+    sempre espelhavam o próprio Caixa). Só sobrevivem no ramo swing (`else`
+    de `operacao_slot_live.html`).
+
+    O card "Caixa" ganhou uma sub-linha "aportado" que usa `initial_capital`
+    de verdade (`capital=20.0` também vira isso, de propósito) -- então a
+    checagem de que o `cash` real não vaza não pode mais ser um "R$ 20,00
+    não está em lugar nenhum da página" (colidiria com essa sub-linha
+    LEGÍTIMA); tem que mirar especificamente o valor PRINCIPAL do card."""
     _create_daytrade_account(isolated_journal, capital=20.0)  # cash=cash_sombra=20
     with live_store.live_journal(isolated_journal) as conn:
         conta = live_store.load_account(conn, DAYTRADE)
@@ -510,9 +612,71 @@ def test_fragmento_daytrade_caixa_carteira_patrimonio_carregam_os_dois_saldos(
 
     html = client.get(f"/operacao/{DAYTRADE}/fragment").text
 
-    # Sem posição aberta (`investido`=0) e sem caixa externo, Carteira e
-    # Patrimônio espelham exatamente o Caixa de cada modo -- 4 ocorrências
-    # do MESMO par de saldos brutos: os 3 cards (Caixa/Carteira/Patrimônio)
-    # mais o resumo do cabeçalho (`ops-sum-cash`, swap fora-de-banda deste
-    # mesmo fragmento).
-    assert html.count('data-cash-live="20,00" data-cash-sombra="500,00"') == 4
+    # O card Caixa mais o resumo do cabeçalho (`ops-sum-cash`, swap
+    # fora-de-banda deste mesmo fragmento) -- 2 ocorrências do MESMO valor.
+    assert html.count("R$ 500,00") == 2
+    # O `cash` real (nao usado neste slot) nao pode vazar como valor
+    # PRINCIPAL do card -- aparecer na sub-linha "aportado" e' esperado.
+    assert '<span class="v num">R$ 20,00</span>' not in html
+    assert "data-cash-live" not in html
+
+
+# ---------- reordenar robôs de day trade (arrastar no painel) ---------------
+
+def test_reordenar_grava_a_ordem_e_persiste_em_nova_conexao(isolated_journal, client):
+    """Pedido do dono (2026-08-24): arrastar um cartão FECHADO pra outra
+    posição, e a ordem sobreviver a F5 (nova requisição) e a reiniciar o
+    processo (nova conexão com o banco, sem estado nenhum em memória). O JS
+    lê o DOM depois do drop e manda a ordem inteira -- aqui simulamos
+    exatamente esse POST."""
+    _create_daytrade_account(isolated_journal, name=DAYTRADE)
+    _create_daytrade_account(isolated_journal, name="dt-gremah_tick-pmam3-shadow",
+                              investment_robot="gremah_tick")
+    with live_store.live_journal(isolated_journal) as conn:
+        assert [c.name for c in live_store.accounts_with_symbol(conn)] == [
+            DAYTRADE, "dt-gremah_tick-pmam3-shadow",
+        ]
+
+    resp = client.post("/operacao/daytrade/reordenar",
+                       data={"ordem": "dt-gremah_tick-pmam3-shadow," + DAYTRADE})
+
+    assert resp.status_code == 200, resp.text
+    with live_store.live_journal(isolated_journal) as conn:
+        assert [c.name for c in live_store.accounts_with_symbol(conn)] == [
+            "dt-gremah_tick-pmam3-shadow", DAYTRADE,
+        ]
+
+
+def test_reordenar_ignora_nome_que_nao_existe_mais(isolated_journal, client):
+    """Um id na ordem que não corresponde a nenhuma conta de day trade (aba
+    dupla, robô removido no meio do arrasto) é ignorado em silêncio -- não
+    derruba o POST nem corrompe a ordem das contas que sobraram."""
+    _create_daytrade_account(isolated_journal, name=DAYTRADE)
+    _create_daytrade_account(isolated_journal, name="dt-gremah_tick-pmam3-shadow",
+                              investment_robot="gremah_tick")
+
+    resp = client.post("/operacao/daytrade/reordenar",
+                       data={"ordem": "dt-nao-existe-mais," + "dt-gremah_tick-pmam3-shadow," + DAYTRADE})
+
+    assert resp.status_code == 200, resp.text
+    with live_store.live_journal(isolated_journal) as conn:
+        assert [c.name for c in live_store.accounts_with_symbol(conn)] == [
+            "dt-gremah_tick-pmam3-shadow", DAYTRADE,
+        ]
+
+
+def test_reordenar_sem_ordem_nao_muda_nada(isolated_journal, client):
+    """POST sem o campo `ordem` (ou vazio) não é erro -- só não reordena
+    nada, o que cobre o caso de um `dragend` que nunca moveu o cartão de
+    lugar (largou no mesmo ponto onde pegou)."""
+    _create_daytrade_account(isolated_journal, name=DAYTRADE)
+    _create_daytrade_account(isolated_journal, name="dt-gremah_tick-pmam3-shadow",
+                              investment_robot="gremah_tick")
+
+    resp = client.post("/operacao/daytrade/reordenar", data={})
+
+    assert resp.status_code == 200, resp.text
+    with live_store.live_journal(isolated_journal) as conn:
+        assert [c.name for c in live_store.accounts_with_symbol(conn)] == [
+            DAYTRADE, "dt-gremah_tick-pmam3-shadow",
+        ]

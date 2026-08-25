@@ -66,30 +66,19 @@
      grande, o mesmo valor dentro de um campo e um botão âmbar do tamanho de
      uma ação primária. Agora o valor É o campo. #}
   <div class="ops-bar">
-  {# `hx-include` manda junto o `<select name=execution_mode>` do form de
-     controle (form IRMÃO, outro endpoint) -- não porque este POST precise
-     dele, mas para ECOAR de volta a escolha ainda-não-salva do dono. Sem
-     isto, "atualizar saldo" troca `#ops-body` inteiro e o select recém-
-     escolhido (mas nunca iniciado) volta pro último modo REALMENTE
-     iniciado -- ver `app.py::operacao_caixa` e a docstring de
-     `_operacao_ctx` (dono, 2026-08-23). Seletor por id porque `closest`/
-     `next` não alcançam um irmão que não é adjacente no DOM. #}
   <form class="ops-cash" hx-post="/operacao/{{ slot.id }}/caixa"
-        hx-target="#ops-body" hx-swap="outerHTML"
-        hx-include="#ops-exec-{{ slot.id }}">
-    {# Rótulo ACIMA do campo, mesmo par `.ops-inline-field` usado em
-       "Robô"/"Execução" ao lado (dono, 2026-08-22) — um só padrão de campo na
-       barra inteira, e não um rótulo ao lado aqui e em cima ali. #}
+        hx-target="#ops-body" hx-swap="outerHTML">
+    {# Rótulo ACIMA do campo, mesmo par `.ops-inline-field` usado em "Robô"
+       ao lado (dono, 2026-08-22) — um só padrão de campo na barra inteira,
+       e não um rótulo ao lado aqui e em cima ali. #}
     <label class="ops-inline-field">
       <span class="k">
         Caixa
         {% if slot.is_intraday %}
-        {# Etiqueta troca com o `<select execution_mode>` ao lado -- ver
-           `static/js/operacao.js::sincronizaCaixaComExecucao`. Servidor
-           desenha o valor inicial já certo (`bloco.caixa_ledger`, que
-           `_slot_ctx` já resolveu pro modo efetivo); sem JS ela nunca
-           muda, mas também nunca mente, porque nasce correta. #}
-        <em data-ops-cash-hint>{{ "sombra" if (bloco.config_anterior.execution_mode or "shadow") == "shadow" else "real" }}</em>
+        {# O modo é fixo no slot desde 2026-08-24 (não há mais `<select
+           execution_mode>` pra esta etiqueta acompanhar) — sombra ou real,
+           sempre o mesmo daqui em diante. #}
+        <em>{{ "simulação" if slot.execution_mode == "shadow" else "real" }}</em>
         {% endif %}
       </span>
       <span class="ops-cash-field">
@@ -106,21 +95,10 @@
            acusar. O `inputmode` traz o teclado numérico no celular.
 
            Sem JS o campo aceita "1234,56" ou "1.234,56" digitado à mão: quem
-           valida e converte é o servidor (`app.py::_valor_brl`).
-
-           `data-cash-live`/`data-cash-sombra` (2026-08-23): os DOIS saldos
-           crus, pro JS trocar o `value` exibido quando o dono muda o
-           `<select execution_mode>` ao lado -- sem round-trip ao servidor,
-           mesmo espírito do filtro de ativos por robô
-           (`static/js/operacao.js::filtraAtivos`). Sem JS o campo mostra e
-           edita só o saldo do modo com que a página nasceu (o efetivo,
-           `bloco.caixa_ledger`) -- quem quer o outro troca o `<select>` e dá
-           F5, que já chega certo (`_slot_ctx` resolve o modo ANTES de
-           escolher qual saldo mandar). #}
+           valida e converte é o servidor (`app.py::_valor_brl`). #}
         <input type="text" name="caixa" inputmode="decimal" autocomplete="off"
-               data-ops-money value="{{ bloco.caixa_ledger | num_br }}" required
-               data-cash-live="{{ bloco.caixa_real_ledger | num_br }}"
-               data-cash-sombra="{{ bloco.caixa_sombra_ledger | num_br }}"
+               data-ops-money data-slot="{{ slot.id }}"
+               value="{{ bloco.caixa_ledger | num_br }}" required
                aria-label="Caixa deste robô em reais" />
         {# Confirmar/cancelar aparecem só com o campo em foco (pedido do dono,
            2026-08-22): um "Salvar" permanente é um chamariz ao lado de um
@@ -157,8 +135,6 @@
   {% with slot = slot, status = bloco.status, proc = bloco.proc,
           config_anterior = bloco.config_anterior, caixa_ok = bloco.caixa_ok,
           caixa_minima = bloco.caixa_minima, caixa_ledger = bloco.caixa_ledger,
-          caixa_real_ledger = bloco.caixa_real_ledger, caixa_sombra_ledger = bloco.caixa_sombra_ledger,
-          caixa_ok_real = bloco.caixa_ok_real, caixa_ok_sombra = bloco.caixa_ok_sombra,
           robot_options = bloco.robot_options, creds_status = creds_status,
           poll_seconds = poll_seconds %}
     {% include "partials/operacao_slot_live.html" %}
@@ -417,6 +393,22 @@
       <form class="ops-new-robot-form" hx-post="/operacao/daytrade/novo"
             hx-target="#ops-body" hx-swap="outerHTML">
         <div class="ops-inline-field">
+          <span class="k">Modo</span>
+          {# Fixo desde a criação (2026-08-24, pedido do dono): não é mais
+             escolhido depois, em "Iniciar" -- é o que permite o MESMO robô
+             no MESMO ativo ter um cartão sombra e um real, simultâneos, em
+             vez de uma única conta alternando de modo. É o PRIMEIRO campo do
+             formulário (pedido do dono, 2026-08-25): são Robô e Ativo que se
+             ajustam ao Modo já escolhido, nunca o contrário -- escolher
+             Robô ou Ativo não deve mais empurrar este campo sozinho pra
+             outro valor (ver `atualizaAtivos` em `static/js/operacao.js`).
+             Sem JS, o servidor recusa o trio repetido com mensagem na tela. #}
+          <select name="execution_mode" data-ops-mode-select required>
+            <option value="shadow" selected>Simulação</option>
+            <option value="live">Real</option>
+          </select>
+        </div>
+        <div class="ops-inline-field">
           <span class="k">Robô</span>
           {# Um único formulário para todos os robôs (antes era um formulário
              por robô, cada um com a própria lista impressa). Trocar o robô
@@ -430,7 +422,7 @@
                que distingue dois robôs do mesmo desenho. #}
             {% for robo in novo_robo.robos %}
             <option value="{{ robo.key }}"{% if loop.first %} selected{% endif %}>
-              TOP-{{ robo.rank }} · {{ robo.label }} ({{ "negócio a negócio" if robo.feed_kind == "tick" else "barra de 1 min" }})
+              TOP-{{ robo.rank }} · {{ robo.label }}
             </option>
             {% endfor %}
           </select>
@@ -443,35 +435,47 @@
             <em>{{ novo_robo.livres }} livre{{ "s" if novo_robo.livres != 1 }}</em>
           </span>
           <select name="symbol" class="ops-asset-select" required>
-            {# SEM `disabled` (dono, 2026-08-22): uma opção desabilitada não
-               pode ser reselecionada depois que o dono escolhe outra — ela
-               vira um valor sem volta. `value=""` continua bastando para o
-               `required` do navegador recusar o envio enquanto esta opção
-               estiver marcada; só deixou de significar "prisão". #}
+            {# `em_uso` aqui só marca "este MESMO robô já tem este ativo" (dois
+               robôs diferentes no mesmo ativo é uma comparação válida, ver
+               `_novo_robo_ctx`) -- é a base do texto/aviso visual (bolinha),
+               mas quem manda de verdade é o JS: `atualizaAtivos` recalcula
+               bolinha, status e o próprio `disabled` de cada opção em cima do
+               MODO já escolhido (o par (robô, ativo) pode repetir com o OUTRO
+               modo -- sombra + real, simultâneos -- então só o trio (robô,
+               ativo, modo) igual a um já existente fica desabilitado, nunca o
+               ativo sozinho). `value=""` continua bastando para o `required`
+               do navegador recusar o envio enquanto esta opção estiver
+               marcada. #}
             <option value="" selected>escolha o ativo…</option>
             {% for robo in novo_robo.robos %}
             {% for ativo in robo.ativos %}
+            {# `data-label` é o texto SEM bolinha nem status -- o JS
+               (`atualizaAtivos`) remonta a partir dele toda vez que o Robô ou
+               o Modo mudam, porque bolinha/status/disabled são por (ativo,
+               MODO), não por (robô, ativo): PMAM3 com só a sombra existindo
+               mostra "parado" (e fica desabilitado) quando o Modo é
+               Simulação, e aparece livre, sem sufixo nenhum, quando o Modo é
+               Real, já que esse trio nem existe ainda (pedido do dono,
+               2026-08-25). `data-modos-rodando` é o mesmo índice de
+               `data-modos-usados`, só que restrito ao que está rodando
+               agora. Sem JS o servidor renderiza olhando qualquer modo (pior
+               aproximação possível, mas só entra em jogo com JS desligado). #}
+            {% set label = ativo.symbol ~ " — " ~ (("mín. R$ " ~ (ativo.minimo | num_br)) if ativo.minimo else "sem preço salvo") %}
             <option value="{{ ativo.symbol }}" data-robot="{{ robo.key }}"
-                    {%- if ativo.em_uso %} disabled data-em-uso="1"{% endif %}
+                    data-label="{{ label }}"
+                    {%- if ativo.em_uso %} data-em-uso="1"{% endif %}
+                    {%- if ativo.modos_usados %} data-modos-usados="{{ ativo.modos_usados | join(',') }}"{% endif %}
+                    {%- if ativo.modos_rodando %} data-modos-rodando="{{ ativo.modos_rodando | join(',') }}"{% endif %}
                     class="{% if ativo.rodando %}is-running{% elif ativo.em_uso %}is-idle{% endif %}">
-              {{ "●" if ativo.em_uso else "○" }} {{ ativo.symbol }} —
-              {% if ativo.minimo %}mín. R$ {{ ativo.minimo | num_br }}{% else %}sem preço salvo{% endif %}
-              {%- if ativo.rodando %} · operando{% elif ativo.em_uso %} · robô parado{% endif %}
+              {{ "●" if ativo.em_uso else "○" }} {{ label }}
+              {%- if ativo.rodando %} · operando{% elif ativo.em_uso %} · parado{% endif %}
             </option>
             {% endfor %}
             {% endfor %}
           </select>
         </div>
-        <button type="submit">Criar robô</button>
+        <button type="submit" data-ops-submit>Criar robô</button>
       </form>
-      {# Legenda, não a lista de ativos: sem ela a cor dentro do select seria
-         um código que ninguém decifra. Texto encurtado (dono, 2026-08-22): a
-         explicação longa ("o ativo segue reservado, o caixa está lá") mora na
-         docstring acima — aqui é só o rótulo do estado. #}
-      <p class="ops-asset-key">
-        <span><span class="ops-asset-dot is-running" aria-hidden="true"></span> operando</span>
-        <span><span class="ops-asset-dot is-idle" aria-hidden="true"></span> parado</span>
-      </p>
       {% endif %}
   </div>
 
@@ -481,18 +485,35 @@
      id). Cada um recolhe sozinho e guarda o próprio estado; o cabeçalho
      continua dizendo caixa e situação com o cartão fechado. #}
   {% for bloco in daytrade %}
-  <article class="ops-slot ops-robot">
+  <article class="ops-slot ops-robot" data-ops-slot-id="{{ bloco.slot.id }}">
     <details data-ops-key="slot:{{ bloco.slot.id }}"{% if bloco.proc %} open{% endif %}>
       <summary class="ops-slot-head">
+        {# Segurar e arrastar pra reordenar (pedido do dono, 2026-08-24):
+           funciona com o cartão FECHADO — é o caso de uso — porque o cabo
+           de arrasto vive no `<summary>`, a única parte sempre visível.
+           `draggable` fica só NESTE `<span>`, não no cartão inteiro: o corpo
+           aberto tem campo de texto e botão, e arrastar a partir deles
+           (selecionar o valor do caixa, por exemplo) não pode virar um
+           drag-and-drop por engano. A ordem gravada é a mesma para sombra e
+           real (é por CONTA, não por par robô+ativo) — dois cartões do
+           mesmo par ainda podem ficar em posições diferentes um do outro.
+           Todo o JS de fato mora em `static/js/operacao.js`. #}
+        <span class="ops-slot-drag" draggable="true" data-ops-drag-handle
+              title="Arrastar para reordenar" aria-label="Arrastar para reordenar"
+              onclick="event.stopPropagation()">&#10495;</span>
         {# O ATIVO é a identidade de um robô de day trade (um robô por ativo,
            conta NETTING), então é ele que vem em destaque — e não um ordinal,
            que seria só a ordem de criação. #}
         <span class="ops-slot-sym">{{ bloco.slot.symbol }}</span>
         <span class="ops-slot-name">{{ bloco.slot.robot_key }}</span>
+        {# Necessário, não cosmético (2026-08-24): o MESMO robô+ativo pode
+           ter um cartão sombra e um real, lado a lado — sem esta etiqueta os
+           dois teriam título idêntico e ficariam indistinguíveis fechados. #}
+        <span class="ops-slot-mode{{ ' is-live' if bloco.slot.execution_mode == 'live' else '' }}">
+          {{ "real" if bloco.slot.execution_mode == "live" else "simulação" }}
+        </span>
         {{ r.resumo(bloco.slot.id, bloco.caixa_ledger, bloco.proc,
-                    bloco.caixa_minima, bloco.caixa_ok,
-                    cash_live=bloco.caixa_real_ledger, cash_sombra=bloco.caixa_sombra_ledger,
-                    caixa_ok_live=bloco.caixa_ok_real, caixa_ok_sombra=bloco.caixa_ok_sombra) }}
+                    bloco.caixa_minima, bloco.caixa_ok) }}
         <span class="ops-sec-caret" aria-hidden="true"></span>
       </summary>
       <div class="ops-slot-body">

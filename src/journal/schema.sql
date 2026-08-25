@@ -185,6 +185,13 @@ CREATE TABLE IF NOT EXISTS live_accounts (
     -- topo histórico) — precisa sobreviver a um restart do processo. Ver
     -- docstring de `AccountState.policy_state` em `core/live_models.py`.
     policy_state       TEXT    NOT NULL DEFAULT '{}',
+    -- Posição manual no painel, entre as contas de day trade (menor = mais
+    -- acima). Default 0 para todas: com todas empatadas, o desempate por
+    -- `id` reproduz a ordem de criação de sempre — só passa a valer depois
+    -- que o dono arrasta um cartão, o que reescreve esta coluna para
+    -- TODAS as contas de day trade de uma vez (ver
+    -- `live_store.set_daytrade_account_order`).
+    sort_order         INTEGER NOT NULL DEFAULT 0,
     created_at         TEXT    NOT NULL DEFAULT (datetime('now')),
     updated_at         TEXT    NOT NULL DEFAULT (datetime('now'))
 );
@@ -389,6 +396,14 @@ CREATE TABLE IF NOT EXISTS live_events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_live_events_ts ON live_events(ts);
+-- Cobre exatamente `WHERE account_id = ? [AND date(ts) = ?] ORDER BY ts DESC,
+-- id DESC` (ver `live_store.recent_events`): sem isto, o filtro por conta
+-- caía num scan da tabela inteira ordenado por `idx_live_events_ts` (todas as
+-- contas juntas) -- ficava mais lento a cada evento novo de QUALQUER conta,
+-- não só desta. Com o histórico completo ("Diário Completo" do painel,
+-- 2026-08-25) fazendo scroll infinito por `id` (cursor de página), este
+-- índice já entrega as linhas na ordem certa sem sort extra.
+CREATE INDEX IF NOT EXISTS idx_live_events_account_ts ON live_events(account_id, ts DESC, id DESC);
 
 -- Aviso de CAPITAL DISPONÍVEL: um robô de day trade em operação diz que já
 -- juntou caixa suficiente para o dono abrir um robô novo num ativo que ainda

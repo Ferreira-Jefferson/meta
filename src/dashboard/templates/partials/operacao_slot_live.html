@@ -1,4 +1,9 @@
 {% set s = status %}
+{# Seta antes de "Long"/"Short" nos cards de Posições/Ordens (pedido do
+   dono, 2026-08-24) -- mesma cor de ganho/perda do resto do painel
+   (`--accent-green`/`--accent-red`, ver `.k-arrow--*` em pages.css), pra a
+   direção ser reconhecível sem ler a palavra. #}
+{% macro seta(lado) %}{% if lado == "long" %}<svg class="k-arrow k-arrow--long" viewBox="0 0 16 16" width="10" height="10" aria-hidden="true"><path d="M8 2 L14 9 H10 V14 H6 V9 H2 Z" fill="currentColor"/></svg>{% else %}<svg class="k-arrow k-arrow--short" viewBox="0 0 16 16" width="10" height="10" aria-hidden="true"><path d="M8 14 L14 7 H10 V2 H6 V7 H2 Z" fill="currentColor"/></svg>{% endif %}{% endmacro %}
 {# Painel operacional de UM slot. Nó próprio, poll próprio: o refresh de
    fundo de um robô não recria o DOM do outro, e nem o form de caixa nem as
    credenciais (que ficam fora daqui) são apagados no meio da digitação.
@@ -11,11 +16,7 @@
    Precisa ser elemento de PRIMEIRO nível da resposta: o htmx só extrai
    `hx-swap-oob` da raiz do fragmento. #}
 {% import "partials/operacao_resumo.html" as r %}
-{{ r.resumo(slot.id, caixa_ledger, proc, caixa_minima, caixa_ok, oob=True,
-           cash_live=(caixa_real_ledger if slot.is_intraday else none),
-           cash_sombra=(caixa_sombra_ledger if slot.is_intraday else none),
-           caixa_ok_live=(caixa_ok_real if slot.is_intraday else none),
-           caixa_ok_sombra=(caixa_ok_sombra if slot.is_intraday else none)) }}
+{{ r.resumo(slot.id, caixa_ledger, proc, caixa_minima, caixa_ok, oob=True) }}
 {% endif %}
 {# A barra de controle (iniciar/parar) mudou de lugar: agora divide a linha
    com o campo de caixa em `operacao_body.html`, FORA deste nó. Aqui só sai o
@@ -27,16 +28,26 @@
 {% if fragmento and controle_mudou %}
 {% with oob = True %}{% include "partials/operacao_slot_control.html" %}{% endwith %}
 {% endif %}
-{# O `hx-get` do poll carrega o estado ATUAL: os limites das duas listas (é o
-   que faz o "ver mais" sobreviver ao refresh de fundo) e se o processo estava
+{# O `hx-get` do poll carrega o estado ATUAL: o limite da lista de posições
+   (é o que faz o "ver mais" sobreviver ao refresh de fundo), se "Diário
+   Completo"/"Diário do dia" dos eventos está ligado (mesmo motivo — senão o
+   poll seguinte reverteria a escolha sozinho) e se o processo estava
    rodando quando este nó foi desenhado (é o que deixa o servidor saber se a
    barra de controle precisa ser reemitida). Ver `app.py::operacao_fragment`. #}
-{% set ev_n = eventos_limit | default(10) %}
 {% set pos_n = posicoes_limit | default(10) %}
-{% set frag_url = "/operacao/" ~ slot.id ~ "/fragment?eventos=" ~ ev_n ~ "&posicoes=" ~ pos_n
+{% set ev_full = 1 if s.eventos_full else 0 %}
+{% set frag_url = "/operacao/" ~ slot.id ~ "/fragment?posicoes=" ~ pos_n
+                  ~ "&eventos_full=" ~ ev_full
                   ~ "&rodando=" ~ (1 if proc else 0) %}
-<div id="ops-slot-live-{{ slot.id }}" hx-get="{{ frag_url }}"
-     hx-trigger="every {{ poll_seconds }}s" hx-swap="outerHTML">
+{# Com "Diário Completo" ligado, o poll de fundo do cartão INTEIRO fica
+   pausado (pedido do dono, 2026-08-25): o scroll infinito do console
+   (`operacao_eventos_lote.html`) vai acumulando lotes DENTRO deste nó, e um
+   `outerHTML` a cada 20s recriaria o nó do zero, jogando o dono de volta pro
+   topo da página inicial no meio da leitura. "Diário do dia" (o botão perto
+   do console) volta a ligar o poll ao trocar `eventos_full` de volta pra 0. #}
+<div id="ops-slot-live-{{ slot.id }}"
+     {% if not s.eventos_full %}hx-get="{{ frag_url }}" hx-trigger="every {{ poll_seconds }}s"{% endif %}
+     hx-swap="outerHTML"
 
 {% if not s.existe %}
 
@@ -52,38 +63,6 @@
 {% else %}
 
 <section class="ops-badges stagger">
-  <span class="ops-badge">
-    <span class="dot"></span> Modo · <strong>{{ s.modo }}</strong>
-  </span>
-  {% if s.daytrade %}
-  {# Modo de execução. Substitui a faixa de prosa que ficava acima do cartão
-     (removida a pedido do dono, 2026-08-22) — mas o FATO não podia sair
-     junto: sem ele, um robô mandando ordem de verdade fica indistinguível de
-     um que não manda nada. E vem do modo REAL do processo, não do tipo do
-     slot: a faixa antiga era condicionada a `slot.is_intraday` e por isso
-     escrevia "modo sombra" mesmo com o robô iniciado em Real.
-     Vermelho no "real" pelo mesmo motivo que o botão de parar é vermelho: é
-     dinheiro de verdade saindo. #}
-  <span class="ops-badge {% if s.daytrade.execution_mode == 'live' %}err{% endif %}">
-    <span class="dot"></span> Execução ·
-    <strong>{{ "real — envia ordem" if s.daytrade.execution_mode == "live" else "sombra" }}</strong>
-    {% if s.daytrade.execution_mode != "live" %}<span class="dim">não envia ordem, não debita o caixa</span>{% endif %}
-  </span>
-  <span class="ops-badge">
-    <span class="dot"></span> Ordens hoje ·
-    <strong>{{ s.daytrade.trades_na_sessao }}/{{ s.daytrade.ordens_postas }}</strong>
-    <span class="dim">preenchidas/postas</span>
-  </span>
-  {% endif %}
-  <span class="ops-badge {% if not s.corretora.automatica %}warn{% endif %}">
-    <span class="dot"></span> Corretora · <strong>{{ s.corretora.nome }}</strong>
-  </span>
-  <span class="ops-badge {% if not s.feed.tempo_real %}warn{% endif %}">
-    <span class="dot"></span> Feed · <strong>{{ s.feed.nome }}</strong>
-    {% if s.feed.atraso_s and s.feed.atraso_s > 60 %}
-      <span class="dim">· atraso {{ (s.feed.atraso_s / 60) | round(0, 'floor') | int }} min</span>
-    {% endif %}
-  </span>
   {# Link para a FICHA do robô: daqui se chega às regras que ele está
      executando com dinheiro real (`/strategies/<key>` resolve robô de swing
      E de day trade desde 2026-08-21). É o robô GRAVADO na conta, não o
@@ -107,6 +86,30 @@
     <span class="dot"></span> Saque · <strong>{{ s.robo_saque.replace("withdrawal:", "") }}</strong>
   </span>
   {% endif %}
+  {# O aviso vermelho de modo REAL não mora mais aqui (removido a pedido do
+     dono, 2026-08-24: duplicava o pill `.ops-slot-mode.is-live` que já fica
+     ao lado do Caixa no cabeçalho do cartão, `operacao_body.html`). Aquele
+     pill lê `slot.execution_mode`, não `s.daytrade.execution_mode` -- os dois
+     nunca divergem porque o modo é fixo por slot e o processo sempre sobe
+     com `--execution-mode` igual ao do slot (`live_control.py::start`). #}
+  <span class="ops-badge {% if not s.feed.tempo_real %}warn{% endif %}">
+    <span class="dot"></span> Feed · <strong>{{ s.feed.nome }}</strong>
+    {% if s.feed.atraso_s and s.feed.atraso_s > 60 %}
+      <span class="dim">· atraso {{ (s.feed.atraso_s / 60) | round(0, 'floor') | int }} min</span>
+    {% endif %}
+  </span>
+  {# Resumo do dia numa etiqueta só (pedido do dono, 2026-08-25): ganhos menos
+     perdas do dia, mesma cor verde/vermelho do resto do painel
+     (`.capital-card.safe`/`.trough`) — sem badge nenhuma dava pra ver o placar
+     do dia sem descer até os cartões de Ganhos/Perdas. Ordem das etiquetas
+     (terminal/robô/ativo/feed/resultado/flatten/pregão) e' pedido explicito
+     do dono, 2026-08-25. #}
+  {% if s.daytrade %}
+  {% set resultado_dia = s.daytrade.ganhos_dia - s.daytrade.perdas_dia %}
+  <span class="ops-badge {% if resultado_dia > 0 %}safe{% elif resultado_dia < 0 %}trough{% endif %}">
+    <span class="dot"></span> Resultado · <strong>R$ {{ resultado_dia | num_br }}</strong>
+  </span>
+  {% endif %}
   {# O fuso do servidor nao e' mais adivinhado (era, e adivinhava errado): ele
      vem medido de `core.b3_session`. O que precisa aparecer aqui e' o
      resultado da CONFERENCIA — e ela impede a operacao, entao e' erro, nao
@@ -118,110 +121,207 @@
   {% endif %}
   {% if s.daytrade %}
   <span class="ops-badge">
-    <span class="dot"></span> Achata às · <strong>{{ s.daytrade.corte_flatten_utc[:5] }} UTC</strong>
+    <span class="dot"></span> Flatten · <strong>{{ s.daytrade.corte_flatten_brt }} BRT</strong>
   </span>
   {% endif %}
+  {# Vivia num `.metric` (topo/fundo da tela conforme o robô tinha ou não
+     day trade) -- o dono relatou o valor "pulando de lugar" entre telas.
+     Aqui é estado do PREGÃO, igual "Achata às"/"Relógio do servidor": mora
+     junto deles, em lugar fixo, sempre (pedido do dono, 2026-08-24). #}
+  <span class="ops-badge">
+    <span class="dot"></span> Pregão · <strong>{{ s.fase }}</strong>
+  </span>
 </section>
 
+{# `posicoes_total`, não `posicoes | length`: a lista vem CORTADA no "ver
+   mais", e contar o pedaço exibido faria a métrica mentir. Definido AQUI
+   (antes dos cartões) porque o card "Posições abertas" também precisa
+   dele, não só o cabeçalho da lista lá embaixo. #}
+{% set n_pos = s.posicoes_total | default(s.posicoes | length) %}
+
+{# Bloco de cartões (Caixa/Ganhos/Perdas/... etc.) recolhível como o resto do
+   painel (pedido do dono, 2026-08-25) -- mesmo mecanismo `data-ops-key` de
+   Posições/Eventos, então o navegador lembra se foi fechado entre os polls
+   de fundo (ver `static/js/operacao.js::restaura`). Aberto por padrão: é a
+   primeira coisa que a tela mostra hoje, só quem já sabe o que quer ver
+   precisa recolher. #}
+<details class="ops-panel ops-list" data-ops-key="valores:{{ slot.id }}" open>
+  <summary class="ops-sub-head">
+    <span class="ops-sub-title">Resumo financeiro</span>
+    <span class="ops-sec-caret" aria-hidden="true"></span>
+  </summary>
+  <div class="ops-sub-body">
 {% if s.daytrade %}
-{# Modo efetivo + as DUAS versões (real/sombra) de todo número desta seção
-   que deriva do caixa -- pedido do dono (2026-08-23), na SEGUNDA volta:
-   "todos os números que aparecem devem ser só do modo selecionado", em
-   TODO lugar, não só no card "Caixa" que a primeira correção cobriu.
-   `Carteira`/`Patrimônio` são formulas de `AccountState.equity`/
-   `patrimonio` (`caixa + posições`/`+ caixa externo`) -- refeitas aqui com
-   `caixa_sombra_ledger` no lugar de `caixa_real_ledger` pra dar o número que
-   apareceria SE o saldo fosse o de sombra. `s.investido`/`s.caixa_externo`
-   não têm versão sombra (posições e saque são sempre reais, day trade nem
-   tem robô de saque) -- só o CAIXA que entra na conta troca. #}
-{% set modo_efetivo = config_anterior.execution_mode or "shadow" %}
-{% set carteira_real = caixa_real_ledger + s.investido %}
-{% set carteira_sombra = caixa_sombra_ledger + s.investido %}
-{% set carteira_inicial = carteira_sombra if modo_efetivo == "shadow" else carteira_real %}
-{% set patrimonio_real = carteira_real + s.caixa_externo %}
-{% set patrimonio_sombra = carteira_sombra + s.caixa_externo %}
-{% set patrimonio_inicial = patrimonio_sombra if modo_efetivo == "shadow" else patrimonio_real %}
-{% endif %}
-<section class="capital-cards stagger"{% if s.daytrade %} id="ops-cards-{{ slot.id }}"{% endif %}>
+{# Redesenho do painel (pedido do dono, 2026-08-24: "informação repetida e
+   com pouco valor" em Carteira/Patrimônio/Investido a mercado, que num
+   robô de UM símbolo só e' quase sempre o próprio Caixa -- o robô flatten
+   no fim do pregão, entao raramente sobra posição de um dia pro outro).
+   Três fileiras, do mais imediato ao mais amplo: hoje / agora / desde
+   sempre. `ganhos_dia`/`perdas_dia`/`lucro_acumulado`/`prejuizo_acumulado`
+   e' sempre >= 0 por construção (`IntradayLiveRuntime.
+   _resultado_dia_e_acumulado` já separa por sinal) -- só os dois cartões
+   "Retorno/DD" podem vir negativos. #}
+<section class="capital-cards stagger">
   <div class="capital-card">
     <span class="k">Caixa</span>
-    {# Mode-aware (2026-08-23, mesmo pedido que trocou o `<input>` de caixa):
-       `s.caixa` (de `status()`) é SEMPRE o caixa real -- pra este card não
-       contradizer o `<input>` e o resumo do cabeçalho (que já trocam com o
-       `<select execution_mode>`), o valor inicial já nasce do saldo do modo
-       efetivo (`caixa_ledger`, resolvido em `_slot_ctx`), e os dois brutos
-       ficam em `data-cash-*` pro JS trocar sem round-trip -- ver
-       `static/js/operacao.js::sincronizaCaixaComExecucao`. #}
-    <span class="v num"
-          {% if s.daytrade %}
-          data-cash-live="{{ caixa_real_ledger | num_br }}" data-cash-sombra="{{ caixa_sombra_ledger | num_br }}"
-          {% endif %}>R$ {{ (caixa_ledger if s.daytrade else s.caixa) | num_br }}</span>
+    <span class="v num">R$ {{ caixa_ledger | num_br }}</span>
+    {# Quanto do saldo é DINHEIRO SEU (`aportes_totais` = `initial_capital`,
+       declarado na criação da conta e nunca mais tocado) e quanto é
+       RETORNO da operação (`lucro_acumulado - prejuizo_acumulado`) --
+       pedido do dono, 2026-08-24: "tem que saber quantos que eu adicionei
+       do meu bolso e quantos veio de retorno". Uma correção manual de
+       caixa depois da criação NÃO muda "aportado" (decisão revertida no
+       mesmo dia, ver `_resultado_dia_e_acumulado`) -- os dois números só
+       somam o Caixa acima em conta que nunca precisou de correção. #}
+    <span class="sub">
+      R$ {{ s.daytrade.aportes_totais | num_br }} aportado ·
+      R$ {{ (s.daytrade.lucro_acumulado - s.daytrade.prejuizo_acumulado) | num_br }} de retorno
+    </span>
+  </div>
+  <div class="capital-card safe">
+    <span class="k">Ganhos do dia</span>
+    <span class="v num">R$ {{ s.daytrade.ganhos_dia | num_br }}</span>
+    <span class="sub">Saídas no lucro hoje</span>
+  </div>
+  <div class="capital-card trough">
+    <span class="k">Perdas do dia</span>
+    <span class="v num">R$ {{ s.daytrade.perdas_dia | num_br }}</span>
+    <span class="sub">Saídas no prejuízo hoje</span>
+  </div>
+  {# Substituiu "Ret./DD" (pedido do dono, 2026-08-25): não é retorno sobre
+     capital, é o Fator de Lucro (termo de finanças p/ ganho ÷ perda,
+     "profit factor") -- o lado que ganhou dividido pelo lado que perdeu,
+     sempre >= 1, invertendo pra "Fator de prejuízo" quando quem venceu foi o
+     prejuízo. É razão adimensional, não percentual -- sem "%" no valor (só
+     no DD do subtítulo, que é % de capital de verdade). Se o outro lado é
+     zero, o resultado é infinito de verdade (não "592%" de retorno) --
+     `fator_*_valor is none` é esse caso.
+     Ver `IntradayLiveRuntime._fator_lucro_prejuizo`. #}
+  <div class="capital-card {% if s.daytrade.fator_dia_label == 'Fator de lucro' %}safe{% else %}trough{% endif %}">
+    <span class="k">{{ s.daytrade.fator_dia_label }}</span>
+    <span class="v num">{% if s.daytrade.fator_dia_valor is none %}<span class="v-infinito">∞</span>{% else %}{{ s.daytrade.fator_dia_valor | num_br(2) }}x{% endif %}</span>
+    <span class="sub">DD {{ s.daytrade.dd_dia_pct | num_br(2) }}%</span>
+  </div>
+</section>
+
+{# Long/short SEPARADOS, não somados num card só (pedido do dono,
+   2026-08-24: "posições abertas"/"ordens posicionadas" misturava os dois
+   lados num total único, com a repartição só no texto pequeno embaixo --
+   difícil de ler rápido). "Long"/"short" no rótulo, não "compra"/"venda":
+   é o vocabulário que o próprio código usa (`trade.side`, `evento.side`),
+   confirmado pelo dono na mesma conversa. #}
+<section class="capital-cards stagger">
+  {# Número principal virou o VALOR em R$, com a quantidade descendo pro
+     texto pequeno (pedido do dono, 2026-08-24: "Deve aparecer os valores, e
+     as quantidades abaixo" -- os cards mostravam só a contagem em cima). #}
+  <div class="capital-card">
+    <span class="k">Posições · {{ seta("long") }}Long</span>
+    <span class="v num">R$ {{ s.daytrade.valor_posicoes_compra | num_br }}</span>
+    <span class="sub">
+      {{ s.daytrade.posicoes_compra }} posiç{{ "ão" if s.daytrade.posicoes_compra == 1 else "ões" }} ·
+      {% if s.daytrade.acerto_compra_pct is not none %}
+      acerto histórico {{ s.daytrade.acerto_compra_pct }}%
+      {% else %}
+      sem histórico ainda
+      {% endif %}
+    </span>
+  </div>
+  <div class="capital-card">
+    <span class="k">Posições · {{ seta("short") }}Short</span>
+    <span class="v num">R$ {{ s.daytrade.valor_posicoes_venda | num_br }}</span>
+    <span class="sub">
+      {{ s.daytrade.posicoes_venda }} posiç{{ "ão" if s.daytrade.posicoes_venda == 1 else "ões" }} ·
+      {% if s.daytrade.acerto_venda_pct is not none %}
+      acerto histórico {{ s.daytrade.acerto_venda_pct }}%
+      {% else %}
+      sem histórico ainda
+      {% endif %}
+    </span>
+  </div>
+  <div class="capital-card">
+    <span class="k">Ordens · {{ seta("long") }}Long</span>
+    {# Ordens e' o inverso de Posições (pedido do dono, 2026-08-24: "aqui faz
+       mais sentido a quantidade aparece maior e o valor menor") -- 0/1
+       posição faz o VALOR mais informativo que a contagem, mas várias
+       ordens no dia fazem a CONTAGEM mais informativa que o nocional. #}
+    <span class="v num">{{ s.daytrade.ordens_compra }}</span>
+    <span class="sub">
+      R$ {{ s.daytrade.valor_ordens_compra | num_br }} ·
+      {% if s.daytrade.preenchida_compra_pct is not none %}
+      preenchida {{ s.daytrade.preenchida_compra_pct }}%
+      {% else %}
+      sem desfecho ainda
+      {% endif %}
+      {% if s.daytrade.ordem_em_pe and s.daytrade.ordem_em_pe.lado == "long" %}
+      · em pé @ {{ "%.4f"|format(s.daytrade.ordem_em_pe.preco) }}
+      {% endif %}
+    </span>
+  </div>
+  <div class="capital-card">
+    <span class="k">Ordens · {{ seta("short") }}Short</span>
+    <span class="v num">{{ s.daytrade.ordens_venda }}</span>
+    <span class="sub">
+      R$ {{ s.daytrade.valor_ordens_venda | num_br }} ·
+      {% if s.daytrade.preenchida_venda_pct is not none %}
+      preenchida {{ s.daytrade.preenchida_venda_pct }}%
+      {% else %}
+      sem desfecho ainda
+      {% endif %}
+      {% if s.daytrade.ordem_em_pe and s.daytrade.ordem_em_pe.lado == "short" %}
+      · em pé @ {{ "%.4f"|format(s.daytrade.ordem_em_pe.preco) }}
+      {% endif %}
+    </span>
+  </div>
+</section>
+
+<section class="capital-cards capital-cards--3 stagger">
+  <div class="capital-card safe">
+    <span class="k">Lucro acumulado</span>
+    <span class="v num">R$ {{ s.daytrade.lucro_acumulado | num_br }}</span>
+    <span class="sub">Desde o início da conta</span>
+  </div>
+  <div class="capital-card trough">
+    <span class="k">Prejuízo acumulado</span>
+    <span class="v num">R$ {{ s.daytrade.prejuizo_acumulado | num_br }}</span>
+    <span class="sub">Desde o início da conta</span>
+  </div>
+  <div class="capital-card {% if s.daytrade.fator_acumulado_label == 'Fator de lucro' %}safe{% else %}trough{% endif %}">
+    <span class="k">{{ s.daytrade.fator_acumulado_label }}</span>
+    <span class="v num">{% if s.daytrade.fator_acumulado_valor is none %}<span class="v-infinito">∞</span>{% else %}{{ s.daytrade.fator_acumulado_valor | num_br(2) }}x{% endif %}</span>
+    <span class="sub">DD {{ s.daytrade.dd_acumulado_pct | num_br(2) }}%</span>
+  </div>
+</section>
+
+{% else %}
+<section class="capital-cards stagger">
+  <div class="capital-card">
+    <span class="k">Caixa</span>
+    <span class="v num">R$ {{ s.caixa | num_br }}</span>
     <span class="sub">Destinado a este robô</span>
   </div>
   <div class="capital-card">
     <span class="k">Carteira</span>
-    <span class="v num"
-          {% if s.daytrade %}
-          data-cash-live="{{ carteira_real | num_br }}" data-cash-sombra="{{ carteira_sombra | num_br }}"
-          {% endif %}>R$ {{ (carteira_inicial if s.daytrade else s.carteira) | num_br }}</span>
+    <span class="v num">R$ {{ s.carteira | num_br }}</span>
     <span class="sub">Caixa + posições a mercado</span>
   </div>
-  {% if s.daytrade %}
-  {# "Resultado" é o MESMO número nos dois modos -- `machine.session_pnl`
-     não sabe de `execution_mode` (o maquinário processa fill real e
-     simulado do mesmo jeito, ver docstring do módulo), então não precisa de
-     `data-cash-*`/toggle nenhum. Pedido do dono (2026-08-23): "as duas
-     visões devem ter os mesmos elementos" -- antes só a sombra tinha este
-     card ("Resultado em sombra") e só ela tinha "Saldo sombra" (redundante
-     com o card "Caixa" agora que ele já troca de saldo sozinho). #}
-  <div class="capital-card {% if s.daytrade.resultado_sessao >= 0 %}safe{% endif %}">
-    <span class="k">Resultado</span>
-    <span class="v num">R$ {{ s.daytrade.resultado_sessao | num_br }}</span>
-    <span class="sub">{{ s.daytrade.trades_na_sessao }} trade(s) hoje · zera no fim do pregão</span>
-  </div>
-  {% else %}
   <div class="capital-card safe">
     <span class="k">Caixa externo</span>
     <span class="v num">R$ {{ s.caixa_externo | num_br }}</span>
     <span class="sub">Sacado, fora do risco</span>
   </div>
-  {% endif %}
   <div class="capital-card headline">
     <span class="k">Patrimônio</span>
-    <span class="v num"
-          {% if s.daytrade %}
-          data-cash-live="{{ patrimonio_real | num_br }}" data-cash-sombra="{{ patrimonio_sombra | num_br }}"
-          {% endif %}>R$ {{ (patrimonio_inicial if s.daytrade else s.patrimonio) | num_br }}</span>
+    <span class="v num">R$ {{ s.patrimonio | num_br }}</span>
     <span class="sub">Carteira + caixa externo</span>
   </div>
 </section>
 
-<section class="metrics-grid stagger">
+<section class="metrics-grid capital-cards--3 stagger">
   <div class="metric">
     <span class="k">Investido a mercado</span>
     <span class="v num">R$ {{ s.investido | num_br }}</span>
-    {# `posicoes_total`, não `posicoes | length`: a lista vem CORTADA no "ver
-       mais", e contar o pedaço exibido faria a métrica mentir. #}
-    {% set n_pos = s.posicoes_total | default(s.posicoes | length) %}
     <span class="sub">{{ n_pos }} posiç{{ "ão" if n_pos == 1 else "ões" }} aberta{{ "" if n_pos == 1 else "s" }}</span>
   </div>
-  {% if s.daytrade %}
-  <div class="metric">
-    <span class="k">Resultado da sessão</span>
-    <span class="v num">R$ {{ s.daytrade.resultado_sessao | num_br }}</span>
-    <span class="sub">{{ s.daytrade.simbolo }} · zera no fim do pregão</span>
-  </div>
-  <div class="metric">
-    <span class="k">Ordem em pé</span>
-    {% if s.daytrade.ordem_em_pe %}
-    <span class="v" style="font-size: var(--fs-h3);">{{ s.daytrade.ordem_em_pe.lado }} @ {{ "%.4f"|format(s.daytrade.ordem_em_pe.preco) }}</span>
-    <span class="sub">Limite esperando o preço tocar</span>
-    {% else %}
-    <span class="v" style="font-size: var(--fs-h3);">—</span>
-    <span class="sub">Nenhuma ordem-limite vigiada</span>
-    {% endif %}
-  </div>
-  {% else %}
   <div class="metric">
     <span class="k">Sacado (histórico)</span>
     <span class="v num">R$ {{ s.sacado_total | num_br }}</span>
@@ -232,18 +332,10 @@
     <span class="v num">{{ s.intencoes_pendentes | length }}</span>
     <span class="sub">Aguardando a próxima abertura</span>
   </div>
-  {% endif %}
-  <div class="metric">
-    <span class="k">Fase do pregão</span>
-    <span class="v" style="font-size: var(--fs-h3);">{{ s.fase }}</span>
-    <span class="sub">
-      {{ s.pregao }}
-      {% if s.daytrade and s.daytrade.ultima_barra %}
-        · última barra {{ s.daytrade.ultima_barra[11:16] }}
-      {% endif %}
-    </span>
-  </div>
 </section>
+{% endif %}
+  </div>
+</details>
 
 {# POSIÇÕES: recolhível e paginada em 10, como a lista de simulações da home
    (dono, 2026-08-22). O cabeçalho diz a contagem TOTAL, então recolher não
@@ -285,7 +377,7 @@
   </table>
   {% if s.posicoes_ha_mais %}
   <div class="ops-more">
-    <button type="button" hx-get="/operacao/{{ slot.id }}/fragment?eventos={{ ev_n }}&amp;posicoes={{ pos_n + 10 }}"
+    <button type="button" hx-get="/operacao/{{ slot.id }}/fragment?posicoes={{ pos_n + 10 }}"
             hx-target="#ops-slot-live-{{ slot.id }}" hx-swap="outerHTML">
       Ver mais 10 posições
     </button>
@@ -332,28 +424,42 @@
 </section>
 {% endif %}
 
-{# EVENTOS: mesma lógica das posições, mas o corte é no SQL — `live_events` é
-   a tabela que mais cresce no banco, e ler tudo para exibir 10 seria pagar o
-   histórico inteiro a cada poll. #}
+{# EVENTOS: por padrão só o pregão atual inteiro (corte por dia é no SQL,
+   ver `store.recent_events`/`IntradayLiveRuntime.status`) -- sem "ver
+   mais" numérico, o `.console` rola por dentro (`max-height` +
+   `overflow-y` em pages.css) quando passa de umas 10 linhas. O botão troca
+   `eventos_full` nos dois sentidos nesta mesma rota (ver
+   `app.py::operacao_fragment`): "Diário Completo" liga TODO o histórico da
+   conta (carregando só `OPS_EVENTOS_PAGINA_INICIAL` linhas, rápido), "Diário
+   do dia" volta a filtrar só hoje. Em modo completo, a sentinela no fim do
+   `<pre>` puxa mais `OPS_EVENTOS_PAGINA_SEGUINTE` linhas conforme o dono rola
+   pra baixo (`hx-trigger="revealed"`, ver `operacao_eventos_lote.html`) --
+   por isso o `hx-get` fica DENTRO do `<pre>` e não no cartão inteiro: só
+   este console cresce, o resto da tela não se mexe. #}
 <details class="console-wrap ops-list" data-ops-key="ev:{{ slot.id }}" open>
   <summary class="ops-sub-head">
-    <span class="ops-sub-title">Eventos recentes</span>
-    <span class="ops-sub-meta">{{ s.eventos | length }}{{ "+" if s.eventos_ha_mais }}</span>
+    <span class="ops-sub-title">Eventos recentes{% if s.eventos_full %} — diário completo{% endif %}</span>
+    <span class="ops-sub-meta">{{ s.eventos | length }}</span>
     <span class="ops-sec-caret" aria-hidden="true"></span>
   </summary>
   <div class="ops-sub-body">
   <pre class="console">{% for e in s.eventos %}[{{ e.ts }}] {{ e.level | upper }} {{ e.source }}: {{ e.message }}
-{% else %}(nenhum evento registrado ainda)
-{% endfor %}</pre>
-  {% if s.eventos_ha_mais %}
-  <div class="ops-more">
-    <button type="button" hx-get="/operacao/{{ slot.id }}/fragment?eventos={{ ev_n + 10 }}&amp;posicoes={{ pos_n }}"
+{% else %}(nenhum evento registrado{% if not s.eventos_full %} ainda hoje{% endif %}){% endfor %}{% if s.eventos_full and s.eventos_mais %}<span id="ops-events-sentinel-{{ slot.id }}"
+      hx-get="/operacao/{{ slot.id }}/eventos?before_id={{ s.eventos[-1].id }}"
+      hx-trigger="revealed" hx-swap="outerHTML" hx-target="this"></span>{% endif %}</pre>
+  <div class="ops-more ops-more--center">
+    {% if s.eventos_full %}
+    <button type="button" hx-get="/operacao/{{ slot.id }}/fragment?posicoes={{ pos_n }}&amp;eventos_full=0"
             hx-target="#ops-slot-live-{{ slot.id }}" hx-swap="outerHTML">
-      Ver mais 10 eventos
+      Diário do dia
     </button>
-    <span class="dim">{{ s.eventos | length }} exibidos · há mais</span>
+    {% else %}
+    <button type="button" hx-get="/operacao/{{ slot.id }}/fragment?posicoes={{ pos_n }}&amp;eventos_full=1"
+            hx-target="#ops-slot-live-{{ slot.id }}" hx-swap="outerHTML">
+      Diário Completo
+    </button>
+    {% endif %}
   </div>
-  {% endif %}
   </div>
 </details>
 

@@ -254,8 +254,8 @@ def _resolve_slot(args):
     if not getattr(args, "slot", None):
         raise ValueError(
             "--slot é obrigatório — não há vaga padrão. Use 'swing' (diário) "
-            "ou um slot de day trade no formato 'dt-<robô>-<ativo>' "
-            "(ex.: 'dt-gremah-pmam3'). Ver core.config.slot_by_id."
+            "ou um slot de day trade no formato 'dt-<robô>-<ativo>-<modo>' "
+            "(ex.: 'dt-gremah-pmam3-shadow'). Ver core.config.slot_by_id."
         )
     try:
         return slot_by_id(args.slot)

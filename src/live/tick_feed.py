@@ -59,6 +59,20 @@ from strategy.daytrade.base import Bar
 #: so' cobre o intervalo entre a decisao de comecar a frio e o primeiro passo.
 _COLD_START_LOOKBACK = timedelta(minutes=5)
 
+#: Piso de quao para tras a busca a este terminal PRECISA alcancar, mesmo que
+#: `after_ts`/`_COLD_START_LOOKBACK` pedisse uma janela mais estreita.
+#: Medido 2026-08-24 (Rico/XP, PMAM3): `copy_ticks_range` com `date_from`
+#: DENTRO do pregao de hoje devolve negocios INCOMPLETOS ou ZERO, mesmo com
+#: negocios reais dentro da janela pedida (4.5h de janela devolveu 75 de 139
+#: negocios reais do dia; <=2.5h devolveu 0) -- e sem levantar excecao
+#: nenhuma, entao o robo ficava com `ultima_barra=None` a sessao inteira sem
+#: nenhum erro no log. So' uma janela que alcanca o dia anterior devolveu os
+#: 139 certos. Alcancar sempre este piso (o filtro por `after_ts` em `_bars`
+#: continua decidindo o que e' NOVO) custa mais dado por chamada, mas so'
+#: importa em papel liquido -- este feed hoje so' serve a `gremah_tick`
+#: (PMAM3, poucos negocios/dia).
+_SAFE_FETCH_LOOKBACK = timedelta(days=1)
+
 #: Folga somada ao fim da janela pedida ao terminal. O limite superior e'
 #: "agora", e um relogio de servidor alguns segundos adiantado do nosso
 #: cortaria justamente os negocios mais recentes — os unicos que interessam.
@@ -78,7 +92,7 @@ class MT5TickFeed:
     `market_data_intraday/tick_bars.py`).
     """
 
-    name = "mt5_ticks"
+    name = "MT5 · TICK"
     #: Zero: um negocio ja' aconteceu quando o terminal o publica — nao ha
     #: nada a esperar fechar. Contraste com `MT5BarFeed.nominal_delay_seconds`
     #: (60s, o minuto que a barra precisa para existir). O atraso que sobra e'
@@ -149,10 +163,18 @@ class MT5TickFeed:
         Lista vazia aqui e' o caso NORMAL, nao um sintoma: num papel iliquido
         podem passar minutos sem um unico negocio. Quem trata buraco de dado
         (`IntradayLiveRuntime`) mede o tempo sem RODAR, nao o tempo sem tick,
-        exatamente por isso."""
+        exatamente por isso.
+
+        A janela pedida ao terminal NUNCA e' mais estreita que
+        `_SAFE_FETCH_LOOKBACK`, mesmo se `after_ts` fosse mais recente que
+        isso — ver a docstring da constante. `after_ts` continua sendo o que
+        decide o que e' NOVO (filtrado dentro de `_bars`); so' o limite
+        INFERIOR da chamada ao terminal e' alargado."""
         agora = pd.Timestamp(self._now_fn())
-        inicio = (after_ts.to_pydatetime() if after_ts is not None
-                  else agora.to_pydatetime() - _COLD_START_LOOKBACK)
+        desejado = (after_ts.to_pydatetime() if after_ts is not None
+                    else agora.to_pydatetime() - _COLD_START_LOOKBACK)
+        piso_seguro = agora.to_pydatetime() - _SAFE_FETCH_LOOKBACK
+        inicio = min(desejado, piso_seguro)
         ticks = self._fetch(inicio, agora.to_pydatetime() + _FUTURE_MARGIN)
         return self._bars(ticks, after_ts, agora)
 

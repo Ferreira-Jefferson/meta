@@ -12,10 +12,12 @@ duplicá-la.
 O QUE DEFINE UM SLOT DE DAY TRADE
 ---------------------------------
 Uma linha em `live_accounts` com `symbol` preenchido. O id da conta é o id do
-slot (`dt-<robô>-<ativo>`) e carrega robô e ativo dentro de si, então o
-processo filho (`scripts/run_live.py --slot dt-gremah-pmam3`) reconstrói tudo
-que precisa a partir do argumento — sem ler este módulo, sem depender de o
-dashboard estar de pé.
+slot (`dt-<robô>-<ativo>-<modo>`) e carrega robô, ativo e modo de execução
+dentro de si, então o processo filho (`scripts/run_live.py --slot
+dt-gremah-pmam3-shadow`) reconstrói tudo que precisa a partir do argumento —
+sem ler este módulo, sem depender de o dashboard estar de pé. O modo é fixo
+desde a criação (2026-08-24): é o que permite o MESMO robô no MESMO ativo
+operar em sombra e em real simultaneamente, como dois slots independentes.
 
 A conta é a fonte de verdade, e não o arquivo de estado dos processos
 (`db/live_process.json`), por uma razão de contabilidade: um robô PARADO
@@ -71,7 +73,7 @@ def daytrade_slots(conn) -> list[Slot]:
         # esconde todos os outros robôs.
         if conta.investment_robot and conta.investment_robot != slot.robot_key:
             try:
-                slot = daytrade_slot(conta.investment_robot, conta.symbol)
+                slot = daytrade_slot(conta.investment_robot, conta.symbol, slot.execution_mode)
             except ValueError:
                 pass
         resultado.append(slot)

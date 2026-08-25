@@ -91,6 +91,16 @@ class Slot:
     # do universo dele); preenchido no day trade, onde o slot É o par
     # robô+ativo — ver `daytrade_slot()`.
     symbol: str = ""
+    # "shadow" ou "live", fixo desde a CRIAÇÃO do slot (2026-08-24) — vazio no
+    # swing, que não tem esse conceito. Até esta data o modo era escolhido
+    # DEPOIS de criar o cartão, por um <select> no form de "Iniciar operação"
+    # — config do PROCESSO, não da conta, e por isso só existia UM slot por
+    # robô+ativo (o mesmo id, alternando modo). O dono pediu para operar o
+    # MESMO robô no MESMO ativo em sombra E em real, simultaneamente — dois
+    # processos/contas/caixas independentes — o que exige que o modo vire
+    # parte da identidade do slot (`daytrade_slot_id`), não mais um parâmetro
+    # de runtime.
+    execution_mode: str = ""
 
     @property
     def is_intraday(self) -> bool:
@@ -165,24 +175,41 @@ def daytrade_magic(slot_id: str) -> int:
     return _DAYTRADE_MAGIC_BASE + (zlib.crc32(slot_id.encode("utf-8")) % _DAYTRADE_MAGIC_SPAN)
 
 
-def daytrade_slot_id(robot_key: str, symbol: str) -> str:
-    """`dt-<robô>-<ativo>`, minúsculo. Recusa (`ValueError`) robô ou ativo com
-    hífen: o hífen é o separador, e um valor que o contenha tornaria o id
-    ambíguo para `slot_by_id` desmontar de volta."""
+#: Modos de execução válidos — a 4ª parte do id de um slot de day trade.
+DAYTRADE_EXECUTION_MODES = ("shadow", "live")
+
+
+def daytrade_slot_id(robot_key: str, symbol: str, execution_mode: str) -> str:
+    """`dt-<robô>-<ativo>-<modo>`, minúsculo. Recusa (`ValueError`) robô ou
+    ativo com hífen: o hífen é o separador, e um valor que o contenha
+    tornaria o id ambíguo para `slot_by_id` desmontar de volta.
+
+    `execution_mode` faz parte do id (não é config de processo) desde
+    2026-08-24 — é o que permite o MESMO robô no MESMO ativo operar em
+    sombra e em real simultaneamente, como dois slots/contas/processos
+    independentes."""
     robot_key = (robot_key or "").strip().lower()
     symbol = (symbol or "").strip().upper()
+    execution_mode = (execution_mode or "").strip().lower()
     if not robot_key or not symbol:
         raise ValueError(f"slot de day trade exige robô e ativo (recebi {robot_key!r}/{symbol!r})")
+    if execution_mode not in DAYTRADE_EXECUTION_MODES:
+        raise ValueError(
+            f"modo de execução inválido: {execution_mode!r} — use "
+            f"{' ou '.join(map(repr, DAYTRADE_EXECUTION_MODES))}."
+        )
     if "-" in robot_key or "-" in symbol:
         raise ValueError(
             f"robô/ativo não podem conter '-' ({robot_key!r}/{symbol!r}) — "
             "é o separador do id do slot."
         )
-    return f"{DAYTRADE_SLOT_PREFIX}-{robot_key}-{symbol.lower()}"
+    return f"{DAYTRADE_SLOT_PREFIX}-{robot_key}-{symbol.lower()}-{execution_mode}"
 
 
-def daytrade_slot(robot_key: str, symbol: str, order: int = 0) -> Slot:
-    """Monta o `Slot` de um robô de day trade rodando `symbol`.
+def daytrade_slot(robot_key: str, symbol: str, execution_mode: str, order: int = 0) -> Slot:
+    """Monta o `Slot` de um robô de day trade rodando `symbol` em
+    `execution_mode` ("shadow" ou "live", fixo desde a criação — ver a
+    docstring de `Slot.execution_mode`).
 
     Função PURA (sem banco, sem I/O): é chamada tanto pelo painel, que sabe
     quais contas existem, quanto por `slot_by_id`, que só tem a string do id.
@@ -196,7 +223,8 @@ def daytrade_slot(robot_key: str, symbol: str, order: int = 0) -> Slot:
     """
     robot_key = robot_key.strip().lower()
     symbol = symbol.strip().upper()
-    slot_id = daytrade_slot_id(robot_key, symbol)
+    execution_mode = execution_mode.strip().lower()
+    slot_id = daytrade_slot_id(robot_key, symbol, execution_mode)
     return Slot(
         id=slot_id,
         kind="intraday",
@@ -207,6 +235,7 @@ def daytrade_slot(robot_key: str, symbol: str, order: int = 0) -> Slot:
         order=order,
         magic=daytrade_magic(slot_id),
         symbol=symbol,
+        execution_mode=execution_mode,
     )
 
 
@@ -222,23 +251,25 @@ def ordered_slots() -> tuple[Slot, ...]:
 
 
 def slot_by_id(slot_id: str) -> Slot:
-    """Slot pelo id — estático (`SLOTS`) ou dinâmico (`dt-<robô>-<ativo>`,
-    reconstruído do próprio id). `KeyError` se não for nem um nem outro:
-    nunca um default silencioso, porque um id desconhecido chegando de uma
-    URL/argv significa form adulterado ou catálogo mudado, e escolher um slot
-    por chute operaria dinheiro real na vaga errada."""
+    """Slot pelo id — estático (`SLOTS`) ou dinâmico
+    (`dt-<robô>-<ativo>-<modo>`, reconstruído do próprio id). `KeyError` se
+    não for nem um nem outro: nunca um default silencioso, porque um id
+    desconhecido chegando de uma URL/argv significa form adulterado ou
+    catálogo mudado, e escolher um slot por chute operaria dinheiro real na
+    vaga errada."""
     for slot in SLOTS:
         if slot.id == slot_id:
             return slot
     partes = (slot_id or "").split("-")
-    if len(partes) == 3 and partes[0] == DAYTRADE_SLOT_PREFIX:
-        _, robot_key, symbol = partes
-        if robot_key and symbol:
-            return daytrade_slot(robot_key, symbol)
+    if len(partes) == 4 and partes[0] == DAYTRADE_SLOT_PREFIX:
+        _, robot_key, symbol, execution_mode = partes
+        if robot_key and symbol and execution_mode in DAYTRADE_EXECUTION_MODES:
+            return daytrade_slot(robot_key, symbol, execution_mode)
     raise KeyError(
         f"slot desconhecido: {slot_id!r} — estáticos: "
         f"{', '.join(s.id for s in SLOTS)}; dinâmicos seguem o formato "
-        f"'{DAYTRADE_SLOT_PREFIX}-<robô>-<ativo>'."
+        f"'{DAYTRADE_SLOT_PREFIX}-<robô>-<ativo>-<modo>' "
+        f"(modo: {' ou '.join(DAYTRADE_EXECUTION_MODES)})."
     )
 
 

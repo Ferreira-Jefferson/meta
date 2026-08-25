@@ -68,7 +68,7 @@ class MT5BarFeed:
     modulo para o motivo de nao haver mais um offset injetavel aqui.
     """
 
-    name = "mt5_bars"
+    name = "MT5 · M1"
     #: Atraso MINIMO entre o preco acontecer e este feed poder entrega-lo. Uma
     #: barra M1 so' e' legivel depois de fechar, entao o piso e' o proprio
     #: minuto — nao e' latencia de rede, e' o formato do dado. O painel reporta
