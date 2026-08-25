@@ -169,10 +169,10 @@
    em digitação seria apagado no meio. #}
 
 {% if erro %}
-<div class="ops-alert stagger">{{ erro }}</div>
+<div class="ops-alert{{ ' stagger' if stagger_ok }}">{{ erro }}</div>
 {% endif %}
 {% if caixa_msg %}
-<div class="ops-alert ops-alert-ok stagger">{{ caixa_msg }}</div>
+<div class="ops-alert ops-alert-ok{{ ' stagger' if stagger_ok }}">{{ caixa_msg }}</div>
 {% endif %}
 
 {% set daytrade = slots | selectattr("slot.is_intraday") | list %}

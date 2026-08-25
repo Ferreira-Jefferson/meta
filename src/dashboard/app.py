@@ -691,11 +691,21 @@ def _novo_robo_ctx(conn) -> dict:
         1 for r in robos for a in r["ativos"] if not a["em_uso"])}
 
 
-def _operacao_ctx(**extra) -> dict:
+def _operacao_ctx(request: Request | None = None, **extra) -> dict:
     """Contexto comum a toda rota que renderiza `operacao.html`/
     `operacao_body.html`: um bloco por slot existente (day trade em cima),
     o formulário de robô novo, os avisos de capital, e o que é global
-    (credenciais, poll)."""
+    (credenciais, poll).
+
+    `request` decide `stagger_ok`: a animação de entrada (`.stagger` em
+    `base.css`, opacity 0->1) só faz sentido numa carga de página de
+    verdade. Toda resposta a um POST daqui (criar robô, atualizar caixa,
+    remover, marcar aviso, salvar credencial) troca o `#ops-body` inteiro
+    via HTMX, e sem esta guarda a tela inteira piscava de novo a cada
+    clique -- os cartões renascem do zero a cada `outerHTML` e a animação
+    reaparece com eles. `HX-Request` é o header que o próprio HTMX manda
+    em toda requisição dele (poll incluso); a carga inicial do navegador
+    não o tem."""
     from core.config import ordered_slots
     from dashboard import slots as slots_mod
     from journal import live_store
@@ -730,6 +740,7 @@ def _operacao_ctx(**extra) -> dict:
         "creds": live_control.display_credentials(),
         "creds_status": live_control.credential_status(),
         "poll_seconds": _operacao_poll_seconds(),
+        "stagger_ok": not (request is not None and request.headers.get("HX-Request")),
         **extra,
     }
 
@@ -823,7 +834,7 @@ def _slot_sumiu(slot_id: str) -> bool:
 
 @app.get("/operacao", response_class=HTMLResponse)
 def operacao(request: Request):
-    ctx = _operacao_ctx(page="operacao")
+    ctx = _operacao_ctx(request, page="operacao")
     return TEMPLATES.TemplateResponse(request, "operacao.html", ctx)
 
 
@@ -880,6 +891,10 @@ def operacao_fragment(request: Request, slot_id: str,
         # dizendo "operando" depois de o robô parar. Falso no render inicial,
         # onde o resumo já é desenhado no lugar certo (duplicaria o id).
         "fragmento": True,
+        # Sempre HTMX aqui (poll de fundo, "ver mais", Diário Completo/do dia)
+        # -- nunca a carga inicial da página. Ver `_operacao_ctx` para o
+        # porquê de suprimir `.stagger` fora da carga inicial de verdade.
+        "stagger_ok": False,
         # A barra de controle também vive fora deste nó, mas ao contrário do
         # resumo NÃO pode ser reemitida a cada poll: ela tem o `<select>` de
         # modo de execução, e trocá-la resetaria a escolha do dono no meio —
@@ -939,7 +954,7 @@ async def operacao_iniciar(request: Request, slot_id: str):
     except (live_store.LegacyPaperAccountError, live_store.LegacyManualAccountError) as e:
         # Correção pós-code-review (item 5): renderiza a mensagem no banner
         # de erro em vez de deixar a exceção subir crua até virar 500.
-        ctx = _operacao_ctx(erro=str(e))
+        ctx = _operacao_ctx(request, erro=str(e))
         return TEMPLATES.TemplateResponse(request, "partials/operacao_body.html", ctx)
 
     erro = None
@@ -1140,7 +1155,7 @@ async def operacao_iniciar(request: Request, slot_id: str):
         except (RuntimeError, ValueError) as e:
             erro = str(e)
 
-    ctx = _operacao_ctx(erro=erro)
+    ctx = _operacao_ctx(request, erro=erro)
     return TEMPLATES.TemplateResponse(request, "partials/operacao_body.html", ctx)
 
 
@@ -1208,7 +1223,7 @@ async def operacao_novo_robo(request: Request):
         except (KeyError, ValueError, RuntimeError) as e:
             erro = str(e)
 
-    ctx = _operacao_ctx(erro=erro)
+    ctx = _operacao_ctx(request, erro=erro)
     return TEMPLATES.TemplateResponse(request, "partials/operacao_body.html", ctx)
 
 
@@ -1236,7 +1251,7 @@ async def operacao_remover_robo(request: Request, slot_id: str):
         except ValueError as e:
             erro = str(e)
 
-    ctx = _operacao_ctx(erro=erro)
+    ctx = _operacao_ctx(request, erro=erro)
     return TEMPLATES.TemplateResponse(request, "partials/operacao_body.html", ctx)
 
 
@@ -1259,7 +1274,7 @@ async def operacao_reordenar_daytrade(request: Request):
 
     with live_store.live_journal() as conn:
         live_store.set_daytrade_account_order(conn, ordem)
-    return TEMPLATES.TemplateResponse(request, "partials/operacao_body.html", _operacao_ctx())
+    return TEMPLATES.TemplateResponse(request, "partials/operacao_body.html", _operacao_ctx(request))
 
 
 @app.post("/operacao/avisos/{signal_id}/feito", response_class=HTMLResponse)
@@ -1271,14 +1286,14 @@ async def operacao_aviso_feito(request: Request, signal_id: int):
 
     with live_store.live_journal() as conn:
         live_store.acknowledge_capital_signal(conn, signal_id)
-    return TEMPLATES.TemplateResponse(request, "partials/operacao_body.html", _operacao_ctx())
+    return TEMPLATES.TemplateResponse(request, "partials/operacao_body.html", _operacao_ctx(request))
 
 
 @app.post("/operacao/{slot_id}/parar", response_class=HTMLResponse)
 def operacao_parar(request: Request, slot_id: str):
     slot = _slot_or_404(slot_id)
     live_control.stop(slot.id)
-    return TEMPLATES.TemplateResponse(request, "partials/operacao_body.html", _operacao_ctx())
+    return TEMPLATES.TemplateResponse(request, "partials/operacao_body.html", _operacao_ctx(request))
 
 
 @app.post("/operacao/{slot_id}/caixa", response_class=HTMLResponse)
@@ -1380,7 +1395,7 @@ async def operacao_caixa(request: Request, slot_id: str):
         except (live_store.LegacyPaperAccountError, live_store.LegacyManualAccountError) as e:
             erro = str(e)
 
-    ctx = _operacao_ctx(erro=erro, caixa_msg=caixa_msg)
+    ctx = _operacao_ctx(request, erro=erro, caixa_msg=caixa_msg)
     return TEMPLATES.TemplateResponse(request, "partials/operacao_body.html", ctx)
 
 
@@ -1394,7 +1409,7 @@ async def operacao_credenciais(request: Request):
     clear = {canal for canal in ("telegram", "smtp", "mt5") if form.get(f"remover_{canal}")}
     updates = {field: form.get(field) for field in live_control.CREDENTIAL_FIELDS}
     live_control.save_credentials(updates, clear=clear)
-    ctx = _operacao_ctx(creds_msg="Credenciais salvas.")
+    ctx = _operacao_ctx(request, creds_msg="Credenciais salvas.")
     return TEMPLATES.TemplateResponse(request, "partials/operacao_body.html", ctx)
 
 

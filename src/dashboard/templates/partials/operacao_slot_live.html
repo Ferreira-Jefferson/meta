@@ -62,7 +62,7 @@
 
 {% else %}
 
-<section class="ops-badges stagger">
+<section class="ops-badges{{ ' stagger' if stagger_ok }}">
   {# Link para a FICHA do robô: daqui se chega às regras que ele está
      executando com dinheiro real (`/strategies/<key>` resolve robô de swing
      E de day trade desde 2026-08-21). É o robô GRAVADO na conta, não o
@@ -161,7 +161,7 @@
    e' sempre >= 0 por construção (`IntradayLiveRuntime.
    _resultado_dia_e_acumulado` já separa por sinal) -- só os dois cartões
    "Retorno/DD" podem vir negativos. #}
-<section class="capital-cards stagger">
+<section class="capital-cards{{ ' stagger' if stagger_ok }}">
   <div class="capital-card">
     <span class="k">Caixa</span>
     <span class="v num">R$ {{ caixa_ledger | num_br }}</span>
@@ -210,7 +210,7 @@
    difícil de ler rápido). "Long"/"short" no rótulo, não "compra"/"venda":
    é o vocabulário que o próprio código usa (`trade.side`, `evento.side`),
    confirmado pelo dono na mesma conversa. #}
-<section class="capital-cards stagger">
+<section class="capital-cards{{ ' stagger' if stagger_ok }}">
   {# Número principal virou o VALOR em R$, com a quantidade descendo pro
      texto pequeno (pedido do dono, 2026-08-24: "Deve aparecer os valores, e
      as quantidades abaixo" -- os cards mostravam só a contagem em cima). #}
@@ -274,7 +274,7 @@
   </div>
 </section>
 
-<section class="capital-cards capital-cards--3 stagger">
+<section class="capital-cards capital-cards--3{{ ' stagger' if stagger_ok }}">
   <div class="capital-card safe">
     <span class="k">Lucro acumulado</span>
     <span class="v num">R$ {{ s.daytrade.lucro_acumulado | num_br }}</span>
@@ -293,7 +293,7 @@
 </section>
 
 {% else %}
-<section class="capital-cards stagger">
+<section class="capital-cards{{ ' stagger' if stagger_ok }}">
   <div class="capital-card">
     <span class="k">Caixa</span>
     <span class="v num">R$ {{ s.caixa | num_br }}</span>
@@ -316,7 +316,7 @@
   </div>
 </section>
 
-<section class="metrics-grid capital-cards--3 stagger">
+<section class="metrics-grid capital-cards--3{{ ' stagger' if stagger_ok }}">
   <div class="metric">
     <span class="k">Investido a mercado</span>
     <span class="v num">R$ {{ s.investido | num_br }}</span>
@@ -388,7 +388,7 @@
 </details>
 
 {% if not s.daytrade %}
-<section class="ops-panel stagger">
+<section class="ops-panel{{ ' stagger' if stagger_ok }}">
   <h3>Intenções pendentes</h3>
   <p class="dek">
     Decididas no último fecho, valem para o próximo pregão — nunca para o mesmo dia (regra 4 do AGENTS.md).
