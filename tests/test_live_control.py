@@ -743,6 +743,64 @@ def test_assert_slots_disjuntos_permite_simbolo_repetido_se_outro_nao_roda(
     live_control._assert_slots_disjuntos(gemeos[0], "gremah", "live")  # não levanta
 
 
+def test_assert_slots_disjuntos_colisao_traz_slot_pra_parar(isolated, monkeypatch):
+    """`SlotSymbolCollisionError` (2026-08-25) carrega o suficiente pro
+    painel oferecer "parar o outro robô" direto no card de erro em vez de só
+    uma mensagem — ver `dashboard/app.py::operacao_iniciar` e
+    `partials/operacao_colisao.html`. Sem posição nem ordem pendente no outro
+    lado, `pode_parar` é True."""
+    from core import config as core_config
+
+    gemeos = (_slot(id="a", kind="intraday", robot_key="gremah", magic=1, label="A"),
+              _slot(id="b", kind="intraday", robot_key="gremah", magic=2, order=1, label="B"))
+    monkeypatch.setattr(core_config, "SLOTS", gemeos)
+    monkeypatch.setattr(live_control, "_pid_alive", lambda pid: True)
+    live_control._write_state(
+        "b", {"pid": 1, "started_at": "2026-08-24T00:00:00+00:00",
+              "config": {"execution_mode": "live"}},
+    )
+
+    with pytest.raises(live_control.SlotSymbolCollisionError) as exc_info:
+        live_control._assert_slots_disjuntos(gemeos[0], "gremah", "live")
+
+    err = exc_info.value
+    assert err.slot_id == "b"
+    assert err.slot_label == "B"
+    assert err.symbols == ["PMAM3"]
+    assert err.pode_parar is True
+    assert err.motivo_bloqueio is None
+
+
+def test_assert_slots_disjuntos_colisao_bloqueia_parar_com_ordem_pendente(isolated, monkeypatch):
+    """Com o outro lado tendo mandado ordem de entrada ainda não resolvida
+    (`pending_entry_refs`), `pode_parar` vira False — parar o processo agora
+    deixaria essa ordem sem ninguém vigiando até o próximo `Iniciar`."""
+    from core import config as core_config
+
+    gemeos = (_slot(id="a", kind="intraday", robot_key="gremah", magic=1, label="A"),
+              _slot(id="b", kind="intraday", robot_key="gremah", magic=2, order=1, label="B"))
+    monkeypatch.setattr(core_config, "SLOTS", gemeos)
+    monkeypatch.setattr(live_control, "_pid_alive", lambda pid: True)
+    live_control._write_state(
+        "b", {"pid": 1, "started_at": "2026-08-24T00:00:00+00:00",
+              "config": {"execution_mode": "live"}},
+    )
+    with live_store.live_journal() as conn:
+        conta = live_store.ensure_account(
+            conn, name="b", mode="mt5", initial_capital=100.0,
+            investment_robot="gremah", withdrawal_robot="", symbol="PMAM3",
+        )
+        conta.policy_state = {"intraday": {"pending_entry_refs": ["abc123"]}}
+        live_store.save_account(conn, conta)
+
+    with pytest.raises(live_control.SlotSymbolCollisionError) as exc_info:
+        live_control._assert_slots_disjuntos(gemeos[0], "gremah", "live")
+
+    err = exc_info.value
+    assert err.pode_parar is False
+    assert "aguarde" in err.motivo_bloqueio
+
+
 def test_catalogo_oficial_de_slots_e_disjunto(isolated):
     """O catálogo REAL do projeto tem de passar na própria checagem, com o
     robô DEFAULT de cada slot (nenhuma conta ainda existe no banco isolado

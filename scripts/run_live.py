@@ -119,6 +119,14 @@ proprio terminal fazer o login sozinho — necessario para operar sem depender
 de alguem manter o terminal logado (ex.: o `loop` rodando como servico em
 segundo plano, disparado pelo botao "Iniciar" do dashboard).
 
+`MT5_TERMINAL_PATH` (caminho do `terminal64.exe`) tambem e o que permite o
+sistema ABRIR o terminal ja com o AutoTrading ligado — `run_live.py terminal`,
+e automaticamente antes do primeiro passo de um `loop` em modo REAL. Sem ela,
+o terminal aberto por um humano continua funcionando normalmente; o que se
+perde e so a abertura automatica. Ver `live/mt5_terminal.py` para por que isso
+passa pelo arquivo de config e nao por um "liga o botao" (o de 25/08/2026: um
+pregao inteiro perdido com o AutoTrading desligado na abertura).
+
 Disjuntor de risco (circuit breaker) — SEMPRE ligado, nao e escolha do usuario
 -------------------------------------------------------------------------------
 O disjuntor nao e parametro de estrategia (nao foi otimizado por backtest) nem
@@ -547,6 +555,43 @@ def cmd_unfreeze(args) -> None:
     print("disjuntor destravado.")
 
 
+def _preparar_terminal(rt) -> None:
+    """Antes do primeiro passo em modo REAL: terminal aberto e AutoTrading
+    ligado, ou o motivo impresso e notificado.
+
+    Chamado so' aqui, e nao dentro do runtime, por causa da regra 6 do
+    AGENTS.md: abrir programa e mexer em arquivo de config do terminal e'
+    trabalho de ORQUESTRACAO, nao de quem decide operacao. O runtime so'
+    confere e recusa (`_check_autotrading`).
+
+    NAO aborta o supervisor quando falha: o dono pode ligar o botao com o
+    processo ja de pe (foi o que aconteceu em 25/08/2026, ~14h) e o proximo
+    passo libera a operacao sozinho. Matar o processo aqui trocaria um
+    problema de 1 segundo por um "e agora tenho de subir o robo de novo"."""
+    from live.mt5_terminal import garantir_terminal_com_autotrading
+
+    resultado = garantir_terminal_com_autotrading(os.environ.get("MT5_TERMINAL_PATH"))
+    if resultado.ok:
+        print(f"terminal MT5 pronto com AutoTrading ligado ({resultado.acao}).", flush=True)
+        return
+    print(f"[atencao] {resultado.motivo}", flush=True)
+    rt.notifier.notify("error", "terminal", resultado.motivo)
+
+
+def cmd_terminal(args) -> None:
+    """Sobe o terminal MT5 com o AutoTrading ligado (ou diz o que falta).
+
+    Existe como comando proprio para o dono poder rodar antes da abertura,
+    sem subir robo nenhum -- e para o painel poder chamar o MESMO caminho de
+    codigo no dia em que quiser um botao para isso."""
+    from live.mt5_terminal import garantir_terminal_com_autotrading
+
+    resultado = garantir_terminal_com_autotrading(os.environ.get("MT5_TERMINAL_PATH"))
+    print(f"{resultado.acao}: {resultado.motivo or 'terminal pronto, AutoTrading ligado.'}")
+    if not resultado.ok:
+        sys.exit(1)
+
+
 def cmd_loop(args) -> None:
     from live import clock
 
@@ -558,6 +603,8 @@ def cmd_loop(args) -> None:
     if getattr(rt, "execution_mode", None) == "shadow":
         print("MODO SOMBRA: tudo e' journalizado, NENHUMA ordem vai para a corretora.",
               flush=True)
+    else:
+        _preparar_terminal(rt)
     while True:
         try:
             espera = clock.seconds_until_active_window()
@@ -640,7 +687,8 @@ def main() -> None:
 
     for nome, fn in (("init", cmd_init), ("status", cmd_status), ("step", cmd_step),
                      ("decide", cmd_decide), ("execute", cmd_execute),
-                     ("reconcile", cmd_reconcile), ("unfreeze", cmd_unfreeze)):
+                     ("reconcile", cmd_reconcile), ("unfreeze", cmd_unfreeze),
+                     ("terminal", cmd_terminal)):
         sub.add_parser(nome).set_defaults(func=fn)
 
     lp = sub.add_parser("loop")

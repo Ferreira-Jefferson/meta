@@ -357,6 +357,15 @@ class AccountState:
     withdrawn_total: float = 0.0         # somatorio historico retirado
     external_cash: float = 0.0           # caixa fora do risco (com juros)
     policy_state: dict = field(default_factory=dict)
+    # Preenchido quando o dono removeu o robo GUARDANDO o historico
+    # (2026-08-26): a conta continua inteira no banco -- diario, ordens,
+    # trades, caixa -- e so' sai do painel. `None` = conta viva. E' o que
+    # permite "remover sem perder o que eu estava rodando" e, depois,
+    # recriar o mesmo trio (robo, ativo, modo) restaurando tudo em vez de
+    # comecar zerado. Quem le a lista do painel (`accounts_with_symbol`)
+    # filtra por este campo; quem carrega uma conta pelo nome
+    # (`load_account`) NAO filtra, senao restaurar seria impossivel.
+    archived_at: Optional[str] = None
     id: Optional[int] = None
 
     def cash_for(self, execution_mode: str) -> float:

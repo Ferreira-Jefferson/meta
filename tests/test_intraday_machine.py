@@ -20,6 +20,7 @@ from backtest.intraday.machine import (
     IntradaySessionMachine,
     LimitCancelled,
     LimitPlaced,
+    OrderRejected,
     PositionClosed,
     PositionOpened,
 )
@@ -916,3 +917,148 @@ def test_resume_session_ignora_seed_pending_se_ja_existe_posicao_restaurada():
 
     assert m.resting_limit is None  # a ordem recalculada NAO foi plantada
     assert m.position.entry_price == pytest.approx(9.80)  # posicao restaurada intacta
+
+
+# ---------- barra de pregao anterior ---------------------------------------
+
+def test_barra_de_pregao_anterior_e_descartada_sem_achatar_a_sessao():
+    """Achado 2026-08-25 (`dt-gremah-pmam3-shadow`): o feed ao vivo entrega
+    tudo com `ts > last_bar_ts`, e essa marca atravessa a virada do pregao.
+    Uma barra atrasada de ONTEM, dentro da janela do corte de flatten, chegou
+    como PRIMEIRA barra de hoje. Como o corte compara so' a HORA
+    (`ts.time() >= session_end_time_for(ts)`), ele disparou as 13:01 e
+    `flattened=True` calou o robo nas 322 barras seguintes -- zero ordem no
+    dia inteiro, sem erro nenhum no diario."""
+    strat = _Scripted({0: [EnterLimit(side="long", limit_price=9.80,
+                                      initial_target=9.90, initial_stop=9.00)]})
+    m = IntradaySessionMachine(strat, _config(session_end_time=time(19, 54)))
+    m.begin_session(pd.Timestamp("2026-01-05").date())
+
+    tarde_de_ontem = Bar(ts=pd.Timestamp("2026-01-02 19:54", tz="UTC"),
+                         open=10.0, high=10.0, low=10.0, close=10.0, volume=0.0)
+    assert m.on_closed_bar(tarde_de_ontem) == []
+    assert m.flattened is False
+    # descartada de verdade: o robo nem foi consultado sobre ela
+    assert strat.session_starts == 1
+
+    # a primeira barra de HOJE decide normalmente
+    ev = m.on_closed_bar(_bar(0, 10.00, 10.00, 10.00, 10.00))
+    assert [type(e) for e in ev] == [LimitPlaced]
+
+
+def test_is_previous_session_bar_so_olha_para_tras():
+    """Barra de pregao FUTURO nao e' descartada: ao vivo ela nao existe (a
+    maquina e' reaberta no pregao de hoje antes de qualquer consumo) e
+    inventar comportamento para ela seria regra nova sem caso real."""
+    m = IntradaySessionMachine(_Scripted({}), _config())
+    m.begin_session(pd.Timestamp("2026-01-05").date())
+
+    assert m.is_previous_session_bar(pd.Timestamp("2026-01-02 19:54", tz="UTC")) is True
+    assert m.is_previous_session_bar(pd.Timestamp("2026-01-05 13:00", tz="UTC")) is False
+    assert m.is_previous_session_bar(pd.Timestamp("2026-01-06 13:00", tz="UTC")) is False
+
+
+def test_sem_sessao_aberta_nenhuma_barra_e_considerada_atrasada():
+    """`session_date is None` (maquina recem-construida, antes de
+    `begin_session`) nao pode virar descarte silencioso de tudo."""
+    m = IntradaySessionMachine(_Scripted({}), _config())
+    assert m.is_previous_session_bar(pd.Timestamp("2026-01-02 19:54", tz="UTC")) is False
+
+
+# ---------- teto de contratos simultaneos (max_open_contracts) -------------
+# Ambiente de COMPETICAO (Copa BTG): margem simulada como infinita, sem saldo
+# ficticio nenhum -- o unico limitador de tamanho e' quantos contratos ficam
+# abertos ao mesmo tempo. Ver `IntradayBacktestConfig.max_open_contracts`.
+
+def _bar_vol(minute: int, o, h, low, c, volume: float) -> Bar:
+    b = _bar(minute, o, h, low, c)
+    return Bar(ts=b.ts, open=b.open, high=b.high, low=b.low, close=b.close, volume=volume)
+
+
+def test_sem_teto_declarado_o_comportamento_e_o_de_sempre():
+    """`None` (default) tem de ser indistinguivel do motor antes desta
+    feature -- e' o caminho que TODA acao usa."""
+    strat = _Scripted({0: [Enter(side="long", quantity=500, reason="grande")]})
+    m = IntradaySessionMachine(strat, _config())
+    m.begin_session(pd.Timestamp("2026-01-05").date())
+    m.on_closed_bar(_bar(0, 10.0, 10.0, 10.0, 10.0))
+    eventos = m.on_closed_bar(_bar(1, 10.0, 10.0, 10.0, 10.0))
+    assert [type(e) for e in eventos] == [PositionOpened]
+    assert m.open_contracts == 500
+    assert m.ordens_recusadas_por_teto == 0
+    assert m.ordens_aceitas == 1
+
+
+def test_entrada_a_mercado_acima_do_teto_e_recusada_por_inteiro_nao_truncada():
+    """Truncar para 3 esconderia, dentro de um P&L de aparencia saudavel, uma
+    estrategia que so' funciona porque o motor apertou o tamanho dela em
+    silencio."""
+    strat = _Scripted({0: [Enter(side="long", quantity=5, reason="acima_do_teto")]})
+    m = IntradaySessionMachine(strat, _config(max_open_contracts=3))
+    m.begin_session(pd.Timestamp("2026-01-05").date())
+    m.on_closed_bar(_bar(0, 10.0, 10.0, 10.0, 10.0))
+    eventos = m.on_closed_bar(_bar(1, 10.0, 10.0, 10.0, 10.0))
+
+    recusas = [e for e in eventos if isinstance(e, OrderRejected)]
+    assert len(recusas) == 1
+    assert recusas[0].quantity == 5 and recusas[0].cap == 3
+    assert recusas[0].open_contracts == 0
+    assert recusas[0].reason == "max_open_contracts"
+    assert not [e for e in eventos if isinstance(e, PositionOpened)]
+    assert m.open_contracts == 0            # nenhum contrato entrou, nem 3
+    assert m.ordens_recusadas_por_teto == 1
+    assert m.ordens_aceitas == 0
+
+
+def test_entrada_a_mercado_exatamente_no_teto_passa():
+    strat = _Scripted({0: [Enter(side="long", quantity=3, reason="no_teto")]})
+    m = IntradaySessionMachine(strat, _config(max_open_contracts=3))
+    m.begin_session(pd.Timestamp("2026-01-05").date())
+    m.on_closed_bar(_bar(0, 10.0, 10.0, 10.0, 10.0))
+    eventos = m.on_closed_bar(_bar(1, 10.0, 10.0, 10.0, 10.0))
+    assert [type(e) for e in eventos] == [PositionOpened]
+    assert m.open_contracts == 3
+    assert m.ordens_recusadas_por_teto == 0
+
+
+def test_filho_de_ordem_dividida_que_estoura_o_teto_e_recusado_e_descartado():
+    """3 filhos de 1 contrato com teto 2: dois entram, o terceiro e' recusado
+    E DESCARTADO. Deixa-lo parado o faria ser re-tentado a cada barra,
+    inflando o contador com a MESMA ordem em vez de medir quantas ordens
+    distintas o teto barrou."""
+    ordem = EnterLimit(side="long", limit_price=9.80, initial_stop=9.00,
+                       initial_target=99.0, quantity=3, split_quantities=(1, 1, 1),
+                       reason="dividida")
+    strat = _Scripted({0: [ordem]})
+    m = IntradaySessionMachine(strat, _config(max_open_contracts=2,
+                                              limit_fill_capped_by_volume=True))
+    m.begin_session(pd.Timestamp("2026-01-05").date())
+    m.on_closed_bar(_bar_vol(0, 10.0, 10.0, 10.0, 10.0, volume=1_000.0))
+    eventos = m.on_closed_bar(_bar_vol(1, 10.0, 10.0, 9.50, 9.90, volume=1_000.0))
+
+    abertas = [e for e in eventos if isinstance(e, PositionOpened)]
+    recusas = [e for e in eventos if isinstance(e, OrderRejected)]
+    assert len(abertas) == 2 and len(recusas) == 1
+    assert recusas[0].order_kind == "limit" and recusas[0].open_contracts == 2
+    assert m.open_contracts == 2
+    assert m.ordens_aceitas == 2 and m.ordens_recusadas_por_teto == 1
+
+    # o filho recusado nao volta a ser tentado na barra seguinte
+    eventos2 = m.on_closed_bar(_bar_vol(2, 9.90, 10.0, 9.50, 9.90, volume=1_000.0))
+    assert not [e for e in eventos2 if isinstance(e, OrderRejected)]
+    assert m.ordens_recusadas_por_teto == 1
+
+
+def test_teto_libera_de_novo_quando_a_posicao_fecha():
+    """O teto e' de contratos SIMULTANEOS, nao um orcamento do pregao: fechar
+    devolve a vaga."""
+    strat = _Scripted({0: [Enter(side="long", quantity=2, reason="entra")],
+                       2: [Exit(reason="sai")]})
+    m = IntradaySessionMachine(strat, _config(max_open_contracts=2))
+    m.begin_session(pd.Timestamp("2026-01-05").date())
+    m.on_closed_bar(_bar(0, 10.0, 10.0, 10.0, 10.0))
+    m.on_closed_bar(_bar(1, 10.0, 10.0, 10.0, 10.0))
+    assert m.open_contracts == 2
+    m.on_closed_bar(_bar(2, 10.0, 10.0, 10.0, 10.0))
+    m.on_closed_bar(_bar(3, 10.0, 10.0, 10.0, 10.0))
+    assert m.open_contracts == 0

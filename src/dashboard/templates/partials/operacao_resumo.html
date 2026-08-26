@@ -11,7 +11,7 @@
    nunca seria trocado pelo refresh de fundo. Sem isto, um cartão recolhido
    continuaria escrito "operando" depois de o robô parar — e um painel que
    mente sobre dinheiro é pior que um painel que não resume. #}
-{% macro resumo(slot_id, caixa, proc, caixa_minima=none, caixa_ok=True, oob=False) %}
+{% macro resumo(slot_id, caixa, proc, caixa_minima=none, caixa_ok=True, oob=False, preenchidas=none, posicionadas=none, impedimento=none) %}
 <span id="ops-sum-{{ slot_id }}" class="ops-sum"{% if oob %} hx-swap-oob="true"{% endif %}>
   <span class="ops-sum-cash num">R$ {{ caixa | num_br }}</span>
   {# O mínimo mudou de lugar (dono, 2026-08-22): ficava ao lado do campo de
@@ -22,14 +22,48 @@
      `is-blocked` já é o sinal de bloqueio, e o estado "parado" ao lado
      confirma que o robô não está rodando — repetir "não opera" por extenso
      era dizer a mesma coisa três vezes na mesma linha. #}
-  {% if caixa_minima is not none %}
+  {# Só aparece PARADO (dono, 2026-08-25): esse mínimo é o piso de ABRIR a
+     conta (2x o lote, `capital_minimo_brl`) -- desde 2026-08-24 ele só
+     bloqueia o clique em "Iniciar", nunca mais reavaliado depois que o robô
+     sobe (day trade day trade passa a checar 1x o lote no preço DO DIA,
+     `IntradayLiveRuntime._check_capital`, que muda todo pregão). Mostrar o
+     número de abertura ao lado do caixa de um robô já operando sugeria um
+     limite que não existe mais pra ele. #}
+  {% if caixa_minima is not none and not proc %}
   <span class="ops-sum-hint{% if not caixa_ok %} is-blocked{% endif %}">mín. R$ {{ caixa_minima | num_br }}</span>
   {% endif %}
-  <span class="ops-sum-state{{ ' is-running' if proc else '' }}">
+  {# Ordens do robô (só day trade — `preenchidas`/`posicionadas` vêm `none`
+     pro swing, que não tem o conceito de ordem-limite em pé): PREENCHIDA é a
+     que virou posição de verdade (aceita pela corretora, ou no sombra a que
+     teoricamente pegou o preço); POSICIONADA é a que ainda está em pé no
+     mercado, mandada mas nem aceita nem recusada ainda. "x/y", pedido do
+     dono 2026-08-25, pra saber o estado da ordem sem abrir o cartão.
+
+     Os DOIS lados são CONTAGEM DE ORDENS, não "tem ou não tem" (corrigido
+     2026-08-26, queixa do dono: a ordem #01 estava em pé no terminal e o
+     cartão dizia "0/0"). Uma entrada dividida (`dividir_entrada`, padrão nos
+     dois robôs de day trade) manda uma ordem REAL por lote, então "0/3" é
+     três ordens de 1 lote esperando o mesmo nível, e "2/1" é duas já
+     preenchidas com a terceira ainda no book. Ver
+     `IntradayLiveRuntime._espelho_da_ordem_em_pe` — o número vem de um
+     espelho PERSISTIDO da ordem, e não da máquina em memória, porque o
+     runtime que desenha esta linha é de leitura e nasce sem ordem nenhuma. #}
+  {% if preenchidas is not none %}
+  <span class="ops-sum-orders num" title="{{ preenchidas }} preenchida{{ 's' if preenchidas != 1 }} · {{ posicionadas }} posicionada{{ 's' if posicionadas != 1 }}">{{ preenchidas }}/{{ posicionadas }}</span>
+  {% endif %}
+  {# IMPEDIDO é diferente de PARADO: o processo está de pé, mas um portão do
+     robô recusou o pregão (relógio do servidor, AutoTrading desligado, caixa
+     abaixo do mínimo -- ver `IntradayLiveRuntime._gravar_impedimento`).
+     Escrever "operando" nesse estado foi a queixa do dono em 25/08/2026: o
+     robô perdeu a primeira ordem do dia com o AutoTrading desligado e o
+     cartão seguiu verde o pregão inteiro. O motivo vai no `title` para caber
+     numa linha; o cartão aberto o mostra por extenso. #}
+  <span class="ops-sum-state{% if impedimento %} is-blocked{% elif proc %} is-running{% endif %}"
+        {%- if impedimento %} title="{{ impedimento }}"{% endif %}>
     {# O ponto repete o que a palavra já diz, de propósito: cor sozinha não
        pode carregar informação (daltonismo, impressão, tema de alto
        contraste). #}
-    <span class="ops-sum-dot" aria-hidden="true"></span>{{ "operando" if proc else "parado" }}
+    <span class="ops-sum-dot" aria-hidden="true"></span>{{ "impedido" if impedimento else ("operando" if proc else "parado") }}
   </span>
 </span>
 {% endmacro %}

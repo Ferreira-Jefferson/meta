@@ -582,6 +582,59 @@ def warm_start_calibration(
     return pending
 
 
+def no_tick(preco: float, tick_size: float) -> float:
+    """Ajusta um preco a GRADE de negociacao do instrumento.
+
+    Mora aqui (e nao dentro de uma estrategia) porque vale para qualquer robo
+    que calcule nivel: um stop/alvo/ordem-limite fora da grade nao existe no
+    book, a corretora recusa, e o backtest que o preenche esta medindo um
+    trade impossivel.
+
+    Vira obrigatorio em FUTURO por uma armadilha medida (2026-08-25): a serie
+    continua do MT5 reporta o tick errado (`WIN@` diz 1,0 quando o `WINV26`
+    negocia de 5 em 5; `WDO@` diz 0,001 contra 0,5 do `WDOV26`). O valor certo
+    entra pelo construtor do robo, vindo de `SymbolProfile.price_tick_size`.
+
+    `tick_size <= 0` devolve o preco intacto -- e' o caso "nao sei o tick",
+    onde arredondar seria pior que nao arredondar."""
+    if tick_size <= 0:
+        return preco
+    return round(preco / tick_size) * tick_size
+
+
+def geometria_e_degenerada(profit_ticks: int, stop_ticks: int | None,
+                           razao_minima: float) -> bool:
+    """`True` quando o stop esta perto demais do alvo para a calibracao ainda
+    significar alguma coisa.
+
+    Mora aqui, e nao dentro de uma estrategia, porque vale para qualquer robo
+    que expresse alvo e stop em ticks -- e porque a alternativa (a mesma
+    comparacao solta copiada nas duas classes da familia `gremah`) e' o tipo de
+    duplicacao que o repo evita: duplicar CLASSE e' aceito, duplicar FORMULA
+    nao.
+
+    O problema que ela detecta foi medido em 2026-08-26. Alvo, espacamento e
+    stop da familia `gremah` saem todos do mesmo `profit_pct`, multiplicados e
+    depois arredondados para ticks com PISO de 1
+    (`max(1, round(preco * pct / tick_size))`). Quando o preco do ativo cai o
+    bastante, os tres afundam no piso e COLAPSAM na mesma distancia: o robo
+    passa a arriscar 1 tick para ganhar 1 tick, e nenhum dos parametros
+    calibrados tem mais efeito nenhum. Aconteceu com a PMAM3, que caiu de
+    R$4,53 para R$0,13 dentro da propria janela de backtest -- o stop dela
+    encolheu de 29 ticks para 1.
+
+    O criterio e' RAZAO, nao igualdade: o defeito e' a perda da assimetria que
+    `stop_multiplier` pretendia, e a razao pega tanto o caso extremo (1 tick
+    contra 1 tick) quanto o intermediario (3 contra 4, tecnicamente diferentes
+    e mesmo assim nada parecidos com o `stop_multiplier=20` configurado).
+
+    `stop_ticks=None` e' "sem stop", nao "stop colapsado" -- outro desenho,
+    fora do escopo desta checagem."""
+    if stop_ticks is None or profit_ticks <= 0:
+        return False
+    return stop_ticks < profit_ticks * razao_minima
+
+
 #: Lote padrao de acao na B3 -- a menor quantidade negociavel SEM recorrer ao
 #: mercado fracionario. Day trade nao usa fracionario: cada ordem la custa
 #: R$1,90 fixos na corretora (confirmado pelo dono 2026-08-22), proibitivo num

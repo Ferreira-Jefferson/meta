@@ -16,7 +16,10 @@
    Precisa ser elemento de PRIMEIRO nível da resposta: o htmx só extrai
    `hx-swap-oob` da raiz do fragmento. #}
 {% import "partials/operacao_resumo.html" as r %}
-{{ r.resumo(slot.id, caixa_ledger, proc, caixa_minima, caixa_ok, oob=True) }}
+{{ r.resumo(slot.id, caixa_ledger, proc, caixa_minima, caixa_ok, oob=True,
+            preenchidas=((s.daytrade.posicoes_compra + s.daytrade.posicoes_venda) if s.daytrade else none),
+            posicionadas=((s.daytrade.ordem_em_pe.ordens if s.daytrade.ordem_em_pe else 0) if s.daytrade else none),
+            impedimento=(s.daytrade.impedimento if s.daytrade else none)) }}
 {% endif %}
 {# A barra de controle (iniciar/parar) mudou de lugar: agora divide a linha
    com o campo de caixa em `operacao_body.html`, FORA deste nó. Aqui só sai o
@@ -76,9 +79,19 @@
   {% if s.daytrade %}
   {# O ativo é propriedade do ROBÔ escolhido, não do slot (desde
      2026-08-21) — precisa aparecer aqui porque dois robôs registrados podem
-     operar símbolos diferentes. #}
-  <span class="ops-badge">
-    <span class="dot"></span> Ativo · <strong>{{ s.daytrade.simbolo }}</strong>
+     operar símbolos diferentes. O Feed (2026-08-25, pedido do dono) entrou
+     NESTE badge em vez de um badge próprio -- day trade só tem UM feed
+     (o do ativo único dele), então "Feed" sozinho era uma etiqueta a mais
+     na fileira pra uma informação que já cabe do lado do ativo.
+     `s.feed.nome` é `"MT5 · M1"`/`"MT5 · TICK"` (`live/bar_feed.py`/
+     `live/tick_feed.py`) -- só a última palavra importa aqui, "MT5" já é
+     redundante (o robô só roda em `mode="mt5"`, ver `ProcessConfig`). #}
+  <span class="ops-badge{% if not s.feed.tempo_real %} warn{% endif %}">
+    <span class="dot"></span> Ativo ·
+    <strong>{{ s.daytrade.simbolo }} · {{ s.feed.nome.rsplit(" · ", 1)[-1] }}</strong>
+    {% if s.feed.atraso_s and s.feed.atraso_s > 60 %}
+      <span class="dim">· atraso {{ (s.feed.atraso_s / 60) | round(0, 'floor') | int }} min</span>
+    {% endif %}
   </span>
   {% endif %}
   {% if s.robo_saque %}
@@ -92,12 +105,17 @@
      pill lê `slot.execution_mode`, não `s.daytrade.execution_mode` -- os dois
      nunca divergem porque o modo é fixo por slot e o processo sempre sobe
      com `--execution-mode` igual ao do slot (`live_control.py::start`). #}
+  {% if not s.daytrade %}
+  {# Swing mantém o badge de Feed separado (2026-08-25): ele não tem um
+     "Ativo" único pra grudar essa informação do lado -- opera uma carteira
+     inteira, não um símbolo só. #}
   <span class="ops-badge {% if not s.feed.tempo_real %}warn{% endif %}">
     <span class="dot"></span> Feed · <strong>{{ s.feed.nome }}</strong>
     {% if s.feed.atraso_s and s.feed.atraso_s > 60 %}
       <span class="dim">· atraso {{ (s.feed.atraso_s / 60) | round(0, 'floor') | int }} min</span>
     {% endif %}
   </span>
+  {% endif %}
   {# Resumo do dia numa etiqueta só (pedido do dono, 2026-08-25): ganhos menos
      perdas do dia, mesma cor verde/vermelho do resto do painel
      (`.capital-card.safe`/`.trough`) — sem badge nenhuma dava pra ver o placar
@@ -114,6 +132,15 @@
      vem medido de `core.b3_session`. O que precisa aparecer aqui e' o
      resultado da CONFERENCIA — e ela impede a operacao, entao e' erro, nao
      aviso. #}
+  {# O portão que recusou o pregão, por extenso (o `<summary>` só cabe a
+     palavra "impedido" + `title`). Vem do processo do robô, gravado na conta
+     -- o painel não pode perguntar ao terminal, `status()` tem proibição de
+     I/O na corretora. #}
+  {% if s.daytrade and s.daytrade.impedimento %}
+  <span class="ops-badge err">
+    <span class="dot"></span> Não está operando · <strong>{{ s.daytrade.impedimento }}</strong>
+  </span>
+  {% endif %}
   {% if s.daytrade and s.daytrade.relogio_alarme %}
   <span class="ops-badge err">
     <span class="dot"></span> Relógio do servidor · <strong>não confere — robô não opera</strong>
@@ -131,6 +158,16 @@
   <span class="ops-badge">
     <span class="dot"></span> Pregão · <strong>{{ s.fase }}</strong>
   </span>
+  {# Último da fileira, de propósito (dono, 2026-08-25): é a única etiqueta
+     que sai do cartão em vez de descrever o estado dele, então fecha a
+     fileira em vez de interromper a leitura das outras. Único lugar que
+     leva pro histórico deste SLOT desde que o atalho do topo da página foi
+     removido (listava um por robô, sem distinguir sombra de real). #}
+  <a class="ops-badge is-link" href="/operacao/historico?slot={{ slot.id }}"
+     title="Abrir o histórico deste robô">
+    <span class="dot"></span> Histórico
+    <span class="arrow">→</span>
+  </a>
 </section>
 
 {# `posicoes_total`, não `posicoes | length`: a lista vem CORTADA no "ver
@@ -439,11 +476,15 @@
 <details class="console-wrap ops-list" data-ops-key="ev:{{ slot.id }}" open>
   <summary class="ops-sub-head">
     <span class="ops-sub-title">Eventos recentes{% if s.eventos_full %} — diário completo{% endif %}</span>
-    <span class="ops-sub-meta">{{ s.eventos | length }}</span>
+    {# "BRT" no cabeçalho porque o `ts` gravado é UTC e a linha mostra
+       Brasília (`app.py::hora_br`): sem o rótulo, quem confere o console
+       contra o log cru da corretora não teria como saber qual dos dois
+       relógios está lendo. #}
+    <span class="ops-sub-meta">{{ s.eventos | length }} · BRT</span>
     <span class="ops-sec-caret" aria-hidden="true"></span>
   </summary>
   <div class="ops-sub-body">
-  <pre class="console">{% for e in s.eventos %}[{{ e.ts }}] {{ e.level | upper }} {{ e.source }}: {{ e.message }}
+  <pre class="console">{% for e in s.eventos %}[{{ e.ts | hora_br }}] {{ e.level | upper }} {{ e.source }}: {{ e.message }}
 {% else %}(nenhum evento registrado{% if not s.eventos_full %} ainda hoje{% endif %}){% endfor %}{% if s.eventos_full and s.eventos_mais %}<span id="ops-events-sentinel-{{ slot.id }}"
       hx-get="/operacao/{{ slot.id }}/eventos?before_id={{ s.eventos[-1].id }}"
       hx-trigger="revealed" hx-swap="outerHTML" hx-target="this"></span>{% endif %}</pre>

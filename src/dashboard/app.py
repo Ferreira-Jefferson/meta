@@ -8,7 +8,7 @@ import queue
 import re
 import time
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -25,6 +25,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from markupsafe import Markup
 
+from core.b3_session import SAO_PAULO
 from core.config import BENCHMARK, WATCHLIST
 from core.indicators import sma
 from dashboard import live_control, live_service, robot_view, simulate as sim_mgr
@@ -115,6 +116,45 @@ def num_br(valor, casas: int | None = 2) -> str:
 
 
 TEMPLATES.env.filters["num_br"] = num_br
+
+
+# O diário grava `ts` em UTC (`datetime('now')` do SQLite, ver
+# `journal/schema.sql`) e é assim que tem de continuar: carimbo de auditoria
+# não pode depender do fuso da máquina que rodou o processo. Mas quem LÊ o
+# painel está em Brasília, e converter de cabeça a cada linha do console é
+# exatamente o trabalho que a tela existe para poupar (pedido do dono,
+# 2026-08-25: "se no meu relógio está meio dia quero que o diário apareça meio
+# dia"). Então a conversão acontece aqui, na camada de APRESENTAÇÃO, no último
+# passo, e o dado gravado segue em UTC.
+#
+# Pelo FUSO (`b3_session.SAO_PAULO`), nunca por um "-3h" fixo: o Brasil não tem
+# horário de verão desde 2019, mas um escalar voltaria a errar em silêncio
+# metade do ano se ele voltar — a mesma família de bug que já matou todo stop
+# intradiário uma vez (ver a docstring de `core/b3_session.py`).
+def hora_br(valor, formato: str = "%Y-%m-%d %H:%M:%S") -> str:
+    """Carimbo UTC do diário na hora de Brasília.
+
+    Aceita o texto do SQLite (`"2026-08-25 19:55:14"`), ISO com fuso
+    (`started_at` de `live_process.json`) e `datetime`. Texto sem fuso é lido
+    como UTC — é o que todo carimbo do diário é. O que não for data volta como
+    veio, sem "—": esconder uma linha que o dono precisa ler seria pior que
+    mostrar o valor cru.
+    """
+    if valor is None or valor == "":
+        return "—"
+    if isinstance(valor, datetime):
+        dt = valor
+    else:
+        try:
+            dt = datetime.fromisoformat(str(valor).strip())
+        except (TypeError, ValueError):
+            return str(valor)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(SAO_PAULO).strftime(formato)
+
+
+TEMPLATES.env.filters["hora_br"] = hora_br
 # Uma frase da ficha técnica do robô virando HTML: escapa tudo e traduz
 # `crase` em <code>. Filtro (e não `|safe` num texto já montado em Python)
 # porque assim o template nunca recebe HTML cru de lugar nenhum — o escape
@@ -608,6 +648,24 @@ def _robot_options(slot, bloco: dict) -> list[dict]:
     return [{"value": c["strategy_name"], "label": c["strategy_name"]} for c in top3]
 
 
+def _msg_restaurado(conta, slot) -> str:
+    """A frase verde depois de recriar um robô em cima do arquivo dele.
+
+    Diz o que VOLTOU, e não só "criado": o caixa é o número que o dono
+    reconhece na hora (ele acabou de ver aquele valor sumir da tela), e é o
+    único jeito de ele perceber, sem abrir o cartão, que restaurou em vez de
+    ter começado do zero. Sem conta carregada — nunca deveria acontecer, mas
+    `restore_account` pode devolver `None` numa corrida — a frase degrada
+    para o essencial em vez de estourar."""
+    if conta is None:
+        return f"Robô {slot.label} restaurado com o histórico que estava guardado."
+    caixa = float(conta.cash_for(slot.execution_mode or "live"))
+    return (
+        f"Robô {slot.label} restaurado com o histórico que estava guardado — "
+        f"diário, trades e o caixa de R$ {num_br(caixa)} voltaram como estavam."
+    )
+
+
 def _novo_robo_ctx(conn) -> dict:
     """O formulário "novo robô de day trade": que robôs existem e, para cada
     um, que ativos ele aceita — ordenados por CAPITAL MÍNIMO (o mais barato
@@ -638,8 +696,10 @@ def _novo_robo_ctx(conn) -> dict:
     par (robô, ativo, modo) que já existe e que `operacao_novo_robo` só ia
     recusar depois do clique.
     """
+    from core.config import slot_by_id
     from dashboard import slots as slots_mod
     from dashboard.robot_view import _ultimo_preco
+    from journal import live_store
     from strategy.daytrade.base import capital_minimo_brl
     from strategy.daytrade.registry import list_daytrade_robots, symbols_for_robot
 
@@ -648,6 +708,23 @@ def _novo_robo_ctx(conn) -> dict:
         if not slot.symbol:
             continue
         slots_por_robo_ativo.setdefault((slot.robot_key, slot.symbol), {})[slot.execution_mode] = slot
+
+    # Trios (robô, ativo, modo) que têm HISTÓRICO GUARDADO — robô removido com
+    # "guardar o histórico" (2026-08-26). Não é o mesmo eixo de `em_uso`:
+    # arquivo não ocupa o ativo (o cartão não existe, o slot está livre), ele
+    # só faz o formulário oferecer "restaurar" em vez de criar zerado. O
+    # índice é `{(robô, ativo): [modos...]}` para casar com a forma que o
+    # `<option>` já usa em `data-modos-usados`.
+    arquivados: dict[tuple[str, str], list[str]] = {}
+    for conta in live_store.archived_accounts(conn):
+        try:
+            arquivado = slot_by_id(conta.name)
+        except KeyError:
+            continue  # linha antiga/à mão: ignorada, igual em `daytrade_slots`
+        if arquivado.symbol:
+            arquivados.setdefault(
+                (arquivado.robot_key, arquivado.symbol), []).append(
+                    arquivado.execution_mode)
 
     todos_slot_ids = [s.id for modos in slots_por_robo_ativo.values() for s in modos.values()]
     rodando = live_control.status_all(todos_slot_ids)
@@ -675,6 +752,7 @@ def _novo_robo_ctx(conn) -> dict:
                 # aviso nenhum" quando troca pra Real (aquele trio ainda nem
                 # existe) -- ver o pedido do dono de 2026-08-25.
                 "modos_rodando": sorted(m for m, s in modos.items() if rodando.get(s.id)),
+                "modos_arquivados": sorted(arquivados.get((info.key, symbol), [])),
                 "slot_id": algum_slot.id if algum_slot else None,
                 "rodando": any(rodando.get(s.id) for s in modos.values()),
             })
@@ -687,8 +765,88 @@ def _novo_robo_ctx(conn) -> dict:
         robos.append({"key": info.key, "label": info.key, "rank": info.rank,
                       "feed_kind": info.feed_kind,
                       "description": info.description, "ativos": ativos})
-    return {"robos": robos, "livres": sum(
-        1 for r in robos for a in r["ativos"] if not a["em_uso"])}
+    return {"robos": robos,
+            # Só existe para o formulário não desenhar o campo "restaurar"
+            # quando não há arquivo NENHUM — sem isto, quem nunca removeu um
+            # robô veria uma caixa marcada oferecendo restaurar o nada.
+            "tem_arquivo": bool(arquivados),
+            "livres": sum(
+                1 for r in robos for a in r["ativos"] if not a["em_uso"])}
+
+
+def _processos_ctx(**extra) -> dict:
+    """Inventário dos supervisores `run_live.py` vivos NESTA MÁQUINA — a
+    seção 04 de `/operacao` (pedido do dono, 2026-08-26).
+
+    Por que a página precisa disto: todo o resto do painel raciocina por
+    CARTÃO ("o robô deste cartão está rodando?"). Um processo que não tem
+    cartão nenhum — robô removido com o supervisor vivo, robô subido pela
+    CLI, sobra de um dashboard fechado sem parar nada — não aparecia em lugar
+    algum da tela, e a única saída era o Gerenciador de Tarefas. É o caso que
+    o dono descreveu: "um processo morto que eventualmente não está listado,
+    ou não é um robô que eu consiga ver".
+
+    A varredura pergunta ao SISTEMA OPERACIONAL, e o arquivo de estado
+    (`db/live_process.json`) entra só como resposta a "e o painel sabe deste
+    aqui?". Três situações, e a diferença entre elas é o que o dono precisa
+    para decidir:
+
+      * `painel`        — tem cartão e está rastreado; o botão "Parar" dele
+                          resolve, esta lista é só confirmação;
+      * `nao_rastreado` — tem cartão, mas o arquivo de estado não o conhece:
+                          o cartão diz "parado" enquanto o processo opera. É
+                          a divergência mais perigosa das três, porque um
+                          clique em "Iniciar" ali subiria um SEGUNDO
+                          supervisor para a mesma conta;
+      * `sem_cartao`    — não há cartão nenhum para este slot. Órfão puro:
+                          nada além desta seção alcança.
+
+    `com_cartao is None` (banco ilegível) NÃO promove ninguém a órfão: sem
+    conseguir listar os cartões, dizer "sem cartão" seria chute — e o chute
+    aqui empurra o dono a matar um robô que está operando de propósito.
+    """
+    from dashboard import slots as slots_mod
+
+    processos, erro = live_control.inventario_processos()
+    try:
+        com_cartao = {s.id for s in slots_mod.all_slots()}
+    except Exception:
+        com_cartao = None
+
+    linhas = []
+    for proc in processos:
+        tem_cartao = True if com_cartao is None else (proc.slot in com_cartao)
+        if not tem_cartao:
+            situacao = "sem_cartao"
+        elif not proc.rastreado:
+            situacao = "nao_rastreado"
+        else:
+            situacao = "painel"
+        linhas.append({
+            "pid": proc.pid,
+            "slot": proc.slot,
+            "rotulo": proc.rotulo,
+            "modo": proc.execution_mode,
+            "filhos": proc.filhos,
+            "situacao": situacao,
+        })
+
+    soltos = sum(1 for l in linhas if l["situacao"] != "painel")
+    if erro:
+        meta = "não foi possível varrer"
+    elif not linhas:
+        meta = "nenhum rodando"
+    else:
+        meta = f"{len(linhas)} rodando"
+        meta += f" · {soltos} solto{'s' if soltos != 1 else ''}" if soltos else " · todos do painel"
+    return {
+        "processos": linhas,
+        "processos_erro": erro,
+        "processos_soltos": soltos,
+        "processos_meta": meta,
+        "processos_carregado": True,
+        **extra,
+    }
 
 
 def _operacao_ctx(request: Request | None = None, **extra) -> dict:
@@ -724,7 +882,7 @@ def _operacao_ctx(request: Request | None = None, **extra) -> dict:
     except (live_store.LegacyPaperAccountError, live_store.LegacyManualAccountError) as e:
         extra.setdefault("erro", str(e))
         todos = list(ordered_slots())
-        novo_robo = {"robos": [], "livres": 0}
+        novo_robo = {"robos": [], "livres": 0, "tem_arquivo": False}
         avisos = []
 
     slots = [_slot_ctx(s) for s in todos]
@@ -1134,6 +1292,7 @@ async def operacao_iniciar(request: Request, slot_id: str):
             conta.initial_capital = live_control.available_cash(slot.id, "live") or 0.0
             live_store.save_account(conn, conta)
 
+    colisao = None
     if erro is None:
         try:
             cfg = live_control.ProcessConfig(
@@ -1152,10 +1311,22 @@ async def operacao_iniciar(request: Request, slot_id: str):
             # "Iniciar". `asyncio.to_thread` roda a chamada bloqueante numa
             # thread separada, sem travar o loop.
             await asyncio.to_thread(live_control.start, cfg)
+        except live_control.SlotSymbolCollisionError as e:
+            # Card centralizado em vez do banner de texto lá em cima (pedido
+            # do dono, 2026-08-25: o banner "não fica no campo de visão e não
+            # dá pra associar" ao clique que acabou de dar) -- ver
+            # `partials/operacao_colisao.html`. `erro` fica de fora de
+            # propósito: mostrar os dois ao mesmo tempo seria repetir a
+            # mesma mensagem duas vezes na tela.
+            colisao = {
+                "slot_id": e.slot_id, "label": e.slot_label,
+                "symbols": e.symbols, "pode_parar": e.pode_parar,
+                "motivo_bloqueio": e.motivo_bloqueio,
+            }
         except (RuntimeError, ValueError) as e:
             erro = str(e)
 
-    ctx = _operacao_ctx(request, erro=erro)
+    ctx = _operacao_ctx(request, erro=erro, colisao=colisao)
     return TEMPLATES.TemplateResponse(request, "partials/operacao_body.html", ctx)
 
 
@@ -1195,6 +1366,15 @@ async def operacao_novo_robo(request: Request):
     robot_key = (form.get("robot") or "").strip()
     symbol = (form.get("symbol") or "").strip().upper()
     execution_mode = (form.get("execution_mode") or "").strip().lower()
+    # Checkbox marcado por padrão (2026-08-26): se este trio já foi removido
+    # COM o histórico guardado, criá-lo de novo traz tudo de volta. Desmarcar
+    # é o "quero começar do zero" — e aí o arquivo é descartado sem segunda
+    # pergunta, porque a caixa desmarcada JÁ é a resposta. Checkbox ausente no
+    # POST significa desmarcada (HTML não manda checkbox desligada), o que
+    # está certo aqui: quem submete sem o campo não tem arquivo nenhum em jogo
+    # (o campo só aparece quando há) e o efeito é o mesmo — conta nova.
+    restaurar = bool(form.get("restaurar"))
+    ok_msg = None
     erro = None
     if not robot_key or not symbol:
         erro = "Escolha o robô e o ativo."
@@ -1209,13 +1389,26 @@ async def operacao_novo_robo(request: Request):
             get_daytrade_robot(robot_key, symbol=symbol)
             slot = daytrade_slot(robot_key, symbol, execution_mode)
             with live_store.live_journal() as conn:
-                if live_store.load_account(conn, slot.id) is not None:
+                existente = live_store.load_account(conn, slot.id)
+                if existente is not None and not existente.archived_at:
                     erro = (
                         f"o robô '{robot_key}' já existe em {symbol} no modo "
                         f"{'sombra' if execution_mode == 'shadow' else 'real'} "
                         "— escolha outro ativo, outro robô ou o outro modo."
                     )
+                elif existente is not None and restaurar:
+                    # Arquivo deste trio + "restaurar" marcado: o robô volta
+                    # como estava — caixa, diário, trades, tudo.
+                    conta = live_store.restore_account(conn, slot.id)
+                    ok_msg = _msg_restaurado(conta, slot)
                 else:
+                    if existente is not None:
+                        # Arquivo existe e o dono DESMARCOU restaurar: ele
+                        # pediu um robô do zero, e o do zero não pode nascer
+                        # com o caixa e o diário do anterior. Sem segunda
+                        # pergunta, por pedido explícito do dono.
+                        live_store.purge_account(conn, slot.id)
+                        live_control.esquecer(slot.id)
                     live_store.ensure_account(
                         conn, name=slot.id, mode="mt5", initial_capital=0.0,
                         investment_robot=robot_key, withdrawal_robot="", symbol=symbol,
@@ -1223,35 +1416,62 @@ async def operacao_novo_robo(request: Request):
         except (KeyError, ValueError, RuntimeError) as e:
             erro = str(e)
 
-    ctx = _operacao_ctx(request, erro=erro)
+    ctx = _operacao_ctx(request, erro=erro, ok_msg=ok_msg)
     return TEMPLATES.TemplateResponse(request, "partials/operacao_body.html", ctx)
 
 
 @app.post("/operacao/{slot_id}/remover", response_class=HTMLResponse)
 async def operacao_remover_robo(request: Request, slot_id: str):
-    """Remove um robô de day trade e libera o ativo dele.
+    """Remove um robô de day trade — processo, pendências na corretora, caixa
+    e conta — em DOIS passos, e o primeiro nunca muda nada.
 
-    Recusa se o processo estiver rodando (pare antes — remover a conta não
-    mata o processo, que continuaria operando contra uma conta inexistente),
-    e `live_store.delete_account` recusa de novo se houver posição aberta ou
-    caixa. Slot estático (swing) não é removível: ele não foi criado aqui.
+    Sem `confirmar` no POST (o clique no botão), só INSPECIONA e devolve o
+    diálogo de `partials/operacao_remocao.html` com o que existe agora. Com
+    `confirmar=1` (o botão de dentro do diálogo), executa.
+
+    Mudou em 2026-08-25, a pedido do dono. Antes, o clique era recusado com
+    "pare a operação antes de remover" — e a recusa era honesta mas inútil:
+    quem clica em remover não quer que o robô continue rodando. Pior, o que
+    estivesse pendurado no MT5 (ordem-limite esperando fila, posição aberta)
+    sobrevivia à remoção e virava órfão invisível, porque o cartão que
+    mostrava aquilo tinha acabado de sumir da tela. Ver `live_teardown`.
+
+    Slot estático (swing) continua não removível: ele não foi criado aqui.
     """
     slot = _slot_or_404(slot_id)
-    from journal import live_store
+    from dashboard import live_teardown
 
-    erro = None
     if not slot.is_dynamic:
-        erro = f"O slot '{slot.label}' é fixo — só robôs de day trade criados aqui podem ser removidos."
-    elif live_control.status(slot.id) is not None:
-        erro = f"O robô '{slot.label}' está rodando — pare a operação antes de remover."
-    else:
-        try:
-            with live_store.live_journal() as conn:
-                live_store.delete_account(conn, slot.id)
-        except ValueError as e:
-            erro = str(e)
+        ctx = _operacao_ctx(
+            request,
+            erro=f"O slot '{slot.label}' é fixo — só robôs de day trade "
+                 "criados aqui podem ser removidos.")
+        return TEMPLATES.TemplateResponse(request, "partials/operacao_body.html", ctx)
 
-    ctx = _operacao_ctx(request, erro=erro)
+    form = await request.form()
+    if not form.get("confirmar"):
+        ctx = _operacao_ctx(request, remocao=live_teardown.inspecionar(slot))
+        return TEMPLATES.TemplateResponse(request, "partials/operacao_body.html", ctx)
+
+    # O que fazer com o REGISTRO (diário, trades, caixa) é escolha do dono no
+    # próprio diálogo (2026-08-26): "guardar" é o padrão porque é o único dos
+    # dois que dá para desfazer, e vale também para um POST sem o campo
+    # (cliente antigo, JS desligado, curl). Nada disso muda os passos que
+    # mexem em DINHEIRO — processo, ordens e posição são desfeitos igual.
+    apagar_historico = (form.get("historico") or "").strip() == "apagar"
+    try:
+        resultado = live_teardown.remover(slot, apagar_historico=apagar_historico)
+    except ValueError as e:
+        # Impedimento conhecido (corretora muda) ou recusa do `delete_account`
+        # — mensagem pronta para o dono, não stack trace.
+        ctx = _operacao_ctx(request, erro=str(e))
+    else:
+        ctx = _operacao_ctx(
+            request, ok_msg=resultado.resumo,
+            # Aviso não é sucesso: o que NÃO deu certo (uma ordem que a
+            # corretora não cancelou, um fechamento parcial) sobe no banner
+            # vermelho, junto do verde que conta o que deu.
+            erro="; ".join(resultado.avisos) or None)
     return TEMPLATES.TemplateResponse(request, "partials/operacao_body.html", ctx)
 
 
@@ -1381,11 +1601,18 @@ async def operacao_caixa(request: Request, slot_id: str):
                 if aplicado:
                     saldo_novo = conta.cash_sombra if editando_sombra else conta.cash
                     descricao = "caixa sombra" if editando_sombra else "caixa"
+                    # Linha curta de propósito (pedido do dono, 2026-08-25:
+                    # "no diário não deve ter nenhuma linha tão grande"): o
+                    # console já é o DESTE slot, então repetir o id dele é
+                    # ruído; a diferença sai da subtração dos dois números que
+                    # a própria linha mostra; e "manualmente" já diz que o
+                    # número não veio do MT5. Nada disso se perde — o payload
+                    # abaixo continua guardando slot e diferença, e é dele que
+                    # a auditoria lê.
                     live_store.log_event(
                         conn, conta.id, "info" if diff > 0 else "warn", "operacao",
-                        f"{descricao} do slot '{slot.id}' definido manualmente: "
-                        f"{saldo_novo - diff:.2f} -> {saldo_novo:.2f} "
-                        f"(diferença R$ {diff:.2f}) -- ledger manual, não veio do MT5.",
+                        f"{descricao} definido manualmente: "
+                        f"{saldo_novo - diff:.2f} -> {saldo_novo:.2f}",
                         {"diferenca": diff, "slot": slot.id, "sombra": editando_sombra},
                     )
                     caixa_msg = (f"{descricao.capitalize()} de '{slot.label}' atualizado "
@@ -1411,6 +1638,58 @@ async def operacao_credenciais(request: Request):
     live_control.save_credentials(updates, clear=clear)
     ctx = _operacao_ctx(request, creds_msg="Credenciais salvas.")
     return TEMPLATES.TemplateResponse(request, "partials/operacao_body.html", ctx)
+
+
+@app.get("/operacao/processos", response_class=HTMLResponse)
+def operacao_processos(request: Request):
+    """A seção 04 de `/operacao`, sozinha — a varredura de processos.
+
+    Carregada à PARTE, e não junto do resto da página, porque ela custa
+    caro: `Get-CimInstance Win32_Process` leva ~3s nesta máquina, e o corpo
+    de `/operacao` é remontado inteiro a cada clique (criar robô, mudar
+    caixa, salvar credencial, remover). Se a varredura entrasse em
+    `_operacao_ctx`, cada um desses cliques ficaria 3s mais lento para
+    responder a uma pergunta que ninguém fez naquele clique.
+
+    Então o corpo nasce como um lugar vazio que se preenche sozinho
+    (`hx-trigger="load"` em `partials/operacao_processos.html`) e este
+    endpoint devolve a seção pronta, com o cabeçalho e a contagem certos.
+    Também é o alvo do botão "Varrer de novo": a lista envelhece sozinha
+    (um robô pode morrer ou subir enquanto a tela está aberta), e a
+    alternativa era recarregar a página inteira.
+    """
+    return TEMPLATES.TemplateResponse(
+        request, "partials/operacao_processos.html", _processos_ctx())
+
+
+@app.post("/operacao/processos/{pid}/encerrar", response_class=HTMLResponse)
+def operacao_encerrar_processo(request: Request, pid: int):
+    """Mata o supervisor `pid` — inclusive um que nenhum cartão alcança.
+
+    `live_control.encerrar_processo` RECUSA um PID que a varredura não
+    reconheça como `run_live.py` vivo: sem essa conferência, isto seria "mate
+    qualquer processo desta máquina pelo número" exposto em HTTP. A recusa
+    chega aqui como `ValueError` e vira mensagem na própria seção — o caso
+    normal dela é benigno (o processo morreu sozinho entre a varredura e o
+    clique), e derrubar a página por isso seria desproporcional.
+
+    Responde só a SEÇÃO (e não o `#ops-body` inteiro) para a confirmação
+    aparecer onde o dono está olhando: o botão fica no fim da página, e um
+    banner lá no topo não seria visto. O cartão do robô, se existir, se
+    corrige sozinho no próximo poll — `encerrar_processo` já zera o `pid` no
+    arquivo de estado antes de voltar.
+    """
+    try:
+        processo = live_control.encerrar_processo(pid)
+    except ValueError as e:
+        ctx = _processos_ctx(processos_erro_acao=str(e))
+    else:
+        ctx = _processos_ctx(processos_msg=(
+            f"Processo {processo.pid} ({processo.rotulo}) encerrado. "
+            "A posição e as ordens que ele tivesse na corretora continuam lá — "
+            "parar o supervisor nunca mexe em dinheiro exposto."))
+    return TEMPLATES.TemplateResponse(request, "partials/operacao_processos.html", ctx)
+
 
 
 # ============ SIMULATION LIFECYCLE =======================================
@@ -1650,8 +1929,16 @@ def operacao_historico(request: Request, slot: str = live_service.DEFAULT_SLOT):
     disciplina de `/operacao` — nunca cria a conta.
 
     `?slot=` porque o histórico é por conta e cada slot tem a sua; sem o
-    parâmetro cai no primeiro slot do catálogo (day trade)."""
-    from core.config import ordered_slots
+    parâmetro cai no primeiro slot do catálogo (day trade).
+
+    Correção (dono, 2026-08-25): a lista de slots do cabeçalho vinha de
+    `core.config.ordered_slots()`, que só devolve os ESTÁTICOS (`swing`) —
+    a própria docstring dela diz que day trade "vive no banco... quem os
+    lista é `dashboard.slots.all_slots()`". Resultado: clicar em qualquer
+    cartão de day trade abria o histórico certo (a URL leva o `slot` certo,
+    os dados são do robô certo) mas o cabeçalho listava só o swing, e como
+    era a ÚNICA entrada, parecia que a tela tinha aberto o robô errado."""
+    from dashboard import slots as slots_mod
     from journal import live_store
 
     escolhido = _slot_or_404(slot)
@@ -1673,11 +1960,11 @@ def operacao_historico(request: Request, slot: str = live_service.DEFAULT_SLOT):
                     "snapshots": live_store.intent_snapshots(conn, account.id, limit=400),
                     "withdrawals": live_store.withdrawals(conn, account.id),
                 }
+            ctx["slots"] = slots_mod.all_slots(conn)
     except live_store.LegacyPaperAccountError as e:
         # Correção pós-code-review (item 5): mensagem amigável em vez de 500
         # cru — este endpoint só lê, não tem template com banner de erro
         # próprio, então devolve texto simples em vez de estourar.
         return PlainTextResponse(str(e), status_code=200)
     ctx["slot"] = escolhido
-    ctx["slots"] = ordered_slots()
     return TEMPLATES.TemplateResponse(request, "historico.html", ctx)

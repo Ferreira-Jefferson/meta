@@ -313,3 +313,108 @@ def test_stop_frac_range_sem_janela_cai_no_fallback_percentual():
     strat = _strat(stop_frac_range=0.5)
     profit, spacing, stop = strat._session_ticks(5.00)
     assert stop == strat._ticks_from_pct(5.00, strat.profit_pct * strat.stop_multiplier)
+
+
+# ---------------------------------------------------------------------------
+# GEOMETRIA EM TICKS (2026-08-26): alvo/espacamento/stop independentes, e a
+# guarda contra a geometria degenerada. Ver
+# `strategy.daytrade.base.geometria_e_degenerada` para o defeito que motivou.
+# ---------------------------------------------------------------------------
+
+
+def test_ticks_explicitos_default_none_nao_muda_nada():
+    """Compatibilidade: os parametros novos existem, mas com o default `None`
+    o resultado tem de ser IDENTICO ao caminho percentual de sempre. Se este
+    teste quebrar, o robo em producao mudou de comportamento sem ninguem pedir."""
+    strat = _strat()
+    assert strat.profit_ticks is None
+    assert strat.spacing_ticks is None
+    assert strat.stop_ticks is None
+    assert strat._session_ticks(5.00) == (
+        strat._ticks_from_pct(5.00, strat.profit_pct),
+        strat._ticks_from_pct(5.00, strat.profit_pct * strat.spacing_multiplier),
+        strat._ticks_from_pct(5.00, strat.profit_pct * strat.stop_multiplier),
+    )
+
+
+def test_alvo_e_stop_em_ticks_sao_independentes():
+    """O ponto inteiro da mudanca. No caminho percentual alvo e stop saem do
+    MESMO `profit_pct` (`stop = profit_pct * stop_multiplier`), entao subir o
+    alvo sobe o stop na mesma proporcao -- e a grade de calibracao nunca
+    conseguiu perguntar "alvo maior com o stop onde esta". Em ticks, consegue."""
+    apertado = _strat(profit_ticks=2, stop_ticks=8)
+    largo = _strat(profit_ticks=4, stop_ticks=8)
+
+    assert apertado._session_ticks(5.00)[0] == 2
+    assert largo._session_ticks(5.00)[0] == 4
+    # dobrar o alvo NAO mexeu no stop
+    assert apertado._session_ticks(5.00)[2] == 8
+    assert largo._session_ticks(5.00)[2] == 8
+
+
+def test_ticks_explicitos_vencem_percentual_volatilidade_e_stop_frac_range():
+    """Hierarquia declarada: o mais explicito vence. Aqui ligamos TODOS os
+    outros caminhos ao mesmo tempo e os tres numeros ainda saem dos ticks."""
+    strat = _strat(alvo_por_volatilidade=True, alvo_vol_mult=0.5,
+                   stop_frac_range=0.9,
+                   profit_ticks=3, spacing_ticks=7, stop_ticks=11)
+    strat.seed_daily_volatility([_diaria(10.0), _diaria(20.0), _diaria(30.0)])
+
+    assert strat._session_ticks(999.0) == (3, 7, 11)
+
+
+def test_ticks_explicitos_nao_aceitam_zero_nem_negativo():
+    """`_build_entry` multiplica ticks por `tick_size` sem checar sinal: um 0
+    poria o alvo em cima do preco de entrada, e um negativo o jogaria para o
+    lado errado -- os dois viram trade impossivel preenchido pelo backtest."""
+    assert _strat(profit_ticks=0).profit_ticks == 1
+    assert _strat(stop_ticks=-5).stop_ticks == 1
+    assert _strat(spacing_ticks=0).spacing_ticks == 1
+
+
+def test_guarda_de_geometria_desligada_por_padrao():
+    """Ligar a guarda MUDA o comportamento do robo (ele deixa de operar), entao
+    isso e' decisao de operacao, nunca um default."""
+    strat = _strat(profit_ticks=1, stop_ticks=1)
+    assert strat.bloquear_geometria_degenerada is False
+    assert strat._geometria_bloqueada(1, 1) is False
+
+
+def test_guarda_ligada_recusa_armar_ordem_e_conta_o_evento():
+    """Stop de 1 tick contra alvo de 1 tick e' a PMAM3 a R$0,13: arriscar
+    exatamente o que se quer ganhar, com nenhum parametro tendo efeito."""
+    strat = _strat(profit_ticks=1, stop_ticks=1, bloquear_geometria_degenerada=True)
+    strat.on_session_start(None)
+    ts = pd.Timestamp("2026-01-05 13:00", tz="UTC")
+    bar = Bar(ts=ts, open=5.00, high=5.00, low=5.00, close=5.00, volume=0)
+
+    actions = strat.on_bar(ts, bar, positions=[], session_pnl_brl=0.0)
+
+    assert actions == []
+    assert strat.geometria_degenerada_eventos == 1
+
+
+def test_guarda_ligada_nao_deixa_ordem_pendente_fantasma():
+    """Regressao: se a guarda recusasse DEPOIS de marcar `pending_side`, o robo
+    ficaria esperando para sempre o preenchimento de uma ordem que nunca foi
+    enviada, e nao armaria mais nada nem quando a geometria melhorasse."""
+    strat = _strat(profit_ticks=1, stop_ticks=1, bloquear_geometria_degenerada=True)
+    strat.on_session_start(None)
+    ts = pd.Timestamp("2026-01-05 13:00", tz="UTC")
+    bar = Bar(ts=ts, open=5.00, high=5.00, low=5.00, close=5.00, volume=0)
+
+    strat.on_bar(ts, bar, positions=[], session_pnl_brl=0.0)
+
+    assert strat._state.pending_side is None
+
+
+def test_guarda_ligada_deixa_passar_geometria_sadia():
+    strat = _strat(profit_ticks=2, stop_ticks=10, bloquear_geometria_degenerada=True)
+    strat.on_session_start(None)
+    ts = pd.Timestamp("2026-01-05 13:00", tz="UTC")
+    bar = Bar(ts=ts, open=5.00, high=5.00, low=5.00, close=5.00, volume=0)
+
+    actions = strat.on_bar(ts, bar, positions=[], session_pnl_brl=0.0)
+
+    assert len(actions) == 1
+    assert strat.geometria_degenerada_eventos == 0

@@ -20,6 +20,7 @@ O que esta em jogo, em ordem de importancia:
 """
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, datetime, time, timezone
 
 import pandas as pd
@@ -114,19 +115,25 @@ def _config() -> IntradayBacktestConfig:
     )
 
 
-def _runtime(tmp_path, barras, semente=None, execution_mode="shadow", **strat_kwargs):
+def _runtime(tmp_path, barras, semente=None, execution_mode="shadow", feed=None,
+             **strat_kwargs):
     """`semente` default = a PRIMEIRA barra de `barras` (a abertura do pregao).
 
     E' o caso realista de ligar dentro da janela de ancora fixa: o warm start
     recalibra com a abertura real e as barras seguintes chegam ao vivo. Sem
     isto, o robo cairia em comeco a frio e a marca de partida engoliria todas
-    as barras do roteiro -- o teste passaria sem o robo ter operado nada."""
+    as barras do roteiro -- o teste passaria sem o robo ter operado nada.
+
+    `feed`: dublê de feed proprio, para quem precisa de um comportamento que
+    `_ScriptedBarFeed` nao tem (ex.: barra que so' aparece na SEGUNDA
+    consulta ao terminal)."""
     from strategy.daytrade.lab.gremah import Gremah
 
     kwargs = dict(symbol=SYMBOL, tick_size=0.01, profit_pct=0.01,
                   spacing_multiplier=2.0, stop_multiplier=20.0)
     kwargs.update(strat_kwargs)
-    feed = _ScriptedBarFeed(barras, barras[:1] if semente is None else semente)
+    if feed is None:
+        feed = _ScriptedBarFeed(barras, barras[:1] if semente is None else semente)
     rt = IntradayLiveRuntime(
         slot=SLOT, strategy=Gremah(**kwargs), config=_config(),
         bar_feed=feed, broker=_ExplodingBroker(),
@@ -226,16 +233,23 @@ def test_numero_de_ordem_e_o_mesmo_do_armar_ate_a_saida_e_avanca_na_proxima_roda
     # So' os 5 eventos de ORDEM, na ordem em que aconteceram -- o resto (aviso
     # de capital para outro ativo, sessao) nao carrega numero.
     de_ordem = [m for m in eventos if "#0" in m]
+    # Formato pedido pelo dono em 2026-08-25 (ver `_lotes_txt` e
+    # `_MOTIVO_SAIDA_TXT`): evento na frente, sem "SOMBRA", tamanho em lotes.
+    # "100 lotes" aqui NAO e' erro: `_config()` deste arquivo usa
+    # `default_quantity=1` (lote sintetico de 1 acao, pra caber no capital de
+    # R$100 dos roteiros) -- em producao PMAM3 tem lote de 100, e a mesma
+    # ordem sai como "1 lote". Quem prova a conversao com o lote real e'
+    # `test_lotes_txt_*`.
     assert de_ordem == [
-        "SOMBRA entrada #01 long 100 PMAM3 @ 9.8000 (stop 7.8000 / alvo 9.9000)",
-        "SOMBRA saida #01 long 100 PMAM3 @ 9.9000 (target) R$ +10.00",
-        "ordem #02 posicionada: short 100 PMAM3 @ 10.2000",
-        "SOMBRA entrada #02 short 100 PMAM3 @ 10.2000 (stop 12.2000 / alvo 10.1000)",
-        "SOMBRA saida #02 short 100 PMAM3 @ 10.1000 (target) R$ +10.00",
+        "LONG #01 100 lotes PMAM3 @ 9.8000 (stop 7.8000 / alvo 9.9000)",
+        "TARGET LONG #01 100 lotes PMAM3 @ 9.9000 - R$ +10.00",
+        "LIMITE SHORT #02 100 lotes PMAM3 @ 10.2000",
+        "SHORT #02 100 lotes PMAM3 @ 10.2000 (stop 12.2000 / alvo 10.1000)",
+        "TARGET SHORT #02 100 lotes PMAM3 @ 10.1000 - R$ +10.00",
         # o robo se rearma de novo com a ultima barra do roteiro -- rodada
         # #03, ainda sem fill: prova que o numero segue avancando (nao
         # empaca em #02) mesmo sem uma saida fechando-a antes do fim do teste.
-        "ordem #03 posicionada: long 100 PMAM3 @ 9.8000",
+        "LIMITE LONG #03 100 lotes PMAM3 @ 9.8000",
     ], de_ordem
 
 
@@ -1471,6 +1485,74 @@ def test_status_reporta_fuso_corte_e_ordem_em_pe(tmp_path, pregao_aberto):
     assert s["daytrade"]["ordem_em_pe"]["preco"] == pytest.approx(9.80)
 
 
+def test_painel_ve_a_ordem_em_pe_num_runtime_de_leitura_novo(tmp_path, pregao_aberto):
+    """`/operacao` NAO reusa o runtime do robo: monta um de LEITURA novo a cada
+    poll (`dashboard/live_service.py::_build_intraday_runtime`), com a maquina
+    zerada. E `IntradaySessionMachine.state()` nao persiste `resting_limit` de
+    proposito (e' uma DECISAO, redecidida pelo warm start).
+
+    O resultado, ao vivo em 26/08/2026: a ordem #01 estava em pe no terminal
+    (tres linhas "LIMITE LONG #01 ... (substitui)" no diario) e o cabecalho do
+    cartao dizia "0/0" -- `ordem_em_pe` era SEMPRE `None` no painel, entao o
+    contador de posicionadas nunca saia de zero e o "em pe @ preco" do card
+    Ordens nunca aparecia. Ver `_SessionSnapshot.ordem_em_pe`."""
+    semente = [_bar("13:00", 10.00, 10.00, 10.00, 10.00)]
+    rt, _feed = _runtime(tmp_path, barras=[], semente=semente, fixed_anchor_until=time(14, 0))
+    rt.run_once(now=_agora("13:01:00"))
+
+    # instancia NOVA sobre o MESMO banco -- o que o painel faz
+    painel, _f = _runtime(tmp_path, barras=[], semente=semente, fixed_anchor_until=time(14, 0))
+    ordem = painel.status()["daytrade"]["ordem_em_pe"]
+
+    assert ordem is not None, "painel perdeu a ordem-limite em pe"
+    assert ordem["lado"] == "long"
+    assert ordem["preco"] == pytest.approx(9.80)
+    # Uma ordem REAL por lote que falta preencher -- e' o "y" do "x/y".
+    assert ordem["ordens"] == 1
+    # `quantidade` e' em ACOES (1 lote = 100 acoes neste papel), nao em lotes --
+    # mesma unidade de `Order.quantity`.
+    assert ordem["quantidade"] == 100
+
+
+def test_painel_conta_posicoes_independentes_sem_estourar(tmp_path, pregao_aberto):
+    """Sombra abre uma posicao INDEPENDENTE por lote preenchido (2026-08-24).
+    `status()` usava `machine.position`, o atalho de 1 posicao, que levanta
+    `RuntimeError` com duas -- `/operacao` inteiro virava erro no pregao em que
+    o robo dividiu a entrada e pegou dois lotes. E a contagem do cartao vinha
+    de `account.positions`, um dicionario POR TICKER: numa conta de day trade
+    (um simbolo so') ela era sempre 0 ou 1, dissesse a verdade ou nao."""
+    semente = [_bar("13:00", 10.00, 10.00, 10.00, 10.00)]
+    rt, _feed = _runtime(tmp_path, barras=[], semente=semente, fixed_anchor_until=time(14, 0))
+    rt.run_once(now=_agora("13:01:00"))
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        estado = dict(acc.policy_state)
+        estado["intraday"]["machine"]["positions"] = [
+            {"side": "long", "entry_ts": "2026-08-21T13:02:00+00:00",
+             "entry_price": 9.80, "quantity": 1, "current_stop": 9.60,
+             "current_target": 9.90, "bars_held": 1, "metadata": {}},
+            {"side": "long", "entry_ts": "2026-08-21T13:03:00+00:00",
+             "entry_price": 9.60, "quantity": 1, "current_stop": 9.40,
+             "current_target": 9.90, "bars_held": 1, "metadata": {}},
+        ]
+        acc.policy_state = estado
+        store.save_account(conn, acc)
+
+    painel, _f = _runtime(tmp_path, barras=[], semente=semente, fixed_anchor_until=time(14, 0))
+    dt = painel.status()["daytrade"]
+
+    assert dt["posicoes_compra"] == 2
+    assert dt["posicoes_venda"] == 0
+    assert dt["valor_posicoes_compra"] == pytest.approx(19.40)
+    # Agregado: quantidade somada, entrada media ponderada.
+    assert dt["posicao_aberta"]["qtd"] == 2
+    assert dt["posicao_aberta"]["posicoes"] == 2
+    assert dt["posicao_aberta"]["entrada"] == pytest.approx(9.70)
+    # Alvo igual nas duas -> sai; stop diferente -> `None`, e nao o da primeira.
+    assert dt["posicao_aberta"]["alvo"] == pytest.approx(9.90)
+    assert dt["posicao_aberta"]["stop"] is None
+
+
 # ---------- conferencia do relogio do servidor -----------------------------
 
 class _FakeClockFeed:
@@ -1916,8 +1998,10 @@ def test_status_traz_ganhos_perdas_cagr_dd_e_acerto_por_lado_de_ponta_a_ponta(
     3a so' posicionada) -- aqui o alvo e' `status()` de ponta a ponta:
     `live_store.daytrade_exit_events`/`daytrade_order_events_on` lendo os
     EVENTOS DE VERDADE gravados no sqlite (nao dados de teste inventados),
-    provando que o filtro por texto de mensagem (`"posicionada"` etc.) e' o
-    mesmo texto que o runtime realmente grava."""
+    provando que o `tipo` que o painel classifica e' o mesmo que o runtime
+    realmente grava no payload. Era um filtro por TEXTO da mensagem ate'
+    2026-08-25 -- ver `test_card_de_ordens_nao_depende_do_texto_da_mensagem`,
+    que e' o teste que guarda essa fronteira agora."""
     barras = [
         _bar("13:00", 10.00, 10.00, 10.00, 10.00),  # abertura: posiciona a 1a (long)
         _bar("13:01", 10.00, 10.00, 9.79, 9.85),    # toca o nivel long (9.80)
@@ -2106,3 +2190,569 @@ def test_saida_sem_numero_de_rodada_ainda_conta_no_ganho(tmp_path):
 
     r = IntradayLiveRuntime._resultado_dia_e_acumulado(saidas, hoje, 100.0)
     assert r["ganhos_dia"] == pytest.approx(3.95, abs=0.01)  # 1.985 + 0.9845*2
+
+
+# ---------- barra atrasada do pregao anterior (2026-08-25) ------------------
+
+class _FeedComBarraAtrasadaDeOntem:
+    """Reproduz o terminal MT5 em 2026-08-25 no slot `dt-gremah-pmam3-shadow`:
+    quando o robo subiu, a ultima barra fechada era `ontem 19:53`; na consulta
+    SEGUINTE apareceu tambem `ontem 19:54` -- a barra do corte de flatten da
+    B3, atrasada, entregue junto com as primeiras de hoje (o feed so' sabe
+    filtrar por `ts > after_ts`, e essa marca atravessa a virada do pregao).
+
+    Sem semente (`session_bars_until` vazio) para forcar o comeco A FRIO, que
+    e' o caso real: o robo ligou antes da abertura."""
+
+    name = "fake_bars_atrasada"
+
+    def __init__(self, ontem_visivel: Bar, ontem_atrasada: Bar, hoje: list[Bar]):
+        self._ontem_visivel = ontem_visivel
+        self._ontem_atrasada = ontem_atrasada
+        self._hoje = list(hoje)
+        self.consultas = 0
+
+    @property
+    def offset_hours(self):
+        return 3.0
+
+    def closed_bars_since(self, after_ts=None):
+        self.consultas += 1
+        disponiveis = [self._ontem_visivel]
+        if self.consultas > 1:
+            disponiveis = [self._ontem_visivel, self._ontem_atrasada, *self._hoje]
+        if after_ts is None:
+            return list(disponiveis)
+        return [b for b in disponiveis if b.ts > after_ts]
+
+    def session_bars_until(self, session, until_ts):
+        return []
+
+
+def _bar_de_ontem(hhmm: str, preco: float) -> Bar:
+    return Bar(ts=pd.Timestamp(f"2026-08-20 {hhmm}", tz="UTC"),
+               open=preco, high=preco, low=preco, close=preco, volume=1_000.0)
+
+
+def test_barra_atrasada_de_ontem_nao_achata_o_pregao_de_hoje(tmp_path, pregao_aberto):
+    """BUG DE PRODUCAO 2026-08-25 (`dt-gremah-pmam3-shadow`, PMAM3): a barra
+    `2026-08-24 19:54` chegou como PRIMEIRA barra do dia. O corte de flatten
+    compara so' a HORA, e 19:54 e' exatamente o corte da B3 naquele dia --
+    `flattened=True` as 13:01, robo mudo nas 322 barras seguintes, ZERO ordem
+    no pregao inteiro e nenhum erro no diario. O robo do slot vizinho
+    (`gremah_tick`, mesmo ativo, mesmo modo) operou 7 vezes no mesmo dia: nao
+    era restricao de "um ativo por robo", era esta barra."""
+    hoje = [
+        _bar("13:00", 10.00, 10.00, 10.00, 10.00),
+        _bar("13:01", 10.00, 10.00, 9.79, 9.85),   # toca o nivel long (9.80)
+        _bar("13:02", 9.85, 9.91, 9.85, 9.90),     # toca o alvo (9.90)
+    ]
+    feed = _FeedComBarraAtrasadaDeOntem(
+        ontem_visivel=_bar_de_ontem("19:53", 10.00),
+        ontem_atrasada=_bar_de_ontem("19:54", 10.00),   # o corte da B3 em 20/08
+        hoje=hoje,
+    )
+    rt, _f = _runtime(tmp_path, hoje, feed=feed)
+
+    passos = rt.run_once(now=_agora("13:05:00"))
+
+    passo = [p for p in passos if p.action == "daytrade"][0]
+    assert passo.detail["descartadas"] == 1
+    assert rt.machine.flattened is False          # o pregao NAO foi achatado
+    assert passo.detail["entradas"] == 1          # e o robo operou de verdade
+    assert passo.detail["saidas"] == 1
+    # a marca AVANCA sobre a barra descartada -- senao ela voltaria em todo
+    # passo, para sempre
+    assert rt._snapshot.last_bar_ts == hoje[-1].ts
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        eventos = [dict(r) for r in conn.execute(
+            "SELECT message FROM live_events WHERE account_id = ? ORDER BY id", (acc.id,)
+        )]
+    assert any("pregao anterior descartada" in e["message"] for e in eventos)
+    assert any("LIMITE LONG #01" in e["message"] for e in eventos)
+
+
+# ---------- recusa da corretora no envio da entrada (2026-08-25) ------------
+
+class _BrokerQueRecusa(_FakeMT5Broker):
+    """Recusa as `recusas` primeiras ordens-limite e aceita da'i em diante --
+    e' o terminal com o AutoTrading desligado sendo ligado no meio do pregao,
+    que foi o caso real de 25/08/2026."""
+
+    def __init__(self, recusas: int = 1):
+        super().__init__()
+        self.recusas = recusas
+        self.recusadas: list = []
+
+    def place_pending(self, order):
+        if self.recusas > 0:
+            self.recusas -= 1
+            order.status = OrderStatus.REJECTED
+            order.note = ("MT5 recusou a ordem-limite pendente (retcode=10027): "
+                          "AutoTrading disabled by client")
+            self.recusadas.append(order)
+            return order
+        return super().place_pending(order)
+
+
+def test_ordem_recusada_nao_deixa_ordem_fantasma_vigiada(tmp_path, pregao_aberto):
+    """BUG DE PRODUCAO 2026-08-25 (`dt-gremah_tick-pmam3-live`): a corretora
+    recusou a primeira ordem do dia (`AutoTrading disabled by client`) e a
+    excecao subiu ate o supervisor. Duas consequencias, as duas erradas:
+
+      1. a transacao do diario voltou atras -- a recusa nao aparecia no
+         historico da tela, so' no log do processo;
+      2. `machine.resting_limit` ja estava gravado ANTES do envio, entao o
+         robo passou de 13:02 as 14:00 vigiando um fill impossivel, e a
+         ordem seguinte entrou no diario como "(substitui)" de uma ordem que
+         nunca existiu no book.
+    """
+    broker = _BrokerQueRecusa(recusas=1)
+    rt, feed = _runtime_live(
+        tmp_path, [_bar("13:05", 10.00, 10.00, 10.00, 10.00)], broker,
+        # ancora rolante desde o inicio (sem warm start, ver
+        # `_needs_warm_start`) e re-arme a cada barra: e' o que faz a barra
+        # seguinte tentar de novo dentro do mesmo teste
+        fixed_anchor_until=time(13, 0), rolling_reanchor_after_bars=1,
+    )
+
+    rt.run_once(now=_agora("13:05:30"))            # comeco a frio: so' marca
+    feed._barras.append(_bar("13:06", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:06:30"))            # arma -> RECUSADA
+    assert len(broker.recusadas) == 1
+    assert rt.machine.resting_limit is None        # nada de ordem fantasma
+    assert rt._snapshot.pending_entry_refs == []
+
+    # o robo re-arma pelo criterio DELE (a recusa nao o avisa de nada, ver
+    # `_recusa_de_envio`): com `rolling_reanchor_after_bars=1`, uma barra
+    # esperando e a seguinte declara a ordem obsoleta
+    feed._barras.append(_bar("13:07", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:07:30"))
+    feed._barras.append(_bar("13:08", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:08:30"))            # arma de novo -> aceita
+    assert len(broker.pendentes_enviadas) == 1
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        eventos = [(r["level"], r["message"]) for r in conn.execute(
+            "SELECT level, message FROM live_events WHERE account_id = ? ORDER BY id",
+            (acc.id,))]
+
+    recusas = [(lvl, m) for lvl, m in eventos if "RECUSADA" in m]
+    assert len(recusas) == 1                       # sobreviveu ao passo (nao houve rollback)
+    assert recusas[0][0] == "error"
+    assert "AutoTrading disabled by client" in recusas[0][1]  # o motivo da corretora
+    # a ordem seguinte e' rodada NOVA, nao "substitui" a que nunca existiu
+    postas = [m for _lvl, m in eventos if m.startswith("LIMITE ")]
+    assert len(postas) == 2
+    assert "substitui" not in postas[1]
+    assert "#02" in postas[1]
+
+
+def test_recusa_da_ordem_do_warm_start_tambem_nao_deixa_fantasma(tmp_path, pregao_aberto):
+    """Mesmo buraco no OUTRO ponto de envio: a ordem que `warm_start_
+    calibration` planta direto em `resting_limit` (robo ligado no meio do
+    pregao). Ela nao tem numero de rodada -- o diario a chama pelo nome."""
+    barras = [
+        _bar("13:00", 10.00, 10.00, 10.00, 10.00),
+        _bar("13:01", 10.00, 10.00, 10.00, 10.00),
+    ]
+    broker = _BrokerQueRecusa(recusas=99)          # recusa tudo
+    rt, _feed = _runtime_live(tmp_path, barras, broker, semente=barras[:1])
+
+    rt.run_once(now=_agora("13:02:00"))            # nao levanta
+
+    assert rt.machine.resting_limit is None
+    assert rt._snapshot.pending_entry_refs == []
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        eventos = [r["message"] for r in conn.execute(
+            "SELECT message FROM live_events WHERE account_id = ? ORDER BY id", (acc.id,))]
+    assert any("RECUSADA warm start" in m for m in eventos)
+
+
+# ---------- botao AutoTrading do terminal (2026-08-25) ---------------------
+
+class _BrokerComAutoTrading(_FakeMT5Broker):
+    """Dublê que sabe responder pelo botao AutoTrading do terminal, como o
+    `MT5Broker` real. `ligado` e' escrito pelo teste."""
+
+    def __init__(self, ligado: bool):
+        super().__init__()
+        self.ligado = ligado
+        self.leituras = 0
+
+    def autotrading_allowed(self):
+        self.leituras += 1
+        return self.ligado
+
+
+def test_autotrading_desligado_recusa_o_pregao_em_vez_de_perder_a_ordem(
+    tmp_path, pregao_aberto,
+):
+    """25/08/2026: o terminal subiu com o AutoTrading desligado e a primeira
+    ordem do dia morreu com `retcode=10027`. O painel continuou verde,
+    "OPERANDO" -- a unica pista era um `[erro]` no log do processo. Agora o
+    pregao e' recusado com o motivo no diario, ANTES de tentar operar."""
+    barras = [_bar("13:00", 10.00, 10.00, 10.00, 10.00),
+              _bar("13:01", 10.00, 10.00, 9.79, 9.85)]
+    broker = _BrokerComAutoTrading(ligado=False)
+    rt, _feed = _runtime_live(tmp_path, barras, broker)
+
+    passos = rt.run_once(now=_agora("13:02:00"))
+
+    assert [p.action for p in passos] == ["daytrade_skip"]
+    assert passos[0].detail["motivo"] == "autotrading desligado"
+    assert broker.pendentes_enviadas == []          # nada foi tentado
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        eventos = [(r["level"], r["message"]) for r in conn.execute(
+            "SELECT level, message FROM live_events WHERE account_id = ? ORDER BY id",
+            (acc.id,))]
+    alarmes = [(lvl, m) for lvl, m in eventos if "AutoTrading" in m]
+    assert len(alarmes) == 1                        # uma vez, nao a cada passo
+    assert alarmes[0][0] == "error"
+
+    # segundo passo com o botao ainda desligado: continua barrado e NAO
+    # repete o alarme no diario
+    rt.run_once(now=_agora("13:02:05"))
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        assert len([r for r in conn.execute(
+            "SELECT message FROM live_events WHERE account_id = ?", (acc.id,))
+            if "AutoTrading" in r["message"]]) == 1
+
+
+def test_ligar_o_autotrading_no_meio_do_pregao_libera_a_operacao(tmp_path, pregao_aberto):
+    """Foi o que o dono fez naquele dia (~14h): ligou o botao com o processo
+    ja rodando. Nao pode exigir reinicio -- o pregao segue do ponto em que
+    esta."""
+    barras = [_bar("13:00", 10.00, 10.00, 10.00, 10.00)]
+    broker = _BrokerComAutoTrading(ligado=False)
+    rt, _feed = _runtime_live(tmp_path, barras, broker)
+
+    assert [p.action for p in rt.run_once(now=_agora("13:01:00"))] == ["daytrade_skip"]
+
+    broker.ligado = True
+    passos = rt.run_once(now=_agora("13:01:30"))
+
+    assert "daytrade_skip" not in [p.action for p in passos]
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        eventos = [r["message"] for r in conn.execute(
+            "SELECT message FROM live_events WHERE account_id = ? ORDER BY id", (acc.id,))]
+    assert any("AutoTrading do terminal LIGADO" in m for m in eventos)
+
+    # depois de passar, para de conferir (o custo de errar aqui e' o COMECO do
+    # pregao; mudanca depois disso aparece na recusa da propria corretora)
+    leituras = broker.leituras
+    rt.run_once(now=_agora("13:02:00"))
+    assert broker.leituras == leituras
+
+
+def test_sombra_nao_depende_do_botao_autotrading(tmp_path, pregao_aberto):
+    """Sombra nao manda ordem nenhuma para a corretora, entao o botao do
+    terminal nao muda nada para ela -- barrar aqui seria inventar um
+    impedimento que nao existe."""
+    barras = [_bar("13:00", 10.00, 10.00, 10.00, 10.00),
+              _bar("13:01", 10.00, 10.00, 9.79, 9.85),
+              _bar("13:02", 9.85, 9.91, 9.85, 9.90)]
+    rt, _feed = _runtime(tmp_path, barras)          # execution_mode="shadow"
+
+    passos = rt.run_once(now=_agora("13:05:00"))
+
+    passo = [p for p in passos if p.action == "daytrade"][0]
+    assert passo.detail["entradas"] == 1
+
+
+# ---------- impedimento visivel no painel (2026-08-25) ---------------------
+
+def test_pregao_recusado_grava_impedimento_e_o_painel_o_enxerga(tmp_path, pregao_aberto):
+    """O painel monta um runtime de LEITURA e `status()` tem proibicao de
+    disparar I/O na corretora (ver `live_service._build_intraday_runtime`) --
+    entao a unica forma de ele saber que o robo NAO esta operando e' o
+    processo do robo gravar o motivo na conta. Sem isto o cartao ficava verde
+    escrito "operando" com o robo barrado o pregao inteiro."""
+    barras = [_bar("13:00", 10.00, 10.00, 10.00, 10.00),
+              _bar("13:01", 10.00, 10.00, 9.79, 9.85)]
+    broker = _BrokerComAutoTrading(ligado=False)
+    rt, _feed = _runtime_live(tmp_path, barras, broker)
+
+    rt.run_once(now=_agora("13:02:00"))
+    assert rt.status()["daytrade"]["impedimento"] == "AutoTrading do terminal desligado"
+
+    # ligou o botao: o impedimento cai no MESMO pregao, nao no proximo
+    broker.ligado = True
+    rt.run_once(now=_agora("13:02:30"))
+    assert rt.status()["daytrade"]["impedimento"] is None
+
+
+def test_impedimento_de_outro_pregao_nao_pinta_o_dia_de_hoje(tmp_path, pregao_aberto):
+    """Impedimento gravado e nunca resolvido (processo morto antes) nao pode
+    sobreviver a virada do pregao: o dia seguinte comeca limpo."""
+    rt, _feed = _runtime_live(tmp_path, [_bar("13:00", 10.0, 10.0, 10.0, 10.0)],
+                              _BrokerComAutoTrading(ligado=False))
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        rt._gravar_impedimento(conn, acc, "caixa abaixo do mínimo do dia",
+                               date(2026, 8, 20))
+        acc_recarregada = store.load_account(conn, SLOT.id)
+
+    assert rt._impedimento_de_hoje(acc_recarregada, date(2026, 8, 20)) is not None
+    assert rt._impedimento_de_hoje(acc_recarregada, SESSION) is None
+
+
+def test_impedimento_nao_reescreve_a_conta_a_cada_passo(tmp_path, pregao_aberto, monkeypatch):
+    """O supervisor passa aqui a cada 5s. Reescrever a mesma linha o pregao
+    inteiro so' castiga o disco -- so' grava quando MUDA."""
+    rt, _feed = _runtime_live(tmp_path, [_bar("13:00", 10.0, 10.0, 10.0, 10.0)],
+                              _BrokerComAutoTrading(ligado=False))
+    gravacoes = []
+    original = itr_mod.store.save_account
+    monkeypatch.setattr(itr_mod.store, "save_account",
+                        lambda conn, acc: (gravacoes.append(acc.name), original(conn, acc))[1])
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        rt._gravar_impedimento(conn, acc, "motivo qualquer", SESSION)
+        assert len(gravacoes) == 1
+        rt._gravar_impedimento(conn, acc, "motivo qualquer", SESSION)   # igual: no-op
+        assert len(gravacoes) == 1
+        rt._gravar_impedimento(conn, acc, None, SESSION)                # mudou: grava
+        assert len(gravacoes) == 2
+
+
+# ---------- formato da linha do diario (2026-08-25) ------------------------
+def test_lotes_txt_usa_o_lote_do_papel_e_nao_arredonda_fracionario(tmp_path, pregao_aberto):
+    """A linha do diario fala em LOTES, nao em acoes (pedido do dono,
+    2026-08-25: "tirar o 100 e tratar como lotes").
+
+    O lote e' do PAPEL (`config.default_quantity`), nao um 100 fixo: acao da
+    B3 tem lote de 100, futuro tem lote de 1 contrato, e os dois passam por
+    aqui. Quantidade que nao fecha lote inteiro (fracionario) volta em acoes
+    -- arredondar para "1 lote" mentiria sobre o tamanho da ordem, que e'
+    exatamente o numero que o dono confere contra a corretora."""
+    rt, _feed = _runtime(tmp_path, [_bar("13:00", 10.00, 10.00, 10.00, 10.00)])
+
+    rt.config = replace(rt.config, default_quantity=100)   # acao da B3
+    assert rt._lotes_txt(100) == "1 lote"
+    assert rt._lotes_txt(300) == "3 lotes"
+    assert rt._lotes_txt(37) == "37 ações"                 # fracionario
+    assert rt._lotes_txt(1) == "1 ação"
+
+    rt.config = replace(rt.config, default_quantity=1)     # futuro: 1 contrato
+    assert rt._lotes_txt(1) == "1 lote"
+    assert rt._lotes_txt(3) == "3 lotes"
+
+
+def test_card_de_ordens_nao_depende_do_texto_da_mensagem(tmp_path, pregao_aberto):
+    """O card "Ordens posicionadas" classifica pelo `tipo` do PAYLOAD.
+
+    Ate' 2026-08-25 ele classificava procurando "posicionada"/"entrada"/
+    "cancelada" DENTRO da frase que a tela mostra. O dono pediu o texto
+    reescrito no mesmo dia (evento na frente, sem "SOMBRA", em lotes) -- e um
+    filtro amarrado ao texto quebraria em silencio: sem teste vermelho, o card
+    so' ficaria vazio no painel. Este teste fixa a fronteira: as mensagens de
+    verdade NAO contem mais nenhuma das palavras antigas, e mesmo assim o card
+    conta as ordens."""
+    barras = [
+        _bar("13:00", 10.00, 10.00, 10.00, 10.00),
+        _bar("13:01", 10.00, 10.00, 9.79, 9.85),   # preenche a entrada long
+        _bar("13:02", 9.85, 9.91, 9.85, 9.90),     # alvo: fecha a rodada
+        _bar("13:03", 9.90, 10.21, 9.90, 10.15),   # arma a proxima (short)
+    ]
+    rt, _feed = _runtime(tmp_path, barras)
+    rt.run_once(now=_agora("13:04:00"))
+
+    hoje = rt._snapshot.session.isoformat()
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        mensagens = [r["message"] for r in conn.execute(
+            "SELECT message FROM live_events WHERE account_id = ? AND source = 'daytrade'",
+            (acc.id,))]
+        ordens = store.daytrade_order_events_on(conn, acc.id, hoje)
+
+    # o vocabulario velho sumiu do texto -- inclusive "SOMBRA", que o dono
+    # mandou tirar por ser fixo do slot (ja aparece na etiqueta do cartao)
+    assert mensagens, "o roteiro tem de gravar evento de day trade"
+    # (a linha de resumo da sessao -- "warm start, 1 barra(s), ordem
+    # posicionada" -- nao e' evento de ORDEM: nao tem `side` no payload e o
+    # card nunca a leu. Por isso as agulhas sao as do formato ANTIGO de ordem,
+    # com os dois-pontos, nao a palavra solta.)
+    for antiga in ("posicionada:", "armada:", "SOMBRA", "entrada #", "saida #"):
+        assert not any(antiga in m for m in mensagens), (antiga, mensagens)
+
+    # ...e o card continua classificando, agora pelo payload
+    assert ordens, mensagens
+    assert {o["kind"] for o in ordens} <= {"armada", "preenchida", "cancelada"}
+    assert any(o["kind"] == "armada" for o in ordens), ordens
+    assert any(o["kind"] == "preenchida" for o in ordens), ordens
+
+
+# ---------- ticket orfao: cancelamento nao confirmado (2026-08-26) ---------
+
+class _BrokerQueNaoCancela(_FakeMT5Broker):
+    """`cancel` FALHA em silencio, como o MT5 de verdade falha.
+
+    `MT5Broker.cancel` nao levanta em nenhum dos seus caminhos de erro
+    (pacote ausente, `connect()` falso, excecao no `order_send`, retcode
+    que nao e' `DONE`): devolve a `Order` com o motivo na nota e o status
+    INTOCADO. Este duble reproduz exatamente isso -- e' o terminal fechado
+    ou a conexao caindo entre o envio e o cancelamento."""
+
+    def cancel(self, order):
+        order.note = "falha ao conectar para cancelar (last_error=-10004)"
+        self.canceladas.append(order)
+        return order                                   # status segue SENT
+
+
+def test_rollback_frustrado_devolve_o_ticket_que_pode_seguir_vivo(tmp_path):
+    """`place_limit` promete que nada fica posicionado pela metade, mas quem
+    cumpre a promessa e' a CORRETORA -- e ela pode nao cumprir.
+
+    Se a 2a fatia e' recusada, a 1a ja esta no book e o cancelamento dela
+    falha, existe uma ordem-limite VIVA que ninguem pediu. Antes de
+    2026-08-26 o retorno de `cancel` era descartado: o ticket sumia do
+    processo, nao entrava no diario e nao ficava em `pending_entry_refs`.
+    So' o terminal do MT5 sabia."""
+    from live.intraday_execution import BrokerExecutionError, MT5IntradayExecution
+
+    broker = _BrokerQueNaoCancela()
+    execucao = MT5IntradayExecution(broker=broker, symbol=SYMBOL)
+
+    # a 1a fatia entra (ticket 1001), a 2a e' recusada -> rollback da 1a
+    original = broker.place_pending
+
+    def place_pending(order):
+        if len(broker.pendentes_enviadas) >= 1:
+            order.status = OrderStatus.REJECTED
+            order.note = "AutoTrading disabled by client"
+            return order
+        return original(order)
+
+    broker.place_pending = place_pending
+
+    with pytest.raises(BrokerExecutionError) as exc:
+        execucao.place_limit(side="long", limit_price=9.80,
+                             quantities=[100, 100], ts=pd.Timestamp("2026-08-26 13:00"))
+
+    # o ticket da fatia que ficou no book VOLTA para quem chamou
+    assert exc.value.orphan_refs == ["1001"], exc.value.orphan_refs
+    # ...e a linha do diario avisa (rollback frustrado E' noticia)
+    assert "pode seguir vivo" in str(exc.value)
+    assert "1001" in str(exc.value)
+
+
+def test_rollback_que_deu_certo_nao_polui_a_linha_do_diario(tmp_path):
+    """Contraparte do teste acima: rollback que funcionou nao vira texto.
+
+    O dono pediu linha curta (2026-08-25) e o rollback bem-sucedido e' o
+    caso NORMAL -- caso normal nao e' noticia. So' a falha entra."""
+    from live.intraday_execution import BrokerExecutionError, MT5IntradayExecution
+
+    broker = _FakeMT5Broker()                          # `cancel` marca CANCELLED
+    execucao = MT5IntradayExecution(broker=broker, symbol=SYMBOL)
+    original = broker.place_pending
+
+    def place_pending(order):
+        if len(broker.pendentes_enviadas) >= 1:
+            order.status = OrderStatus.REJECTED
+            order.note = "AutoTrading disabled by client"
+            return order
+        return original(order)
+
+    broker.place_pending = place_pending
+
+    with pytest.raises(BrokerExecutionError) as exc:
+        execucao.place_limit(side="long", limit_price=9.80,
+                             quantities=[100, 100], ts=pd.Timestamp("2026-08-26 13:00"))
+
+    assert exc.value.orphan_refs == []
+    assert "pode seguir vivo" not in str(exc.value)
+    assert str(exc.value).endswith("AutoTrading disabled by client")
+
+
+def test_ordem_substituida_que_nao_cancelou_continua_vigiada(tmp_path, pregao_aberto):
+    """Substituir a ordem cancela a anterior -- se o cancelamento NAO for
+    confirmado, o ticket antigo nao pode ser esquecido.
+
+    Este e' o caminho mais perigoso porque e' ROTINEIRO, nao excepcional:
+    toda vez que a ancora rola, a ordem anterior e' substituida. O codigo
+    descartava o retorno de `cancel_limit` e logo em seguida SOBRESCREVIA
+    `pending_entry_refs` com o ticket novo -- duas ordens vivas no book e o
+    robo lembrando de uma so'. `pending_entry_refs` e' persistida e e' o que
+    faz a proxima `EnterLimit` tentar cancelar de novo, alem de segurar o
+    botao de parar em `dashboard/live_control.py`."""
+    broker = _BrokerQueNaoCancela()
+    rt, feed = _runtime_live(
+        tmp_path, [_bar("13:05", 10.00, 10.00, 10.00, 10.00)], broker,
+        fixed_anchor_until=time(13, 0), rolling_reanchor_after_bars=1,
+    )
+
+    rt.run_once(now=_agora("13:05:30"))
+    feed._barras.append(_bar("13:06", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:06:30"))            # arma a 1a (ticket 1001)
+    assert rt._snapshot.pending_entry_refs == ["1001"]
+
+    feed._barras.append(_bar("13:07", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:07:30"))
+    feed._barras.append(_bar("13:08", 10.10, 10.30, 10.10, 10.25))
+    rt.run_once(now=_agora("13:08:30"))            # re-ancora: substitui
+
+    assert len(broker.canceladas) >= 1, "deveria ter tentado cancelar a anterior"
+    # o ticket velho (cancelamento nao confirmado) segue na vigilancia, JUNTO
+    # com o novo -- nao no lugar dele
+    assert "1001" in rt._snapshot.pending_entry_refs, rt._snapshot.pending_entry_refs
+    assert len(rt._snapshot.pending_entry_refs) >= 2, rt._snapshot.pending_entry_refs
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        eventos = [(r["level"], r["message"]) for r in conn.execute(
+            "SELECT level, message FROM live_events WHERE account_id = ? ORDER BY id",
+            (acc.id,))]
+
+    orfas = [(lvl, m) for lvl, m in eventos if m.startswith("ORFA ")]
+    assert orfas, [m for _l, m in eventos]
+    assert orfas[0][0] == "warn"
+    assert "1001" in orfas[0][1]
+
+
+def test_fatia_de_saida_que_nao_cancelou_nao_e_esquecida(tmp_path):
+    """A limite de SAIDA que a corretora nao confirmou cancelada segue
+    vigiada -- e o robo tenta de novo.
+
+    Nos 4 sites de `machine.py` a fatia-limite de saida e' cancelada e a
+    posicao e' fechada A MERCADO no mesmo passo. Um cancelamento que falha
+    em silencio deixa as DUAS ordens vivas pela mesma posicao (e' o que o
+    comentario de `machine.py:898` diz querer evitar), e numa conta NETTING
+    a limite orfa preenchendo DEPOIS do flatten INVERTE a posicao: um lado
+    aberto que ninguem pediu, sem stop, sem alvo e sem logica de saida.
+
+    Antes de 2026-08-26 `cancel_exit_limit` descartava o retorno de
+    `cancel`, entao esse ticket sumia do processo sem deixar rastro."""
+    from live.intraday_execution import MT5IntradayExecution
+
+    broker = _BrokerQueNaoCancela()
+    execucao = MT5IntradayExecution(broker=broker, symbol=SYMBOL)
+    ts = pd.Timestamp("2026-08-26 13:00")
+
+    execucao.place_exit_limit(position_side="long", quantity=100,
+                              limit_price=10.20, current_position_qty=100,
+                              ts=ts)
+    ticket = execucao.pending_exit_order.broker_ref
+
+    execucao.cancel_exit_limit(ts, reason="flatten")
+
+    # o ticket que pode seguir vivo no book fica registrado
+    assert execucao.exit_orphan_refs == [ticket], execucao.exit_orphan_refs
+
+    # ...e quando a corretora confirma, ele sai da lista
+    broker_ok = _FakeMT5Broker()
+    execucao2 = MT5IntradayExecution(broker=broker_ok, symbol=SYMBOL)
+    execucao2.place_exit_limit(position_side="long", quantity=100,
+                               limit_price=10.20, current_position_qty=100,
+                               ts=ts)
+    execucao2.cancel_exit_limit(ts, reason="flatten")
+    assert execucao2.exit_orphan_refs == []

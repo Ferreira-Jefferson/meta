@@ -1,7 +1,9 @@
 {#
-  Linha de contexto de uma decisão — o "por quê" completo, escondido por
-  padrão. Fica num partial porque a tabela de decisões já é longa e misturar
-  os dois níveis de detalhe no mesmo arquivo tornava as duas coisas ilegíveis.
+  Linha de contexto de uma decisão — o "por quê" completo, SEMPRE visível
+  (dono, 2026-08-25: nada de dinheiro real escondido atrás de um clique;
+  antes nascia com `hidden` e um botão "por quê" abria). Fica num partial
+  porque a tabela de decisões já é longa e misturar os dois níveis de
+  detalhe no mesmo arquivo tornava as duas coisas ilegíveis.
 
   Dois blocos, deliberadamente separados:
 
@@ -18,7 +20,7 @@
   Números passam pelo filtro `num_br` (ver `dashboard/app.py`) — o padrão
   `.replace(",", ".")` usado no resto dos templates corrompe valor com decimal.
 #}
-<tr class="ctx-row" id="ctx-{{ i.id }}" hidden>
+<tr class="ctx-row" id="ctx-{{ i.id }}">
   <td colspan="8">
     <div class="ctx">
 

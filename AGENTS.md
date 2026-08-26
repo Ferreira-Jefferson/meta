@@ -53,6 +53,55 @@ orquestração. Se uma feature precisa de algo de outra, ou o dado sobe para
 - Toda regra de saída/entrada em `strategy/` → teste com cenário sintético.
 - Alteração no engine → teste anti-look-ahead deve permanecer verde.
 
+### A suíte roda em PARALELO — e continua rodando
+
+`pyproject.toml` fixa `-n auto --dist load` (pytest-xdist). Medido nesta
+máquina: 92s serial → 35s em paralelo. Não é conforto: o ciclo de trabalho
+aqui é "mede → decide → mede de novo", e uma suíte lenta é o gargalo do
+projeto inteiro, não um detalhe de infra.
+
+Duas condições que **todo teste novo** tem de respeitar, senão o paralelismo
+quebra em falha intermitente (a pior espécie de falha):
+
+1. **Nenhum caminho de arquivo fixo compartilhado.** `tmp_path` sempre. Dois
+   workers rodam ao mesmo tempo e pegariam o mesmo arquivo.
+2. **Nenhuma dependência de ordem entre testes.** `--dist load` distribui
+   teste a teste entre workers; ordem de coleta não é ordem de execução.
+
+Vale o mesmo espírito para **varredura de parâmetros**: `ProcessPoolExecutor`
+com `submit`/`as_completed` (nunca `pool.map`, que só entrega na ordem de
+submissão e prende resultado pronto atrás de unidade lenta), `redirect_stdout`
+por unidade e `flush=True` em todo print — ver
+`scripts/daytrade/sweep_gremah_tick.py`.
+
+### Resultado sai assim que fica pronto
+
+Regra: nenhuma rodada longa espera todas as unidades terminarem para falar.
+Cada unidade que termina imprime **a linha dela** (formato da tabela padrão)
+na hora, com `flush=True`; o resumo ordenado vem depois, no fim. Ver
+`scripts/daytrade/sweep_copa.py`.
+
+Motivo: uma varredura de 20 minutos que só fala no fim é uma varredura que
+ninguém consegue interromper com informação — e interromper cedo, ao ver que
+o espaço inteiro está negativo, é metade do valor de varrer. Quando o
+resultado parcial não fizer sentido isolado (ex.: precisa de todas as
+unidades para deduplicar), imprima ao menos o progresso e o melhor-até-agora.
+
+## Saída de backtest: uma tabela só
+
+Todo script de day trade imprime resultado por
+`backtest/intraday/report.py` — `linha_de_resultado()` + `tabela()`. As 12
+colunas da base (`variante`, `retorno`, `líquido R$`, `MaxDD %`, `MaxDD R$`,
+`lucro/DD`, `win%`, `trades`, `R$/dia`, `trd/dia`, `capital final`,
+`pregões`) são fixas e sempre nessa ordem; o que a rodada tem de específico
+entra como coluna `extras`, **depois** da base, nunca no lugar dela.
+
+Não inventar colunas próprias, não reformatar número por script: a mesma
+grandeza tem de aparecer com o mesmo nome e o mesmo formato em toda tabela
+do repo, senão comparar duas rodadas vira trabalho de leitura. O módulo
+explica as duas decisões que fogem do óbvio (`lucro/DD` no lugar do Calmar
+anualizado, e capital NOCIONAL apagando as colunas que dependem de saldo).
+
 ## O que NÃO fazer
 
 - Não adicionar dependência sem justificativa (peso do projeto importa).

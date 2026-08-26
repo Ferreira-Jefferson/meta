@@ -57,10 +57,11 @@ import json
 import re
 import sqlite3
 from contextlib import contextmanager
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Iterator, Optional
 
+from core.b3_session import SAO_PAULO
 from core.config import LIVE_DB_PATH, SCHEMA_PATH
 from core.live_models import (
     AccountState,
@@ -310,6 +311,7 @@ _ACCOUNT_COLUMNS_ADICIONADAS = (
     ("symbol", "TEXT NOT NULL DEFAULT ''"),
     ("cash_sombra", "REAL NOT NULL DEFAULT 0"),
     ("sort_order", "INTEGER NOT NULL DEFAULT 0"),
+    ("archived_at", "TEXT"),
 )
 
 
@@ -459,6 +461,7 @@ def load_account(conn: sqlite3.Connection, name: str) -> Optional[AccountState]:
         investment_robot=row["investment_robot"] or "",
         withdrawal_robot=row["withdrawal_robot"] or "",
         symbol=(row["symbol"] or "") if "symbol" in row.keys() else "",
+        archived_at=(row["archived_at"] if "archived_at" in row.keys() else None),
         withdrawn_total=row["withdrawn_total"],
         external_cash=row["external_cash"],
         policy_state=_loads(row["policy_state"]),
@@ -527,10 +530,17 @@ def accounts_with_symbol(conn: sqlite3.Connection) -> list[AccountState]:
     estado dos processos (`db/live_process.json`), de propósito: aquele
     arquivo é do dashboard, e um robô parado continua sendo dono do ativo
     dele — o caixa está lá.
+
+    `archived_at IS NULL` porque conta ARQUIVADA não é vaga ocupada: o dono
+    removeu aquele robô do painel (guardando o histórico, ver
+    `archive_account`) e o ativo tem de voltar a ficar livre na mesma hora.
+    Fosse contada aqui, o cartão sumiria da tela mas o ativo continuaria
+    bloqueado — o pior dos dois mundos, e sem lugar nenhum para o dono
+    entender o motivo.
     """
     rows = conn.execute(
         "SELECT name FROM live_accounts WHERE symbol IS NOT NULL AND symbol != '' "
-        "ORDER BY sort_order, id"
+        "AND archived_at IS NULL ORDER BY sort_order, id"
     ).fetchall()
     contas = [load_account(conn, row["name"]) for row in rows]
     return [c for c in contas if c is not None]
@@ -587,6 +597,123 @@ def delete_account(conn: sqlite3.Connection, name: str) -> bool:
         )
     conn.execute("DELETE FROM live_accounts WHERE id = ?", (account.id,))
     return True
+
+
+# ---------------------------------------------------------------------------
+# arquivo: remover o robô do painel SEM perder o que ele viveu
+# ---------------------------------------------------------------------------
+#
+# Pedido do dono em 26/08/2026, olhando o Resumo Financeiro de um robô cujo
+# processo já tinha morrido: "eu sei que tem um processo morto, mas eu não
+# quero perder as informações do que estou rodando". Até aqui, remover era
+# sempre `delete_account` — e o `ON DELETE CASCADE` levava junto diário,
+# ordens, fills e avisos. Não havia meio-termo entre "o cartão fica na tela
+# para sempre" e "some tudo".
+#
+# O meio-termo é este: a conta continua INTEIRA no banco, só marcada com
+# `archived_at`. Some do painel (`accounts_with_symbol`), o ativo volta a
+# ficar livre na hora, e o histórico espera. Quem decide o destino final é o
+# próprio dono, depois, no formulário de robô novo: recriar o MESMO trio
+# (robô, ativo, modo) oferece restaurar; criar "do zero" descarta.
+#
+# `load_account` de propósito NÃO filtra por `archived_at` — restaurar e
+# descartar precisam achar a conta pelo nome, e o nome é o id do slot.
+
+
+def archive_account(conn: sqlite3.Connection, name: str) -> bool:
+    """Marca a conta como arquivada, sem apagar nada. `False` se não existia.
+
+    RECUSA (`ValueError`) com posição aberta, pelo mesmo motivo de
+    `delete_account`: arquivar tira o cartão da tela, e uma posição viva no
+    MT5 sem cartão que a mostre é órfã invisível — o desfecho que
+    `dashboard.live_teardown` existe para impedir.
+
+    Ao contrário de `delete_account`, NÃO exige caixa zerado: o caixa é parte
+    do que o dono pediu para guardar. Ele fica reservado a este robô até o
+    arquivo ser restaurado ou descartado, exatamente como ficava enquanto o
+    robô estava parado.
+
+    Arquivar uma conta já arquivada é no-op (`True`), sem mexer na data
+    original — a primeira remoção é a que conta.
+    """
+    account = load_account(conn, name)
+    if account is None:
+        return False
+    if account.positions:
+        raise ValueError(
+            f"conta '{name}' tem {len(account.positions)} posição(ões) aberta(s) — "
+            "feche na corretora antes de arquivar o robô, senão a posição fica "
+            "viva no MT5 e invisível aqui."
+        )
+    if account.archived_at:
+        return True
+    conn.execute(
+        "UPDATE live_accounts SET archived_at = datetime('now'), "
+        "updated_at = datetime('now') WHERE id = ?",
+        (account.id,),
+    )
+    return True
+
+
+def restore_account(conn: sqlite3.Connection, name: str) -> Optional[AccountState]:
+    """Traz a conta arquivada de volta ao painel, com tudo que ela guardava.
+    Devolve a conta restaurada, ou `None` se não havia nada arquivado com
+    esse nome (conta viva não é "restaurada" — não foi a lugar nenhum).
+    """
+    account = load_account(conn, name)
+    if account is None or not account.archived_at:
+        return None
+    conn.execute(
+        "UPDATE live_accounts SET archived_at = NULL, updated_at = datetime('now') "
+        "WHERE id = ?",
+        (account.id,),
+    )
+    account.archived_at = None
+    return account
+
+
+def purge_account(conn: sqlite3.Connection, name: str) -> bool:
+    """Descarta de vez uma conta ARQUIVADA — ela e tudo que pende dela.
+    `False` se não existia.
+
+    Só aceita conta arquivada (`ValueError` caso contrário): é o caminho do
+    "criar do zero", onde o dono desmarcou "restaurar" e disse, por omissão,
+    que aquele histórico não interessa mais. Uma conta VIVA nunca some por
+    este caminho — para essa existe `delete_account`, com os guardas de
+    posição e caixa.
+
+    E aqui o caixa NÃO é guarda: a conta já saiu do painel quando foi
+    arquivada, e o guarda de `delete_account` existe para o dono não apagar
+    sem querer um robô que ainda tem dinheiro alocado na tela. Aqui a decisão
+    já foi tomada duas vezes (remover guardando, depois recriar do zero), e
+    exigir "zere o caixa antes" só travaria o formulário com uma mensagem
+    sobre uma conta que ele nem mostra mais.
+    """
+    account = load_account(conn, name)
+    if account is None:
+        return False
+    if not account.archived_at:
+        raise ValueError(
+            f"conta '{name}' não está arquivada — `purge_account` é só para o "
+            "arquivo. Use `delete_account`, que confere posição e caixa."
+        )
+    conn.execute("DELETE FROM live_accounts WHERE id = ?", (account.id,))
+    return True
+
+
+def archived_accounts(conn: sqlite3.Connection) -> list[AccountState]:
+    """Contas de day trade arquivadas, mais recentes primeiro.
+
+    É o que o formulário de robô novo lê para saber em quais trios (robô,
+    ativo, modo) o toggle "restaurar" tem o que restaurar — mostrar a opção
+    onde não há arquivo nenhum seria oferecer um botão que não faz nada.
+    """
+    rows = conn.execute(
+        "SELECT name FROM live_accounts WHERE symbol IS NOT NULL AND symbol != '' "
+        "AND archived_at IS NOT NULL ORDER BY archived_at DESC, id DESC"
+    ).fetchall()
+    contas = [load_account(conn, row["name"]) for row in rows]
+    return [c for c in contas if c is not None]
 
 
 # ---------------------------------------------------------------------------
@@ -1345,12 +1472,39 @@ def log_event(
     return int(cur.lastrowid)
 
 
+def _dia_brt_em_utc(day: str) -> tuple[str, str]:
+    """Bordas UTC (`[inicio, fim)`) do dia CIVIL de Brasília `day`.
+
+    `ts` é gravado em UTC (`datetime('now')`), então `date(ts) = day` filtrava
+    pelo dia UTC — que vira no dia seguinte às 21:00 de Brasília. Qualquer
+    evento entre 21:00 e a meia-noite (supervisor de pé, robô iniciado à
+    noite) caía no dia UTC seguinte e sumia do "diário do dia" mesmo tendo
+    acontecido hoje no relógio do dono. Com o console mostrando hora de
+    Brasília (`app.py::hora_br`), o corte tem de ser do mesmo relógio.
+
+    Pelo FUSO, nunca por "-3h" fixo, e em Python (não em SQL): o SQLite não
+    tem base de fusos, e `date(ts, '-3 hours')` seria justamente o escalar que
+    volta a errar se o horário de verão brasileiro voltar. Devolve texto no
+    mesmo formato do `ts` gravado (`YYYY-MM-DD HH:MM:SS`), então a comparação
+    lexicográfica do `>=`/`<` é a comparação cronológica — e ainda usa o
+    índice `idx_live_events_account_ts`, que `date(ts)` não usava.
+    """
+    d = date.fromisoformat(day)
+    inicio = datetime.combine(d, time(0, 0), tzinfo=SAO_PAULO)
+    fim = datetime.combine(d + timedelta(days=1), time(0, 0), tzinfo=SAO_PAULO)
+    fmt = "%Y-%m-%d %H:%M:%S"
+    return (inicio.astimezone(timezone.utc).strftime(fmt),
+            fim.astimezone(timezone.utc).strftime(fmt))
+
+
 def recent_events(conn: sqlite3.Connection, account_id: Optional[int] = None, limit: int = 100,
                    day: Optional[str] = None, before_id: Optional[int] = None) -> list[dict]:
-    """`day` (`YYYY-MM-DD`) restringe ao pregão daquele dia (`date(ts)` —
-    mesma comparação de data que `daytrade_order_events_on` faz em `ts[:10]`).
-    Painel de `/operacao` usa isso para o console de eventos nunca acumular
-    dias antigos (ver `IntradayLiveRuntime.status`/`LiveRuntime.status`).
+    """`day` (`YYYY-MM-DD`) restringe ao pregão daquele dia, contado no
+    relógio de BRASÍLIA (`_dia_brt_em_utc`) e não no dia UTC em que o `ts` foi
+    gravado — é o mesmo relógio que o console do painel mostra (`app.py::
+    hora_br`). Painel de `/operacao` usa isso para o console de eventos nunca
+    acumular dias antigos (ver `IntradayLiveRuntime.status`/
+    `LiveRuntime.status`).
 
     `before_id` é o cursor do scroll infinito do botão "Diário Completo"
     (ver `app.py::operacao_eventos_mais_antigos`): pega só eventos com `id`
@@ -1363,8 +1517,9 @@ def recent_events(conn: sqlite3.Connection, account_id: Optional[int] = None, li
         clauses.append("account_id = ?")
         params.append(account_id)
     if day is not None:
-        clauses.append("date(ts) = ?")
-        params.append(day)
+        inicio, fim = _dia_brt_em_utc(day)
+        clauses.append("ts >= ? AND ts < ?")
+        params.extend([inicio, fim])
     if before_id is not None:
         clauses.append("id < ?")
         params.append(before_id)
@@ -1438,8 +1593,9 @@ def daytrade_order_events_on(conn: sqlite3.Connection, account_id: int, day: str
     conta no PREGÃO `day` (`YYYY-MM-DD`) -- fonte do card "Ordens
     posicionadas" do painel de `/operacao`. `_on_limit_placed`/`_on_opened`/
     `_on_opened_top_up`/`_on_limit_cancelled` gravam `side` ("long"/"short",
-    vocabulário interno do day trade) no payload; o TIPO do evento distingue
-    pela mensagem, já que não há um campo dedicado para isso no payload.
+    vocabulário interno do day trade) e `tipo` ("armada"/"preenchida"/
+    "cancelada") no payload -- o tipo saiu do texto da mensagem e virou campo
+    próprio em 2026-08-25, ver o comentário no laço abaixo.
 
     `day` casa com `sessao` (payload) quando existe, ou com `ts[:10]` (hora
     de inserção) em evento gravado ANTES desse campo existir -- mesmo
@@ -1462,14 +1618,25 @@ def daytrade_order_events_on(conn: sqlite3.Connection, account_id: int, day: str
         side = payload.get("side")
         if side is None:
             continue
-        msg = row["message"]
-        if "posicionada" in msg or "armada" in msg:
-            kind = "armada"
-        elif "cancelada" in msg:
-            kind = "cancelada"
-        elif "entrada" in msg or "TOP-UP" in msg:
-            kind = "preenchida"
-        else:
+        # `tipo` no payload é a fonte; o texto é só o fallback do histórico.
+        # Nasceu porque o formato das linhas foi reescrito (2026-08-25, pedido
+        # do dono: ação primeiro, sem "SOMBRA", em lotes) e classificar evento
+        # lendo a frase que a tela mostra amarra o CARD ao texto -- toda
+        # reescrita futura quebraria este filtro em silêncio, sem teste
+        # vermelho, com o card só ficando vazio. Evento gravado antes de
+        # 2026-08-25 não tem `tipo`, então o casamento por texto continua
+        # aqui: "armada" é o nome mais antigo ainda, de antes de virar
+        # "posicionada"; "entrada"/"TOP-UP" eram o preenchimento.
+        kind = payload.get("tipo")
+        if kind is None:
+            msg = row["message"]
+            if "posicionada" in msg or "armada" in msg:
+                kind = "armada"
+            elif "cancelada" in msg:
+                kind = "cancelada"
+            elif "entrada" in msg or "TOP-UP" in msg:
+                kind = "preenchida"
+        if kind not in ("armada", "cancelada", "preenchida"):
             continue
         # `quantity`/`price` (o preco vem como `limit_price` na armada e
         # `price` na entrada -- nomes diferentes no payload de cada evento,

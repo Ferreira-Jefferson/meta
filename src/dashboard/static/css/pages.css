@@ -1668,36 +1668,7 @@
   color: var(--fg-faint);
 }
 
-/* `white-space: nowrap` em vez de `display: flex`: transformar um `<td>` em
-   container flex tira a celula do algoritmo de layout de tabela e desalinha a
-   coluna nas linhas que nao tem o botao. Pilula e botao lado a lado, sem
-   quebrar. */
 .ops-table-diario td.col-status { white-space: nowrap; }
-.ops-table-diario td.col-status .ctx-toggle { margin-left: var(--s-3); }
-
-.ctx-toggle {
-  appearance: none;
-  background: none;
-  border: 1px solid var(--grid-strong);
-  border-radius: 0;
-  color: var(--fg-muted);
-  font-family: var(--font-mono);
-  font-size: var(--fs-metadata);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  padding: 2px var(--s-2);
-  cursor: pointer;
-  transition: color 120ms linear, border-color 120ms linear;
-}
-.ctx-toggle:hover {
-  color: var(--accent-amber);
-  border-color: var(--accent-amber);
-}
-.ctx-toggle[aria-expanded="true"] {
-  color: var(--bg);
-  background: var(--accent-amber);
-  border-color: var(--accent-amber);
-}
 
 /* A linha de contexto não é "mais uma linha da tabela": é um aparte. Fundo
    recuado e uma barra âmbar à esquerda amarram visualmente o detalhe à
@@ -1862,6 +1833,117 @@
   font-family: var(--font-mono);
   font-size: var(--fs-body);
 }
+
+/* Card de colisão de símbolo (`partials/operacao_colisao.html`, dono
+   2026-08-25): `<dialog>` nativo centraliza sozinho via UA stylesheet
+   (`margin: auto` implícito quando `showModal()` chama), só precisa de
+   moldura/tipografia consistente com o resto do painel. */
+.ops-modal {
+  max-width: 480px;
+  width: calc(100% - var(--s-6));
+  border: 1px solid var(--accent-red);
+  background: var(--bg-elevated);
+  color: var(--fg-strong);
+  padding: var(--s-5);
+  font-family: var(--font-mono);
+}
+.ops-modal::backdrop { background: rgba(0,0,0,0.5); }
+.ops-modal-close { display: flex; justify-content: flex-end; margin: calc(var(--s-3) * -1) calc(var(--s-3) * -1) 0 0; }
+.ops-modal-x {
+  background: none; border: none; color: var(--fg-muted);
+  font-size: var(--fs-h3); line-height: 1; cursor: pointer; padding: var(--s-2);
+}
+.ops-modal-x:hover { color: var(--fg-strong); }
+.ops-modal-title {
+  font-family: var(--font-serif); font-weight: 400; font-size: var(--fs-h3);
+  margin: 0 0 var(--s-3); color: var(--accent-red);
+}
+.ops-modal-body { margin: 0 0 var(--s-5); line-height: 1.5; }
+.ops-modal-actions { display: flex; gap: var(--s-3); flex-wrap: wrap; }
+/* O "Parar {robô}" aqui é o MESMO botão de `.ops-control button.btn-stop`,
+   só que fora daquele container (o modal não é filho da barra de controle
+   de slot nenhum) -- repete o estilo em vez de generalizar o seletor, que
+   pegaria botões de lugares que nunca deveriam virar vermelhos. */
+.ops-modal-actions button.btn-stop {
+  background: var(--accent-red); color: var(--bg); border: none;
+  padding: var(--s-3) var(--s-5); font-family: var(--font-mono); font-weight: 500;
+  font-size: var(--fs-body); text-transform: uppercase; letter-spacing: 0.14em; cursor: pointer;
+}
+.ops-modal-actions button.btn-stop:hover { background: var(--fg-strong); }
+.ops-modal-actions button:disabled {
+  background: var(--grid); color: var(--fg-muted); border: none;
+  padding: var(--s-3) var(--s-5); font-family: var(--font-mono); font-size: var(--fs-body);
+  text-transform: uppercase; letter-spacing: 0.14em; cursor: not-allowed;
+}
+.ops-modal-cancel {
+  background: none; border: 1px solid var(--grid); color: var(--fg-muted);
+  padding: var(--s-3) var(--s-5); font-family: var(--font-mono); font-size: var(--fs-body);
+  text-transform: uppercase; letter-spacing: 0.14em; cursor: pointer;
+}
+.ops-modal-cancel:hover { color: var(--fg-strong); border-color: var(--fg-strong); }
+.ops-modal-hint { color: var(--fg-muted); font-size: var(--fs-metadata); margin: var(--s-3) 0 0; }
+
+/* Lista de consequências do diálogo de remoção. Não é decoração: é a
+   diferença entre "tem certeza?" e "isto é o que vai acontecer" -- por isso
+   cada item tem um `<strong>` (o fato) e um texto fraco (o porquê), e não
+   uma linha só de tamanho igual. Marcador em régua de 1px, como o resto da
+   hierarquia do projeto, em vez de bolinha. */
+.ops-modal-list { list-style: none; margin: 0 0 var(--s-5); padding: 0; }
+.ops-modal-list > li {
+  border-left: 1px solid var(--border);
+  padding: 0 0 0 var(--s-3);
+  margin: 0 0 var(--s-4);
+  line-height: 1.5;
+  color: var(--fg-muted);
+}
+.ops-modal-list > li:last-child { margin-bottom: 0; }
+.ops-modal-list strong { color: var(--fg-strong); font-weight: 500; }
+.ops-modal-list .ops-modal-hint { display: block; margin-top: var(--s-2); }
+.ops-modal-list .pos { color: var(--accent-green); }
+.ops-modal-list .neg { color: var(--accent-red); }
+/* Os tickets das ordens: mono e apagados, é número de sistema para conferir
+   no MT5, não algo para ler linha a linha. */
+.ops-modal-sublist {
+  list-style: none;
+  margin: var(--s-2) 0 0;
+  padding: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-metadata);
+}
+.ops-modal-sublist li { margin: 0 0 var(--s-1); }
+
+/* Escolha do destino do historico na remocao (pedido do dono, 2026-08-26).
+   Fica ABAIXO da lista de consequencias e ACIMA dos botoes de proposito: a
+   lista diz o que acontece de qualquer jeito, isto e' a unica coisa que o
+   dono ainda decide, e a ultima antes de ele clicar.
+   `fieldset` sem borda nem padding do navegador -- a separacao visual e' a
+   regua de 1px em cima, igual ao resto da hierarquia do projeto. */
+.ops-modal-choice {
+  border: none;
+  border-top: 1px solid var(--grid);
+  margin: 0 0 var(--s-4);
+  padding: var(--s-4) 0 0;
+}
+.ops-modal-choice legend {
+  padding: 0;
+  font-size: var(--fs-metadata);
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+}
+.ops-modal-choice label {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-3);
+  margin-top: var(--s-3);
+  line-height: 1.5;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.ops-modal-choice strong { color: var(--fg-strong); font-weight: 500; }
+/* O radio nao encolhe junto com o texto que quebra em varias linhas. */
+.ops-modal-choice input[type="radio"] { flex: 0 0 auto; accent-color: var(--fg-strong); }
+
 
 .ops-start-form-wrap { max-width: 640px; margin: 0 auto; }
 .ops-start-form { text-align: left; }
@@ -2169,6 +2251,10 @@ details[open] > summary .ops-sec-caret::before { content: "\2212"; }
    campo de edição, longe de onde o cartão já mostra o valor). */
 .ops-sum-hint { color: var(--fg-faint); white-space: nowrap; }
 .ops-sum-hint.is-blocked { color: var(--accent-red); }
+/* Ordens do robô, "preenchida/posicionada" (pedido do dono, 2026-08-25) --
+   mesmo peso visual do mínimo ao lado, só o valor com tabular-nums por ser
+   numérico. */
+.ops-sum-orders { color: var(--fg-faint); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .ops-sum-state {
   display: inline-flex;
   align-items: center;
@@ -2181,6 +2267,14 @@ details[open] > summary .ops-sec-caret::before { content: "\2212"; }
   width: 7px; height: 7px;
   background: var(--fg-faint);
   flex-shrink: 0;
+}
+/* IMPEDIDO: processo de pé, pregão recusado por um portão do robô (ver o
+   macro `resumo`). Vermelho, não âmbar -- não é aviso, é "não está
+   operando". */
+.ops-sum-state.is-blocked { color: var(--accent-red); }
+.ops-sum-state.is-blocked .ops-sum-dot {
+  background: var(--accent-red);
+  box-shadow: 0 0 0 3px rgba(178,74,66,0.16);
 }
 .ops-sum-state.is-running { color: var(--accent-green); }
 .ops-sum-state.is-running .ops-sum-dot {
@@ -2549,6 +2643,83 @@ details[open] > summary .ops-sec-caret::before { content: "\2212"; }
 }
 .ops-signal form button:hover { color: var(--accent-green); border-color: var(--accent-green); }
 
+/* Secao 04 -- PROCESSOS DE ROBO (dono, 2026-08-26). Mesmo vocabulario visual
+   da lista de avisos (bolinha + texto + acao a direita, separadas por filete
+   de 1px): as duas sao listas de "coisas que o dono talvez precise resolver",
+   e inventar uma segunda linguagem para a mesma ideia so' faria a pagina
+   parecer dois produtos. A diferenca e' a COR da bolinha, que aqui carrega a
+   unica distincao que importa: processo que o painel rastreia (apagado, e'
+   so' confirmacao) vs. processo solto (ambar, e' o que ninguem mais
+   alcanca). */
+.ops-proc-list { list-style: none; margin: 0; padding: 0; }
+.ops-proc {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-3);
+  padding: var(--s-3) 0;
+  border-top: 1px solid var(--grid);
+}
+.ops-proc-text { flex: 1; min-width: 0; }
+.ops-proc-text p { margin: 0; font-family: var(--font-serif); color: var(--fg); }
+.ops-proc-text strong {
+  font-family: var(--font-mono);
+  color: var(--fg-strong);
+  margin-right: var(--s-2);
+}
+.ops-proc-text .sub {
+  font-family: var(--font-mono);
+  font-size: var(--fs-metadata);
+  color: var(--fg-muted);
+  margin-top: var(--s-1);
+}
+.ops-proc-dot {
+  width: 7px; height: 7px;
+  margin-top: 0.45em;
+  background: var(--fg-faint);
+  flex-shrink: 0;
+}
+.ops-proc.is-solto .ops-proc-dot { background: var(--accent-amber); }
+.ops-proc form button {
+  background: none;
+  border: 1px solid var(--grid-strong);
+  border-radius: 0;
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-metadata);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  padding: var(--s-2) var(--s-3);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 120ms linear, border-color 120ms linear;
+}
+.ops-proc form button:hover { color: var(--accent-red); border-color: var(--accent-red); }
+/* "Varrer de novo" e' acao de MANUTENCAO da propria lista, nao operacao de
+   robo: fica discreta, do tamanho do texto que a acompanha. */
+.ops-proc-actions {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+  margin-top: var(--s-4);
+  padding-top: var(--s-3);
+  border-top: 1px solid var(--grid);
+}
+.ops-proc-actions button {
+  background: none;
+  border: 1px solid var(--grid-strong);
+  border-radius: 0;
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-metadata);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  padding: var(--s-2) var(--s-3);
+  cursor: pointer;
+}
+.ops-proc-actions button:hover { color: var(--fg-strong); border-color: var(--fg-strong); }
+.ops-proc-actions .ops-modal-hint { margin: 0; flex: 1; min-width: 12ch; }
+
 /* Formulario de robo novo: SEMPRE visivel quando a secao de day trade esta
    aberta (nao recolhe) e SEMPRE acima da lista de robos -- ponto fixo da
    secao, enquanto a lista embaixo cresce. O recolhivel e' o robo criado.
@@ -2590,6 +2761,21 @@ details[open] > summary .ops-sec-caret::before { content: "\2212"; }
    sufixo de status) com folga pro padding e a seta nativa do navegador. */
 .ops-new-robot-form .ops-asset-field select { width: 360px; }
 .ops-new-robot-form select:disabled { color: var(--fg-muted); cursor: not-allowed; }
+/* Caixa "restaurar o historico guardado". Alinha pela BASE junto com os
+   selects (`align-items: flex-end` do formulario), e so' aparece no trio que
+   tem arquivo -- quem revela e' `atualizaRestauro` em `static/js/operacao.js`,
+   tirando o `hidden`. O `:not([hidden])` e' obrigatorio: `display: flex` aqui
+   venceria o `display: none` que o atributo `hidden` traz do navegador. */
+.ops-inline-check:not([hidden]) {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding-bottom: var(--s-3);
+  font-size: var(--fs-metadata);
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.ops-inline-check input[type="checkbox"] { accent-color: var(--accent-amber); }
 .ops-new-robot-form button {
   background: var(--accent-amber);
   color: var(--bg);

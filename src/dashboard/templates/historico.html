@@ -18,9 +18,14 @@
   </div>
   <aside>
     {% for s in slots %}
+    {# `s.label` sozinho ("gremah_tick — PMAM3") não distingue sombra de
+       real -- sombra e real do MESMO robô+ativo viram duas linhas
+       IDÊNTICAS nesta lista (dono, 2026-08-25). Só o day trade tem modo; o
+       swing (`execution_mode=""`) fica como sempre. #}
+    {% set rotulo = s.label ~ (" · sombra" if s.execution_mode == "shadow" else " · real" if s.execution_mode == "live" else "") %}
     <div>
-      {% if s.id == slot.id %}<strong>{{ s.label }}</strong>
-      {% else %}<a href="/operacao/historico?slot={{ s.id }}">{{ s.label }}</a>{% endif %}
+      {% if s.id == slot.id %}<strong>{{ rotulo }}</strong>
+      {% else %}<a href="/operacao/historico?slot={{ s.id }}">{{ rotulo }}</a>{% endif %}
     </div>
     {% endfor %}
     {% if existe %}
@@ -57,9 +62,9 @@
   <h3>Decisões</h3>
   <p class="dek">
     Toda intenção gravada pelo robô, mais recente primeiro — decidida no fecho
-    de um pregão, para executar no seguinte (regra 4 do AGENTS.md). Em
-    <em>por quê</em>, o que a regra mediu e como o mercado estava naquele
-    pregão.
+    de um pregão, para executar no seguinte (regra 4 do AGENTS.md). O que a
+    regra mediu e como o mercado estava naquele pregão vem aberto embaixo de
+    cada linha, sem precisar clicar.
   </p>
   <table class="ops-table ops-table-diario">
     <thead>
@@ -98,13 +103,11 @@
         <td class="right num">{{ i.execute_on }}</td>
         <td class="col-status">
           <span class="status-pill {{ i.status.value }}">{{ i.status.value }}</span>
-          {% if tem_ctx %}
-          <button type="button" class="ctx-toggle" aria-expanded="false"
-                  aria-controls="ctx-{{ i.id }}"
-                  title="Por que esta decisão">por quê</button>
-          {% endif %}
         </td>
       </tr>
+      {# Contexto (gatilho + mercado) sempre visível embaixo da linha, sem
+         toggle (dono, 2026-08-25) -- nada fica escondido atrás de um clique
+         numa decisão de dinheiro real. Ver `decisao_contexto.html`. #}
       {% if tem_ctx %}{% include "partials/decisao_contexto.html" %}{% endif %}
       {% else %}
       <tr><td colspan="8" class="ops-table-empty">Nenhuma decisão registrada ainda.</td></tr>
@@ -141,21 +144,6 @@
     </tbody>
   </table>
 </section>
-
-<script>
-// Toggle da linha de contexto. Delegação num listener só (e não um por botão):
-// a tabela tem até 200 linhas, e ligar 200 listeners para uma interação que
-// acontece uma vez por leitura é desperdício sem ganho nenhum.
-document.addEventListener('click', function (ev) {
-  const btn = ev.target.closest('.ctx-toggle');
-  if (!btn) return;
-  const alvo = document.getElementById(btn.getAttribute('aria-controls'));
-  if (!alvo) return;
-  const aberto = btn.getAttribute('aria-expanded') === 'true';
-  btn.setAttribute('aria-expanded', String(!aberto));
-  alvo.hidden = aberto;
-});
-</script>
 
 <script>
 window.addEventListener('load', function () {

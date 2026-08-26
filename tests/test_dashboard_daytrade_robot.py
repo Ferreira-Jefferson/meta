@@ -331,6 +331,71 @@ def test_operacao_iniciar_daytrade_live_usa_cash_real_mesmo_com_sombra_alto(
     assert called == []
 
 
+def test_operacao_iniciar_colisao_de_simbolo_mostra_modal_com_botao_de_parar(
+    isolated_journal, client, monkeypatch,
+):
+    """Pedido do dono (2026-08-25): colisão de símbolo (`_assert_slots_
+    disjuntos`) não pode mais só escrever um banner de texto lá em cima do
+    painel — vira um card centralizado (`partials/operacao_colisao.html`)
+    com o robô que está no caminho e um botão pra parar ELE, direto dali.
+    `live_control.start` é monkeypatchado pra levantar o erro estruturado
+    direto (o cenário de colisão em si já tem cobertura própria em
+    `test_live_control.py`; aqui o que se testa é o app.py + template)."""
+    client.post(f"/operacao/{DAYTRADE}/caixa", data={"caixa": "100.00"})
+
+    def _start(cfg):
+        raise live_control.SlotSymbolCollisionError(
+            "colisão de símbolo de teste",
+            slot_id="dt-gremah_tick-pmam3-live", slot_label="PMAM3 · gremah_tick",
+            symbols=["PMAM3"], pode_parar=True, motivo_bloqueio=None,
+        )
+
+    monkeypatch.setattr(live_control, "start", _start)
+    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot, robot_key=None: 1.0)
+    monkeypatch.setattr(live_control, "detect_fractional_symbol_map", lambda slot, robot_key=None: None)
+
+    resp = client.post(f"/operacao/{DAYTRADE}/iniciar", data={"robo": "gremah"})
+
+    assert resp.status_code == 200
+    assert 'data-ops-modal' in resp.text
+    assert "PMAM3 · gremah_tick" in resp.text
+    assert '/operacao/dt-gremah_tick-pmam3-live/parar' in resp.text
+    # Sem `erro` no topo -- o card já explica sozinho, repetir seria ruído.
+    assert 'class="ops-alert stagger"' not in resp.text
+
+
+def test_operacao_iniciar_colisao_de_simbolo_com_ordens_desabilita_parar(
+    isolated_journal, client, monkeypatch,
+):
+    """Contraprova: com o outro robô tendo posição/ordem em aberto
+    (`pode_parar=False`), o modal não pode oferecer um botão de Parar que
+    funcione -- vira `disabled` com a explicação do motivo."""
+    client.post(f"/operacao/{DAYTRADE}/caixa", data={"caixa": "100.00"})
+
+    def _start(cfg):
+        raise live_control.SlotSymbolCollisionError(
+            "colisão de símbolo de teste",
+            slot_id="dt-gremah_tick-pmam3-live", slot_label="PMAM3 · gremah_tick",
+            symbols=["PMAM3"], pode_parar=False,
+            motivo_bloqueio="este robô tem ordens posicionadas ou abertas agora — aguarde.",
+        )
+
+    monkeypatch.setattr(live_control, "start", _start)
+    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot, robot_key=None: 1.0)
+    monkeypatch.setattr(live_control, "detect_fractional_symbol_map", lambda slot, robot_key=None: None)
+
+    resp = client.post(f"/operacao/{DAYTRADE}/iniciar", data={"robo": "gremah"})
+
+    assert resp.status_code == 200
+    assert 'data-ops-modal' in resp.text
+    assert "aguarde" in resp.text
+    assert "disabled" in resp.text
+    # O form com hx-post pra /parar não pode existir neste ramo -- só o
+    # botão desabilitado, senão um clique acidental (ou um replay do POST)
+    # pararia o robô com ordem em aberto.
+    assert 'hx-post="/operacao/dt-gremah_tick-pmam3-live/parar"' not in resp.text
+
+
 def test_operacao_iniciar_daytrade_primeira_vez_em_sombra_nao_infla_initial_capital(
     isolated_journal, client, monkeypatch,
 ):

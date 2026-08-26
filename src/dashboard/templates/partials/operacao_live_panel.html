@@ -3,7 +3,7 @@
 
 <section class="ops-control stagger">
   {% if proc %}
-    <span class="ops-status running"><span class="dot"></span> Robô ativo desde {{ proc.started_at[:16].replace("T", " ") }}</span>
+    <span class="ops-status running"><span class="dot"></span> Robô ativo desde {{ proc.started_at | hora_br("%Y-%m-%d %H:%M") }}</span>
     <form hx-post="/operacao/parar" hx-target="#ops-body" hx-swap="outerHTML">
       <button type="submit" class="btn-stop">■ Parar operação</button>
     </form>
@@ -164,7 +164,7 @@
 
 <section class="console-wrap stagger">
   <div class="k console-label">Eventos recentes</div>
-  <pre class="console">{% for e in s.eventos %}[{{ e.ts }}] {{ e.level | upper }} {{ e.source }}: {{ e.message }}
+  <pre class="console">{% for e in s.eventos %}[{{ e.ts | hora_br }}] {{ e.level | upper }} {{ e.source }}: {{ e.message }}
 {% else %}(nenhum evento registrado ainda)
 {% endfor %}</pre>
 </section>

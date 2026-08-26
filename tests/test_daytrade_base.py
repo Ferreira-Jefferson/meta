@@ -20,6 +20,7 @@ from strategy.daytrade.base import (
     RollingVolumeWindow,
     barra_diaria,
     capital_minimo_brl,
+    geometria_e_degenerada,
 )
 
 
@@ -228,3 +229,41 @@ def test_janela_volatilidade_descarta_alem_do_tamanho_declarado():
     for rng in (1.0, 2.0, 3.0):
         janela.registrar_dia(_bar_ohlc("18:00", 10.0, 10.0 + rng, 10.0, 10.0))
     assert janela.range_mediano() == pytest.approx(2.0)
+
+
+# ---------------------------------------------------------------------------
+# `geometria_e_degenerada` -- a funcao pura por tras da guarda das duas
+# estrategias da familia `gremah`. Testada aqui, isolada, porque e' o unico
+# lugar em que a REGRA vive (as classes so' a chamam).
+# ---------------------------------------------------------------------------
+
+
+def test_geometria_degenerada_stop_colado_no_alvo():
+    """O caso da PMAM3 a R$0,13: 1 tick de alvo contra 1 tick de stop."""
+    assert geometria_e_degenerada(1, 1, 1.5) is True
+
+
+def test_geometria_degenerada_pega_o_caso_intermediario():
+    """O criterio e' RAZAO, nao igualdade: 3 contra 4 sao numeros diferentes e
+    mesmo assim nada parecidos com o `stop_multiplier=20` que a calibracao
+    pretendia."""
+    assert geometria_e_degenerada(3, 4, 1.5) is True
+    assert geometria_e_degenerada(3, 5, 1.5) is False
+
+
+def test_geometria_sadia_nao_e_degenerada():
+    assert geometria_e_degenerada(1, 20, 1.5) is False
+    assert geometria_e_degenerada(2, 3, 1.5) is False
+
+
+def test_sem_stop_nao_e_geometria_degenerada():
+    """`None` e' "este desenho nao usa stop", outra coisa -- e nao cabe a esta
+    funcao opinar sobre ele."""
+    assert geometria_e_degenerada(1, None, 1.5) is False
+
+
+def test_razao_minima_e_o_criterio_de_quem_chama():
+    """1.0 aceita qualquer stop >= alvo; e' o ajuste que transforma a guarda de
+    "quero assimetria" em "so' nao aceito stop MENOR que o alvo"."""
+    assert geometria_e_degenerada(1, 1, 1.0) is False
+    assert geometria_e_degenerada(2, 1, 1.0) is True

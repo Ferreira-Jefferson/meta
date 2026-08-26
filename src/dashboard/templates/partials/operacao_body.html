@@ -146,14 +146,18 @@
      competiria com esse clique. Ação destrutiva também não ganha o âmbar
      dos botões de ação — texto apagado, acende só no hover. #}
   <div class="ops-slot-foot">
+    {# Sem `hx-confirm`: o confirm() do navegador cabia uma frase, e a frase
+       mentia por omissão (remover também mata processo e mexe na corretora).
+       O clique abre `partials/operacao_remocao.html`, que LISTA o que existe
+       agora antes de perguntar. #}
     <form hx-post="/operacao/{{ slot.id }}/remover"
-          hx-target="#ops-body" hx-swap="outerHTML"
-          hx-confirm="Remover o robô {{ slot.label }}? O ativo {{ slot.symbol }} volta a ficar livre.">
+          hx-target="#ops-body" hx-swap="outerHTML">
       <button type="submit">Remover robô</button>
     </form>
     <span class="sub">
-      Libera {{ slot.symbol }} para outro robô. O servidor recusa se o
-      processo estiver rodando, houver posição aberta ou sobrar caixa.
+      Encerra o processo, cancela o que estiver pendurado na corretora e
+      libera {{ slot.symbol }} para outro robô. Você confere tudo antes de
+      confirmar.
     </span>
   </div>
   {% endif %}
@@ -173,6 +177,19 @@
 {% endif %}
 {% if caixa_msg %}
 <div class="ops-alert ops-alert-ok{{ ' stagger' if stagger_ok }}">{{ caixa_msg }}</div>
+{% endif %}
+{# `ok_msg` é o irmão genérico de `caixa_msg` (que só fala de ledger): serve
+   para qualquer ação que terminou bem e precisa CONTAR o que fez -- hoje, a
+   remoção de robô, que resume processo encerrado, ordens canceladas e
+   posição zerada numa linha só. #}
+{% if ok_msg %}
+<div class="ops-alert ops-alert-ok{{ ' stagger' if stagger_ok }}">{{ ok_msg }}</div>
+{% endif %}
+{% if colisao %}
+{% include "partials/operacao_colisao.html" %}
+{% endif %}
+{% if remocao %}
+{% include "partials/operacao_remocao.html" %}
 {% endif %}
 
 {% set daytrade = slots | selectattr("slot.is_intraday") | list %}
@@ -351,8 +368,8 @@
             </p>
             <p class="sub num">
               Caixa R$ {{ aviso.cash_brl | num_br }} · {{ aviso.suggested_symbol }} exige
-              R$ {{ aviso.required_brl | num_br }} · {{ aviso.ts }}
-              {% if aviso.acknowledged_at %} · feito em {{ aviso.acknowledged_at }}{% endif %}
+              R$ {{ aviso.required_brl | num_br }} · {{ aviso.ts | hora_br }}
+              {% if aviso.acknowledged_at %} · feito em {{ aviso.acknowledged_at | hora_br }}{% endif %}
             </p>
           </div>
           {% if not aviso.acknowledged_at %}
@@ -466,6 +483,12 @@
                     {%- if ativo.em_uso %} data-em-uso="1"{% endif %}
                     {%- if ativo.modos_usados %} data-modos-usados="{{ ativo.modos_usados | join(',') }}"{% endif %}
                     {%- if ativo.modos_rodando %} data-modos-rodando="{{ ativo.modos_rodando | join(',') }}"{% endif %}
+                    {#- Modos deste par (robô, ativo) com histórico GUARDADO.
+                        Eixo diferente de `data-modos-usados`: arquivo não
+                        ocupa o ativo (o slot está livre, a opção não fica
+                        desabilitada) — só faz o `atualizaRestauro` revelar a
+                        caixa "restaurar". #}
+                    {%- if ativo.modos_arquivados %} data-modos-arquivados="{{ ativo.modos_arquivados | join(',') }}"{% endif %}
                     class="{% if ativo.rodando %}is-running{% elif ativo.em_uso %}is-idle{% endif %}">
               {{ "●" if ativo.em_uso else "○" }} {{ label }}
               {%- if ativo.rodando %} · operando{% elif ativo.em_uso %} · parado{% endif %}
@@ -474,6 +497,33 @@
             {% endfor %}
           </select>
         </div>
+        {% if novo_robo.tem_arquivo %}
+        {#  Toggle "restaurar" (pedido do dono, 2026-08-26). Só aparece quando
+            existe algum robô removido COM o histórico guardado, e o JS
+            (`atualizaRestauro` em `static/js/operacao.js`) o esconde de novo
+            se o trio (robô, ativo, modo) escolhido agora não for um deles —
+            oferecer "restaurar" onde não há nada guardado é um controle que
+            não faz nada.
+
+            Marcado por padrão porque o dono só chega aqui vindo de uma
+            remoção em que ele JÁ escolheu guardar: a intenção declarada era
+            não perder aquilo. Desmarcar é o "quero começar do zero", e aí o
+            arquivo é descartado sem segunda pergunta — a caixa desmarcada já
+            é a resposta (pedido explícito do dono: "sem confirmação nem
+            nada").
+
+            Nasce `hidden` (é o JS que o revela no trio certo), e isso define
+            também a degradação sem JS: o campo nunca aparece, mas continua
+            sendo enviado MARCADO — `hidden` esconde, não desabilita. Sem JS,
+            portanto, criar em cima de um arquivo restaura; "do zero" fica
+            indisponível. É o lado certo para cair: restaurar é desfazível,
+            descartar não. #}
+        <label class="ops-inline-check" data-ops-restore-field hidden>
+          <input type="checkbox" name="restaurar" value="1" checked
+                 data-ops-restore-input />
+          <span>Restaurar o histórico guardado deste robô</span>
+        </label>
+        {% endif %}
         <button type="submit" data-ops-submit>Criar robô</button>
       </form>
       {% endif %}
@@ -512,8 +562,15 @@
         <span class="ops-slot-mode{{ ' is-live' if bloco.slot.execution_mode == 'live' else '' }}">
           {{ "real" if bloco.slot.execution_mode == "live" else "simulação" }}
         </span>
+        {# `daytrade` vem ausente do status enquanto a conta não existe ainda
+           ("Ainda sem conta para este robô") -- `dt` fica `none` nesse caso e
+           o macro esconde o "x/y" (mesmo padrão de `caixa_minima`). #}
+        {% set dt = bloco.status.get('daytrade') %}
         {{ r.resumo(bloco.slot.id, bloco.caixa_ledger, bloco.proc,
-                    bloco.caixa_minima, bloco.caixa_ok) }}
+                    bloco.caixa_minima, bloco.caixa_ok,
+                    preenchidas=((dt.posicoes_compra + dt.posicoes_venda) if dt else none),
+                    posicionadas=((dt.ordem_em_pe.ordens if dt.ordem_em_pe else 0) if dt else none),
+                    impedimento=(dt.impedimento if dt else none)) }}
         <span class="ops-sec-caret" aria-hidden="true"></span>
       </summary>
       <div class="ops-slot-body">
@@ -523,4 +580,11 @@
   </article>
   {% endfor %}
 {% endcall %}
+
+
+{# ---------- 04 · PROCESSOS ------------------------------------------------
+   Última seção da página de propósito: é diagnóstico, não operação. Quem vem
+   aqui já sabe o que procura -- um robô que continua rodando sem cartão que o
+   mostre. Carrega sozinha (~3s de varredura) para não atrasar o resto. #}
+{% include "partials/operacao_processos.html" %}
 </div>

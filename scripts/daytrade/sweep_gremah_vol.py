@@ -60,6 +60,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from backtest.intraday.engine import run_intraday_backtest  # noqa: E402
 from backtest.intraday.frozen_split import LockedBars, declare_frozen_split  # noqa: E402
 from backtest.intraday.profiles import PROFILES, config_for  # noqa: E402
+from backtest.intraday.report import cabecalho, linha, linha_de_resultado  # noqa: E402
 from market_data_intraday.mt5_source import symbol_economics  # noqa: E402
 from market_data_intraday.storage import load_m1  # noqa: E402
 from strategy.daytrade.base import capital_minimo_brl  # noqa: E402
@@ -82,31 +83,27 @@ VOL_JANELA_DIAS_PADRAO = 10
 MIN_TRADES_CONFIAVEL = 30
 
 
-def _rodar(profile, run_bars: pd.DataFrame, econ, strat: Gremah, preco_atual: float) -> dict:
+#: Coluna EXTRA desta varredura -- entra DEPOIS das 12 da base
+#: (`backtest/intraday/report.py`), nunca no lugar de nenhuma delas.
+EXTRAS = ("confiavel",)
+
+
+def _rodar(profile, run_bars: pd.DataFrame, econ, strat: Gremah, preco_atual: float,
+           label: str = ""):
+    """Devolve a linha da TABELA PADRAO -- ate 2026-08-25 este script montava
+    a propria tabela, e comparar duas varreduras virava trabalho de leitura."""
     capital_inicial = capital_minimo_brl(preco_atual)
     config = config_for(
         profile, trade_tick_value=econ.trade_tick_value, trade_tick_size=econ.trade_tick_size,
         target_fills_as_maker=strat.target_fills_as_maker, preco_atual=preco_atual,
     )
     result = run_intraday_backtest(run_bars, strat, config)
-    m = result.metrics
-    final = capital_inicial + sum(t.pnl_brl for t in result.trades)
     n = len(result.trades)
-    return {
-        "retorno_%": m["cagr"] * 100, "maxdd_%": m["max_drawdown"] * 100,
-        "calmar": m["calmar"], "win_rate_%": m.get("win_rate", 0.0) * 100,
-        "trades": n, "capital_final": final, "capital_inicial": capital_inicial,
-        "confiavel": n >= MIN_TRADES_CONFIAVEL, "wiped_out": result.wiped_out_at is not None,
-        "dias_pulados": len(result.sessoes_puladas_por_capital),
-    }
-
-
-def _linha(label: str, r: dict) -> str:
-    confiavel = "sim" if r["confiavel"] else f"NAO (<{MIN_TRADES_CONFIAVEL})"
-    aviso = " ZERADO" if r["wiped_out"] else (f" pulou{r['dias_pulados']}d" if r["dias_pulados"] else "")
-    return (f"{label:<20}{r['retorno_%']:>9.1f}%{r['maxdd_%']:>9.1f}%{r['calmar']:>9.2f}"
-            f"{r['win_rate_%']:>10.1f}%{r['trades']:>8d}  R${r['capital_final']:>10.2f}"
-            f"  {confiavel:>13}{aviso}")
+    return linha_de_resultado(
+        label, result, capital_inicial,
+        extras={"confiavel": "sim" if n >= MIN_TRADES_CONFIAVEL
+                else f"NAO<{MIN_TRADES_CONFIAVEL}"},
+    )
 
 
 def _sweep_symbol(symbol: str, top: int) -> None:
@@ -136,37 +133,37 @@ def _sweep_symbol(symbol: str, top: int) -> None:
           f"{run_bars.index.min()} -> {run_bars.index.max()}, "
           f"caixa minimo R${capital_minimo_brl(preco_atual):.2f} ===")
 
-    linhas: list[tuple[str, dict]] = []
+    linhas = []
     baseline = Gremah(symbol=symbol)
     rotulo_atual = (
         f"atual (k={baseline.alvo_vol_mult:.2f}/s={baseline.stop_vol_mult:.0f})"
         if baseline.alvo_por_volatilidade
         else f"atual ({calib.profit_pct*100:.2f}%/{calib.stop_multiplier:.0f}x)"
     )
-    linhas.append((rotulo_atual, _rodar(profile, run_bars, econ, baseline, preco_atual)))
+    linhas.append(_rodar(profile, run_bars, econ, baseline, preco_atual, rotulo_atual))
 
     for k in K_GRID:
         strat_a = Gremah(symbol=symbol, alvo_por_volatilidade=True,
                           alvo_vol_mult=k, vol_janela_dias=VOL_JANELA_DIAS_PADRAO)
-        linhas.append((f"A k={k:.2f}", _rodar(profile, run_bars, econ, strat_a, preco_atual)))
+        linhas.append(_rodar(profile, run_bars, econ, strat_a, preco_atual, f"A k={k:.2f}"))
 
     for k in K_GRID:
         for s in S_GRID:
             strat_b = Gremah(symbol=symbol, alvo_por_volatilidade=True,
                               alvo_vol_mult=k, vol_janela_dias=VOL_JANELA_DIAS_PADRAO,
                               stop_vol_mult=s)
-            linhas.append((f"B k={k:.2f} s={s:.0f}", _rodar(profile, run_bars, econ, strat_b, preco_atual)))
+            linhas.append(_rodar(profile, run_bars, econ, strat_b, preco_atual,
+                                 f"B k={k:.2f} s={s:.0f}"))
 
     # A linha "atual" fica SEMPRE visivel, mesmo fora do top-N, para servir
     # de referencia direta a cada variante ordenada por capital final.
     atual = linhas[0]
-    resto = sorted(linhas[1:], key=lambda item: item[1]["capital_final"], reverse=True)
+    resto = sorted(linhas[1:], key=lambda item: item.liquido_brl, reverse=True)
 
-    print(f"{'variante':<20}{'retorno':>10}{'maxdd':>10}{'calmar':>9}"
-          f"{'win rate':>11}{'trades':>8}{'capital final':>15}  {'confiavel':>13}")
-    print(_linha(*atual))
-    for label, r in resto[:top]:
-        print(_linha(label, r))
+    print(cabecalho(EXTRAS))
+    print(linha(atual, EXTRAS), flush=True)
+    for item in resto[:top]:
+        print(linha(item, EXTRAS), flush=True)
     if len(resto) > top:
         print(f"  ... {len(resto) - top} combinacao(oes) a mais, fora do top-{top}")
 

@@ -1,0 +1,263 @@
+"""TABELA PADRAO de resultado intradiario — uma unica definicao de "como se
+mostra o resultado de um backtest", usada por TODO script de day trade.
+
+Existe por decisao do dono (2026-08-25): "defina uma tabela padrao de output
+para sempre seguir o mesmo padrao; ela deve contemplar tudo o que e'
+necessario, e em comparacoes entre testes/ativos/estrategias vai ser
+adaptada, mas deve ter uma base bem definida e conhecida por todos".
+
+O problema que ela resolve e' concreto e ja aconteceu neste repo: cada script
+imprimia o SEU conjunto de colunas, com o SEU formato de numero, e comparar
+duas rodadas virava trabalho de leitura em vez de leitura direta. Pior: uma
+coluna com o MESMO nome significava coisas diferentes em scripts diferentes.
+
+## As 12 colunas da BASE (sempre presentes, sempre nesta ordem)
+
+| coluna | o que e' |
+|---|---|
+| `variante` | rotulo da linha (parametro, ativo, estrategia — o que a rodada compara) |
+| `retorno` | retorno percentual sobre o capital inicial; `—` quando o capital e' NOCIONAL |
+| `liquido R$` | P&L liquido total, ja com custo — o numero que decide |
+| `MaxDD %` | pior queda percentual da curva de patrimonio; `—` com capital nocional |
+| `MaxDD R$` | pior queda em reais — a unica leitura valida de DD com capital nocional |
+| `lucro/DD` | `liquido R$ / MaxDD R$` — quantos reais de lucro por real de queda |
+| `win%` | percentual de trades vencedores |
+| `trades` | numero de trades fechados |
+| `R$/dia` | liquido dividido por pregao COM DADO (nao por dia de calendario) |
+| `trd/dia` | trades por pregao — o giro do desenho, em uma coluna |
+| `capital final` | capital inicial + liquido; `—` quando o capital e' nocional |
+| `pregoes` | pregoes distintos cobertos pela run |
+
+Quem compara N variantes acrescenta colunas com `extras` (dict ordenado, ja
+formatado como texto) — elas entram DEPOIS da base, nunca no lugar dela.
+
+## Duas escolhas que valem explicacao
+
+**`lucro/DD` no lugar do Calmar anualizado.** `backtest.metrics.calmar`
+anualiza o retorno, e este motor roda janelas de semanas a meses: anualizar
+uma janela curta AMPLIFICA o numero em vez de estima-lo. E' a mesma razao
+que ja fez `run_intraday_backtest` reportar `metrics.period_return` sob a
+chave `"cagr"` (ver `backtest/intraday/engine.py`). `liquido R$ / MaxDD R$`
+e' adimensional, nao depende de anualizacao nenhuma e significa a MESMA coisa
+com capital real ou nocional.
+
+**Capital NOCIONAL (`capital_nocional=True`).** Um mini-futuro na Copa BTG
+nao tem saldo: a margem e' simulada como infinita e o limitador e' o teto de
+contratos abertos. Um `initial_capital` ali e' so' uma linha de base para a
+curva de patrimonio existir — dividir por ele produziria "retorno de X%"
+sobre um numero inventado. Nesses casos as tres colunas que dependem da base
+(`retorno`, `MaxDD %`, `capital final`) saem como `—`, em vez de sairem com
+um numero que ninguem pode usar.
+
+Numero em formato BR (milhar com ponto, decimal com virgula) porque e' assim
+que o dono le' — mesma convencao ja usada nas tabelas de conversa.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+import pandas as pd
+
+from backtest.intraday.machine import IntradayTrade
+
+#: Larguras das 12 colunas da base, na ordem. Ficam aqui (e nao espalhadas em
+#: f-strings) para o cabecalho e as linhas nunca saírem desalinhados: os dois
+#: leem a MESMA tupla.
+#: Largura da coluna `variante`. Publica porque quem MONTA rotulo precisa
+#: caber nela: um rotulo truncado faz duas combinacoes diferentes aparecerem
+#: como a MESMA linha da tabela (aconteceu 2026-08-25 numa varredura de 1.152
+#: combinacoes). Quem gera rotulo checa contra esta constante em vez de
+#: repetir o numero.
+LARGURA_VARIANTE = 30
+
+_BASE = (
+    ("variante", LARGURA_VARIANTE, "<"),
+    ("retorno", 9, ">"),
+    ("liquido R$", 13, ">"),
+    ("MaxDD %", 9, ">"),
+    ("MaxDD R$", 12, ">"),
+    ("lucro/DD", 9, ">"),
+    ("win%", 7, ">"),
+    ("trades", 7, ">"),
+    ("R$/dia", 11, ">"),
+    ("trd/dia", 8, ">"),
+    ("capital final", 15, ">"),
+    ("pregoes", 8, ">"),
+)
+
+_VAZIO = "—"
+
+
+def num_br(valor: float | None, casas: int = 2) -> str:
+    """`1234.5` -> `"1.234,50"`. `None` -> `"—"`. Formato BR em UM lugar so':
+    a alternativa (cada script formatando do seu jeito) ja produziu tabelas
+    em que a mesma grandeza aparecia com separador diferente em duas linhas
+    vizinhas."""
+    if valor is None:
+        return _VAZIO
+    inteiro = f"{valor:,.{casas}f}"
+    return inteiro.replace(",", "\x00").replace(".", ",").replace("\x00", ".")
+
+
+@dataclass(frozen=True)
+class LinhaResultado:
+    """Uma linha da tabela padrao. Montada por `linha_de_resultado` a partir
+    de um `IntradayBacktestResult` — construir na mao so' em teste."""
+
+    variante: str
+    liquido_brl: float
+    maxdd_brl: float
+    win_rate_pct: float
+    trades: int
+    pregoes: int
+    #: `None` quando o capital e' NOCIONAL (ver docstring do modulo).
+    retorno_pct: float | None = None
+    maxdd_pct: float | None = None
+    capital_final: float | None = None
+    #: Colunas extras da rodada, ja em texto e na ordem de exibicao.
+    extras: dict[str, str] = field(default_factory=dict)
+    #: Texto curto colado no fim da linha (ex.: "ZERADO", "pulou 48d") —
+    #: nunca uma coluna, porque nao existe em toda rodada.
+    aviso: str = ""
+
+    @property
+    def lucro_por_dd(self) -> float | None:
+        """`None` quando nao houve queda nenhuma — dividir por zero daria
+        `inf`, que numa tabela ordenada por esta coluna poe uma run sem
+        drawdown (tipicamente uma run com 1 trade) acima de tudo."""
+        if self.maxdd_brl <= 0:
+            return None
+        return self.liquido_brl / self.maxdd_brl
+
+    @property
+    def liquido_por_pregao(self) -> float | None:
+        if self.pregoes <= 0:
+            return None
+        return self.liquido_brl / self.pregoes
+
+    @property
+    def trades_por_pregao(self) -> float | None:
+        if self.pregoes <= 0:
+            return None
+        return self.trades / self.pregoes
+
+
+def maxdd_brl(equity_curve: pd.Series) -> float:
+    """Pior queda da curva de patrimonio em REAIS (pico-a-vale), sempre >= 0.
+
+    Em reais, e nao em percentual, porque com capital nocional o percentual
+    nao quer dizer nada — e porque a comparacao que interessa ("o bloco
+    mediano de 4 pregoes ganha mais do que a pior queda?") e' entre duas
+    grandezas em reais."""
+    if equity_curve is None or equity_curve.empty:
+        return 0.0
+    pico = equity_curve.cummax()
+    return float((pico - equity_curve).max())
+
+
+def maxdd_intradiario_mediano_brl(equity_curve: pd.Series) -> float:
+    """Mediana, entre os pregoes, da pior queda DENTRO de cada pregao (R$).
+
+    Diferente de `maxdd_brl`, que e' a pior queda da janela INTEIRA: um robo
+    de day trade zera todo dia, entao o que ele pede de estomago no dia a dia
+    e' esta queda intradiaria, nao a queda acumulada de meses.
+
+    Existe para o portao G2 do plano da Copa ("o bloco mediano tem de ganhar
+    mais do que o MaxDD intradiario mediano"): comparar lucro tipico com
+    sofrimento tipico, os dois em reais."""
+    if equity_curve is None or equity_curve.empty:
+        return 0.0
+    def _dd(serie: pd.Series) -> float:
+        return float((serie.cummax() - serie).max())
+    por_dia = equity_curve.groupby(pd.DatetimeIndex(equity_curve.index).date).apply(_dd)
+    return float(por_dia.median()) if len(por_dia) else 0.0
+
+
+def linha_de_resultado(
+    variante: str,
+    result,
+    initial_capital: float,
+    capital_nocional: bool = False,
+    extras: dict[str, str] | None = None,
+) -> LinhaResultado:
+    """Traduz um `IntradayBacktestResult` na linha padrao.
+
+    `capital_nocional=True` (futuro em ambiente de margem infinita) apaga as
+    tres colunas que dependem de um capital de verdade — ver a docstring do
+    modulo. O aviso de conta zerada / pregao pulado sai automatico do proprio
+    resultado, para nenhum script esquecer de mostra-lo (ja aconteceu: uma
+    tabela com capital final bonito e a conta zerada no meio da janela)."""
+    trades: list[IntradayTrade] = list(result.trades)
+    liquido = sum(t.pnl_brl for t in trades)
+    equity = result.equity_curve
+    pregoes = 0
+    if equity is not None and not equity.empty:
+        pregoes = len(set(pd.DatetimeIndex(equity.index).date))
+    vencedores = sum(1 for t in trades if t.pnl_brl > 0)
+
+    avisos: list[str] = []
+    if getattr(result, "wiped_out_at", None) is not None:
+        avisos.append("ZERADO")
+    puladas = len(getattr(result, "sessoes_puladas_por_capital", []) or [])
+    if puladas:
+        avisos.append(f"pulou {puladas}d")
+
+    return LinhaResultado(
+        variante=variante,
+        liquido_brl=liquido,
+        maxdd_brl=maxdd_brl(equity),
+        win_rate_pct=(100.0 * vencedores / len(trades)) if trades else 0.0,
+        trades=len(trades),
+        pregoes=pregoes,
+        retorno_pct=(None if capital_nocional or initial_capital <= 0
+                     else 100.0 * liquido / initial_capital),
+        maxdd_pct=(None if capital_nocional
+                   else 100.0 * result.metrics.get("max_drawdown", 0.0)),
+        capital_final=(None if capital_nocional else initial_capital + liquido),
+        extras=dict(extras or {}),
+        aviso=" ".join(avisos),
+    )
+
+
+def _celula(texto: str, largura: int, alinha: str) -> str:
+    return f"{texto:{alinha}{largura}}"
+
+
+def cabecalho(extras: tuple[str, ...] = (), largura_extra: int = 12) -> str:
+    """Cabecalho da tabela + a regua embaixo. `extras` na ordem em que as
+    linhas as declaram — quem imprime e' responsavel por passar as MESMAS
+    chaves aqui e em cada `LinhaResultado.extras`."""
+    partes = [_celula(nome, larg, alinha) for nome, larg, alinha in _BASE]
+    partes += [_celula(nome, largura_extra, ">") for nome in extras]
+    linha = "".join(partes)
+    return linha + "\n" + "-" * len(linha)
+
+
+def linha(item: LinhaResultado, extras: tuple[str, ...] = (), largura_extra: int = 12) -> str:
+    valores = [
+        item.variante[:LARGURA_VARIANTE],
+        _VAZIO if item.retorno_pct is None else f"{num_br(item.retorno_pct, 1)}%",
+        num_br(item.liquido_brl, 2),
+        _VAZIO if item.maxdd_pct is None else f"{num_br(item.maxdd_pct, 1)}%",
+        num_br(item.maxdd_brl, 2),
+        num_br(item.lucro_por_dd, 2),
+        f"{num_br(item.win_rate_pct, 1)}%",
+        str(item.trades),
+        num_br(item.liquido_por_pregao, 2),
+        num_br(item.trades_por_pregao, 1),
+        num_br(item.capital_final, 2),
+        str(item.pregoes),
+    ]
+    partes = [_celula(v, larg, alinha) for v, (_, larg, alinha) in zip(valores, _BASE)]
+    partes += [_celula(item.extras.get(nome, _VAZIO), largura_extra, ">") for nome in extras]
+    texto = "".join(partes)
+    return texto + (f"  {item.aviso}" if item.aviso else "")
+
+
+def tabela(linhas: list[LinhaResultado], extras: tuple[str, ...] = (),
+           largura_extra: int = 12) -> str:
+    """A tabela inteira em texto, cabecalho incluso — nao ordena nada: a
+    ORDEM e' decisao de quem chama (a linha 'atual'/baseline costuma vir
+    primeiro, fora da ordenacao, para a comparacao ser imediata)."""
+    return "\n".join([cabecalho(extras, largura_extra)]
+                     + [linha(item, extras, largura_extra) for item in linhas])

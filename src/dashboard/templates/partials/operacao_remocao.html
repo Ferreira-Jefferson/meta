@@ -1,0 +1,177 @@
+{#  Confirmação de "Remover robô" (pedido do dono, 2026-08-25).
+
+    Antes daqui, remover era um `hx-confirm` do navegador — uma frase só, sem
+    poder olhar nada: "Remover o robô X? O ativo volta a ficar livre." Ela
+    mentia por omissão, porque remover NÃO era só isso. O processo continuava
+    rodando (o servidor recusava, empurrando o problema de volta), e o que
+    estivesse pendurado no MT5 continuava lá, agora invisível — o cartão que
+    mostrava a ordem tinha acabado de sumir da tela.
+
+    Este diálogo é o mesmo `<dialog>` nativo de `operacao_colisao.html`
+    (`showModal()` em `static/js/operacao.js`, backdrop e centralização de
+    graça). A diferença é o conteúdo: em vez de perguntar "tem certeza?", ele
+    LISTA o que a corretora tem agora e o que cada item vira. Confirmação sem
+    informação é só um passo a mais entre o dono e o mesmo estrago.
+
+    `remocao` é um `live_teardown.Pendencias`. #}
+<dialog class="ops-modal" data-ops-modal aria-labelledby="ops-remocao-titulo">
+  <form method="dialog" class="ops-modal-close">
+    <button type="submit" class="ops-modal-x" aria-label="Fechar">&times;</button>
+  </form>
+
+  {% if remocao.impedimento %}
+  {#  Único caso em que a remoção não é oferecida: robô em modo REAL cuja
+      corretora não respondeu. Apagar sem conseguir perguntar é como se cria
+      ordem órfã — o botão some, e a saída (abrir o terminal) fica escrita. #}
+  <h3 id="ops-remocao-titulo" class="ops-modal-title">Não dá para remover agora</h3>
+  <p class="ops-modal-body">{{ remocao.impedimento }}</p>
+  <div class="ops-modal-actions">
+    <button type="button" class="ops-modal-cancel"
+            onclick="this.closest('dialog').close()">Fechar</button>
+  </div>
+
+  {% else %}
+  <h3 id="ops-remocao-titulo" class="ops-modal-title">Remover {{ remocao.label }}?</h3>
+
+  {% if remocao.ordens or remocao.posicao %}
+  <p class="ops-modal-body">
+    Este robô ainda tem coisa viva na corretora. Removê-lo desfaz tudo abaixo,
+    nesta ordem, e só então tira o cartão da tela.
+  </p>
+  {% elif remocao.e_sombra %}
+  {#  Sombra não teve a corretora consultada, e dizer que teve seria mentira:
+      um robô de sombra nunca chega a ter `executor`, então não existe ordem
+      dele para estar pendurada. #}
+  <p class="ops-modal-body">
+    Robô de <strong>sombra</strong> — ele nunca envia ordem para a corretora,
+    então não há nada pendurado lá. O que a remoção faz:
+  </p>
+  {% else %}
+  <p class="ops-modal-body">
+    Nada pendurado na corretora — perguntei ao terminal agora. O que a
+    remoção faz:
+  </p>
+  {% endif %}
+
+  <ul class="ops-modal-list">
+    {% if remocao.processo_pid %}
+    <li>
+      <strong>O processo {{ remocao.processo_pid }} é encerrado.</strong>
+      {% if remocao.ordens %}
+      Antes de tudo: enquanto ele estiver vivo, cancelar ordem não adianta —
+      ele reancora uma nova em segundos.
+      {% else %}
+      Ele continuaria rodando contra uma conta que não existe mais.
+      {% endif %}
+    </li>
+    {% endif %}
+
+    {% if remocao.ordens %}
+    <li>
+      <strong>{{ remocao.ordens | length }}
+      {{ "ordem pendurada é cancelada" if remocao.ordens | length == 1 else "ordens penduradas são canceladas" }}
+      na corretora:</strong>
+      <ul class="ops-modal-sublist">
+        {% for o in remocao.ordens %}
+        <li><code>#{{ o.ticket }}</code> — {{ o.side }} de {{ o.quantity }}
+          {{ o.symbol }} a R$ {{ o.price | num_br }}</li>
+        {% endfor %}
+      </ul>
+    </li>
+    {% endif %}
+
+    {% if remocao.posicao %}
+    <li>
+      <strong>A posição de {{ remocao.posicao.quantity }} {{ remocao.symbol }}
+      ({{ "comprada" if remocao.posicao.side == "long" else "vendida" }} a
+      R$ {{ remocao.posicao.price | num_br }}) é encerrada a mercado.</strong>
+      {% if remocao.pl_estimado is not none %}
+      Pelo último preço negociado (R$ {{ remocao.preco_atual | num_br }}), isso
+      realiza
+      {% if remocao.pl_estimado >= 0 %}
+      um <span class="pos">lucro de R$ {{ remocao.pl_estimado | num_br }}</span>.
+      {% else %}
+      um <span class="neg">prejuízo de R$ {{ (0 - remocao.pl_estimado) | num_br }}</span>.
+      {% endif %}
+      <span class="ops-modal-hint">
+        Estimativa, não promessa: o preço de execução depende da fila no
+        momento do envio, e a corretagem não está descontada.
+      </span>
+      {% else %}
+      Não consegui ler o preço de agora, então não dá para estimar o resultado
+      dessa saída.
+      {% endif %}
+    </li>
+    {% endif %}
+
+    <li>
+      <strong>O cartão sai da tela</strong> e o ativo {{ remocao.symbol }} volta
+      a ficar livre para outro robô.
+    </li>
+  </ul>
+
+  {#  A escolha que o dono pediu em 2026-08-26. Até aqui remover era sempre
+      apagar, e o `ON DELETE CASCADE` levava junto diário, trades e caixa —
+      não havia meio-termo entre "o cartão fica na tela para sempre" e "some
+      tudo". Os itens acima NÃO estão em jogo aqui: eles tratam de dinheiro
+      exposto na corretora e acontecem dos dois jeitos. O que se escolhe é só
+      o destino do REGISTRO.
+
+      "Guardar" vem marcado por ser o único dos dois que dá para desfazer: se
+      o dono se enganar, o histórico continua lá e o formulário de robô novo
+      oferece trazê-lo de volta; se ele escolher apagar, não há segunda
+      chance. #}
+  <form class="ops-remocao-form"
+        hx-post="/operacao/{{ remocao.slot_id }}/remover"
+        hx-target="#ops-body" hx-swap="outerHTML">
+    <input type="hidden" name="confirmar" value="1" />
+
+    {#  `caixa` é o saldo que o dono acabou de ver no cartão (`cash_for` do
+        modo: sombra lê `cash_sombra`, real lê `cash`). `caixa_real` é o
+        ledger de dinheiro REAL alocado — num robô de sombra pode ser um
+        segundo número, diferente, e é ele que a remoção zera antes de apagar
+        a conta. Só é nomeado quando de fato diverge, senão o mesmo valor
+        apareceria duas vezes na mesma frase. #}
+    {% set tem_caixa = remocao.caixa | abs >= 0.005 %}
+    {% set tem_caixa_real = remocao.caixa_real | abs >= 0.005
+                            and (remocao.caixa_real - remocao.caixa) | abs >= 0.005 %}
+    <fieldset class="ops-modal-choice">
+      <legend>E o que este robô já viveu?</legend>
+      <label>
+        <input type="radio" name="historico" value="guardar" checked />
+        <span>
+          <strong>Guardar</strong> — o diário, os trades{% if tem_caixa %}
+          e o caixa {% if tem_caixa_real %}de simulação {% endif %}de
+          R$ {{ remocao.caixa | num_br }}{% endif %}{% if tem_caixa_real %}
+          (e o caixa real de R$ {{ remocao.caixa_real | num_br }}){% endif %}
+          ficam guardados fora do painel. Ao criar de novo este mesmo robô em
+          {{ remocao.symbol }}{% if remocao.modo %} no modo
+          {{ "simulação" if remocao.modo == "shadow" else "real" }}{% endif %},
+          o formulário oferece trazer tudo de volta.
+        </span>
+      </label>
+      <label>
+        <input type="radio" name="historico" value="apagar" />
+        <span>
+          <strong>Apagar</strong> — diário, trades, avisos{% if tem_caixa %}
+          e o caixa {% if tem_caixa_real %}de simulação {% endif %}de
+          R$ {{ remocao.caixa | num_br }}{% endif %}{% if tem_caixa_real %}
+          (e o caixa real de R$ {{ remocao.caixa_real | num_br }}){% endif %}
+          somem junto com a conta. {% if tem_caixa or tem_caixa_real %}Caixa
+          aqui é o ledger do painel, não dinheiro saindo da corretora.
+          {% endif %}Não dá para desfazer.
+        </span>
+      </label>
+    </fieldset>
+
+    <div class="ops-modal-actions">
+      <button type="submit" class="btn-stop">Remover e desfazer tudo</button>
+      <button type="button" class="ops-modal-cancel"
+              onclick="this.closest('dialog').close()">Cancelar</button>
+    </div>
+  </form>
+  <p class="ops-modal-hint">
+    O processo, as ordens e a posição não voltam de nenhum dos dois jeitos.
+  </p>
+  {% endif %}
+</dialog>

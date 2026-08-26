@@ -899,3 +899,43 @@ def test_migrate_vocabulario_rebuild_aborta_antes_do_commit_se_fk_invalida(tmp_p
         assert "'broker'" in ddl
     finally:
         conn.close()
+
+
+def test_recent_events_corta_o_dia_no_relogio_de_brasilia(db_path):
+    """O "diário do dia" do painel conta o dia de BRASÍLIA, não o dia UTC.
+
+    `ts` é gravado em UTC e o dia UTC vira às 21:00 de Brasília — evento das
+    22:00 (supervisor de pé, robô iniciado à noite) caía no dia UTC seguinte e
+    sumia do console mesmo tendo acontecido "hoje" no relógio do dono. Com o
+    console mostrando hora de Brasília (`dashboard.app.hora_br`), o corte tem
+    de ser do mesmo relógio, senão a tela mostra uma hora e filtra por outra.
+    """
+    with live_journal(db_path) as conn:
+        account = _account(conn)
+        # (ts em UTC, o que isso é no relógio de Brasília)
+        gravados = [
+            ("2026-08-25 02:30:00", "23:30 do dia 24"),
+            ("2026-08-25 19:55:00", "16:55 do dia 25 (fim do pregão)"),
+            ("2026-08-26 01:00:00", "22:00 do dia 25"),
+            ("2026-08-26 04:00:00", "01:00 do dia 26"),
+        ]
+        for ts, msg in gravados:
+            conn.execute(
+                "INSERT INTO live_events (account_id, ts, level, source, message, payload)"
+                " VALUES (?, ?, 'info', 'daytrade', ?, '{}')",
+                (account.id, ts, msg),
+            )
+
+        do_dia = {e["ts"] for e in recent_events(conn, account.id, day="2026-08-25")}
+        assert do_dia == {"2026-08-25 19:55:00", "2026-08-26 01:00:00"}
+
+        # As duas pontas caem nos dias vizinhos, não somem do diário.
+        assert {e["ts"] for e in recent_events(conn, account.id, day="2026-08-24")} == {
+            "2026-08-25 02:30:00"
+        }
+        assert {e["ts"] for e in recent_events(conn, account.id, day="2026-08-26")} == {
+            "2026-08-26 04:00:00"
+        }
+
+        # Sem `day`, nada é filtrado.
+        assert len(recent_events(conn, account.id)) == len(gravados)

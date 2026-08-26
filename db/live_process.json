@@ -6,10 +6,38 @@
       "started_at": null,
       "config": {
         "mode": "mt5",
-        "capital": 30.98,
+        "capital": 38.83,
         "strategy": "gremah_tick",
         "slot": "dt-gremah_tick-pmam3-shadow",
         "execution_mode": "shadow",
+        "notify_min_level": "warn",
+        "mt5_shares_per_lot": 1.0,
+        "mt5_fractional_map": null
+      }
+    },
+    "dt-gremah-pmam3-shadow": {
+      "pid": null,
+      "started_at": null,
+      "config": {
+        "mode": "mt5",
+        "capital": 36.91,
+        "strategy": "gremah",
+        "slot": "dt-gremah-pmam3-shadow",
+        "execution_mode": "shadow",
+        "notify_min_level": "warn",
+        "mt5_shares_per_lot": 1.0,
+        "mt5_fractional_map": null
+      }
+    },
+    "dt-gremah_tick-pmam3-live": {
+      "pid": null,
+      "started_at": null,
+      "config": {
+        "mode": "mt5",
+        "capital": 30.0,
+        "strategy": "gremah_tick",
+        "slot": "dt-gremah_tick-pmam3-live",
+        "execution_mode": "live",
         "notify_min_level": "warn",
         "mt5_shares_per_lot": 1.0,
         "mt5_fractional_map": null

@@ -192,6 +192,13 @@ CREATE TABLE IF NOT EXISTS live_accounts (
     -- TODAS as contas de day trade de uma vez (ver
     -- `live_store.set_daytrade_account_order`).
     sort_order         INTEGER NOT NULL DEFAULT 0,
+    -- Quando o dono removeu o robô GUARDANDO o histórico (2026-08-26). A
+    -- conta continua inteira -- diário, ordens, trades, caixa -- e só some do
+    -- painel: `accounts_with_symbol` filtra por `archived_at IS NULL`. Criar
+    -- de novo o mesmo trio (robô, ativo, modo) oferece restaurar isto; criar
+    -- "do zero" apaga. NULL = conta viva, e é o estado de toda conta que
+    -- existia antes desta coluna.
+    archived_at        TEXT,
     created_at         TEXT    NOT NULL DEFAULT (datetime('now')),
     updated_at         TEXT    NOT NULL DEFAULT (datetime('now'))
 );

@@ -51,6 +51,28 @@ class SymbolProfile:
     # horario proprio (futuro, por exemplo, cujo fechamento medido NAO desloca
     # com o horario de verao dos EUA) e para relogio sintetico de teste.
     session_end_policy: Literal["fixed", "b3_equities"] = "b3_equities"
+    # Tamanho do TICK DE PRECO do instrumento, quando o simbolo de onde a
+    # economia e' lida reporta um valor que nao serve para posicionar ordem.
+    # `None` (default) = usa o que o terminal devolveu, o caso de toda acao.
+    #
+    # Existe por uma armadilha MEDIDA (2026-08-25) nas series CONTINUAS de
+    # futuro: `WIN@` devolve `trade_tick_size=1.0` e `WDO@`, `0.001` -- mas o
+    # contrato cheio que elas emendam (`WINV26`/`WDOV26`) negocia em passos de
+    # 5,0 e 0,5. O `point_value_brl` sai correto nos dois casos (a razao
+    # `trade_tick_value/trade_tick_size` da' 0,20 e 10,00 igual), entao a
+    # continua e' segura para P&L; o que ela estraga e' o PRECO: uma ordem
+    # limite colocada em 141.237 nao existe no book (so' multiplos de 5), e o
+    # backtest preencheria uma ordem que a corretora recusaria.
+    #
+    # `config_for` preserva `point_value_brl` ao aplicar o override (reescala
+    # `trade_tick_value` junto), entao trocar isto nunca mexe no P&L -- so' na
+    # grade de precos e na slippage em ticks.
+    price_tick_size: float | None = None
+    # Teto de contratos SIMULTANEAMENTE abertos (ver `IntradayBacktestConfig.
+    # max_open_contracts`). `None` = sem teto (toda acao). Instrumento de
+    # competicao com teto de posicao declara o teto OFICIAL aqui, e quem roda
+    # um teste com folga passa `max_open_contracts=` para `config_for`.
+    max_open_contracts: int | None = None
 
 
 #: Corte IS/OOS de TODA a familia de acoes calibrada em 2026-08-22. Declarado
@@ -114,6 +136,117 @@ def _equity_profile(regime_start: str, oos_note: str) -> SymbolProfile:
     )
 
 
+#: Custo assumido por CONTRATO de mini-futuro em UM round-trip (ida e volta),
+#: em reais -- R$0,25 por perna. Futuro cobra por CONTRATO, nao percentual do
+#: notional: por isso `exchange_fee_pct_per_leg=0.0` nos perfis de futuro e
+#: todo o custo vive aqui (o inverso exato do perfil de acao, onde a
+#: corretagem e' zero e todo o custo e' percentual).
+#:
+#: Mesmo espirito conservador de `B3_EQUITY_EXCHANGE_FEE_PCT_PER_LEG` (2x a
+#: taxa real): a tarifa de day trade em mini-contrato na B3 fica abaixo disto
+#: e varias corretoras zeram a corretagem em mini. Assumir MAIS custo do que
+#: se paga nunca inventa lucro; assumir menos, sim.
+#:
+#: A assimetria que este numero cria entre os dois instrumentos e' o motivo
+#: principal de WIN e WDO nao poderem compartilhar calibracao: R$0,50 e' meio
+#: tick no WIN (tick = 5 pts = R$1,00) e um DECIMO de tick no WDO (tick = 0,5
+#: pt = R$5,00). O WDO tolera cinco vezes mais giro por unidade de edge.
+FUTURES_FEE_ROUND_TRIP_BRL = 0.50
+
+_FEE_NOTE_FUTURO = (
+    "R$0,25 por perna, por CONTRATO (`FUTURES_FEE_ROUND_TRIP_BRL`), sem taxa "
+    "percentual de notional. NAO se sabe se o simulador da Copa BTG cobra "
+    "custo nenhum -- por isso todo relatorio da familia `copa` mostra o par "
+    "COM e SEM custo, em vez de escolher uma das duas hipoteses."
+)
+
+
+def _futures_profile(
+    session_end_time: time,
+    price_tick_size: float,
+    max_open_contracts: int,
+    medicao: str,
+) -> SymbolProfile:
+    """Perfil de um MINI-FUTURO da B3 (serie continua) operado em contratos.
+
+    Nao usa `_equity_profile` de proposito -- e' outro tarifario (por
+    contrato, nao percentual), outro horario (o pregao de futuro NAO desloca
+    com o horario de verao dos EUA, medido: a ultima barra M1 do WIN cai as
+    18:24 de Brasilia em 179 dos 182 pregoes salvos) e outro limitador de
+    tamanho (teto de contratos abertos, nao caixa).
+
+    `session_end_time` em UTC, como todo perfil deste modulo -- as barras
+    salvas por `market_data_intraday` tem index UTC e a maquina compara
+    `ts.time()` direto contra este campo (`session_end_policy="fixed"`).
+
+    `medicao`: o que foi medido no parquet deste simbolo, para o numero de
+    corte nao ficar orfao de evidencia."""
+    return SymbolProfile(
+        frozen_cutoff=OOS_CUTOFF,
+        frozen_note=(
+            f"corte IS/OOS reaproveitado da familia de acoes (congelado em "
+            f"2026-08-22, ANTES de qualquer trabalho em futuro existir -- "
+            f"logo nao pode ter sido escolhido para favorecer a familia "
+            f"`copa`). {medicao}"
+        ),
+        fee_round_trip_brl=FUTURES_FEE_ROUND_TRIP_BRL,
+        fee_note=_FEE_NOTE_FUTURO,
+        exchange_fee_pct_per_leg=0.0,
+        session_end_time=session_end_time,
+        session_end_policy="fixed",
+        default_quantity=1,  # 1 CONTRATO -- futuro nao tem lote de 100
+        price_tick_size=price_tick_size,
+        max_open_contracts=max_open_contracts,
+    )
+
+
+#: Mini-futuros da B3, series CONTINUAS (`@` = o MT5 emenda os vencimentos).
+#: Fora de `PROFILES` de proposito: aquela tabela e' a familia `gremah` (acao
+#: em lote padrao, com calibracao propria por papel) e dois testes
+#: (`tests/test_intraday_profiles.py`) leem cada entrada dela assumindo isso.
+#: Um futuro nao tem calibracao `gremah`, nao opera lote de 100 e nao e'
+#: limitado por caixa -- misturar os dois faria a tabela deixar de significar
+#: uma coisa so'. `profile_for()` resolve os dois catalogos.
+FUTURES_PROFILES: dict[str, SymbolProfile] = {
+    "WIN@": _futures_profile(
+        session_end_time=time(21, 25),  # 18:25 de Brasilia (fecho medido 18:24)
+        price_tick_size=5.0,            # WINV26; a continua reporta 1,0 (ver `price_tick_size`)
+        max_open_contracts=15,          # teto oficial da Copa BTG 2025
+        medicao=(
+            "182 pregoes M1 (2025-12-01..2026-08-25): range diario mediano "
+            "2.968 pts, soma|C-O| por pregao 29.722 pts, 563 barras/pregao, "
+            "17,4M contratos/dia de giro."
+        ),
+    ),
+    "WDO@": _futures_profile(
+        session_end_time=time(21, 30),  # 18:30 de Brasilia (fecho medido 18:29)
+        price_tick_size=0.5,            # WDOV26; a continua reporta 0,001
+        max_open_contracts=5,           # teto oficial da Copa BTG 2025
+        medicao=(
+            "177 pregoes M1 (2025-12-08..2026-08-25): range diario mediano "
+            "49,3 pts, soma|C-O| por pregao 570 pts, 570 barras/pregao, "
+            "2,4M contratos/dia de giro."
+        ),
+    ),
+}
+
+
+def profile_for(symbol: str) -> SymbolProfile:
+    """Perfil economico de um simbolo, venha ele da tabela de ACAO
+    (`PROFILES`) ou da de FUTURO (`FUTURES_PROFILES`). `KeyError` (nunca um
+    default silencioso) para simbolo sem perfil -- operar com custo/horario
+    de outro instrumento e' pior que nao operar."""
+    if symbol in PROFILES:
+        return PROFILES[symbol]
+    if symbol in FUTURES_PROFILES:
+        return FUTURES_PROFILES[symbol]
+    raise KeyError(
+        f"sem perfil economico declarado para {symbol!r} -- ver "
+        f"`backtest.intraday.profiles.PROFILES` (acoes) e `FUTURES_PROFILES` "
+        f"(mini-futuros)."
+    )
+
+
 #: Ordem = lucro OOS decrescente dentro de cada grupo, PMAM3 primeiro por ser
 #: o papel original da familia. Toda entrada aqui tem calibracao propria em
 #: `strategy.daytrade.lab.gremah._CALIBRATION_BY_SYMBOL` — as duas tabelas
@@ -159,7 +292,8 @@ def config_for(
     preco_atual: float | None = None,
     initial_capital: float | None = None,
     limit_fill_capped_by_volume: bool = True,
-    enforce_capital_minimo: bool = True,
+    enforce_capital_minimo: bool | None = None,
+    max_open_contracts: int | None = None,
 ) -> IntradayBacktestConfig:
     """Monta o `IntradayBacktestConfig` de um perfil + a economia do simbolo
     lida do terminal (`market_data_intraday.mt5_source.symbol_economics`).
@@ -182,7 +316,24 @@ def config_for(
     So' desliga quem passar `False` explicitamente (ex.: comparacao ad-hoc
     contra o comportamento antigo).
 
-    `enforce_capital_minimo`: `True` por padrao desde 2026-08-23 -- MESMA
+    `max_open_contracts`: teto de contratos simultaneos para ESTA run.
+    `None` (default) usa o teto OFICIAL declarado no perfil
+    (`SymbolProfile.max_open_contracts`, `None` em toda acao = sem teto).
+    Passar um valor explicito e' como se roda com FOLGA deliberada (o plano
+    da Copa calibra com 12 no WIN e 4 no WDO, e confirma no teto oficial 15/5
+    depois) ou uma escada de sensibilidade -- o teto nunca e' constante no
+    codigo da estrategia, e' entrada, porque os numeros de 2025 podem mudar
+    antes da competicao de 2026.
+
+    `enforce_capital_minimo`: `None` (default) resolve por INSTRUMENTO --
+    `True` para acao (o caixa e' o limitador de verdade: `capital_minimo_brl`
+    e' o custo de 2 lotes de 100 acoes) e `False` para um instrumento com
+    teto de CONTRATOS declarado, onde `capital_minimo_brl` nao significa nada
+    (o simulador da Copa declara margem infinita e nao tem saldo ficticio; o
+    unico limitador la' e' quantos contratos ficam abertos ao mesmo tempo).
+    `True`/`False` explicito sempre vence.
+
+    Historico do `True` de acao, mantido -- desde 2026-08-23 e' a MESMA
     regra que `live.intraday_runtime.IntradayLiveRuntime._check_capital` ja
     aplica ao vivo (recusar o pregao se o caixa nao cobrir `capital_minimo_
     brl`), agora tambem no backtest (`run_intraday_backtest`). Achado ao
@@ -200,6 +351,18 @@ def config_for(
         initial_capital = capital_minimo_brl(preco_atual)
     elif preco_atual is not None:
         raise ValueError("config_for: passe `initial_capital` OU `preco_atual`, nao os dois.")
+    teto = profile.max_open_contracts if max_open_contracts is None else max_open_contracts
+    if enforce_capital_minimo is None:
+        enforce_capital_minimo = profile.max_open_contracts is None
+    if profile.price_tick_size is not None:
+        # Preserva `point_value_brl` (= tick_value/tick_size) ao trocar so' a
+        # GRADE de preco: reescala `trade_tick_value` junto. Sem isto, um
+        # override de tick_size mudaria o valor do ponto e o P&L inteiro --
+        # exatamente o oposto do problema que o override existe para
+        # resolver (ver `SymbolProfile.price_tick_size`).
+        point_value = trade_tick_value / trade_tick_size
+        trade_tick_size = profile.price_tick_size
+        trade_tick_value = point_value * profile.price_tick_size
     costs = IntradayCostModel.from_symbol_info(
         trade_tick_value=trade_tick_value,
         trade_tick_size=trade_tick_size,
@@ -215,4 +378,5 @@ def config_for(
         target_fills_as_maker=target_fills_as_maker,
         limit_fill_capped_by_volume=limit_fill_capped_by_volume,
         enforce_capital_minimo=enforce_capital_minimo,
+        max_open_contracts=teto,
     )

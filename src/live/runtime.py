@@ -707,8 +707,8 @@ class LiveRuntime:
                     and not self._null_notifier_warned):
                 self._null_notifier_warned = True
                 self._log(conn, account.id, "warn", "runtime",
-                                "conta de dinheiro real sem canal de notificacao configurado "
-                                "— alertas so ficam no diario")
+                                "dinheiro real sem canal de notificacao: "
+                                "alerta so no diario")
 
             # E3: idempotencia ANTES do dado -- ver docstring.
             ja_decidida = store.last_equity(conn, account.id, session.isoformat())
@@ -758,9 +758,7 @@ class LiveRuntime:
                                        account.invested(marks), equity,
                                        account.external_cash):
                 self._log(conn, account.id, "warn", "runtime",
-                          f"outro processo decidiu {session} durante esta chamada — "
-                          "decisao abandonada para nao duplicar ordem. Dois "
-                          "supervisores no mesmo banco?",
+                          f"outro processo decidiu {session}: decisao abandonada",
                           {"session": session.isoformat()})
                 return StepReport("decide_skip", session,
                                   detail={"motivo": "ja decidido (corrida)"})
@@ -847,8 +845,7 @@ class LiveRuntime:
                     # e `warn` (ver docstring de `scripts/run_live.py`).
                     self._log(conn, account.id, "warn", "saque",
                                     f"recomendacao de saque: R$ {intent.amount:.2f} "
-                                    f"({intent.reason}) — saque direto na corretora, "
-                                    "se e quando quiser: este sistema so notifica",
+                                    f"({intent.reason})",
                                     {"intent_id": intent.id, "valor": intent.amount})
 
             for pos in account.positions.values():
@@ -945,8 +942,7 @@ class LiveRuntime:
                     self._record_intent(conn, account, intent)
                     self._log(conn, account.id, "warn", "saque",
                                     f"recomendacao de saque: R$ {intent.amount:.2f} "
-                                    f"({intent.reason}) — saque direto na corretora, "
-                                    "se e quando quiser: este sistema so notifica",
+                                    f"({intent.reason})",
                                     {"intent_id": intent.id, "valor": intent.amount})
                     done["recomendacoes_saque"] += 1
 
@@ -1007,9 +1003,8 @@ class LiveRuntime:
         if ja_em_voo is not None:
             store.set_intent_status(conn, intent.id, IntentStatus.CANCELLED)
             self._log(conn, account.id, "warn", "runtime",
-                            f"saida de {pos.ticker} descartada: ja existe ordem "
-                            f"aberta #{ja_em_voo.id} para o mesmo papel — venda "
-                            "nao duplicada")
+                            f"saida de {pos.ticker} descartada: ja ha ordem "
+                            f"aberta #{ja_em_voo.id}")
             return "rejected"
         order = self._place(conn, account, intent, pos.ticker, OrderSide.SELL,
                             pos.quantity, note=f"saida: {intent.reason}")
@@ -1222,9 +1217,8 @@ class LiveRuntime:
                 continue  # outro processo ja tratou esta recomendacao
             self.withdrawal.on_executed(intent, 0.0)
             self._log(conn, account.id, "warn", "saque",
-                            f"recomendacao de saque de R$ {intent.amount:.2f} (decidida em "
-                            f"{intent.decided_on}) expirou sem confirmacao -- valor volta "
-                            "para a fila da politica",
+                            f"saque de R$ {intent.amount:.2f} ({intent.decided_on}) "
+                            "expirou sem confirmacao",
                             {"intent_id": intent.id, "valor": intent.amount})
             expiradas += 1
 
@@ -1406,7 +1400,7 @@ class LiveRuntime:
                     self._log(conn, account.id, "error", "feed",
                                     f"stop de {intent.ticker} suprimido: cotacao "
                                     f"atrasada {int(velhas[intent.ticker])}s "
-                                    f"(feed {self.feed.name}) -- nao executa sobre dado velho")
+                                    f"(feed {self.feed.name})")
                     continue
                 if intent.ticker in exit_em_andamento:
                     # ja existe uma saida em voo para este ticker (gravada

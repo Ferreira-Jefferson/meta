@@ -22,7 +22,7 @@
   </td>
   <td class="right num">{{ (r.sharpe or 0) | num_br }}</td>
   <td class="right num">{{ r.trades_count or 0 }}</td>
-  <td class="right num dim">{{ r.created_at }}</td>
+  <td class="right num dim">{{ r.created_at | hora_br }}</td>
 </tr>
 {% else %}
 {% if not append_mode %}

@@ -56,7 +56,44 @@ class BrokerExecutionError(RuntimeError):
     """A corretora nao confirmou o que era preciso confirmar.
 
     Sempre significa "nao sei", nunca "nao aconteceu" -- quem captura deve
-    tentar de novo na proxima barra, jamais assumir um resultado."""
+    tentar de novo na proxima barra, jamais assumir um resultado.
+
+    `orphan_refs` carrega os tickets que o ROLLBACK tambem nao conseguiu
+    confirmar mortos (ver `place_limit`). Vazio no caso normal; quando vem
+    cheio, quem captura NAO pode esquecer esses tickets -- eles podem
+    seguir vivos no book."""
+
+    def __init__(self, *args, orphan_refs: Optional[list[str]] = None):
+        super().__init__(*args)
+        self.orphan_refs: list[str] = list(orphan_refs or [])
+
+
+def orphan_refs(canceladas: list[Order]) -> list[str]:
+    """Dos cancelamentos tentados, quais tickets NAO ficaram resolvidos.
+
+    `MT5Broker.cancel` nao levanta quando falha: sem o pacote MT5, sem
+    conexao, com excecao inesperada ou com um retcode que nao e' `DONE`,
+    ele devolve a `Order` com o motivo na nota e o status INTOCADO. Ordem
+    que nao chegou a estado terminal (`FILLED`/`CANCELLED`/`REJECTED`)
+    pode, portanto, seguir viva no book -- e' exatamente o que precisa
+    sobreviver em `pending_entry_refs` em vez de ser esquecido.
+
+    Sem `broker_ref` nao ha o que reconciliar depois (a ordem nunca chegou
+    a existir na corretora), entao fica de fora."""
+    return [o.broker_ref for o in canceladas
+            if o.broker_ref and not o.is_terminal]
+
+
+def descarta_confirmados(refs: list[str], canceladas: list[Order]) -> list[str]:
+    """`refs` menos os tickets que a corretora CONFIRMOU resolvidos.
+
+    Contraparte de `orphan_refs` para quem ja mantinha uma lista de
+    vigilancia (`pending_entry_refs`): some da lista so' o ticket que
+    chegou a estado terminal. O que o cancelamento nao confirmou fica --
+    esquece-lo e' que deixaria uma ordem viva sem dono. Ticket que nao
+    estava na tentativa de cancelamento tambem fica, intocado."""
+    mortos = {o.broker_ref for o in canceladas if o.broker_ref and o.is_terminal}
+    return [r for r in refs if r not in mortos]
 
 
 class MT5IntradayExecution:
@@ -108,6 +145,11 @@ class MT5IntradayExecution:
         # diario nao poderia ser cruzada com o extrato da corretora.
         self.last_entry_ref: Optional[str] = None
         self.last_exit_order: Optional[Order] = None
+        # Tickets de SAIDA que `cancel_exit_limit` nao conseguiu confirmar
+        # mortos. O runtime drena isto a cada barra (`_drena_orfas_de_saida`):
+        # aqui e' so' o deposito, porque quem tem `conn`/`account` para
+        # journalizar e' ele.
+        self.exit_orphan_refs: list[str] = []
 
     # ---------- ordem-limite pendente (ENTRADA) -----------------------------
 
@@ -134,15 +176,25 @@ class MT5IntradayExecution:
             )
             enviada = self.broker.place_pending(order)
             if enviada.status == OrderStatus.REJECTED:
-                for feita in enviadas:
-                    self.broker.cancel(feita)
+                # O retorno de `cancel` E' a resposta: ele nao levanta quando
+                # falha (ver `orphan_refs`). Descarta-lo era o que transformava
+                # um rollback frustrado numa ordem viva que ninguem vigiava.
+                orfas = orphan_refs([self.broker.cancel(f) for f in enviadas])
                 self.pending_orders = []
+                # Curto de proposito: este texto cai INTEIRO no diario
+                # ("RECUSADA #01: {erro}", ver `IntradayLiveRuntime.
+                # _recusa_de_envio`) e o dono pediu (2026-08-25) linha direta
+                # la'. Sobra o que muda de uma recusa pra outra -- qual fatia e
+                # o que a corretora respondeu. O rollback BEM-SUCEDIDO nao
+                # entra: e' o caso normal, e caso normal nao e' noticia. Um
+                # rollback FRUSTRADO entra, porque muda o que o dono precisa
+                # fazer: ha um ticket possivelmente vivo no terminal.
+                sobrou = (f" -- ticket {', '.join(orfas)} pode seguir vivo"
+                          if orfas else "")
                 raise BrokerExecutionError(
-                    f"corretora recusou a fatia {i + 1}/{len(quantities)} ({qty} de "
-                    f"{sum(quantities)} acoes) da ordem-limite {side} {self.symbol} @ "
-                    f"{limit_price:.4f}: {enviada.note}. As {len(enviadas)} fatia(s) ja "
-                    "enviada(s) foram canceladas -- nunca fica uma entrada posicionada pela "
-                    "metade."
+                    f"fatia {i + 1}/{len(quantities)} de {side} {self.symbol} "
+                    f"@ {limit_price:.4f}: {enviada.note}{sobrou}",
+                    orphan_refs=orfas,
                 )
             enviadas.append(enviada)
         self.pending_orders = enviadas
@@ -256,12 +308,21 @@ class MT5IntradayExecution:
 
     def cancel_exit_limit(self, ts: pd.Timestamp, reason: str) -> Optional[Order]:
         """Remove do terminal a ordem-limite de saida corrente, se houver.
-        Mesma garantia de no-op seguro de `cancel_limit`."""
+        Mesma garantia de no-op seguro de `cancel_limit`.
+
+        Quem chama (`machine.py`, 4 sites) fecha a posicao A MERCADO logo
+        depois. Se o cancelamento nao for confirmado, as duas ordens ficam
+        vivas pela mesma posicao -- e numa conta NETTING a limite orfa
+        preenchendo DEPOIS do flatten inverte a posicao. Por isso o que nao
+        confirmou vai para `exit_orphan_refs` em vez de ser esquecido; o
+        runtime avisa e tenta de novo."""
         order = self.pending_exit_order
         if order is None:
             return None
         self.pending_exit_order = None
-        return self.broker.cancel(order)
+        devolvida = self.broker.cancel(order)
+        self.exit_orphan_refs.extend(orphan_refs([devolvida]))
+        return devolvida
 
     def exit_fill(self, position_side: str, bar) -> Optional[dict]:
         """A fatia de saida vigiada (`place_exit_limit`) encolheu a posicao

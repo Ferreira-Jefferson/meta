@@ -1,0 +1,36 @@
+{# Card centralizado de colisão de símbolo (pedido do dono, 2026-08-25): o
+   clique em "Iniciar" que esbarra em `live_control.SlotSymbolCollisionError`
+   (dois robôs no mesmo ativo, os dois em modo real, conta NETTING) parava de
+   mostrar só um banner de texto lá no topo do painel — "não fica no campo de
+   visão e não dá pra associar" ao clique que acabou de dar. Este `<dialog>`
+   nativo aparece por cima de tudo (overlay + centralização de graça, sem
+   lib nenhuma) e já oferece a ação óbvia: parar o outro robô, direto dali.
+
+   `showModal()` é quem abre de fato (ver `static/js/operacao.js`, dispara
+   depois de todo swap do htmx) -- sem JS, o `<dialog>` ainda aparece no
+   fluxo normal da página (degrada, não quebra), só não centralizado. #}
+<dialog class="ops-modal" data-ops-modal aria-labelledby="ops-colisao-titulo">
+  <form method="dialog" class="ops-modal-close">
+    <button type="submit" class="ops-modal-x" aria-label="Fechar">&times;</button>
+  </form>
+  <h3 id="ops-colisao-titulo" class="ops-modal-title">Não dá para iniciar agora</h3>
+  <p class="ops-modal-body">
+    <strong>{{ colisao.label }}</strong> já está operando
+    <strong>{{ colisao.symbols | join(", ") }}</strong> de verdade (modo real)
+    nesta conta. Como a conta é NETTING, os dois em real ao mesmo tempo
+    fundiriam as posições numa só, e os dois caixas passariam a mentir.
+  </p>
+  {% if colisao.pode_parar %}
+  <form class="ops-modal-actions"
+        hx-post="/operacao/{{ colisao.slot_id }}/parar" hx-target="#ops-body" hx-swap="outerHTML">
+    <button type="submit" class="btn-stop">■ Parar {{ colisao.label }}</button>
+    <button type="button" class="ops-modal-cancel" onclick="this.closest('dialog').close()">Cancelar</button>
+  </form>
+  {% else %}
+  <div class="ops-modal-actions">
+    <button type="button" disabled title="{{ colisao.motivo_bloqueio }}">■ Parar {{ colisao.label }}</button>
+    <button type="button" class="ops-modal-cancel" onclick="this.closest('dialog').close()">Fechar</button>
+  </div>
+  <p class="ops-modal-hint">{{ colisao.motivo_bloqueio | capitalize }}</p>
+  {% endif %}
+</dialog>

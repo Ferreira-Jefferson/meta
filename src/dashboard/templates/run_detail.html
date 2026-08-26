@@ -10,7 +10,7 @@
     <h1>{{ run.strategy_name }} <span class="ver">v{{ run.strategy_version }}</span></h1>
     <p class="dek">
       Período <em>{{ run.period_start }}</em> → <em>{{ run.period_end }}</em> ·
-      Concluída em {{ run.created_at }}
+      Concluída em {{ run.created_at | hora_br }}
     </p>
     <div class="run-params">
       <span class="run-params-label">Ativos</span>

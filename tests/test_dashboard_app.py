@@ -1268,3 +1268,62 @@ def test_tabela_de_ativos_vem_ordenada_pelo_caixa_minimo(client):
     html = client.get("/strategies/gremah").text
     posicoes = [html.index(a.symbol) for a in com_caixa]
     assert posicoes == sorted(posicoes)
+
+
+def test_hora_br_converte_o_carimbo_utc_do_diario():
+    """O diário grava UTC; a tela mostra Brasília (pedido do dono, 2026-08-25).
+
+    Cobre as três formas que chegam ao template: texto do SQLite (sem fuso —
+    lido como UTC, que é o que todo `ts` do diário é), ISO com fuso explícito
+    (`started_at` de `live_process.json`) e `datetime` já com fuso.
+    """
+    from datetime import datetime, timezone
+
+    hora_br = dashboard_app.hora_br
+
+    # o evento do print do dono: 19:55 UTC é 16:55 em Brasília
+    assert hora_br("2026-08-25 19:55:14") == "2026-08-25 16:55:14"
+    # vira o dia para trás quando o UTC já está na madrugada seguinte
+    assert hora_br("2026-08-26 01:00:00") == "2026-08-25 22:00:00"
+    # ISO com fuso, e formato curto do "Ativo desde"
+    assert hora_br("2026-08-25T12:56:39+00:00", "%Y-%m-%d %H:%M") == "2026-08-25 09:56"
+    # datetime já ciente de fuso não é reinterpretado como UTC
+    assert hora_br(datetime(2026, 8, 25, 19, 55, tzinfo=timezone.utc)) == "2026-08-25 16:55:00"
+
+
+def test_hora_br_nao_engole_valor_que_nao_e_data():
+    """Vazio vira travessão; o que não parseia volta cru.
+
+    Esconder uma linha do diário porque o carimbo veio estranho seria pior que
+    mostrar o valor como está — o console existe justamente para o dono ver o
+    que aconteceu.
+    """
+    hora_br = dashboard_app.hora_br
+
+    assert hora_br(None) == "—"
+    assert hora_br("") == "—"
+    assert hora_br("t0") == "t0"
+
+
+def test_console_de_eventos_mostra_hora_de_brasilia(isolated_journal, client):
+    """Ponta a ponta: o evento gravado em UTC sai no HTML em hora de Brasília.
+
+    O teste grava o `ts` na mão (o default do schema é `datetime('now')`, que
+    seria a hora da máquina que roda o teste) e pede o "Diário Completo", que
+    ignora o corte por dia — assim a asserção não depende de o teste rodar
+    hoje.
+    """
+    _create_mt5_account(isolated_journal, capital=100.0, slot=DAYTRADE)
+    with live_store.live_journal() as conn:
+        conta = live_store.load_account(conn, DAYTRADE)
+        conn.execute(
+            "INSERT INTO live_events (account_id, ts, level, source, message, payload)"
+            " VALUES (?, '2026-08-25 19:55:14', 'info', 'daytrade',"
+            " 'ordem #01 cancelada (fim do pregao)', '{}')",
+            (conta.id,),
+        )
+
+    html = client.get(f"/operacao/{DAYTRADE}/fragment?eventos_full=1").text
+
+    assert "[2026-08-25 16:55:14] INFO daytrade:" in html
+    assert "2026-08-25 19:55:14" not in html

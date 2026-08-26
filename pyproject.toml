@@ -14,4 +14,21 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
-addopts = "-ra --strict-markers"
+# `-n auto` (pytest-xdist): a suite roda em N processos, um por nucleo logico.
+# Regra do dono (2026-08-25): rodada de teste NUNCA pode ser o gargalo -- o
+# prazo da Copa BTG e' curto e o ciclo "mede -> decide -> mede de novo" e'
+# o trabalho inteiro. Serial a suite leva ~92s nesta maquina; em paralelo,
+# uma fracao disso.
+#
+# Duas condicoes que todo teste novo tem de respeitar para isto continuar
+# valendo (elas ja valiam de fato, agora sao obrigatorias):
+#   - nenhum caminho de arquivo FIXO compartilhado entre testes: `tmp_path`
+#     sempre. Dois workers rodando ao mesmo tempo pegariam o mesmo arquivo.
+#   - nenhum teste depende da ORDEM de outro: xdist distribui por worker,
+#     nao na ordem de coleta.
+# `--dist load` distribui TESTE a teste (nao arquivo a arquivo). Medido nesta
+# maquina, suite inteira: 92s serial -> 60s com `--dist loadfile` -> 35s com
+# `--dist load`. A diferenca e' que dois arquivos (`test_dashboard_app.py` e
+# `test_dashboard_daytrade_robot.py`) concentram dezenas de testes de ~1,7s
+# cada; presos num worker so', eles viram o caminho critico da suite inteira.
+addopts = "-ra --strict-markers -n auto --dist load"

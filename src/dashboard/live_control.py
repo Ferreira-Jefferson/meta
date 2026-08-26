@@ -236,6 +236,24 @@ def _write_state(slot: str, state: Optional[dict]) -> None:
     tmp_path.replace(_STATE_PATH)
 
 
+def esquecer(slot: str) -> None:
+    """Apaga a linha DESTE slot em `db/live_process.json` — pid e config de
+    retomada.
+
+    Diferente de `stop()`, que zera só o `pid` de propósito (o formulário do
+    cartão continua pré-preenchido depois de parar). Aqui é para quando o
+    slot deixa de existir: a config guardada passa a descrever um robô que
+    não tem mais para onde retomar, e ressuscitaria com capital velho se o
+    dono recriasse o mesmo trio do zero.
+
+    Os dois chamadores são os dois fins de linha de um robô
+    (`dashboard.live_teardown.remover` apagando o histórico, e a criação "do
+    zero" em cima de um arquivo descartado); nenhum deles precisa do lock
+    porque o processo já morreu antes.
+    """
+    _write_state(slot, None)
+
+
 def _tail_log(slot: str, max_chars: int = 2_000) -> str:
     """Últimos `max_chars` do log DESTE slot — usado para explicar POR QUE o
     processo morreu logo após subir (ver `start()`)."""
@@ -608,6 +626,24 @@ def create_account(config: ProcessConfig):
     return rt.ensure_account()
 
 
+class SlotSymbolCollisionError(RuntimeError):
+    """Colisão de símbolo entre dois slots numa conta NETTING, ambos em modo
+    `live` — ver `_assert_slots_disjuntos`. Carrega o suficiente pro painel
+    oferecer "parar o outro robô" direto na tela do erro (pedido do dono,
+    2026-08-25: o banner de texto lá em cima do painel "não fica no campo de
+    visão e não dá pra associar" ao clique em Iniciar), em vez de só uma
+    mensagem — `str(self)` continua a mesma frase de sempre, pros chamadores
+    que só querem o texto (CLI, testes)."""
+
+    def __init__(self, message, *, slot_id, slot_label, symbols, pode_parar, motivo_bloqueio=None):
+        super().__init__(message)
+        self.slot_id = slot_id
+        self.slot_label = slot_label
+        self.symbols = symbols
+        self.pode_parar = pode_parar
+        self.motivo_bloqueio = motivo_bloqueio
+
+
 def _assert_slots_disjuntos(slot, robot_key: str, execution_mode: str = "live") -> None:
     """A conta da Rico é NETTING (`margin_mode=0`, verificado no terminal
     real em 2026-08-21): duas ordens REAIS no MESMO símbolo se FUNDEM numa
@@ -661,11 +697,30 @@ def _assert_slots_disjuntos(slot, robot_key: str, execution_mode: str = "live") 
         outro_mode = (estado_outro or {}).get("config", {}).get("execution_mode", "live")
         if estado_outro is None or outro_mode != "live":
             continue
-        raise RuntimeError(
+        # "Pode parar" direto do card de erro (pedido do dono, 2026-08-25):
+        # só quando o OUTRO robô não tem nada em risco agora -- nem posição
+        # aberta, nem ordem de entrada mandada e ainda não resolvida
+        # (`pending_entry_refs`, ver `live/intraday_runtime.py`). Parar no
+        # meio de qualquer um dos dois deixaria o robô órfão de vigilância
+        # até o próximo `Iniciar` -- mesmo raciocínio de `stop()`, que também
+        # nunca mexe na posição, só no processo supervisor.
+        tem_posicao = bool(conta_outro.positions) if conta_outro else False
+        pendentes = (
+            (conta_outro.policy_state or {}).get("intraday", {}).get("pending_entry_refs")
+            if conta_outro else None
+        )
+        pode_parar = not tem_posicao and not pendentes
+        raise SlotSymbolCollisionError(
             f"slots {slot.id!r} e {outro.id!r} negociam o(s) mesmo(s) símbolo(s) "
             f"({', '.join(sorted(colisao))}) numa conta NETTING, os dois em modo "
             "'live' — as posições se fundiriam numa só e os dois caixas "
-            "passariam a mentir. Pare um dos dois, ou rode em modo sombra."
+            "passariam a mentir. Pare um dos dois, ou rode em modo sombra.",
+            slot_id=outro.id, slot_label=outro.label, symbols=sorted(colisao),
+            pode_parar=pode_parar,
+            motivo_bloqueio=None if pode_parar else (
+                "este robô tem ordens posicionadas ou abertas agora — aguarde a "
+                "conclusão para poder encerrar a operação."
+            ),
         )
 
 
@@ -902,17 +957,280 @@ def stop(slot: str) -> bool:
     (`_TasklistUnavailable`), tenta o `taskkill` do mesmo jeito: matar um
     PID que já morreu é inofensivo (o comando só falha silenciosamente),
     enquanto PULAR o `taskkill` por indeterminação arrisca marcar "parado"
-    no arquivo um processo que continua vivo de verdade."""
+    no arquivo um processo que continua vivo de verdade.
+
+    Sem PID no arquivo, o botão NÃO desiste: pergunta ao sistema operacional
+    se existe um `run_live.py` deste slot rodando mesmo assim
+    (`listar_processos`). Esse caso é real — processo subido pela CLI, ou
+    arquivo de estado perdido/sobrescrito enquanto o robô continuava vivo —
+    e antes disto ele só tinha uma saída, que era o Gerenciador de Tarefas:
+    o painel mostrava "parado" para um robô que estava operando, e um clique
+    em "Iniciar" ali subiria um SEGUNDO processo para a mesma conta."""
     state = _read_state(slot)
     if state is None or state.get("pid") is None:
-        return False
+        return _parar_processo_nao_rastreado(slot)
     pid = state["pid"]
     try:
         deve_matar = _pid_alive(pid)
     except _TasklistUnavailable:
         deve_matar = True
     if deve_matar:
-        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
-                       capture_output=True, timeout=10)
+        _matar_arvore(pid)
     _write_state(slot, {**state, "pid": None, "started_at": None})
     return True
+
+
+# ---------- inventario de processos (inclusive os que ninguem rastreia) -----
+#
+# `status()`/`status_all()` respondem "o PID que EU anotei ainda esta vivo?".
+# Isso deixa um ponto cego inteiro: processo que sobreviveu ao dashboard que o
+# criou (achado 25/08/2026 -- o dono fechou o painel sem parar os robos e tres
+# supervisores continuaram vivos, dormindo ate a abertura do dia seguinte),
+# robo subido na mao pela CLI, e sobra de um `dev.bat` reiniciado. Nenhum
+# deles aparece em `db/live_process.json`, e por isso nenhum botao do painel
+# conseguia mata-los -- so' o Gerenciador de Tarefas.
+#
+# A varredura aqui pergunta ao SISTEMA OPERACIONAL quem esta rodando
+# `run_live.py`, e nao ao nosso arquivo de estado. O arquivo vira o que ele
+# deveria ser desde sempre: um indice do que o painel criou, nao a definicao
+# do que existe.
+
+
+@dataclass(frozen=True)
+class ProcessoRobo:
+    """Um supervisor `run_live.py` vivo nesta maquina.
+
+    `rastreado` distingue o que o painel criou e ainda anota
+    (`db/live_process.json`) do que ficou solto -- e' a diferenca entre "o
+    botao Parar do cartao resolve" e "so' esta tela resolve"."""
+
+    pid: int
+    slot: Optional[str]
+    execution_mode: Optional[str]
+    rastreado: bool
+    filhos: tuple[int, ...] = ()
+
+    @property
+    def rotulo(self) -> str:
+        """`dt-gremah_tick-pmam3-live` quando da' para saber; senao o PID."""
+        return self.slot or f"pid {self.pid}"
+
+
+def _argumento(linha: str, flag: str) -> Optional[str]:
+    """Valor de `--flag valor` numa linha de comando. `None` se ausente."""
+    partes = linha.split()
+    alvo = f"--{flag}"
+    for i, parte in enumerate(partes):
+        if parte == alvo and i + 1 < len(partes):
+            return partes[i + 1]
+        if parte.startswith(f"{alvo}="):
+            return parte.split("=", 1)[1]
+    return None
+
+
+def _powershell() -> str:
+    """Caminho absoluto do `powershell.exe`, com o nome nu como ultimo
+    recurso. Nao da' para confiar no PATH: o dashboard pode subir por um
+    atalho, por um servico ou por um shell (Git Bash, por exemplo) cujo PATH
+    nao inclui o `System32` -- e ai a varredura morre com "arquivo nao
+    encontrado" em vez de listar os robos que estao rodando."""
+    raiz = os.environ.get("SystemRoot") or r"C:\Windows"
+    caminho = Path(raiz) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+    return str(caminho) if caminho.is_file() else "powershell"
+
+
+def _processos_do_sistema() -> list[tuple[int, int, str]]:
+    """`(pid, ppid, linha_de_comando)` de todo processo desta maquina que
+    esta rodando `scripts/run_live.py`.
+
+    Windows sai pelo `Get-CimInstance` do PowerShell, e nao pelo `tasklist`
+    usado no resto do modulo: `tasklist` nao mostra linha de comando, e sem
+    ela nao da' para saber QUAL robo e' cada PID -- que e' justamente a
+    pergunta desta tela. POSIX sai pelo `ps`, porque o servidor para onde
+    isto vai nao tem PowerShell nem `taskkill`.
+
+    Levanta `_TasklistUnavailable` (mesmo contrato do resto do modulo:
+    "indeterminado", nunca "nao ha nada") se a consulta falhar."""
+    if os.name == "nt":
+        comando = [
+            _powershell(), "-NoProfile", "-NonInteractive", "-Command",
+            "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like "
+            "'*run_live*' } | Select-Object ProcessId,ParentProcessId,CommandLine "
+            "| ConvertTo-Json -Compress",
+        ]
+    else:
+        comando = ["ps", "-eo", "pid=,ppid=,args="]
+    try:
+        out = subprocess.run(comando, capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError) as e:
+        raise _TasklistUnavailable(str(e)) from e
+    if out.returncode != 0 and not out.stdout.strip():
+        raise _TasklistUnavailable(out.stderr.strip() or f"codigo {out.returncode}")
+
+    achados: list[tuple[int, int, str]] = []
+    if os.name == "nt":
+        texto = out.stdout.strip()
+        if not texto:
+            return []
+        try:
+            dados = json.loads(texto)
+        except json.JSONDecodeError as e:
+            raise _TasklistUnavailable(f"resposta ilegivel do PowerShell: {e}") from e
+        # `ConvertTo-Json` devolve um OBJETO quando ha um resultado so' e uma
+        # LISTA quando ha varios -- tratar so' a lista perderia exatamente o
+        # caso de "sobrou UM robo solto", o mais comum desta tela.
+        if isinstance(dados, dict):
+            dados = [dados]
+        for item in dados:
+            linha = item.get("CommandLine") or ""
+            achados.append((int(item["ProcessId"]),
+                            int(item.get("ParentProcessId") or 0), linha))
+    else:
+        for linha_bruta in out.stdout.splitlines():
+            campos = linha_bruta.strip().split(None, 2)
+            if len(campos) < 3:
+                continue
+            try:
+                achados.append((int(campos[0]), int(campos[1]), campos[2]))
+            except ValueError:
+                continue
+    # O filtro final e' aqui, e nao so' no comando: no Windows o proprio
+    # PowerShell da varredura casa com o `-like` (a string esta no `-Command`
+    # dele) e apareceria na lista como se fosse um robo.
+    return [(pid, ppid, linha) for pid, ppid, linha in achados
+            if "run_live.py" in linha and "Get-CimInstance" not in linha]
+
+
+def _read_all_states() -> dict:
+    """`{slot: estado}` cru do arquivo, sem conferir vivacidade -- ao
+    contrario de `status_all()`, que autocorrige. Aqui a autocorrecao seria
+    errada: esta tela existe para comparar o arquivo com a REALIDADE, e um
+    leitor que ja arruma o arquivo antes esconde a divergencia que o dono
+    precisa ver."""
+    todos = _read_all()
+    return {sid: est for sid, est in (todos.get("slots") or {}).items() if est}
+
+
+def listar_processos() -> list[ProcessoRobo]:
+    """Todo supervisor de robo vivo nesta maquina, rastreado ou nao.
+
+    Um supervisor aparece DUAS vezes na varredura do Windows (o `python.exe`
+    do venv e' um lancador que cria o interpretador de verdade como filho,
+    com a mesma linha de comando). Mostrar os dois faria a tela listar seis
+    linhas para tres robos e convidaria o dono a matar a metade errada,
+    entao o filho e' dobrado dentro do pai (`filhos`) em vez de virar linha
+    propria -- e quem mata o pai leva a arvore junto.
+
+    Ordena por slot para a lista nao dancar entre dois refreshes."""
+    achados = _processos_do_sistema()
+    pids = {pid for pid, _ppid, _linha in achados}
+    filhos_de: dict[int, list[int]] = {}
+    for pid, ppid, _linha in achados:
+        if ppid in pids:
+            filhos_de.setdefault(ppid, []).append(pid)
+
+    rastreados = {
+        est["pid"]: sid
+        for sid, est in _read_all_states().items()
+        if est.get("pid") is not None
+    }
+    processos = []
+    for pid, ppid, linha in achados:
+        if ppid in pids:
+            continue  # e' o interpretador filho de um supervisor ja listado
+        processos.append(ProcessoRobo(
+            pid=pid,
+            slot=_argumento(linha, "slot") or rastreados.get(pid),
+            execution_mode=_argumento(linha, "execution-mode"),
+            rastreado=pid in rastreados,
+            filhos=tuple(sorted(filhos_de.get(pid, ()))),
+        ))
+    return sorted(processos, key=lambda p: (p.slot or "", p.pid))
+
+
+def _matar_arvore(pid: int) -> None:
+    """Encerra `pid` e a arvore dele. Nao levanta: matar um PID que ja morreu
+    e' o resultado desejado, nao um erro."""
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
+                       capture_output=True, timeout=10)
+        return
+    import signal
+
+    for sinal in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.kill(pid, sinal)
+        except OSError:
+            return
+        time.sleep(0.5)
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            return
+
+
+def _parar_processo_nao_rastreado(slot: str) -> bool:
+    """Mata um supervisor deste slot que o arquivo de estado não conhece.
+    `False` se não havia nenhum (o caso normal de "já estava parado").
+
+    Indeterminação vira `False`, e não exceção: quem chama é o botão "Parar",
+    e derrubar a tela com erro porque a varredura engasgou seria pior que
+    dizer "não havia o que parar" e deixar o dono clicar de novo."""
+    try:
+        processos = listar_processos()
+    except _TasklistUnavailable:
+        return False
+    for processo in processos:
+        if processo.slot == slot:
+            _matar_arvore(processo.pid)
+            for filho in processo.filhos:
+                _matar_arvore(filho)
+            return True
+    return False
+
+
+def encerrar_processo(pid: int) -> ProcessoRobo:
+    """Mata o supervisor `pid` (e a arvore dele) e devolve o que foi morto.
+
+    RECUSA (`ValueError`) qualquer PID que a varredura nao reconheca como um
+    `run_live.py` vivo. Isto nao e' zelo decorativo: o `pid` chega pela URL
+    de um POST, e sem a conferencia o endpoint seria "mate qualquer processo
+    desta maquina pelo numero", exposto em HTTP -- inclusive o proprio
+    dashboard, o terminal MT5 ou o Windows.
+
+    Tambem limpa o `pid` do arquivo de estado quando o processo era
+    rastreado, para o cartao do robo nao continuar dizendo "rodando" depois
+    de esta tela ter matado o processo dele."""
+    alvos = {p.pid: p for p in listar_processos()}
+    processo = alvos.get(int(pid))
+    if processo is None:
+        raise ValueError(
+            f"o PID {pid} nao e (mais) um robo em execucao — a lista pode ter "
+            "mudado desde que a tela foi carregada; recarregue e tente de novo."
+        )
+    _matar_arvore(processo.pid)
+    for filho in processo.filhos:
+        _matar_arvore(filho)
+    if processo.rastreado:
+        for sid, est in _read_all_states().items():
+            if est.get("pid") == processo.pid:
+                _write_state(sid, {**est, "pid": None, "started_at": None})
+    return processo
+
+
+def inventario_processos() -> tuple[list[ProcessoRobo], Optional[str]]:
+    """`(processos, motivo)` — a mesma varredura de `listar_processos()`, mas
+    que NUNCA levanta: uma varredura que engasgou vira `([], motivo)`.
+
+    Existe para a tela (`/operacao/processos`): esta lista é o inventário de
+    "o que está rodando de verdade nesta máquina", e derrubar a página com
+    500 porque o PowerShell demorou seria trocar a informação que faltava por
+    informação nenhuma. O motivo volta em texto para o painel poder dizer
+    "não consegui varrer agora" em vez de "não há nada rodando" — as duas
+    frases são opostas, e a segunda é a que faz o dono ir dormir com um robô
+    solto.
+    """
+    try:
+        return listar_processos(), None
+    except _TasklistUnavailable as e:
+        return [], str(e)

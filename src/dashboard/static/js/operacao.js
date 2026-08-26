@@ -14,6 +14,11 @@
  *    robo selecionado e se desabilitam as que o (robo, ativo, modo) ja
  *    escolhido tornaria um trio duplicado.
  *
+ * 3. REVELAR A CAIXA "RESTAURAR" so' no trio que tem historico guardado
+ *    (pedido do dono, 2026-08-26 -- ver `atualizaRestauro`): o mesmo
+ *    <select> de ativos carrega `data-modos-arquivados`, e a caixa some
+ *    quando o (robo, ativo, modo) escolhido nao e' um deles.
+ *
  * Tudo por DELEGACAO no `document`: os nos sao recriados a cada swap do htmx,
  * entao ouvinte preso no elemento morreria no primeiro refresh de fundo.
  *
@@ -119,7 +124,41 @@
     // submeter -- desabilita o botao em vez de deixar o clique estourar no
     // servidor.
     if (submit) submit.disabled = !livre;
+    atualizaRestauro(form);
   }
+
+  /* Caixa "restaurar o historico guardado" (pedido do dono, 2026-08-26).
+   *
+   * Aparece SO' quando o trio (robo, ativo, modo) escolhido agora tem
+   * historico guardado -- um robo que foi removido com "guardar". Fora
+   * disso, seria um controle marcado oferecendo restaurar o nada.
+   *
+   * Volta MARCADA toda vez que reaparece, mesmo que o dono tenha desmarcado
+   * num trio anterior: "quero comecar do zero" e' uma decisao sobre AQUELE
+   * arquivo, nao uma preferencia que deva seguir o dono pro proximo robo --
+   * e o efeito dela (descartar o historico) nao tem volta.
+   */
+  function atualizaRestauro(form) {
+    var campo = form.querySelector('[data-ops-restore-field]');
+    if (!campo) return;                       // nenhum arquivo: nem renderizado
+    var modo = form.querySelector('select[data-ops-mode-select]');
+    var ativos = form.querySelector('select.ops-asset-select');
+    var sel = ativos && ativos.selectedOptions[0];
+    var guardados = sel
+      ? ((sel.getAttribute('data-modos-arquivados') || '').split(',').filter(Boolean))
+      : [];
+    var tem = !!modo && guardados.indexOf(modo.value) !== -1;
+    campo.hidden = !tem;
+    var check = form.querySelector('[data-ops-restore-input]');
+    if (check && !tem) check.checked = true;
+  }
+
+  document.addEventListener('change', function (ev) {
+    var sel = ev.target;
+    if (!sel || !sel.matches || !sel.matches('select.ops-asset-select')) return;
+    var form = sel.closest('form');
+    if (form) atualizaRestauro(form);
+  });
 
   document.addEventListener('change', function (ev) {
     var sel = ev.target;
@@ -236,10 +275,44 @@
     }
   });
 
+  /* ---- card de colisão de símbolo (pedido do dono, 2026-08-25) -----------
+   *
+   * `<dialog>` nativo (`partials/operacao_colisao.html`) só nasce ABERTO de
+   * verdade com `showModal()` -- o atributo `open` sozinho não centraliza
+   * nem cobre o fundo. Abre so' UMA vez: `data-ops-modal-shown` marca que
+   * este NO especifico ja foi tratado, senao o poll de fundo de um cartao
+   * QUALQUER (afterSwap dispara pra qualquer swap, nao so' o do dialogo)
+   * reabriria um modal que o dono acabou de fechar -- o dialogo continua no
+   * DOM ate o proximo swap de `#ops-body` INTEIRO (outro clique em
+   * "Iniciar", ou o proprio botao "Parar" de dentro dele).
+   */
+  function abreColisao() {
+    var dlg = document.querySelector('dialog[data-ops-modal]:not([data-ops-modal-shown])');
+    if (!dlg) return;
+    dlg.setAttribute('data-ops-modal-shown', '1');
+    if (typeof dlg.showModal === 'function') {
+      try { dlg.showModal(); } catch (e) {}
+    }
+  }
+
+  // Clique no backdrop fecha (pedido implicito de todo modal): so' o clique
+  // no proprio <dialog> conta como backdrop -- um clique dentro do conteudo
+  // borbulha ate o <dialog> tambem, entao confere se o ponto clicado cai
+  // FORA do retangulo do conteudo antes de fechar.
+  document.addEventListener('click', function (ev) {
+    var dlg = ev.target;
+    if (!dlg || dlg.tagName !== 'DIALOG' || !dlg.hasAttribute('data-ops-modal') || !dlg.open) return;
+    var r = dlg.getBoundingClientRect();
+    var dentro = ev.clientX >= r.left && ev.clientX <= r.right
+              && ev.clientY >= r.top && ev.clientY <= r.bottom;
+    if (!dentro) dlg.close();
+  });
+
   function aplica() {
     restaura();
     var forms = document.querySelectorAll('form.ops-new-robot-form');
     for (var i = 0; i < forms.length; i++) atualizaAtivos(forms[i]);
+    abreColisao();
   }
 
   // `htmx:afterSwap` cobre tanto a troca do `#ops-body` inteiro quanto o

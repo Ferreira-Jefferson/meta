@@ -200,7 +200,7 @@
         </td>
         <td class="right num">{{ (r.sharpe or 0) | num_br }}</td>
         <td class="right num">{{ r.trades_count or 0 }}</td>
-        <td class="right num dim">{{ r.created_at }}</td>
+        <td class="right num dim">{{ r.created_at | hora_br }}</td>
       </tr>
       {% else %}
       <tr><td colspan="11" class="runs-empty">Ainda não há simulações — rode a primeira num robô acima.</td></tr>

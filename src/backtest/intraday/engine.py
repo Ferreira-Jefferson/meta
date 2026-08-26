@@ -81,6 +81,14 @@ class IntradayBacktestResult:
     # (default de quem monta `IntradayBacktestConfig` na mao) ou quando o
     # caixa sempre cobriu o minimo.
     sessoes_puladas_por_capital: list = field(default_factory=list)
+    # Diagnostico do teto de contratos (`IntradayBacktestConfig.
+    # max_open_contracts`), copiado da maquina no fim da run. Zerados quando
+    # nao ha' teto (toda acao). `ordens_recusadas_por_teto / (aceitas +
+    # recusadas)` e' o portao G5 do plano da Copa: acima de 5%, a estrategia
+    # esta' fazendo o motor apertar o tamanho dela o tempo todo -- o P&L
+    # medido nao descreve o desenho que ela acha que tem.
+    ordens_aceitas: int = 0
+    ordens_recusadas_por_teto: int = 0
 
 
 def _bar_volume(row: pd.Series) -> float:
@@ -283,4 +291,6 @@ def run_intraday_backtest(
     }
     return IntradayBacktestResult(trades=trades, equity_curve=equity_curve,
                                    metrics=result_metrics, wiped_out_at=wiped_out_at,
-                                   sessoes_puladas_por_capital=sessoes_puladas_por_capital)
+                                   sessoes_puladas_por_capital=sessoes_puladas_por_capital,
+                                   ordens_aceitas=machine.ordens_aceitas,
+                                   ordens_recusadas_por_teto=machine.ordens_recusadas_por_teto)

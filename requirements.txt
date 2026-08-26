@@ -7,6 +7,7 @@ uvicorn[standard]>=0.29.0
 jinja2>=3.1.3
 python-multipart>=0.0.9
 pytest>=8.0.0
+pytest-xdist>=3.8.0  # `-n auto` em pyproject.toml: a suite roda em paralelo, nao serial
 playwright>=1.44.0
 httpx>=0.27.0  # so para teste: starlette.testclient.TestClient exige isto
 

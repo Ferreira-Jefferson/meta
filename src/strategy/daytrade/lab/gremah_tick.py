@@ -171,6 +171,7 @@ from strategy.daytrade.base import (
     JanelaVolatilidadeDiaria,
     RollingVolumeWindow,
     capital_minimo_brl,
+    geometria_e_degenerada,
 )
 
 #: Mesmo default de `gremah.VOL_JANELA_DIAS_PADRAO` -- ver a docstring la para
@@ -738,6 +739,23 @@ class GremahTick(IntradayStrategy):
         "capacidade_min_eventos": "Minimo de negocios na janela intradia antes do teto de "
                                  "preenchimento confiar na mediana deles -- com poucos eventos "
                                  "a mediana e' refem de um bloco isolado, igual a media era.",
+        "profit_ticks": "Alvo em TICKS inteiros, direto. Vazio = o alvo sai de `profit_pct` "
+                        "como sempre. Existe porque o alvo percentual satura no piso de 1 tick "
+                        "em 9 dos 10 símbolos calibrados: quem quer alvo de 2 ticks precisa "
+                        "dizer 2, não torcer para o percentual arredondar para lá.",
+        "spacing_ticks": "Distância da entrada em TICKS inteiros. Vazio = sai de "
+                         "`spacing_multiplier` x `profit_pct`.",
+        "stop_ticks": "Stop em TICKS inteiros. Vazio = sai de `stop_multiplier` x `profit_pct`. "
+                      "Junto com `profit_ticks`, permite escolher alvo e stop de forma "
+                      "INDEPENDENTE -- no caminho percentual eles estão amarrados, e subir um "
+                      "sobe o outro na mesma proporção.",
+        "bloquear_geometria_degenerada": "Recusa armar ordem quando o stop está perto demais do "
+                                         "alvo (razão abaixo de `geometria_razao_minima`), em vez "
+                                         "de operar uma calibração que perdeu o efeito. Desligado "
+                                         "por padrão: ligar muda o comportamento do robô.",
+        "geometria_razao_minima": "Quantas vezes o stop precisa ser maior que o alvo para a "
+                                  "geometria contar como válida. Só tem efeito com "
+                                  "`bloquear_geometria_degenerada` ligado.",
     }
 
     @staticmethod
@@ -770,6 +788,11 @@ class GremahTick(IntradayStrategy):
         vol_janela_dias: int = VOL_JANELA_DIAS_PADRAO,
         stop_vol_mult: float | None = None,
         stop_frac_range: float | None = None,
+        profit_ticks: int | None = None,
+        spacing_ticks: int | None = None,
+        stop_ticks: int | None = None,
+        bloquear_geometria_degenerada: bool = False,
+        geometria_razao_minima: float = 1.5,
         capacidade_negocio_mult: float | None = None,
         capacidade_fracao: float | None = None,
         capacidade_janela_dias: int = CAPACIDADE_JANELA_DIAS_PADRAO,
@@ -861,6 +884,32 @@ class GremahTick(IntradayStrategy):
         # Mesmo mecanismo/motivo de `Gremah.__init__` (mesma classe) -- ver
         # a docstring la para a justificativa completa.
         self.stop_frac_range = stop_frac_range
+        # GEOMETRIA EM TICKS (2026-08-26). Ate' aqui, alvo/espacamento/stop
+        # saiam TODOS de `profit_pct` (x `spacing_multiplier`, x
+        # `stop_multiplier`), o que torna impossivel mexer em um sem arrastar
+        # os outros: subir o alvo para escapar do piso de 1 tick subia o stop
+        # na mesma proporcao. A grade de calibracao nunca conseguiu perguntar
+        # "alvo de 2 ticks com o stop onde esta" -- so' "tudo maior junto".
+        #
+        # Estes tres sobrescrevem o resultado final, em ticks inteiros,
+        # independentes entre si. `None` (o default) = nada muda, o caminho
+        # antigo decide sozinho. Aplicados por ULTIMO em `_session_ticks`,
+        # depois inclusive de `stop_frac_range`: mais explicito vence menos
+        # explicito, a mesma hierarquia que o resto do arquivo ja usa.
+        self.profit_ticks = None if profit_ticks is None else max(1, int(profit_ticks))
+        self.spacing_ticks = None if spacing_ticks is None else max(1, int(spacing_ticks))
+        self.stop_ticks = None if stop_ticks is None else max(1, int(stop_ticks))
+        # Guarda opt-in contra a geometria degenerada descrita em
+        # `strategy.daytrade.base.geometria_e_degenerada`. `False` por padrao:
+        # ligar isto MUDA o comportamento do robo (ele deixa de armar ordem),
+        # e essa e' uma decisao de operacao, nao um default.
+        self.bloquear_geometria_degenerada = bloquear_geometria_degenerada
+        self.geometria_razao_minima = float(geometria_razao_minima)
+        #: Quantas vezes a guarda acima recusou armar uma ordem. Publico de
+        #: proposito: uma recusa silenciosa seria pior que o defeito que ela
+        #: evita -- mesmo espirito de
+        #: `IntradaySessionMachine.ordens_recusadas_por_teto`.
+        self.geometria_degenerada_eventos = 0
 
         self.quantity: int | None = None
         self._state = _SessionState()
@@ -922,7 +971,22 @@ class GremahTick(IntradayStrategy):
             stop_vol = self._ticks_from_vol(self.stop_frac_range)
             if stop_vol is not None:
                 stop_ticks = stop_vol
+        # Override EXPLICITO em ticks, por ultimo (ver `__init__`): quem passou
+        # um numero inteiro de ticks quis exatamente aquele numero, e nenhum
+        # dos caminhos acima -- percentual, volatilidade, `stop_frac_range` --
+        # tem por que opinar depois disso.
+        if self.profit_ticks is not None:
+            profit_ticks = self.profit_ticks
+        if self.spacing_ticks is not None:
+            spacing_ticks = self.spacing_ticks
+        if self.stop_ticks is not None:
+            stop_ticks = self.stop_ticks
         return profit_ticks, spacing_ticks, stop_ticks
+
+    def _geometria_bloqueada(self, profit_ticks: int, stop_ticks: int | None) -> bool:
+        return self.bloquear_geometria_degenerada and geometria_e_degenerada(
+            profit_ticks, stop_ticks, self.geometria_razao_minima
+        )
 
     def _arm_fixed_session_params(self) -> None:
         price = self._state.open_price
@@ -1136,17 +1200,25 @@ class GremahTick(IntradayStrategy):
         if next_side is None:
             return actions
 
-        state.pending_side = next_side
-        state.pending_since_ts = ts
-        state.pending_mode = "fixed" if is_fixed_phase else "rolling"
         if is_fixed_phase:
-            entry = self._build_entry(
-                next_side, state.open_price,
-                state.spacing_ticks_today, state.profit_ticks_today, state.stop_ticks_today,
-                ts,
-            )
+            anchor = state.open_price
+            profit_ticks = state.profit_ticks_today
+            spacing_ticks = state.spacing_ticks_today
+            stop_ticks = state.stop_ticks_today
         else:
             anchor = bar.close
             profit_ticks, spacing_ticks, stop_ticks = self._session_ticks(anchor)
-            entry = self._build_entry(next_side, anchor, spacing_ticks, profit_ticks, stop_ticks, ts)
+        # Guarda de geometria degenerada (opt-in, `bloquear_geometria_
+        # degenerada`), checada ANTES de marcar a ordem como pendente: marcar
+        # primeiro e desistir depois deixaria um `pending_side` que nunca virou
+        # ordem, e o robo esperaria para sempre por um preenchimento que
+        # ninguem pediu. Recusa a armacao INTEIRA e conta o evento -- nunca
+        # arma uma versao truncada.
+        if self._geometria_bloqueada(profit_ticks, stop_ticks):
+            self.geometria_degenerada_eventos += 1
+            return actions
+        state.pending_side = next_side
+        state.pending_since_ts = ts
+        state.pending_mode = "fixed" if is_fixed_phase else "rolling"
+        entry = self._build_entry(next_side, anchor, spacing_ticks, profit_ticks, stop_ticks, ts)
         return [entry]

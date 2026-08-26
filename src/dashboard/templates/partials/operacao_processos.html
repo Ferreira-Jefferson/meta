@@ -1,0 +1,133 @@
+{#  Seção 04 · PROCESSOS DE ROBÔ (pedido do dono, 2026-08-26).
+
+    O resto do painel raciocina por CARTÃO: cada robô tem o seu, e o botão
+    "Parar" dele encerra o processo dele. Isso deixa um ponto cego inteiro —
+    o processo que NÃO tem cartão. Robô removido com o supervisor vivo, robô
+    subido pela linha de comando, sobra de um dashboard fechado sem parar
+    nada: nenhum aparecia em lugar nenhum da tela, e a única saída era o
+    Gerenciador de Tarefas do Windows.
+
+    Esta seção pergunta ao SISTEMA OPERACIONAL quem está rodando
+    `run_live.py` (`live_control.listar_processos`) e compara com o que o
+    painel acha que existe. O arquivo de estado (`db/live_process.json`)
+    volta a ser o que sempre deveria ter sido: um índice do que o painel
+    criou, e não a definição do que existe.
+
+    CARREGA SOZINHA, à parte da página: a varredura leva ~3s (o
+    `Get-CimInstance` do Windows enumera todos os processos da máquina), e o
+    corpo de `/operacao` é remontado a cada clique da página inteira. Fosse
+    junto, cada clique em "Criar robô"/"Salvar caixa" pagaria 3 segundos por
+    uma resposta que ninguém pediu naquele clique. Ver
+    `dashboard/app.py::operacao_processos`.
+
+    Sem JS a seção fica no estado "varrendo…" para sempre — `hx-trigger="load"`
+    é o que a preenche. É degradação aceitável porque nada mais da página
+    depende dela: o painel inteiro continua funcionando, e esta é uma tela de
+    diagnóstico, não um caminho de operação. #}
+<section class="ops-sec" id="ops-processos">
+  <details data-ops-key="processos"{% if processos_soltos %} open{% endif %}>
+    <summary class="ops-sec-head">
+      <span class="ops-sec-ord">04</span>
+      <span class="ops-sec-title">Processos de robô</span>
+      {#  O cabeçalho recolhido não pode mentir (regra da página): é ele que
+          carrega "2 soltos" quando há algo solto — e é por isso que a seção
+          também nasce ABERTA nesse caso. #}
+      <span class="ops-sec-meta">{{ processos_meta or "varrendo…" }}</span>
+      <span class="ops-sec-caret" aria-hidden="true"></span>
+    </summary>
+    <div class="ops-sec-body">
+
+      {% if not processos_carregado %}
+      <p class="ops-start-hint" hx-get="/operacao/processos" hx-trigger="load"
+         hx-target="#ops-processos" hx-swap="outerHTML">
+        Varrendo os processos desta máquina…
+      </p>
+
+      {% else %}
+      <p class="dek">
+        Tudo que está rodando <code>run_live.py</code> nesta máquina agora —
+        perguntado ao sistema operacional, não ao painel. Um robô que aparece
+        aqui e não tem cartão (ou tem, mas o cartão diz "parado") continua
+        decidindo e, em modo real, continua mandando ordem.
+      </p>
+
+      {% if processos_msg %}
+      <div class="ops-alert ops-alert-ok">{{ processos_msg }}</div>
+      {% endif %}
+      {% if processos_erro_acao %}
+      <div class="ops-alert">{{ processos_erro_acao }}</div>
+      {% endif %}
+
+      {% if processos_erro %}
+      {#  Varredura indeterminada NÃO é lista vazia: as duas frases são
+          opostas, e a errada é a que faz o dono ir dormir com um robô
+          solto. #}
+      <div class="ops-alert">
+        Não consegui varrer os processos agora ({{ processos_erro }}) — isto
+        <strong>não</strong> quer dizer que não há nada rodando. Tente varrer
+        de novo.
+      </div>
+      {% elif not processos %}
+      <p class="ops-start-hint">
+        Nenhum supervisor de robô rodando nesta máquina.
+      </p>
+      {% else %}
+      <ul class="ops-proc-list">
+        {% for p in processos %}
+        <li class="ops-proc{% if p.situacao != 'painel' %} is-solto{% endif %}">
+          <span class="ops-proc-dot" aria-hidden="true"></span>
+          <div class="ops-proc-text">
+            <p>
+              <strong>{{ p.rotulo }}</strong>
+              {% if p.modo %}
+              <span class="ops-slot-mode{{ ' is-live' if p.modo == 'live' else '' }}">
+                {{ "real" if p.modo == "live" else "simulação" }}
+              </span>
+              {% endif %}
+            </p>
+            <p class="sub num">
+              PID {{ p.pid }}{% if p.filhos %} (+ {{ p.filhos | join(", ") }}){% endif %} ·
+              {% if p.situacao == "painel" %}
+              rastreado pelo painel — o botão "Parar" do cartão também resolve
+              {% elif p.situacao == "nao_rastreado" %}
+              o cartão deste robô diz "parado", mas o processo está vivo
+              {% else %}
+              não há cartão para este robô — só esta seção o alcança
+              {% endif %}
+            </p>
+          </div>
+          {#  `hx-confirm` (e não o diálogo rico de "Remover robô"): encerrar
+              o supervisor não desfaz nada na corretora — é o mesmo contrato
+              do "Parar" do cartão —, então não há lista de consequências
+              para mostrar, só uma frase.
+
+              E ela é CURTA (dono, 2026-08-26: "está confuso e maior que o
+              necessário"). A versão anterior explicava o que NÃO acontece
+              com a posição e por quanto tempo; num popup nativo do
+              navegador, sem formatação nenhuma, isso vira um parágrafo que
+              se lê pior do que não ler. O que o dono precisa saber antes de
+              clicar são duas coisas: qual robô morre, e que o dinheiro na
+              corretora não se mexe. #}
+          <form hx-post="/operacao/processos/{{ p.pid }}/encerrar"
+                hx-target="#ops-processos" hx-swap="outerHTML"
+                hx-confirm="Encerrar {{ p.rotulo }} (PID {{ p.pid }})? O robô para. Posição e ordens ficam como estão na corretora.">
+            <button type="submit" class="btn-stop">Encerrar</button>
+          </form>
+        </li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+
+      <div class="ops-proc-actions">
+        <button type="button" hx-get="/operacao/processos"
+                hx-target="#ops-processos" hx-swap="outerHTML">Varrer de novo</button>
+        <span class="ops-modal-hint">
+          A lista envelhece sozinha — um robô pode subir ou morrer enquanto
+          esta tela está aberta.
+        </span>
+      </div>
+      {% endif %}
+
+    </div>
+  </details>
+</section>

@@ -602,8 +602,121 @@ class MT5Broker(Broker):
         except Exception:
             return None
 
+    def pending_orders(self, ticker: str) -> Optional[list[dict]]:
+        """Ordens-limite PENDENTES deste robo (`magic`) neste papel, como a
+        corretora as ve. `None` = nao deu para perguntar (terminal fechado,
+        pacote ausente) -- que NAO e' a mesma coisa que `[]` ("perguntei, nao
+        ha nenhuma"): quem apaga um robo precisa distinguir "confirmei que
+        nao ha nada pendurado" de "nao consegui confirmar".
+
+        Cada item: `{"ticket", "side", "quantity", "price", "symbol"}`.
+        `quantity` em ACOES (`volume * shares_per_lot`), a mesma unidade de
+        `Order.quantity`, para o painel nao ter de converter lote.
+
+        Complementa `open_position()`: aquela responde "quanto eu TENHO",
+        esta responde "o que ainda pode virar posicao sem ninguem clicar em
+        nada". Uma limpeza que so' olhasse posicao deixaria viva uma ordem
+        que preenche depois do robo ja ter sido apagado do painel."""
+        try:
+            import MetaTrader5 as mt5  # lazy: ver docstring do modulo
+        except Exception:  # pragma: no cover - ambiente sem o pacote
+            return None
+        try:
+            if not self.connect():
+                return None
+            symbol = self.symbol_for(ticker)
+            ordens = mt5.orders_get(symbol=symbol)
+            if ordens is None:
+                return None
+            compras = {getattr(mt5, "ORDER_TYPE_BUY_LIMIT", 2),
+                       getattr(mt5, "ORDER_TYPE_BUY_STOP", 4)}
+            saida = []
+            for o in ordens:
+                if getattr(o, "magic", None) != self._magic:
+                    continue
+                volume = float(getattr(o, "volume_current", 0.0) or 0.0)
+                saida.append({
+                    "ticket": str(getattr(o, "ticket", "") or ""),
+                    "side": "compra" if getattr(o, "type", None) in compras else "venda",
+                    "quantity": int(round(volume * self._shares_per_lot)),
+                    "price": float(getattr(o, "price_open", 0.0) or 0.0),
+                    "symbol": symbol,
+                })
+            return saida
+        except Exception:
+            return None
+
+    def last_price(self, ticker: str) -> Optional[float]:
+        """Ultimo preco negociado do papel, ou `None` se nao deu para ler.
+
+        `last` primeiro (negocio de verdade); se o terminal devolver 0 --
+        acontece fora do pregao e em papel sem negocio no dia -- cai para o
+        meio do book (`bid`/`ask`). Serve para ESTIMAR quanto uma posicao
+        aberta valeria se fosse encerrada agora; nao e' preco de execucao, e
+        quem mostra isso na tela tem de dizer que e' estimativa."""
+        try:
+            import MetaTrader5 as mt5  # lazy: ver docstring do modulo
+        except Exception:  # pragma: no cover - ambiente sem o pacote
+            return None
+        try:
+            if not self.connect():
+                return None
+            symbol = self.symbol_for(ticker)
+            mt5.symbol_select(symbol, True)
+            tick = mt5.symbol_info_tick(symbol)
+            if tick is None:
+                return None
+            ultimo = float(getattr(tick, "last", 0.0) or 0.0)
+            if ultimo > 0:
+                return ultimo
+            bid = float(getattr(tick, "bid", 0.0) or 0.0)
+            ask = float(getattr(tick, "ask", 0.0) or 0.0)
+            if bid > 0 and ask > 0:
+                return (bid + ask) / 2.0
+            return bid or ask or None
+        except Exception:
+            return None
+
     def supports_automation(self) -> bool:
         return True
+
+    def autotrading_allowed(self) -> Optional[bool]:
+        """O botao AutoTrading (Algo Trading) do terminal esta LIGADO?
+        `None` = nao deu para saber (terminal fora do ar).
+
+        Com ele desligado o terminal recusa TODA ordem enviada pela API, com
+        `retcode=10027 AutoTrading disabled by client` -- foi o que matou a
+        primeira ordem do pregao de 25/08/2026 no slot
+        `dt-gremah_tick-pmam3-live`.
+
+        So' LEITURA, e nao por preguica: a API do MetaTrader5 nao expoe
+        nenhuma funcao para LIGAR (`terminal_info()` e' o unico caminho, e
+        `RES_E_AUTO_TRADING_DISABLED` e' so' o codigo de erro do lado de
+        quem tenta operar). Medido em 2026-08-25, nesta maquina, os dois
+        caminhos de contorno tambem nao servem:
+
+          - `PostMessage(Ctrl+E)` na janela `MetaQuotes::MetaTrader::5.00`:
+            o terminal ignora (acelerador confere o teclado REAL, que
+            `PostMessage` nao muda);
+          - `SendInput(Ctrl+E)`: o envio funciona, mas o Windows recusa dar
+            o foco ao terminal para um processo de segundo plano
+            (`SetForegroundWindow` -> 0, trava de foreground), entao as
+            teclas caem na janela que o dono estiver usando. Injetar tecla as
+            cegas na janela errada e' pior que nao operar.
+
+        O estado mora em `config/common.ini`, secao `[Experts]`, chave
+        `Enabled` -- lida na ABERTURA do terminal e reescrita quando ele
+        fecha. Ligar por ali so' funciona com o terminal FECHADO, valendo na
+        proxima abertura."""
+        import MetaTrader5 as mt5  # lazy: ver docstring do modulo
+
+        try:
+            info = mt5.terminal_info()
+        except Exception:
+            return None
+        if info is None:
+            return None
+        return bool(info.trade_allowed)
 
     def cash_balance(self) -> Optional[float]:
         """Saldo real de caixa reportado pelo terminal.

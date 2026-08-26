@@ -10,7 +10,7 @@
    hífen) antes do `for`: isto é anexado DENTRO de um `<pre>` já aberto, e
    qualquer `\n` sobrando (o do comentário acima, ou o do fim do arquivo)
    viraria linha em branco a mais no console a cada lote carregado. #}
-{%- for e in eventos %}[{{ e.ts }}] {{ e.level | upper }} {{ e.source }}: {{ e.message }}
+{%- for e in eventos %}[{{ e.ts | hora_br }}] {{ e.level | upper }} {{ e.source }}: {{ e.message }}
 {% endfor %}{% if eventos | length == pagina %}<span id="ops-events-sentinel-{{ slot.id }}"
       hx-get="/operacao/{{ slot.id }}/eventos?before_id={{ eventos[-1].id }}"
       hx-trigger="revealed" hx-swap="outerHTML" hx-target="this"></span>{% endif %}

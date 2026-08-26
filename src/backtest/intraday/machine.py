@@ -182,6 +182,26 @@ class IntradayBacktestConfig:
     # comportamento (fill, restart, etc); `config_for` liga `True` para
     # todo backtest/sombra real, fechando a divergencia.
     enforce_capital_minimo: bool = False
+    # Teto de contratos SIMULTANEAMENTE abertos -- `None` (default) = sem
+    # teto, o comportamento de sempre (acao a vista, onde quem limita e' o
+    # caixa: `enforce_capital_minimo` + `initial_capital`).
+    #
+    # Existe para um ambiente onde o limitador NAO e' dinheiro: na Copa BTG
+    # Trader o simulador declara "Simulacao de Margem Infinita" e nao ha'
+    # saldo ficticio nenhum -- o unico limitador de tamanho e' quantos
+    # contratos o competidor pode ter abertos ao mesmo tempo (WIN 15, WDO 5
+    # em 2025). Modelar isso como caixa seria mentira em duas direcoes:
+    # inventaria uma restricao que la' nao existe (margem) e deixaria de
+    # aplicar a que existe de verdade.
+    #
+    # Recusa por INTEIRO, nunca trunca: uma ordem de 5 contratos com 12 de 15
+    # ja abertos e' RECUSADA (0 contratos), nao reduzida a 3. Truncar
+    # esconderia, dentro de um numero de P&L aparentemente saudavel, uma
+    # estrategia que so' "funciona" porque o motor ficou apertando o tamanho
+    # dela em silencio -- `IntradaySessionMachine.ordens_recusadas_por_teto`
+    # torna isso visivel e mensuravel (portao G5 do plano da Copa: menos de
+    # 5% das ordens).
+    max_open_contracts: int | None = None
 
 
 @dataclass
@@ -267,7 +287,27 @@ class PositionClosed:
     pnl_brl: float
 
 
-MachineEvent = Union[LimitPlaced, LimitCancelled, PositionOpened, PositionClosed]
+@dataclass(frozen=True)
+class OrderRejected:
+    """Uma entrada foi RECUSADA por inteiro pelo motor, sem virar posicao --
+    hoje so' por `IntradayBacktestConfig.max_open_contracts` (`reason=
+    "max_open_contracts"`). `quantity` e' o que foi pedido e nao entrou;
+    `open_contracts` e' quanto ja estava aberto no momento da recusa.
+
+    E' um evento, e nao um `raise`, porque bater no teto e' comportamento
+    ESPERADO de um ambiente com teto -- o que nao pode e' acontecer em
+    silencio."""
+
+    ts: pd.Timestamp
+    side: Side
+    quantity: int
+    open_contracts: int
+    cap: int
+    order_kind: str
+    reason: str
+
+
+MachineEvent = Union[LimitPlaced, LimitCancelled, PositionOpened, PositionClosed, OrderRejected]
 
 
 # ---------- helpers de preenchimento (portados de `engine.py` sem mudanca) --
@@ -486,6 +526,14 @@ class IntradaySessionMachine:
         self.session_pnl = 0.0
         self.realized_pnl = 0.0
         self.session_date = None
+        # Diagnostico de `config.max_open_contracts` -- CUMULATIVOS em todo o
+        # backtest (nao zerados por `_reset_session`): a pergunta que eles
+        # respondem ("esta estrategia so' funciona porque esbarra no teto?")
+        # e' sobre a run inteira, nao sobre um pregao. Contam ENTRADAS
+        # (`Enter` a mercado e cada filho de `EnterLimit` que preencheu ou
+        # foi recusado), nunca saidas -- fechar posicao sempre cabe.
+        self.ordens_aceitas = 0
+        self.ordens_recusadas_por_teto = 0
 
     # ---------- ciclo de vida da sessao ----------------------------------
 
@@ -638,6 +686,43 @@ class IntradaySessionMachine:
 
     # ---------- marcacao de patrimonio -----------------------------------
 
+    @property
+    def open_contracts(self) -> int:
+        """Contratos (ou acoes) SIMULTANEAMENTE abertos agora, somando todas
+        as posicoes independentes -- a grandeza que
+        `config.max_open_contracts` limita."""
+        return sum(p.quantity for p in self.positions)
+
+    @property
+    def resting_children(self) -> tuple[int, ...]:
+        """Quantidades dos FILHOS de `resting_limit` que ainda NAO preencheram
+        -- tupla vazia quando nao ha ordem-limite de entrada em pe.
+
+        Publico porque o PAINEL conta ordens posicionadas por aqui (ver
+        `live/intraday_runtime.py::_espelho_da_ordem_em_pe`): `len()` e' quantas
+        ordens estao no book (uma por filho, ver `EnterLimit.children` e a Fase
+        2 em `live/intraday_execution.py`) e `sum()` e' quantas acoes elas
+        somam. Copia, e nao a lista viva: quem le e' tela, nao decide nada, e
+        nao pode conseguir mexer no estado da maquina por descuido."""
+        return tuple(self._resting_children_qty)
+
+    def _cabe_no_teto(self, quantity: int) -> bool:
+        cap = self.config.max_open_contracts
+        return cap is None or (self.open_contracts + quantity) <= cap
+
+    def _recusa_por_teto(self, ts: pd.Timestamp, side: Side, quantity: int,
+                         order_kind: str) -> "OrderRejected":
+        """Registra e descreve UMA recusa por teto. Nao mexe em posicao nem
+        em ordem parada -- quem chama decide o que fazer com a ordem
+        recusada (hoje: descartada, ver `on_closed_bar`)."""
+        self.ordens_recusadas_por_teto += 1
+        return OrderRejected(
+            ts=ts, side=side, quantity=quantity,
+            open_contracts=self.open_contracts,
+            cap=int(self.config.max_open_contracts or 0),
+            order_kind=order_kind, reason="max_open_contracts",
+        )
+
     def unrealized_brl(self, price: float) -> float:
         """Marcacao a mercado da SOMA de todas as posicoes abertas a `price`
         (0.0 sem posicao nenhuma)."""
@@ -681,13 +766,42 @@ class IntradaySessionMachine:
             return b3_session.closing_bar_minute_utc(ts.date())
         return self.config.session_end_time
 
+    def is_previous_session_bar(self, ts: pd.Timestamp) -> bool:
+        """`ts` esta carimbado num pregao ANTERIOR ao que esta maquina abriu?
+
+        Existe porque o corte de flatten (secao (2) de `on_closed_bar`)
+        compara so' a HORA (`ts.time() >= session_end_time_for(ts)`) -- ele
+        nao tem como saber sozinho de que DIA e' a barra. Ao vivo, o feed
+        entrega tudo com `ts > last_bar_ts`, e essa marca atravessa a virada
+        do pregao: uma barra atrasada de ONTEM, dentro da janela do corte,
+        chegava como PRIMEIRA barra de hoje e achatava a sessao inteira antes
+        da primeira decisao (achado 2026-08-25 na `dt-gremah-pmam3-shadow`:
+        barra `2026-08-24 19:54`, corte da B3 `19:54` -> `flattened=True` as
+        13:01, robo mudo nas 322 barras seguintes, zero ordem no dia).
+
+        Barra de pregao FUTURO nao entra aqui de proposito: ao vivo ela nao
+        existe (`_start_session` reabre a maquina no pregao de hoje antes de
+        qualquer consumo), e inventar um comportamento para ela seria regra
+        nova sem caso real.
+
+        No backtest e' inerte: `run_intraday_backtest` agrupa por
+        `bars.index.date` e abre a sessao com essa MESMA data, entao nenhuma
+        barra do grupo e' anterior a ela."""
+        return self.session_date is not None and ts.date() < self.session_date
+
     def on_closed_bar(self, bar: Bar, is_last_bar: bool = False) -> list[MachineEvent]:
         """Processa UMA barra ja FECHADA. `is_last_bar=True` forca o flatten
         nesta barra (ultima barra da sessao no dado); o corte por horario
-        (`config.session_end_time`) e' avaliado de qualquer forma."""
+        (`config.session_end_time`) e' avaliado de qualquer forma.
+
+        Barra de pregao anterior (`is_previous_session_bar`) e' DESCARTADA
+        sem nenhum efeito -- nem decisao, nem preenchimento, nem flatten."""
         cfg = self.config
         ts = bar.ts
         events: list[MachineEvent] = []
+
+        if self.is_previous_session_bar(ts):
+            return events
 
         # (1) stop/target automatico tem prioridade sobre qualquer acao filada.
         # Itera sobre uma COPIA (`list(...)`) porque fechar uma posicao
@@ -811,6 +925,19 @@ class IntradaySessionMachine:
             # TODAS as posicoes abertas de uma vez (ex.: stop agregado de
             # sessao, `IntradayExitReason.SIGNAL`) -- nao existe "Exit de uma
             # posicao so'" no contrato da estrategia.
+            # Teto de contratos (`config.max_open_contracts`): uma entrada A
+            # MERCADO que nao cabe e' recusada por INTEIRO aqui, antes de
+            # qualquer execucao -- nunca truncada para o que sobra do teto
+            # (ver o comentario do campo). So' vale quando o robo esta flat:
+            # com posicao aberta, um `Enter` ja e' descartado mais abaixo por
+            # outro motivo, e conta-lo como recusa de teto seria mentira.
+            if (isinstance(self.pending, Enter) and not self.positions
+                    and not self._cabe_no_teto(self.pending.quantity or cfg.default_quantity)):
+                events.append(self._recusa_por_teto(
+                    ts, self.pending.side,
+                    self.pending.quantity or cfg.default_quantity, "market"))
+                self.pending = None
+
             if isinstance(self.pending, Exit) and self.positions:
                 for pos in list(self.positions):
                     events.append(self._close_position(pos, ts, bar.open, IntradayExitReason.SIGNAL))
@@ -846,6 +973,7 @@ class IntradaySessionMachine:
                     metadata=dict(pending.metadata or {}),
                 )
                 self.positions.append(nova_posicao)
+                self.ordens_aceitas += 1
                 self.pending = None
                 events.append(PositionOpened(
                     ts=ts, side=nova_posicao.side, price=entry_px,
@@ -883,6 +1011,18 @@ class IntradaySessionMachine:
                 )
                 if fills:
                     for fill_price, fill_qty in fills:
+                        if not self._cabe_no_teto(fill_qty):
+                            # Filho que nao cabe no teto e' recusado por
+                            # INTEIRO e DESCARTADO (nao volta para
+                            # `restantes`): deixa-lo parado o faria ser
+                            # re-tentado e re-recusado a cada barra,
+                            # inflando o contador com a MESMA ordem em vez
+                            # de medir quantas ordens distintas o teto
+                            # barrou.
+                            events.append(self._recusa_por_teto(
+                                ts, order.side, fill_qty, "limit"))
+                            continue
+                        self.ordens_aceitas += 1
                         if self.execution is not None and self.positions:
                             pos = self.positions[0]
                             nova_qty = pos.quantity + fill_qty
@@ -965,6 +1105,27 @@ class IntradaySessionMachine:
             pos.bars_held += 1
 
         return events
+
+    def discard_resting_limit(self) -> None:
+        """Esquece a ordem-limite vigiada SEM emitir evento e SEM mandar
+        cancelamento nenhum -- ela nunca chegou a existir no book.
+
+        So' a operacao REAL usa, e para um caso so': a corretora RECUSOU o
+        envio (`live/intraday_execution.py::BrokerExecutionError`, que so'
+        sobe depois de cancelar as fatias ja enviadas -- nunca fica entrada
+        pela metade). A maquina grava `resting_limit` ANTES do envio, entao
+        uma recusa a deixava vigiando um fill impossivel: em 25/08/2026 o
+        slot `dt-gremah_tick-pmam3-live` passou de 13:02 as 14:00 esperando
+        uma ordem que o terminal tinha recusado (`AutoTrading disabled by
+        client`), e so' voltou a mandar quando o proprio robo declarou a
+        ordem obsoleta pelo relogio.
+
+        `LimitCancelled` seria a ferramenta errada aqui: ele significa "uma
+        ordem que ESTAVA no book saiu dele" e faz o chamador ao vivo mandar
+        cancelamento para a corretora -- por uma ordem que ela recusou."""
+        self.resting_limit = None
+        self._resting_children_qty = []
+        self.resting_limit_bars_waited = 0
 
     def force_flatten(self, ts: pd.Timestamp, price: float) -> list[MachineEvent]:
         """Achata a posicao (se houver) e cancela a ordem-limite vigiada, SEM
