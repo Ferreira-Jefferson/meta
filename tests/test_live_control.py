@@ -65,6 +65,15 @@ def isolated(tmp_path, monkeypatch):
     from live import intraday_runtime
 
     monkeypatch.setattr(intraday_runtime, "LIVE_DB_PATH", db_path)
+    # `start()` varre processos orfaos do slot antes de subir (2026-08-27,
+    # ver docstring dele) via `_processos_do_sistema()`, que dispara um
+    # `subprocess.run` de verdade (PowerShell/`ps`) -- sem este default a
+    # zero, cada teste da suite ficaria: (a) lento de verdade shellando pro
+    # SO, e (b) sujeito a colidir com o `subprocess.Popen` fake que os testes
+    # de `start()` instalam pra CAPTURAR o argv do robo, que nao suporta o
+    # protocolo de context manager que `subprocess.run` exige. Testes que
+    # querem simular um orfao de verdade sobrescrevem isto de novo.
+    monkeypatch.setattr(live_control, "_processos_do_sistema", lambda: [])
     return {"state": state_path, "dir": tmp_path, "db": db_path}
 
 
@@ -315,6 +324,48 @@ def test_start_execution_mode_invalido_recusa_antes_do_popen(isolated, monkeypat
         live_control.start(_cfg(execution_mode="pra-valer"))
 
     assert called == []
+
+
+def test_start_mata_orfao_do_slot_antes_de_subir_novo_processo(isolated, monkeypatch):
+    """2026-08-27, achado numa conferencia manual do dono: `stop()` pode zerar
+    `pid`/`started_at` no arquivo sem o `_matar_arvore` ter pego o processo de
+    verdade (reparentado, `taskkill` engasgado) -- o arquivo dizia "parado"
+    com um `run_live.py` de verdade ainda vivo por tras. `start()` via so' o
+    arquivo e subia um SEGUNDO processo pro MESMO slot por cima do orfao (foi
+    exatamente o que aconteceu com `dt-gremah-pmam3-shadow`: dois processos
+    escrevendo na mesma conta ao mesmo tempo). Este teste prova que `start()`
+    agora varre e mata qualquer orfao do slot ANTES do `Popen` novo."""
+    _seed_cash(isolated["db"], DAYTRADE, 100.0)
+    linha_orfa = (
+        r'"C:\...\python.exe" "C:\...\run_live.py" --mode mt5 --capital 40.86 '
+        f'--strategy gremah --slot {DAYTRADE} --execution-mode shadow loop --seconds 5'
+    )
+    monkeypatch.setattr(live_control, "_processos_do_sistema",
+                        lambda: [(11111, 22222, linha_orfa)])
+    mortos = []
+    monkeypatch.setattr(live_control, "_matar_arvore", lambda pid: mortos.append(pid))
+    monkeypatch.setattr(live_control.subprocess, "Popen",
+                        _fake_popen(poll_value=None, captured_argv=[]))
+
+    state = live_control.start(_cfg(slot=DAYTRADE, strategy="gremah"))
+
+    assert mortos == [11111]
+    assert state["pid"] == 99999
+
+
+def test_start_sem_orfao_nao_mata_nada(isolated, monkeypatch):
+    """Caso comum (nenhum orfao no sistema): a varredura nao pode matar nada
+    nem impedir a subida normal."""
+    _seed_cash(isolated["db"], DAYTRADE, 100.0)
+    mortos = []
+    monkeypatch.setattr(live_control, "_matar_arvore", lambda pid: mortos.append(pid))
+    monkeypatch.setattr(live_control.subprocess, "Popen",
+                        _fake_popen(poll_value=None, captured_argv=[]))
+
+    state = live_control.start(_cfg(slot=DAYTRADE, strategy="gremah"))
+
+    assert mortos == []
+    assert state["pid"] == 99999
 
 
 def test_start_day_trade_usa_passo_de_5s_swing_60s(isolated, monkeypatch):

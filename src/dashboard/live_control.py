@@ -817,6 +817,21 @@ def start(config: ProcessConfig) -> dict:
     estado. O lock é único (não por slot) porque o arquivo de estado é
     compartilhado — ver docstring do módulo.
 
+    Varredura de órfão ANTES de subir (2026-08-27, crítico nº3, achado numa
+    conferência manual do dono): o guard acima só enxerga o arquivo de
+    estado. Se `stop()` mandou matar um PID e o `_matar_arvore` não pegou de
+    verdade (processo já reparentado, `taskkill` engasgado) ele ainda assim
+    zera `pid`/`started_at` (ver docstring de `stop()`) — o arquivo diz
+    "parado" com um processo de verdade continuando vivo por trás. Sem esta
+    varredura, o próximo `start()` deste slot só olhava o arquivo limpo e
+    subia um SEGUNDO processo por cima do primeiro: dois `run_live.py loop`
+    escrevendo na mesma conta e no mesmo log ao mesmo tempo (foi exatamente
+    isto que aconteceu com `dt-gremah-pmam3-shadow` em 27/08 — órfão das
+    09:26 sobrevivendo lado a lado com o processo das 12:12, rastreado).
+    `_parar_processo_nao_rastreado` é o MESMO mecanismo que o botão "Parar"
+    já usa pro caso "arquivo sem pid" — reusado aqui pra garantir sempre no
+    máximo um processo por slot, não só quando alguém nota e clica em Parar.
+
     Piso de caixa (2026-08-21, refinado por robô em 2026-08-22): recusa se o
     ledger manual do slot tiver menos que `min_cash_for(slot, config.strategy)`
     — `Slot.min_cash_brl` pro swing, `capital_minimo_brl` do robô ESCOLHIDO
@@ -831,6 +846,11 @@ def start(config: ProcessConfig) -> dict:
             raise RuntimeError(
                 f"o robô do slot '{slot.label}' já está rodando — pare antes de iniciar de novo."
             )
+        # Sempre no máximo um processo por slot (ver docstring acima,
+        # "Varredura de órfão"): mata qualquer `run_live.py` deste slot que o
+        # arquivo de estado não conhece antes de subir um novo. Sem custo no
+        # caso comum (retorna `False` na hora se não achar nada).
+        _parar_processo_nao_rastreado(config.slot)
         if not config.strategy:
             raise RuntimeError(
                 "nenhum robô de investimento selecionado — não há robô "
