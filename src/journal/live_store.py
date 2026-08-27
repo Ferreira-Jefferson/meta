@@ -1649,5 +1649,11 @@ def daytrade_order_events_on(conn: sqlite3.Connection, account_id: int, day: str
             "side": side, "kind": kind,
             "quantity": payload.get("quantity"),
             "price": payload.get("limit_price", payload.get("price")),
+            # Reancoragem da MESMA rodada carrega o mesmo `numero_ordem` --
+            # e' o que deixa `_ordens_por_lado` (intraday_runtime.py) nao
+            # contar um "(substitui)" como ordem nova. `None` num evento sem
+            # o campo (payload antigo) faz cada linha contar sozinha, igual
+            # sempre contou.
+            "numero_ordem": payload.get("numero_ordem"),
         })
     return out

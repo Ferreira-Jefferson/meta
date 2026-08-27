@@ -291,6 +291,11 @@
       {% endif %}
       {% if s.daytrade.ordem_em_pe and s.daytrade.ordem_em_pe.lado == "long" %}
       · em pé @ {{ "%.4f"|format(s.daytrade.ordem_em_pe.preco) }}
+      {# Ticket de VERDADE da corretora (2026-08-27, pedido do dono) --
+         `None` em modo sombra, que nunca manda ordem pra corretora. #}
+      {% if s.daytrade.ordem_em_pe.tickets %}
+      · ticket {{ s.daytrade.ordem_em_pe.tickets | join(", ") }}
+      {% endif %}
       {% endif %}
     </span>
   </div>
@@ -306,6 +311,11 @@
       {% endif %}
       {% if s.daytrade.ordem_em_pe and s.daytrade.ordem_em_pe.lado == "short" %}
       · em pé @ {{ "%.4f"|format(s.daytrade.ordem_em_pe.preco) }}
+      {# Ticket de VERDADE da corretora (2026-08-27, pedido do dono) --
+         `None` em modo sombra, que nunca manda ordem pra corretora. #}
+      {% if s.daytrade.ordem_em_pe.tickets %}
+      · ticket {{ s.daytrade.ordem_em_pe.tickets | join(", ") }}
+      {% endif %}
       {% endif %}
     </span>
   </div>

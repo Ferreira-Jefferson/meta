@@ -444,6 +444,27 @@ def test_live_registra_ordem_limite_pendente_de_verdade_na_corretora(tmp_path, p
     assert primeira.side == OrderSide.BUY
 
 
+def test_ordem_em_pe_mostra_o_ticket_de_verdade_da_corretora_em_modo_live(tmp_path, pregao_aberto):
+    """2026-08-27, pedido do dono: ele queria o ticket REAL da corretora no
+    lugar do numero de rodada interno (`#NN`), achando que o ticket nao dava
+    pra recuperar. Da' -- `MT5Broker.place_pending` ja' grava em `broker_ref`
+    (ver `_FakeMT5Broker.place_pending`), so' nunca tinha chegado ao painel.
+    `#NN` continua existindo (round que sobrevive a reancoragem), o ticket e'
+    ADICIONAL, nao substituto."""
+    broker = _FakeMT5Broker()
+    barras = [
+        _bar("13:00", 10.00, 10.00, 10.00, 10.00),
+        _bar("13:01", 10.00, 10.00, 10.00, 10.00),
+    ]
+    rt, _feed = _runtime_live(tmp_path, barras, broker)
+
+    rt.run_once(now=_agora("13:03:00"))
+
+    ordem = rt.status()["daytrade"]["ordem_em_pe"]
+    assert ordem is not None
+    assert ordem["tickets"] == [broker.pendentes_enviadas[0].broker_ref]
+
+
 def test_live_barra_atravessa_o_nivel_mas_corretora_nao_tem_posicao_nao_abre(tmp_path, pregao_aberto):
     """O coracao da mudanca. A barra desce MUITO abaixo do nivel da ordem --
     no backtest isso e' um fill garantido. Com a corretora reportando conta
@@ -1483,6 +1504,9 @@ def test_status_reporta_fuso_corte_e_ordem_em_pe(tmp_path, pregao_aberto):
     assert s["daytrade"]["corte_flatten_utc"] == "19:54:00"
     assert s["daytrade"]["ordem_em_pe"]["lado"] == "long"
     assert s["daytrade"]["ordem_em_pe"]["preco"] == pytest.approx(9.80)
+    # Sombra nunca manda ordem pra corretora -- sem ticket de verdade pra
+    # mostrar (ver test_ordem_em_pe_mostra_o_ticket_de_verdade_da_corretora_em_modo_live).
+    assert s["daytrade"]["ordem_em_pe"]["tickets"] is None
 
 
 def test_painel_ve_a_ordem_em_pe_num_runtime_de_leitura_novo(tmp_path, pregao_aberto):
@@ -1991,6 +2015,34 @@ def test_ordens_por_lado_sem_desfecho_ainda_e_none():
     assert r["valor_ordens_venda"] == 0.0
 
 
+def test_ordens_por_lado_nao_conta_reancoragem_da_mesma_rodada_como_ordem_nova():
+    """Queixa do dono, 2026-08-27: o diario so' tinha chegado em "#02" mas o
+    card "Ordens" mostrava 4 -- cada "(substitui)" (mesma rodada, preco novo,
+    ver `_on_limit_placed`) vinha somando +1 e o nocional do preco
+    abandonado, em vez de so' atualizar a rodada existente."""
+    ordens = [
+        {"side": "long", "kind": "armada", "quantity": 100, "price": 10.0, "numero_ordem": 1},
+        {"side": "long", "kind": "armada", "quantity": 100, "price": 11.0, "numero_ordem": 1},  # substitui #01
+        {"side": "long", "kind": "armada", "quantity": 100, "price": 9.0, "numero_ordem": 2},   # rodada NOVA
+    ]
+    r = IntradayLiveRuntime._ordens_por_lado(ordens)
+
+    assert r["ordens_compra"] == 2                   # #01 (uma vez so') + #02
+    # nocional: ULTIMO preco de #01 (11.0, nao 10.0) + preco de #02 -- nunca
+    # soma as duas reancoragens da mesma rodada.
+    assert r["valor_ordens_compra"] == 100 * 11.0 + 100 * 9.0
+
+    # sem `numero_ordem` (payload antigo) cada linha continua contando
+    # sozinha, exatamente como antes desta mudanca.
+    legado = [
+        {"side": "short", "kind": "armada", "quantity": 50, "price": 20.0},
+        {"side": "short", "kind": "armada", "quantity": 50, "price": 21.0},
+    ]
+    r2 = IntradayLiveRuntime._ordens_por_lado(legado)
+    assert r2["ordens_venda"] == 2
+    assert r2["valor_ordens_venda"] == 50 * 20.0 + 50 * 21.0
+
+
 def test_status_traz_ganhos_perdas_cagr_dd_e_acerto_por_lado_de_ponta_a_ponta(
     tmp_path, pregao_aberto,
 ):
@@ -2148,7 +2200,8 @@ def test_eventos_gravados_antes_do_campo_sessao_existir_ainda_contam_no_dia(tmp_
 
     assert saidas == [{"date": hoje, "round": 1, "side": "long", "pnl_brl": 10.0}]
     # so' a "armada" -- nao gravei uma "entrada"
-    assert ordens == [{"side": "long", "kind": "armada", "quantity": 100, "price": 9.8}]
+    assert ordens == [{"side": "long", "kind": "armada", "quantity": 100, "price": 9.8,
+                        "numero_ordem": 1}]
 
     r = IntradayLiveRuntime._resultado_dia_e_acumulado(saidas, hoje, 100.0)
     assert r["ganhos_dia"] == 10.0  # nao pode sumir so' por faltar "sessao"
@@ -2717,6 +2770,61 @@ def test_ordem_substituida_que_nao_cancelou_continua_vigiada(tmp_path, pregao_ab
     assert orfas, [m for _l, m in eventos]
     assert orfas[0][0] == "warn"
     assert "1001" in orfas[0][1]
+
+
+def test_status_nao_conta_ancora_rolante_como_ordem_nova(tmp_path, pregao_aberto):
+    """Ponta a ponta do bug relatado pelo dono em 27/08/2026: no painel
+    real, o diario mostrava so' a rodada #02 (a #01 nunca preencheu e foi
+    reancorada) e o card "Ordens" contava 4, somando o nocional de tres
+    precos ja abandonados pela propria reancoragem. Mesmo roteiro de
+    `test_ordem_substituida_que_nao_cancelou_continua_vigiada` (ancora rola
+    a cada barra), mas lendo `status()` -- o caminho de VERDADE que
+    `daytrade_order_events_on` alimenta -- em vez de inspecionar a maquina."""
+    # Barras planas mas com o FECHAMENTO subindo a cada uma (10.00 -> 10.05
+    # -> 10.10): a ancora rola pra um nivel NOVO a cada barra (a guarda de
+    # "mesmo nivel" -- `_reancoragem_no_mesmo_nivel`, commit 672bd5e -- so'
+    # suprime o rearme quando o nivel recalculado da' EXATAMENTE no mesmo
+    # lugar, o que barras totalmente planas produziriam). Nenhuma barra toca
+    # o proprio nivel (sempre ~2% abaixo do fechamento dela), entao nunca
+    # preenche -- so' reancora.
+    broker = _FakeMT5Broker()
+    rt, feed = _runtime_live(
+        tmp_path, [_bar("13:05", 10.00, 10.00, 10.00, 10.00)], broker,
+        fixed_anchor_until=time(13, 0), rolling_reanchor_after_bars=1,
+    )
+
+    rt.run_once(now=_agora("13:05:30"))            # comeco a frio: so' marca
+    feed._barras.append(_bar("13:06", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:06:30"))            # arma #01 @ ~9.80
+    feed._barras.append(_bar("13:07", 10.05, 10.05, 10.05, 10.05))
+    rt.run_once(now=_agora("13:07:30"))            # ainda esperando o rearme
+    feed._barras.append(_bar("13:08", 10.10, 10.10, 10.10, 10.10))
+    rt.run_once(now=_agora("13:08:30"))            # reancora #01 @ ~9.90 (substitui)
+    feed._barras.append(_bar("13:09", 10.20, 10.20, 10.20, 10.20))
+    rt.run_once(now=_agora("13:09:30"))            # ainda esperando o rearme
+    feed._barras.append(_bar("13:10", 10.30, 10.30, 10.30, 10.30))
+    rt.run_once(now=_agora("13:10:30"))            # reancora #01 de novo (substitui)
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        eventos = [r["message"] for r in conn.execute(
+            "SELECT message FROM live_events WHERE account_id = ? ORDER BY id",
+            (acc.id,))]
+    postas = [m for m in eventos if m.startswith("LIMITE ")]
+    assert len(postas) == 3, postas          # armou 1a vez + reancorou 2x
+    assert all("#01" in m for m in postas)   # nunca virou #02: mesma rodada
+
+    s = rt.status()["daytrade"]
+    ordem = s["ordem_em_pe"]
+    assert ordem is not None
+    lado = ordem["lado"]
+    contagem_chave = "ordens_compra" if lado == "long" else "ordens_venda"
+    valor_chave = "valor_ordens_compra" if lado == "long" else "valor_ordens_venda"
+
+    assert s[contagem_chave] == 1, "reancoragem da mesma rodada nao e' ordem nova"
+    # nocional so' da ULTIMA reancoragem (a que ainda esta' em pe), nunca a
+    # soma dos tres precos que a propria rodada ja abandonou.
+    assert s[valor_chave] == pytest.approx(ordem["quantidade"] * ordem["preco"])
 
 
 def test_fatia_de_saida_que_nao_cancelou_nao_e_esquecida(tmp_path):

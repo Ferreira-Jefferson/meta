@@ -600,21 +600,41 @@ class IntradayLiveRuntime:
         (`ordens_compra`/`ordens_venda`) virando texto secundário (pedido do
         dono, 2026-08-24: "deve aparecer os valores, e as quantidades
         abaixo"). Mesma população da contagem (armadas, não preenchidas),
-        pra o número grande e o texto pequeno descreverem a mesma coisa."""
+        pra o número grande e o texto pequeno descreverem a mesma coisa.
+
+        Reancoragem da MESMA rodada (`numero_ordem` repetido, o "(substitui)"
+        do diário -- ver a docstring de `_on_limit_placed`) NÃO conta como
+        ordem nova aqui (queixa do dono, 2026-08-27: o diário só tinha
+        chegado em "#02" e o card já mostrava 4 ordens armadas, somando o
+        nocional de TRÊS preços que a própria rodada já tinha abandonado).
+        `numero_ordem` ausente (payload antigo, ou eventos sintéticos de
+        teste sem o campo) preserva o comportamento de sempre -- cada linha
+        conta como rodada própria, via uma chave de posição que nunca se
+        repete."""
         contagem = {lado: {"armada": 0, "preenchida": 0, "cancelada": 0} for lado in ("long", "short")}
-        valor_armada = {"long": 0.0, "short": 0.0}
-        for o in ordens_hoje:
+        valor_rodada = {"long": {}, "short": {}}
+        for i, o in enumerate(ordens_hoje):
             lado = o["side"]
             if lado not in contagem:
                 continue
-            contagem[lado][o["kind"]] += 1
-            if o["kind"] == "armada" and o.get("quantity") is not None and o.get("price") is not None:
-                valor_armada[lado] += o["quantity"] * o["price"]
+            kind = o["kind"]
+            if kind != "armada":
+                contagem[lado][kind] += 1
+                continue
+            chave = o.get("numero_ordem")
+            if chave is None:
+                chave = ("sem-numero", i)
+            if chave not in valor_rodada[lado]:
+                contagem[lado]["armada"] += 1
+            if o.get("quantity") is not None and o.get("price") is not None:
+                # Última reancoragem VENCE (mesma rodada, preço novo) -- não
+                # soma com a que ela substituiu.
+                valor_rodada[lado][chave] = o["quantity"] * o["price"]
 
         resultado = {
             "ordens_compra": contagem["long"]["armada"], "ordens_venda": contagem["short"]["armada"],
-            "valor_ordens_compra": round(valor_armada["long"], 2),
-            "valor_ordens_venda": round(valor_armada["short"], 2),
+            "valor_ordens_compra": round(sum(valor_rodada["long"].values()), 2),
+            "valor_ordens_venda": round(sum(valor_rodada["short"].values()), 2),
         }
         for lado, chave in (("long", "preenchida_compra_pct"), ("short", "preenchida_venda_pct")):
             desfechos = contagem[lado]["preenchida"] + contagem[lado]["cancelada"]
@@ -693,6 +713,14 @@ class IntradayLiveRuntime:
             # Em ACOES/CONTRATOS, nao em lotes -- mesma unidade de
             # `Order.quantity` (quem quer lotes divide por `default_quantity`).
             "quantidade": sum(filhos),
+            # Ticket(s) DE VERDADE da corretora (2026-08-27, pedido do dono:
+            # antes so' existia o numero de rodada `#NN`, que o dono confundiu
+            # com "nao da' pra saber o ticket" -- da', `Order.broker_ref` ja'
+            # vinha sendo gravado desde a Fase 2, so' nunca tinha chegado ao
+            # painel). `None` em modo sombra (nunca manda ordem pra corretora,
+            # entao `pending_entry_refs` fica sempre vazio) -- o painel decide
+            # se mostra "ticket" ou nao a partir disto, nao de `execution_mode`.
+            "tickets": list(self._snapshot.pending_entry_refs or []) or None,
         }
 
     def _persist(self, conn, account: AccountState) -> None:
