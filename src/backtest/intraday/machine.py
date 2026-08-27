@@ -202,6 +202,45 @@ class IntradayBacktestConfig:
     # torna isso visivel e mensuravel (portao G5 do plano da Copa: menos de
     # 5% das ordens).
     max_open_contracts: int | None = None
+    # Q_FRENTE: quantidade assumida PARADA NA FRENTE, no book, no exato nivel
+    # de uma ordem-limite (maker), no INSTANTE em que ela e' armada -- em
+    # lotes/acoes, absoluto. Default `0.0` preserva o comportamento antigo
+    # (preenchimento no PRIMEIRO toque, sem fila nenhuma) -- so' quem passa um
+    # valor explicito liga o modelo.
+    #
+    # Existe porque "tocou o nivel" NAO E' "preencheu": no book real, o preco
+    # ter negociado no seu nivel significa que ALGUEM negociou ali -- muito
+    # provavelmente com quem estava na frente da fila, nao com voce. Medido
+    # ao vivo na PMAM3 em 2026-08-26: 12 ordens reais enviadas, 0
+    # preenchimentos, contra 7 trades do gemeo em modo sombra (que preenche
+    # por toque, sem fila) no MESMO pregao -- e' o motor de sombra/backtest
+    # que estava sendo otimista, nao o real que estava "sem sorte".
+    #
+    # Mecanica (ver `IntradaySessionMachine._resolve_limit_fills` e o campo
+    # `_queue_ahead_remaining`): ao armar a ordem, `_queue_ahead_remaining`
+    # comeca em `queue_ahead_qty`. Cada barra/tick que TOCA o nivel (mesmo
+    # criterio de `_limit_touched`, que a familia gremah ja usa para decidir
+    # fill) consome `bar.volume` desse acumulado ANTES de qualquer coisa
+    # sobrar para os FILHOS da propria ordem -- a fila e' um property do
+    # NIVEL, compartilhada por todos os filhos, nao um contador por filho.
+    # So' o volume EXCEDENTE (depois da fila zerar) pode preencher, ainda
+    # sujeito ao cap de `limit_fill_capped_by_volume` que ja existe.
+    #
+    # `Q_frente` e' INOBSERVAVEL no dado que este repo tem (tick MT5: bid/
+    # ask/last/volume/flags -- profundidade de book NAO existe, ver
+    # `market_data_intraday/tick_storage.py`). Por isso e' PARAMETRO, nunca
+    # um numero inventado como fato: quem usa faz sensibilidade (varios
+    # valores), nunca uma unica corrida.
+    #
+    # O ponto que teve de ser respeitado por desenho (commit `672bd5e`,
+    # `_reancoragem_no_mesmo_nivel`): um REARME que recalcula o MESMO nivel
+    # (comum em ativo de centavos, ver a docstring daquele metodo) NAO reseta
+    # `_queue_ahead_remaining` -- a ordem nunca saiu do book de verdade,
+    # entao a fila que ja tinha sido cortada continua cortada. Um rearme que
+    # muda de nivel de verdade (perdeu a fila -- foi para o FIM de uma fila
+    # NOVA) reseta para `queue_ahead_qty` outra vez. E' exatamente o custo
+    # que o motor antigo cobrava ZERO e este parametro passa a cobrar.
+    queue_ahead_qty: float = 0.0
 
 
 @dataclass
@@ -501,6 +540,16 @@ class IntradaySessionMachine:
         # agregado, decrescido pelo que a corretora reportar como
         # crescimento da posicao a cada barra (ver `_resolve_limit_fills`).
         self._resting_children_qty: list[int] = []
+        # Q_frente RESTANTE a ser limpo pelo volume negociado no nivel antes
+        # de qualquer filho de `resting_limit` poder preencher -- ver
+        # `IntradayBacktestConfig.queue_ahead_qty`. Comeca em
+        # `queue_ahead_qty` toda vez que um NIVEL NOVO e' armado (`resume_
+        # session`, ou `on_closed_bar` quando `_reancoragem_no_mesmo_nivel`
+        # e' `False`); um rearme que recalcula o MESMO nivel NAO reseta --
+        # e' esse o ponto inteiro da guarda de `672bd5e`. `0.0` (default,
+        # `queue_ahead_qty=0.0`) mantem o motor 100% identico ao
+        # comportamento antigo (preenche no toque, sem fila).
+        self._queue_ahead_remaining: float = 0.0
         # Fatia de SAIDA (`_Position.exit_split_unit`) vigiada agora para
         # CADA posicao -- ordem-limite REAL na corretora quando `execution`
         # esta setado (`_resolve_live_split_exit`), ou simulada contra
@@ -571,6 +620,10 @@ class IntradaySessionMachine:
             self.resting_limit = seed_pending
             self.resting_limit_bars_waited = 0
             self._resting_children_qty = seed_pending.children(self.config.default_quantity)
+            # Warm start nao sabe quanto da fila real ja tinha sido cortado
+            # antes do processo cair -- assume o pior caso (fila inteira de
+            # novo), mesmo espirito conservador do resto do warm start.
+            self._queue_ahead_remaining = self.config.queue_ahead_qty
 
     def _reset_session(self, session_date, clear_resting: bool = True) -> None:
         self.session_date = session_date
@@ -580,6 +633,7 @@ class IntradaySessionMachine:
             self.resting_limit = None
             self.resting_limit_bars_waited = 0
             self._resting_children_qty = []
+            self._queue_ahead_remaining = 0.0
 
     # ---------- persistencia (so a operacao ao vivo usa) ------------------
 
@@ -986,6 +1040,7 @@ class IntradaySessionMachine:
                     events.append(LimitCancelled(order=self.resting_limit, ts=ts, reason="superseded"))
                     self.resting_limit = None
                     self._resting_children_qty = []
+                    self._queue_ahead_remaining = 0.0
             else:
                 self.pending = None  # Enter com posicao ja aberta (ou Exit sem posicao): descartado
 
@@ -1056,12 +1111,14 @@ class IntradaySessionMachine:
                     else:
                         self.resting_limit = None
                         self.resting_limit_bars_waited = 0
+                        self._queue_ahead_remaining = 0.0
                 else:
                     self.resting_limit_bars_waited += 1
                     if order.ttl_bars is not None and self.resting_limit_bars_waited >= order.ttl_bars:
                         self.resting_limit = None
                         self._resting_children_qty = []
                         self.resting_limit_bars_waited = 0
+                        self._queue_ahead_remaining = 0.0
                         events.append(LimitCancelled(order=order, ts=ts, reason="ttl"))
 
         # (5) decisao do robo para a PROXIMA barra — nao roda mais depois do flatten.
@@ -1094,6 +1151,7 @@ class IntradaySessionMachine:
                     self.resting_limit = None
                     self._resting_children_qty = []
                     self.resting_limit_bars_waited = 0
+                    self._queue_ahead_remaining = 0.0
                 elif isinstance(action, EnterLimit) and not self.positions:
                     if self._reancoragem_no_mesmo_nivel(action, cfg.default_quantity):
                         # Rearme que recalculou EXATAMENTE o mesmo nivel: a
@@ -1116,6 +1174,14 @@ class IntradaySessionMachine:
                         # `resting_limit_bars_waited` mede uma ordem que nunca
                         # saiu do book, e zera-la aqui faria `ttl_bars` nunca
                         # vencer para quem rearma no mesmo nivel.
+                        #
+                        # `_queue_ahead_remaining` (Q_frente, ver
+                        # `IntradayBacktestConfig.queue_ahead_qty`) tambem NAO
+                        # reseta aqui, pelo MESMO motivo: a ordem nunca saiu
+                        # do book, a fila que ja tinha sido cortada continua
+                        # cortada. E' o ponto inteiro desta guarda -- sem ele
+                        # o modelo de fila cobraria fim-de-fila num rearme que
+                        # nem chegou a acontecer na corretora.
                         self.resting_limit = action
                     else:
                         # substitui (nao acumula) qualquer ordem-limite ja pendente
@@ -1123,6 +1189,11 @@ class IntradaySessionMachine:
                         self.resting_limit = action
                         self.resting_limit_bars_waited = 0
                         self._resting_children_qty = action.children(cfg.default_quantity)
+                        # Nivel NOVO (ou primeira ordem): perdeu qualquer fila
+                        # que tivesse sido cortada no nivel anterior -- volta
+                        # para o FIM da fila do nivel novo (ver
+                        # `IntradayBacktestConfig.queue_ahead_qty`).
+                        self._queue_ahead_remaining = cfg.queue_ahead_qty
 
         for pos in self.positions:
             pos.bars_held += 1
@@ -1178,6 +1249,7 @@ class IntradaySessionMachine:
         self.resting_limit = None
         self._resting_children_qty = []
         self.resting_limit_bars_waited = 0
+        self._queue_ahead_remaining = 0.0
 
     def force_flatten(self, ts: pd.Timestamp, price: float) -> list[MachineEvent]:
         """Achata a posicao (se houver) e cancela a ordem-limite vigiada, SEM
@@ -1203,6 +1275,7 @@ class IntradaySessionMachine:
             self.resting_limit = None
         self._resting_children_qty = []
         self.resting_limit_bars_waited = 0
+        self._queue_ahead_remaining = 0.0
         self.pending = None
         self.flattened = True
         return eventos
@@ -1480,7 +1553,21 @@ class IntradaySessionMachine:
         `ttl_bars`/`resting_limit_bars_waited` do lado de fora nao muda).
         Uma falha em CONSULTAR a corretora nao vira "nao preencheu" (isso
         faria o robo re-armar sobre uma posicao que talvez ja exista) -- a
-        excecao sobe de dentro de `limit_fill`."""
+        excecao sobe de dentro de `limit_fill`.
+
+        MODELO DE FILA (2026-08-27, `IntradayBacktestConfig.queue_ahead_qty`,
+        Q_frente, ADITIVO -- default `0.0` reproduz este metodo EXATAMENTE
+        como estava antes desta mudanca): so' entra em jogo no caminho
+        SIMULADO (`self.execution is None` -- execucao REAL ja reflete fila
+        de verdade, a corretora decide sozinha). Quando `self.
+        _queue_ahead_remaining > 0`, cada barra/tick que TOCA o nivel (o
+        MESMO criterio de `_limit_touched` -- toque e' negocio AO PRECO do
+        nivel ou melhor) consome `bar.volume` desse acumulado ANTES de
+        qualquer coisa sobrar para os filhos desta ordem. So' o volume
+        EXCEDENTE (depois da fila zerar) e' o `orcamento` que os dois ramos
+        abaixo (com/sem `limit_fill_capped_by_volume`) enxergam -- a fila e'
+        uma propriedade do NIVEL, compartilhada por todos os filhos, nao um
+        contador por filho."""
         if self.execution is not None:
             fill = self.execution.limit_fill(order, bar)
             if fill is None:
@@ -1493,13 +1580,28 @@ class IntradaySessionMachine:
         if not _limit_touched(order, bar):
             return [], children_qty
 
+        orcamento = bar.volume
+        if self._queue_ahead_remaining > 0.0:
+            consumido = min(orcamento, self._queue_ahead_remaining)
+            self._queue_ahead_remaining -= consumido
+            orcamento -= consumido
+            if self._queue_ahead_remaining > 0.0:
+                # fila ainda nao zerou nesta barra/tick -- nada sobra para
+                # nos, mas o toque JA consumiu fila (nao e' descartado: o
+                # `orcamento` deste evento foi de verdade gasto por quem
+                # estava na nossa frente).
+                return [], children_qty
+
         if not self.config.limit_fill_capped_by_volume:
+            # Sem cap por volume: uma vez que a fila (se houver) ja zerou
+            # (checado acima), o toque preenche tudo de uma vez -- MESMA
+            # premissa otimista de sempre sobre o volume do proprio evento,
+            # so que agora depois de pagar o pedagio da fila, nao antes.
             total = sum(children_qty)
             return ([(order.limit_price, total)] if total else []), []
 
         fills: list[tuple[float, int]] = []
         remaining: list[int] = []
-        orcamento = bar.volume
         for qty in children_qty:
             if orcamento >= qty:
                 fills.append((order.limit_price, qty))

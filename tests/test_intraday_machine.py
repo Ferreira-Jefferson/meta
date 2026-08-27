@@ -1154,3 +1154,157 @@ def test_teto_libera_de_novo_quando_a_posicao_fecha():
     m.on_closed_bar(_bar(2, 10.0, 10.0, 10.0, 10.0))
     m.on_closed_bar(_bar(3, 10.0, 10.0, 10.0, 10.0))
     assert m.open_contracts == 0
+
+
+# ---------- modelo de fila (Q_frente) no preenchimento ---------------------
+# `IntradayBacktestConfig.queue_ahead_qty` (2026-08-27, Fase A do modelo de
+# fila -- ver a docstring do campo em `machine.py`). Cobre as quatro
+# garantias pedidas: fila zerada reproduz o toque-preenche-tudo de sempre;
+# Q_frente grande nunca preenche; rearme que MUDA de nivel reseta o
+# acumulado (perdeu a fila de verdade); rearme no MESMO nivel (guarda
+# `_reancoragem_no_mesmo_nivel`, commit `672bd5e`) NAO reseta.
+
+def test_queue_ahead_qty_zero_reproduz_o_toque_preenche_tudo():
+    """Default (`queue_ahead_qty=0.0`, e passado explicito aqui): NENHUMA
+    mudanca de comportamento -- toca, preenche por inteiro, mesma barra,
+    mesmo com volume irrisorio (a fila esta' desligada, entao nem existe)."""
+    strat = _Scripted({0: [EnterLimit(side="long", limit_price=9.80, quantity=300)]})
+    m = IntradaySessionMachine(strat, _config(queue_ahead_qty=0.0))
+    m.begin_session(pd.Timestamp("2026-01-05").date())
+    m.on_closed_bar(_bar_vol(0, 10.00, 10.00, 10.00, 10.00, 0.0))
+
+    ev = m.on_closed_bar(_bar_vol(1, 10.00, 10.00, 9.79, 9.85, 1.0))  # so' 1 acao negociou
+    abertas = [e for e in ev if isinstance(e, PositionOpened)]
+    assert len(abertas) == 1
+    assert abertas[0].quantity == 300
+
+
+def test_fila_grande_nunca_preenche_mesmo_tocando_varias_vezes():
+    """Q_frente maior que TODO volume negociado no nivel em 20 barras: a
+    ordem nunca chega na frente da fila -- nunca preenche, nao importa
+    quantas barras toquem."""
+    strat = _Scripted({0: [EnterLimit(side="long", limit_price=9.80, quantity=100)]})
+    m = IntradaySessionMachine(strat, _config(queue_ahead_qty=1_000_000.0))
+    m.begin_session(pd.Timestamp("2026-01-05").date())
+    m.on_closed_bar(_bar_vol(0, 10.00, 10.00, 10.00, 10.00, 0.0))
+
+    for minuto in range(1, 21):
+        ev = m.on_closed_bar(_bar_vol(minuto, 9.80, 9.80, 9.80, 9.80, 500.0))  # toca toda barra
+        assert [e for e in ev if isinstance(e, PositionOpened)] == []
+    assert m.position is None
+    assert m.resting_limit is not None  # ainda parada, esperando a fila zerar
+
+
+def test_fila_consome_volume_e_preenche_o_excedente_depois_de_zerar():
+    """Q_frente=200: a primeira barra que toca so' tem 150 de volume -- vai
+    tudo para a fila, nada sobra, nao preenche. A segunda tem 100: 50 zeram
+    a fila e o resto do orcamento preenche a ordem inteira (sem cap por
+    volume -- MESMA logica otimista de sempre, so' que depois de pagar o
+    pedagio da fila, nao antes)."""
+    strat = _Scripted({0: [EnterLimit(side="long", limit_price=9.80, quantity=300)]})
+    m = IntradaySessionMachine(strat, _config(queue_ahead_qty=200.0))
+    m.begin_session(pd.Timestamp("2026-01-05").date())
+    m.on_closed_bar(_bar_vol(0, 10.00, 10.00, 10.00, 10.00, 0.0))
+
+    ev1 = m.on_closed_bar(_bar_vol(1, 10.00, 10.00, 9.79, 9.85, 150.0))
+    assert [e for e in ev1 if isinstance(e, PositionOpened)] == []
+    assert m.resting_limit is not None
+
+    ev2 = m.on_closed_bar(_bar_vol(2, 9.85, 9.85, 9.79, 9.80, 100.0))
+    abertas = [e for e in ev2 if isinstance(e, PositionOpened)]
+    assert len(abertas) == 1
+    assert abertas[0].quantity == 300
+    assert abertas[0].price == pytest.approx(9.80)
+
+
+def test_fila_com_cap_por_volume_preenche_so_o_excedente_por_filho():
+    """Q_frente=200 + `limit_fill_capped_by_volume=True` + ordem dividida em
+    filhos de 100: a barra que zera a fila com 250 de volume so' tem 50 de
+    excedente -- nenhum filho de 100 cabe (FOK por pedaco, mesma regra de
+    sempre). A barra seguinte, com a fila JA zerada, usa o orcamento por
+    inteiro e cabe 1 filho."""
+    strat = _Scripted({0: [EnterLimit(side="long", limit_price=9.80, quantity=300,
+                                      split_quantities=(100, 100, 100))]})
+    m = IntradaySessionMachine(
+        strat, _config(queue_ahead_qty=200.0, limit_fill_capped_by_volume=True))
+    m.begin_session(pd.Timestamp("2026-01-05").date())
+    m.on_closed_bar(_bar_vol(0, 10.00, 10.00, 10.00, 10.00, 0.0))
+
+    ev1 = m.on_closed_bar(_bar_vol(1, 10.00, 10.00, 9.79, 9.85, 250.0))
+    assert [e for e in ev1 if isinstance(e, PositionOpened)] == []
+    assert m.resting_limit is not None
+
+    ev2 = m.on_closed_bar(_bar_vol(2, 9.85, 9.85, 9.79, 9.80, 100.0))
+    abertas2 = [e for e in ev2 if isinstance(e, PositionOpened)]
+    assert len(abertas2) == 1
+    assert abertas2[0].quantity == 100
+
+
+def test_rearme_no_mesmo_nivel_nao_reseta_a_fila_ja_cortada():
+    """Rearme que recalcula o MESMO nivel (guarda `_reancoragem_no_mesmo_
+    nivel`, commit `672bd5e`) NAO devolve a ordem para o fim da fila: o
+    volume ja cortado antes desta decisao continua contando."""
+    mesma = dict(side="long", limit_price=9.80, quantity=300)
+    strat = _Scripted({
+        0: [EnterLimit(**mesma)],
+        2: [EnterLimit(**mesma)],  # rearme no MESMO nivel, decidido na barra 2
+    })
+    m = IntradaySessionMachine(strat, _config(queue_ahead_qty=200.0))
+    m.begin_session(pd.Timestamp("2026-01-05").date())
+    m.on_closed_bar(_bar_vol(0, 10.00, 10.00, 10.00, 10.00, 0.0))
+
+    # corta 150 dos 200 -- sobram 50, nao preenche.
+    ev1 = m.on_closed_bar(_bar_vol(1, 10.00, 10.00, 9.79, 9.85, 150.0))
+    assert [e for e in ev1 if isinstance(e, PositionOpened)] == []
+
+    # rearme no MESMO nivel: nem LimitPlaced nem LimitCancelled saem (guarda
+    # ativa), e esta barra nao tem volume nenhum tocando o nivel.
+    ev2 = m.on_closed_bar(_bar_vol(2, 10.00, 10.05, 9.95, 10.00, 0.0))
+    assert [e for e in ev2 if isinstance(e, (LimitPlaced, LimitCancelled))] == []
+    assert [e for e in ev2 if isinstance(e, PositionOpened)] == []
+
+    # so' faltam 50 para zerar a fila -- 50 de volume bastam, PROVANDO que os
+    # 150 ja cortados na barra 1 nao foram perdidos no rearme da barra 2.
+    ev3 = m.on_closed_bar(_bar_vol(3, 10.00, 10.00, 9.79, 9.80, 50.0))
+    abertas = [e for e in ev3 if isinstance(e, PositionOpened)]
+    assert len(abertas) == 1
+    assert abertas[0].quantity == 300
+
+
+def test_rearme_que_muda_de_nivel_reseta_a_fila():
+    """O oposto do teste acima: um rearme que troca de NIVEL de verdade
+    (cancela+manda de verdade na corretora) perde a fila -- volta para
+    `queue_ahead_qty` inteiro no nivel novo."""
+    strat = _Scripted({
+        0: [EnterLimit(side="long", limit_price=9.80, quantity=300)],
+        2: [EnterLimit(side="long", limit_price=9.70, quantity=300)],  # nivel NOVO
+    })
+    m = IntradaySessionMachine(strat, _config(queue_ahead_qty=200.0))
+    m.begin_session(pd.Timestamp("2026-01-05").date())
+    m.on_closed_bar(_bar_vol(0, 10.00, 10.00, 10.00, 10.00, 0.0))
+
+    # corta 150 da fila do nivel 9.80 (sobram 50) -- nao preenche.
+    ev1 = m.on_closed_bar(_bar_vol(1, 10.00, 10.00, 9.79, 9.85, 150.0))
+    assert [e for e in ev1 if isinstance(e, PositionOpened)] == []
+
+    # barra 2: rearma num nivel DIFERENTE -- cancela+manda de verdade
+    # (LimitPlaced com `replaced` setado, nao a guarda do mesmo nivel).
+    ev2 = m.on_closed_bar(_bar_vol(2, 10.00, 10.05, 9.95, 10.00, 0.0))
+    postas = [e for e in ev2 if isinstance(e, LimitPlaced)]
+    assert len(postas) == 1
+    assert postas[0].replaced is not None
+
+    # se a fila NAO tivesse resetado, so' faltariam 50 dos 200 originais e
+    # este volume bastaria. Com o reset, 50 nao e' suficiente -- prova que
+    # o nivel novo comecou do zero.
+    ev3 = m.on_closed_bar(_bar_vol(3, 9.70, 9.70, 9.69, 9.70, 50.0))
+    assert [e for e in ev3 if isinstance(e, PositionOpened)] == []
+    assert m.resting_limit is not None
+
+    # completando os 200 do nivel novo (150 aqui, ja tinha cortado 50 acima)
+    # preenche por inteiro no NIVEL NOVO.
+    ev4 = m.on_closed_bar(_bar_vol(4, 9.70, 9.70, 9.69, 9.70, 150.0))
+    abertas = [e for e in ev4 if isinstance(e, PositionOpened)]
+    assert len(abertas) == 1
+    assert abertas[0].quantity == 300
+    assert abertas[0].price == pytest.approx(9.70)
