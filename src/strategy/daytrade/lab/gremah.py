@@ -76,7 +76,6 @@ from strategy.daytrade.base import (
     JanelaVolatilidadeDiaria,
     RollingVolumeWindow,
     capital_minimo_brl,
-    geometria_e_degenerada,
 )
 
 #: Sessoes anteriores usadas por padrao para medir o range diario mediano
@@ -280,7 +279,6 @@ _CAPACIDADE_BY_SYMBOL: dict[str, _SymbolCapacidade] = {
     "CSAN3": _SymbolCapacidade(mult=3.0, fracao=0.05),
     "DASA3": _SymbolCapacidade(mult=0.1, fracao=0.01),
     "PCAR3": _SymbolCapacidade(mult=1.0, fracao=0.3),
-    "CLSC4": _SymbolCapacidade(mult=1.0, fracao=0.10),
     "KLBN3": _SymbolCapacidade(mult=1.0, fracao=0.10),
     "GRND3": _SymbolCapacidade(mult=0.75, fracao=0.3),
     "LPSB3": _SymbolCapacidade(mult=1.0, fracao=0.10),
@@ -364,7 +362,6 @@ _CALIBRATION_BY_SYMBOL: dict[str, _SymbolCalibration] = {
     "CSAN3": _SymbolCalibration(profit_pct=0.0021, stop_multiplier=20.0),
     "DASA3": _SymbolCalibration(profit_pct=0.0021, stop_multiplier=10.0),
     "PCAR3": _SymbolCalibration(profit_pct=0.0021, stop_multiplier=10.0),
-    "CLSC4": _SymbolCalibration(profit_pct=0.0042, stop_multiplier=10.0),
     "KLBN3": _SymbolCalibration(profit_pct=0.0021, stop_multiplier=5.0),
     "GRND3": _SymbolCalibration(profit_pct=0.0021, stop_multiplier=5.0),
     "LPSB3": _SymbolCalibration(profit_pct=0.0042, stop_multiplier=20.0),
@@ -455,7 +452,19 @@ _VOLATILITY_OVERRIDE_BY_SYMBOL: dict[str, tuple[float, float]] = {
 # qualquer um dos tres explicitamente (mesmo espirito do override de
 # volatilidade acima: o override nunca sobrescreve escolha deliberada).
 _GEOMETRIA_TICKS_BY_SYMBOL: dict[str, tuple[int, int, int]] = {
+    # rodada 1: IS R$ 624,04 x 559,45 (+11,5%); OOS R$ 182,82 x 144,01 (+26,9%),
+    # MaxDD OOS R$ 19,14 x 42,32.
     "PMAM3": (1, 1, 4),
+    # rodada 2: IS R$ 960,71 x 586,70 (+63,7%); OOS R$ 535,63 x 50,75.
+    # RESSALVA: boa parte do salto do OOS e' a calibracao antiga ter PULADO 37
+    # dos 50 pregoes por caixa insuficiente enquanto esta pulou 1 -- o ganho e'
+    # real, mas nao e' "10x melhor por trade". Ela tambem passa por cima do
+    # override de volatilidade de `_VOLATILITY_OVERRIDE_BY_SYMBOL`, de proposito.
+    "CSAN3": (1, 1, 8),
+    # rodada 2, o teste mais LIMPO dos quatro: so' 2 pregoes pulados de 50 nas
+    # duas pontas. IS R$ 1.563,39 x 1.269,48 (+23,2%); OOS R$ 201,00 x 169,81
+    # (+18,4%), lucro/DD 20,77 x 19,30.
+    "KLBN3": (1, 1, 4),
 }
 
 
@@ -816,13 +825,6 @@ class Gremah(IntradayStrategy):
                       "Junto com `profit_ticks`, permite escolher alvo e stop de forma "
                       "INDEPENDENTE -- no caminho percentual eles estão amarrados, e subir um "
                       "sobe o outro na mesma proporção.",
-        "bloquear_geometria_degenerada": "Recusa armar ordem quando o stop está perto demais do "
-                                         "alvo (razão abaixo de `geometria_razao_minima`), em vez "
-                                         "de operar uma calibração que perdeu o efeito. Desligado "
-                                         "por padrão: ligar muda o comportamento do robô.",
-        "geometria_razao_minima": "Quantas vezes o stop precisa ser maior que o alvo para a "
-                                  "geometria contar como válida. Só tem efeito com "
-                                  "`bloquear_geometria_degenerada` ligado.",
     }
     @staticmethod
     def calibrated_setups() -> tuple[SymbolSetup, ...]:
@@ -867,8 +869,6 @@ class Gremah(IntradayStrategy):
         profit_ticks: int | None = None,
         spacing_ticks: int | None = None,
         stop_ticks: int | None = None,
-        bloquear_geometria_degenerada: bool = False,
-        geometria_razao_minima: float = 1.5,
         capacidade_negocio_mult: float | None = None,
         capacidade_fracao: float | None = None,
         capacidade_janela_dias: int = CAPACIDADE_JANELA_DIAS_PADRAO,
@@ -998,17 +998,6 @@ class Gremah(IntradayStrategy):
         self.profit_ticks = None if profit_ticks is None else max(1, int(profit_ticks))
         self.spacing_ticks = None if spacing_ticks is None else max(1, int(spacing_ticks))
         self.stop_ticks = None if stop_ticks is None else max(1, int(stop_ticks))
-        # Guarda opt-in contra a geometria degenerada descrita em
-        # `strategy.daytrade.base.geometria_e_degenerada`. `False` por padrao:
-        # ligar isto MUDA o comportamento do robo (ele deixa de armar ordem),
-        # e essa e' uma decisao de operacao, nao um default.
-        self.bloquear_geometria_degenerada = bloquear_geometria_degenerada
-        self.geometria_razao_minima = float(geometria_razao_minima)
-        #: Quantas vezes a guarda acima recusou armar uma ordem. Publico de
-        #: proposito: uma recusa silenciosa seria pior que o defeito que ela
-        #: evita -- mesmo espirito de
-        #: `IntradaySessionMachine.ordens_recusadas_por_teto`.
-        self.geometria_degenerada_eventos = 0
         # Mecanismo PORTADO da `GremahTick`, numeros MEDIDOS por SIMBOLO neste
         # motor (2026-08-24 na PMAM3, 2026-08-25 nos outros 9) -- mesmo
         # padrao de `None` = lookup por simbolo que `profit_pct`/
@@ -1145,11 +1134,6 @@ class Gremah(IntradayStrategy):
         if self.stop_ticks is not None:
             stop_ticks = self.stop_ticks
         return profit_ticks, spacing_ticks, stop_ticks
-
-    def _geometria_bloqueada(self, profit_ticks: int, stop_ticks: int | None) -> bool:
-        return self.bloquear_geometria_degenerada and geometria_e_degenerada(
-            profit_ticks, stop_ticks, self.geometria_razao_minima
-        )
 
     def _arm_fixed_session_params(self) -> None:
         price = self._state.open_price
@@ -1375,25 +1359,17 @@ class Gremah(IntradayStrategy):
         if next_side is None:
             return actions
 
-        if is_fixed_phase:
-            anchor = state.open_price
-            profit_ticks = state.profit_ticks_today
-            spacing_ticks = state.spacing_ticks_today
-            stop_ticks = state.stop_ticks_today
-        else:
-            anchor = bar.close
-            profit_ticks, spacing_ticks, stop_ticks = self._session_ticks(anchor)
-        # Guarda de geometria degenerada (opt-in, `bloquear_geometria_
-        # degenerada`), checada ANTES de marcar a ordem como pendente: marcar
-        # primeiro e desistir depois deixaria um `pending_side` que nunca virou
-        # ordem, e o robo esperaria para sempre por um preenchimento que
-        # ninguem pediu. Recusa a armacao INTEIRA e conta o evento -- nunca
-        # arma uma versao truncada.
-        if self._geometria_bloqueada(profit_ticks, stop_ticks):
-            self.geometria_degenerada_eventos += 1
-            return actions
         state.pending_side = next_side
         state.pending_bars_waited = 0
         state.pending_mode = "fixed" if is_fixed_phase else "rolling"
-        entry = self._build_entry(next_side, anchor, spacing_ticks, profit_ticks, stop_ticks, ts)
+        if is_fixed_phase:
+            entry = self._build_entry(
+                next_side, state.open_price,
+                state.spacing_ticks_today, state.profit_ticks_today, state.stop_ticks_today,
+                ts,
+            )
+        else:
+            anchor = bar.close
+            profit_ticks, spacing_ticks, stop_ticks = self._session_ticks(anchor)
+            entry = self._build_entry(next_side, anchor, spacing_ticks, profit_ticks, stop_ticks, ts)
         return [entry]

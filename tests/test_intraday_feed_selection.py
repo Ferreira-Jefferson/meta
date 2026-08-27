@@ -77,18 +77,17 @@ def test_gremah_tick_e_o_top1_e_gremah_o_top2():
 
 
 def test_o_painel_so_oferece_ativo_medido_em_tick():
-    """A tabela de calibracao da `gremah_tick` tem 10 linhas, e as 10 estao
-    em `TICK_CONFIRMED_SYMBOLS` -- mas por dois caminhos diferentes: 9
-    passaram pelos 4 passos completos (regime -> varredura IS ->
-    confirmacao OOS), e a CLSC4 foi confirmada so' em OOS (amostra
-    pequena demais no IS pra diferenciar qualquer parametro; o dono
-    decidiu o numero dela olhando so' o OOS, e pediu para marcar como
-    confirmada mesmo assim -- ver `gremah_tick.py`, paragrafo da CLSC4).
-    O painel nao distingue os dois caminhos, so' oferece o que tem
-    alguma medicao propria em tick."""
+    """O painel so' oferece ativo com medicao propria em tick.
+
+    Eram 10 ate' 2026-08-26, quando a CLSC4 saiu do conjunto calibrado: ela
+    imprime preco em 18,4 barras M1 por pregao (contra 217-427 dos outros) e
+    exige R$15.130 de caixa contra R$658-810 deles -- nao havia giro que
+    sustentasse um robo maker ali, e ela era negativa em 48 de 48 celulas de
+    geometria nos dois motores. Ver `gremah_tick.py`, acima de
+    `TICK_CONFIRMED_SYMBOLS`."""
     assert symbols_for_robot("gremah_tick") == (
         "PMAM3", "BMGB4", "KLBN3", "LPSB3", "DASA3", "KLBN4", "PCAR3", "CSAN3",
-        "GRND3", "CLSC4",
+        "GRND3",
     )
-    # A `gremah` continua com os dez dela: sao medicoes proprias em M1.
-    assert len(symbols_for_robot("gremah")) == 10
+    # A `gremah` acompanha: sao os mesmos nove, medidos em M1.
+    assert len(symbols_for_robot("gremah")) == 9

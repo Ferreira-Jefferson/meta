@@ -316,9 +316,9 @@ def test_stop_frac_range_sem_janela_cai_no_fallback_percentual():
 
 
 # ---------------------------------------------------------------------------
-# GEOMETRIA EM TICKS (2026-08-26): alvo/espacamento/stop independentes, e a
-# guarda contra a geometria degenerada. Ver
-# `strategy.daytrade.base.geometria_e_degenerada` para o defeito que motivou.
+# GEOMETRIA EM TICKS (2026-08-26): alvo, espacamento e stop escolhidos de
+# forma INDEPENDENTE. No caminho percentual os tres saem do mesmo `profit_pct`
+# (`stop = profit_pct * stop_multiplier`), entao mexer num arrasta os outros.
 # ---------------------------------------------------------------------------
 
 
@@ -370,51 +370,3 @@ def test_ticks_explicitos_nao_aceitam_zero_nem_negativo():
     assert _strat(profit_ticks=0).profit_ticks == 1
     assert _strat(stop_ticks=-5).stop_ticks == 1
     assert _strat(spacing_ticks=0).spacing_ticks == 1
-
-
-def test_guarda_de_geometria_desligada_por_padrao():
-    """Ligar a guarda MUDA o comportamento do robo (ele deixa de operar), entao
-    isso e' decisao de operacao, nunca um default."""
-    strat = _strat(profit_ticks=1, stop_ticks=1)
-    assert strat.bloquear_geometria_degenerada is False
-    assert strat._geometria_bloqueada(1, 1) is False
-
-
-def test_guarda_ligada_recusa_armar_ordem_e_conta_o_evento():
-    """Stop de 1 tick contra alvo de 1 tick e' a PMAM3 a R$0,13: arriscar
-    exatamente o que se quer ganhar, com nenhum parametro tendo efeito."""
-    strat = _strat(profit_ticks=1, stop_ticks=1, bloquear_geometria_degenerada=True)
-    strat.on_session_start(None)
-    ts = pd.Timestamp("2026-01-05 13:00", tz="UTC")
-    bar = Bar(ts=ts, open=5.00, high=5.00, low=5.00, close=5.00, volume=0)
-
-    actions = strat.on_bar(ts, bar, positions=[], session_pnl_brl=0.0)
-
-    assert actions == []
-    assert strat.geometria_degenerada_eventos == 1
-
-
-def test_guarda_ligada_nao_deixa_ordem_pendente_fantasma():
-    """Regressao: se a guarda recusasse DEPOIS de marcar `pending_side`, o robo
-    ficaria esperando para sempre o preenchimento de uma ordem que nunca foi
-    enviada, e nao armaria mais nada nem quando a geometria melhorasse."""
-    strat = _strat(profit_ticks=1, stop_ticks=1, bloquear_geometria_degenerada=True)
-    strat.on_session_start(None)
-    ts = pd.Timestamp("2026-01-05 13:00", tz="UTC")
-    bar = Bar(ts=ts, open=5.00, high=5.00, low=5.00, close=5.00, volume=0)
-
-    strat.on_bar(ts, bar, positions=[], session_pnl_brl=0.0)
-
-    assert strat._state.pending_side is None
-
-
-def test_guarda_ligada_deixa_passar_geometria_sadia():
-    strat = _strat(profit_ticks=2, stop_ticks=10, bloquear_geometria_degenerada=True)
-    strat.on_session_start(None)
-    ts = pd.Timestamp("2026-01-05 13:00", tz="UTC")
-    bar = Bar(ts=ts, open=5.00, high=5.00, low=5.00, close=5.00, volume=0)
-
-    actions = strat.on_bar(ts, bar, positions=[], session_pnl_brl=0.0)
-
-    assert len(actions) == 1
-    assert strat.geometria_degenerada_eventos == 0

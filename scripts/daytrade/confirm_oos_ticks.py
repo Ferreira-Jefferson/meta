@@ -7,21 +7,33 @@ passada seja explicita, com a lista de candidatos FIXA no codigo -- e nao um
 `run_backtest.py --unlock-oos` disparado com parametro digitado na hora, que
 convida a "tentar mais um".
 
-CANDIDATOS, congelados em 2026-08-26 ANTES de qualquer leitura do OOS. Os dois
-sao o melhor liquido da grade de 48 celulas
+CANDIDATOS, congelados ANTES de qualquer leitura do OOS. Cada um e' o melhor
+liquido da grade de 48 celulas do seu par
 (`sweep_gremah_ticks_independentes.py`, alvo x espacamento x stop
-independentes) rodada no IS:
+independentes) no IS.
 
-    PMAM3 / tick : T1 E1 S2  (IS R$ 867,61 contra R$ 792,99 da calibracao atual)
-    PMAM3 / m1   : T1 E1 S4  (IS R$ 624,04 contra R$ 559,45 da calibracao atual)
+RODADA 1 -- 2026-08-26, ja GASTA:
+    PMAM3 / tick : T1 E1 S2  -> IS +9,4%,  OOS -5,6%   REPROVADO (descartado)
+    PMAM3 / m1   : T1 E1 S4  -> IS +11,5%, OOS +26,9%  APROVADO (adotado)
 
-MOTIVO da passada: a PMAM3 caiu de ~R$0,55 (mediana do IS) para ~R$0,14, e
-nesse preco a calibracao percentual COLAPSA -- alvo, espacamento e stop viram
-1 tick cada, sem diferenca entre arriscar e ganhar (ver
-`mapa_geometria.py`). A geometria em ticks nao depende do preco, mas o IS nao
-contem nenhum dado a R$0,14 para dizer se ela funciona la. A janela OOS
-(13/06 em diante) contem. E' exatamente a pergunta que o OOS serve para
-responder, e por isso vale gasta-lo.
+RODADA 2 -- os quatro pares cujo delta de IS passa de ~10%. Esse patamar nao e'
+arbitrario: a rodada 1 mediu que um ganho de IS de +9,4% virou perda no OOS,
+entao delta menor que isso, numa escolha de melhor-de-48, e' ruido de selecao e
+nao vale a janela.
+
+    PCAR3 / tick : T1 E1 S4  (IS R$ 491,14 contra R$ 310,51, +58,2%; e o MaxDD
+                              cai de R$166,55 para R$40,74 -- o unico caso em
+                              que o ganho aparece sobretudo no RISCO)
+    CSAN3 / m1   : T1 E1 S8  (IS R$ 960,71 contra R$ 586,70, +63,7%)
+    BMGB4 / tick : T1 E1 S8  (IS R$ 1.636,80 contra R$ 1.310,14, +24,9%)
+    KLBN3 / m1   : T1 E1 S4  (IS R$ 1.563,39 contra R$ 1.269,48, +23,2%)
+
+RESSALVA sobre a PCAR3/tick: o IS dela foi medido com `--tail-ticks 300000`
+(o IS inteiro tem 874.602 registros e nao cabia em tempo util na grade de 48
+celulas). A ESCOLHA do candidato saiu dessa janela capada; a confirmacao abaixo
+roda o IS e o OOS INTEIROS. Se o numero de IS aqui nao parecer com o da
+varredura, e' por isso, e nao invalida nada -- o que o OOS julga e' o candidato,
+nao o IS.
 
 Uso:
     python scripts/daytrade/confirm_oos_ticks.py --unlock-oos "MOTIVO"
@@ -52,8 +64,10 @@ from strategy.daytrade.base import capital_minimo_brl  # noqa: E402
 
 #: (simbolo, motor, alvo, espacamento, stop). FIXO -- ver a docstring.
 CANDIDATOS = (
-    ("PMAM3", "tick", 1, 1, 2),
-    ("PMAM3", "m1", 1, 1, 4),
+    ("PCAR3", "tick", 1, 1, 4),
+    ("CSAN3", "m1", 1, 1, 8),
+    ("BMGB4", "tick", 1, 1, 8),
+    ("KLBN3", "m1", 1, 1, 4),
 )
 
 

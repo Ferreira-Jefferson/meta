@@ -77,10 +77,14 @@ EXTRAS = ("confiavel",)
 
 
 def _celulas(alvo: int):
-    """As combinacoes de um alvo. `stop <= alvo` fica DE FORA: e' exatamente o
-    regime degenerado que ja sabemos perder (ver
-    `strategy.daytrade.base.geometria_e_degenerada`), e gastar backtest nele
-    seria re-medir o problema em vez de procurar a saida."""
+    """As combinacoes de um alvo. `stop <= alvo` fica DE FORA para a grade nao
+    gastar backtest onde o stop e' mais apertado que o proprio alvo -- o robo
+    seria stopado antes de ter chance de acertar o alvo.
+
+    Cuidado ao ler isso como "stop apertado e' ruim": NAO e'. Medido em
+    2026-08-26, `stop == alvo` (1 tick contra 1 tick) entrega 77,7% de acerto
+    na PMAM3 e ganha do stop mais largo no OOS. O corte aqui e' de economia de
+    CPU numa grade de reconhecimento, nao um veredito sobre a regiao."""
     for mult in ESPACO_MULT_GRID:
         for stop in STOP_TICKS_GRID:
             if stop > alvo:

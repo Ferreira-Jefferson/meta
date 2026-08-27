@@ -293,7 +293,7 @@ def test_override_de_volatilidade_liga_sozinho_para_simbolo_confirmado(symbol, k
     assert _VOLATILITY_OVERRIDE_BY_SYMBOL[symbol] == (k, s)
 
 
-@pytest.mark.parametrize("symbol", ["PMAM3", "DASA3", "PCAR3", "CLSC4", "KLBN3", "LPSB3"])
+@pytest.mark.parametrize("symbol", ["PMAM3", "DASA3", "PCAR3", "KLBN3", "LPSB3"])
 def test_simbolos_sem_confirmacao_oos_continuam_no_percentual(symbol):
     """Os 6 simbolos onde nada bateu o percentual no IS (CLSC4, DASA3) ou
     pioraram no OOS (KLBN3, LPSB3, PCAR3, PMAM3) NAO tem override --
@@ -479,9 +479,9 @@ def test_dividir_pecas_fatia_perto_da_barra_tipica_recente():
 
 
 # ---------------------------------------------------------------------------
-# GEOMETRIA EM TICKS (2026-08-26): alvo/espacamento/stop independentes, e a
-# guarda contra a geometria degenerada. Ver
-# `strategy.daytrade.base.geometria_e_degenerada` para o defeito que motivou.
+# GEOMETRIA EM TICKS (2026-08-26): alvo, espacamento e stop escolhidos de
+# forma INDEPENDENTE. No caminho percentual os tres saem do mesmo `profit_pct`
+# (`stop = profit_pct * stop_multiplier`), entao mexer num arrasta os outros.
 # ---------------------------------------------------------------------------
 
 
@@ -535,54 +535,6 @@ def test_ticks_explicitos_nao_aceitam_zero_nem_negativo():
     assert _strat(spacing_ticks=0).spacing_ticks == 1
 
 
-def test_guarda_de_geometria_desligada_por_padrao():
-    """Ligar a guarda MUDA o comportamento do robo (ele deixa de operar), entao
-    isso e' decisao de operacao, nunca um default."""
-    strat = _strat(profit_ticks=1, stop_ticks=1)
-    assert strat.bloquear_geometria_degenerada is False
-    assert strat._geometria_bloqueada(1, 1) is False
-
-
-def test_guarda_ligada_recusa_armar_ordem_e_conta_o_evento():
-    """Stop de 1 tick contra alvo de 1 tick e' a PMAM3 a R$0,13: arriscar
-    exatamente o que se quer ganhar, com nenhum parametro tendo efeito."""
-    strat = _strat(profit_ticks=1, stop_ticks=1, bloquear_geometria_degenerada=True)
-    strat.on_session_start(None)
-    ts = pd.Timestamp("2026-01-05 13:00", tz="UTC")
-    bar = Bar(ts=ts, open=5.00, high=5.00, low=5.00, close=5.00, volume=0)
-
-    actions = strat.on_bar(ts, bar, positions=[], session_pnl_brl=0.0)
-
-    assert actions == []
-    assert strat.geometria_degenerada_eventos == 1
-
-
-def test_guarda_ligada_nao_deixa_ordem_pendente_fantasma():
-    """Regressao: se a guarda recusasse DEPOIS de marcar `pending_side`, o robo
-    ficaria esperando para sempre o preenchimento de uma ordem que nunca foi
-    enviada, e nao armaria mais nada nem quando a geometria melhorasse."""
-    strat = _strat(profit_ticks=1, stop_ticks=1, bloquear_geometria_degenerada=True)
-    strat.on_session_start(None)
-    ts = pd.Timestamp("2026-01-05 13:00", tz="UTC")
-    bar = Bar(ts=ts, open=5.00, high=5.00, low=5.00, close=5.00, volume=0)
-
-    strat.on_bar(ts, bar, positions=[], session_pnl_brl=0.0)
-
-    assert strat._state.pending_side is None
-
-
-def test_guarda_ligada_deixa_passar_geometria_sadia():
-    strat = _strat(profit_ticks=2, stop_ticks=10, bloquear_geometria_degenerada=True)
-    strat.on_session_start(None)
-    ts = pd.Timestamp("2026-01-05 13:00", tz="UTC")
-    bar = Bar(ts=ts, open=5.00, high=5.00, low=5.00, close=5.00, volume=0)
-
-    actions = strat.on_bar(ts, bar, positions=[], session_pnl_brl=0.0)
-
-    assert len(actions) == 1
-    assert strat.geometria_degenerada_eventos == 0
-
-
 def test_geometria_em_ticks_por_simbolo_e_aplicada_sozinha():
     """PMAM3/M1 usa geometria em TICKS desde 2026-08-26 (IS + confirmacao OOS,
     ver o comentario de `_GEOMETRIA_TICKS_BY_SYMBOL`). Se alguem editar a
@@ -624,9 +576,13 @@ def test_simbolo_fora_da_tabela_de_ticks_segue_no_percentual():
     )
 
 
-def test_gremah_tick_nao_tem_tabela_de_geometria_em_ticks():
-    """Reprovado no OOS = descarte, sem segunda tentativa. Se alguem adicionar
-    uma tabela equivalente na `gremah_tick`, tem de ser por uma medicao NOVA e
-    este teste e' onde a decisao antiga esta registrada."""
-    import strategy.daytrade.lab.gremah_tick as gt
-    assert not hasattr(gt, "_GEOMETRIA_TICKS_BY_SYMBOL_TICK")
+def test_pmam3_nao_entra_na_geometria_em_ticks_do_motor_tick():
+    """Reprovado no OOS = descarte, sem segunda tentativa: o candidato da
+    PMAM3 em tick (T1 E1 S2) venceu o IS por +9,4% e perdeu o OOS por -5,6%
+    em 2026-08-26. A tabela do motor tick EXISTE (a BMGB4 passou na mesma
+    rodada), entao o que este teste guarda e' a decisao sobre a PMAM3, nao a
+    ausencia da tabela -- foi assim que ele foi escrito primeiro, com a
+    premissa larga demais, e a BMGB4 o derrubou no mesmo dia."""
+    from strategy.daytrade.lab.gremah_tick import _GEOMETRIA_TICKS_BY_SYMBOL_TICK
+    assert "PMAM3" not in _GEOMETRIA_TICKS_BY_SYMBOL_TICK
+    assert _GEOMETRIA_TICKS_BY_SYMBOL_TICK["BMGB4"] == (1, 1, 8)
