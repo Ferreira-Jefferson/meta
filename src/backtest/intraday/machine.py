@@ -1095,16 +1095,68 @@ class IntradaySessionMachine:
                     self._resting_children_qty = []
                     self.resting_limit_bars_waited = 0
                 elif isinstance(action, EnterLimit) and not self.positions:
-                    # substitui (nao acumula) qualquer ordem-limite ja pendente
-                    events.append(LimitPlaced(order=action, ts=ts, replaced=self.resting_limit))
-                    self.resting_limit = action
-                    self.resting_limit_bars_waited = 0
-                    self._resting_children_qty = action.children(cfg.default_quantity)
+                    if self._reancoragem_no_mesmo_nivel(action, cfg.default_quantity):
+                        # Rearme que recalculou EXATAMENTE o mesmo nivel: a
+                        # ordem parada CONTINUA sendo a mesma ordem, e nao sai
+                        # `LimitPlaced` nenhum. Ao vivo esse evento viraria
+                        # "cancela a antiga, manda a nova" na corretora, e a
+                        # nova entraria no FIM da fila do nivel -- jogando fora
+                        # toda a espera ja acumulada. Achado 2026-08-26 na
+                        # PMAM3 real: 11 substituicoes num pregao, 9 delas de
+                        # 0,13 para 0,13, zero preenchimento; o gemeo em
+                        # sombra, que preenche por toque e nao tem fila
+                        # nenhuma, negociou normalmente no mesmo pregao.
+                        #
+                        # Adota o objeto NOVO mesmo assim: stop, alvo e
+                        # fatiamento de saida podem ter sido recalculados, e
+                        # nenhum deles existe na corretora (a pendente real
+                        # leva so' lado/preco/quantidade -- ver
+                        # `live.intraday_execution.MT5IntradayExecution.
+                        # place_limit`). O que NAO reinicia e' a espera:
+                        # `resting_limit_bars_waited` mede uma ordem que nunca
+                        # saiu do book, e zera-la aqui faria `ttl_bars` nunca
+                        # vencer para quem rearma no mesmo nivel.
+                        self.resting_limit = action
+                    else:
+                        # substitui (nao acumula) qualquer ordem-limite ja pendente
+                        events.append(LimitPlaced(order=action, ts=ts, replaced=self.resting_limit))
+                        self.resting_limit = action
+                        self.resting_limit_bars_waited = 0
+                        self._resting_children_qty = action.children(cfg.default_quantity)
 
         for pos in self.positions:
             pos.bars_held += 1
 
         return events
+
+    def _reancoragem_no_mesmo_nivel(self, nova: EnterLimit, default_quantity: int) -> bool:
+        """`nova` pede exatamente a ordem que JA esta parada -- mesmo lado,
+        mesmo nivel, mesmas fatias?
+
+        E' o caso do rearme por tempo da familia `gremah`
+        (`rolling_reanchor_after_seconds`/`rolling_reanchor_after_bars`): a
+        ancora rolou, o nivel foi recalculado, e o arredondamento deu no
+        mesmo lugar. Em ativo de centavos isso e' a REGRA, nao a excecao --
+        so' a PMAM3 a R$ 0,13 fez isso 9 vezes num pregao.
+
+        Compara so' o que define a ordem NA CORRETORA (lado, preco, tamanho
+        das fatias). Stop, alvo e fatiamento de saida ficam de fora de
+        proposito: sao decisoes que o robo aplica DEPOIS do fill, nao existem
+        na pendente real, e trocar a ordem por causa deles custaria a fila
+        sem nada em troca.
+
+        `_resting_children_qty` vazio devolve `False` por seguranca (nao ha
+        ordem viva a manter). Ele so' fica diferente de
+        `resting_limit.children(...)` depois de algum filho preencher -- e
+        nesse caso existe posicao aberta, entao este caminho nem roda."""
+        parada = self.resting_limit
+        if parada is None or not self._resting_children_qty:
+            return False
+        if parada.side != nova.side:
+            return False
+        if abs(parada.limit_price - nova.limit_price) > 1e-9:
+            return False
+        return list(self._resting_children_qty) == nova.children(default_quantity)
 
     def discard_resting_limit(self) -> None:
         """Esquece a ordem-limite vigiada SEM emitir evento e SEM mandar

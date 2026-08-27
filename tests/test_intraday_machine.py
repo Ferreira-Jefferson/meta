@@ -142,6 +142,98 @@ def test_ordem_limite_substituida_viaja_em_limit_placed_replaced():
     assert m.resting_limit.limit_price == pytest.approx(9.70)
 
 
+def test_rearme_no_mesmo_nivel_mantem_a_ordem_parada():
+    """Rearme que recalcula EXATAMENTE o mesmo nivel NAO substitui a ordem.
+
+    O rearme por tempo da familia `gremah` recalcula o nivel a partir da
+    ancora rolante, e em ativo de centavos o arredondamento cai no mesmo
+    lugar quase sempre. Ao vivo, emitir `LimitPlaced` ali viraria
+    cancela+manda na corretora e a ordem voltaria para o FIM da fila do
+    nivel — que e' exatamente o que impedia a PMAM3 real de preencher
+    (11 substituicoes, zero fills, 2026-08-26)."""
+    mesma = dict(side="long", limit_price=9.80, initial_target=9.90, initial_stop=9.00)
+    strat = _Scripted({
+        0: [EnterLimit(**mesma)],
+        1: [EnterLimit(**mesma)],
+    })
+    m = IntradaySessionMachine(strat, _config())
+    m.begin_session(pd.Timestamp("2026-01-05").date())
+
+    m.on_closed_bar(_bar(0, 10.00, 10.00, 10.00, 10.00))
+    ev1 = m.on_closed_bar(_bar(1, 10.00, 10.05, 9.95, 10.00))
+
+    assert [e for e in ev1 if isinstance(e, (LimitPlaced, LimitCancelled))] == []
+    assert m.resting_limit is not None
+    assert m.resting_limit.limit_price == pytest.approx(9.80)
+    # e continua sendo uma ordem de verdade: a barra seguinte toca e preenche
+    ev2 = m.on_closed_bar(_bar(2, 10.00, 10.00, 9.79, 9.85))
+    assert [e.price for e in ev2 if isinstance(e, PositionOpened)] == [pytest.approx(9.80)]
+
+
+def test_rearme_no_mesmo_nivel_adota_stop_e_alvo_novos():
+    """Manter a ordem na fila nao e' congelar a decisao: stop, alvo e
+    fatiamento de saida do objeto NOVO valem, porque nenhum deles existe na
+    ordem pendente da corretora (que leva so lado/preco/quantidade)."""
+    strat = _Scripted({
+        0: [EnterLimit(side="long", limit_price=9.80, initial_target=9.90, initial_stop=9.00)],
+        1: [EnterLimit(side="long", limit_price=9.80, initial_target=9.95, initial_stop=9.50)],
+    })
+    m = IntradaySessionMachine(strat, _config())
+    m.begin_session(pd.Timestamp("2026-01-05").date())
+
+    m.on_closed_bar(_bar(0, 10.00, 10.00, 10.00, 10.00))
+    ev1 = m.on_closed_bar(_bar(1, 10.00, 10.05, 9.95, 10.00))
+    assert [e for e in ev1 if isinstance(e, (LimitPlaced, LimitCancelled))] == []
+
+    ev2 = m.on_closed_bar(_bar(2, 10.00, 10.00, 9.79, 9.85))
+    aberta = [e for e in ev2 if isinstance(e, PositionOpened)][0]
+    assert aberta.target == pytest.approx(9.95)
+    assert aberta.stop == pytest.approx(9.50)
+
+
+def test_rearme_no_mesmo_nivel_nao_reinicia_a_espera_de_ttl():
+    """A espera (`resting_limit_bars_waited`) mede uma ordem que nunca saiu
+    do book. Zera-la a cada rearme faria `ttl_bars` nunca vencer para quem
+    rearma no mesmo nivel — a ordem viveria para sempre."""
+    mesma = dict(side="long", limit_price=9.80, ttl_bars=2)
+    strat = _Scripted({0: [EnterLimit(**mesma)], 1: [EnterLimit(**mesma)],
+                       2: [EnterLimit(**mesma)]})
+    m = IntradaySessionMachine(strat, _config())
+    m.begin_session(pd.Timestamp("2026-01-05").date())
+
+    m.on_closed_bar(_bar(0, 10.00, 10.00, 10.00, 10.00))
+    m.on_closed_bar(_bar(1, 10.00, 10.05, 9.95, 10.00))   # espera 1
+    ev2 = m.on_closed_bar(_bar(2, 10.00, 10.05, 9.95, 10.00))   # espera 2 -> vence
+
+    cancelamentos = [e for e in ev2 if isinstance(e, LimitCancelled)]
+    assert [e.reason for e in cancelamentos] == ["ttl"]
+
+
+@pytest.mark.parametrize("diferente, campo", [
+    (dict(side="short", limit_price=9.80), "lado"),
+    (dict(side="long", limit_price=9.81), "nivel"),
+    (dict(side="long", limit_price=9.80, quantity=2), "tamanho"),
+])
+def test_rearme_que_muda_a_ordem_na_corretora_continua_substituindo(diferente, campo):
+    """A guarda so' vale para a ordem IDENTICA. Qualquer mudanca no que a
+    corretora enxerga (lado, nivel ou tamanho) tem de virar cancela+manda,
+    senao o robo ficaria com uma ordem que ele nao pediu mais."""
+    strat = _Scripted({
+        0: [EnterLimit(side="long", limit_price=9.80, quantity=1)],
+        1: [EnterLimit(**diferente)],
+    })
+    m = IntradaySessionMachine(strat, _config())
+    m.begin_session(pd.Timestamp("2026-01-05").date())
+
+    m.on_closed_bar(_bar(0, 10.00, 10.00, 10.00, 10.00))
+    ev1 = m.on_closed_bar(_bar(1, 10.00, 10.05, 9.95, 10.00))
+
+    postas = [e for e in ev1 if isinstance(e, LimitPlaced)]
+    assert len(postas) == 1, campo
+    assert postas[0].replaced is not None
+    assert postas[0].replaced.limit_price == pytest.approx(9.80)
+
+
 def test_ttl_expirado_emite_cancelamento_por_ttl():
     strat = _Scripted({0: [EnterLimit(side="long", limit_price=9.00, ttl_bars=1)]})
     m = IntradaySessionMachine(strat, _config())
