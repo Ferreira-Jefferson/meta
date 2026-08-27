@@ -538,6 +538,21 @@ class _SessionState:
     long_fills: int = 0
     short_fills: int = 0
     last_closed_side: str | None = None
+    # Rastreio de vitoria/derrota do ULTIMO round-trip fechado NESTA sessao
+    # -- alimenta `_next_side_to_arm` (achado 2026-08-26, memoria
+    # `gremah_repetir_ultimo_vencedor`: repetir o lado depois de um trade
+    # LUCRATIVO bate a alternancia pura em 9/9 simbolos testados com capital
+    # real). `open_pnl_brl` e' o snapshot de `session_pnl_brl` tirado na
+    # abertura (1a fatia, se `dividir_entrada=True`); `last_trade_won` e' o
+    # resultado do fechamento (ultima fatia) comparado contra aquele
+    # snapshot -- mede o round-trip INTEIRO mesmo com entrada/saida
+    # fatiadas, porque as fatias intermediarias nunca tocam nenhum dos
+    # dois campos (ver `on_bar`). Os dois resetam a cada sessao junto com
+    # o resto do `_SessionState`; isso e' inocuo porque `last_closed_side`
+    # tambem reseta, e `_next_side_to_arm` so' usa `last_trade_won` quando
+    # `last_closed_side` ja' esta' setado NESTA sessao.
+    open_pnl_brl: float = 0.0
+    last_trade_won: bool | None = None
     spacing_ticks_today: int = 1
     profit_ticks_today: int = 1
     stop_ticks_today: int | None = None
@@ -1146,10 +1161,24 @@ class Gremah(IntradayStrategy):
         return self._state.long_fills if side == "long" else self._state.short_fills
 
     def _next_side_to_arm(self) -> str | None:
-        candidates = ["long", "short"]
-        if self._state.last_closed_side in candidates:
-            candidates.remove(self._state.last_closed_side)
-            candidates.append(self._state.last_closed_side)
+        """Ate' 2026-08-26 alternava sempre. Achado medido (memoria
+        `gremah_repetir_ultimo_vencedor_2026_08_26`, 9/9 simbolos com
+        capital real, portao ligado, nulo p=0,0000 em 7/9): depois de um
+        round-trip fechar, se deu LUCRO repete o MESMO lado; se deu
+        prejuizo (ou empatou em 0), troca -- o oposto da alternancia pura.
+        Sem round-trip fechado ainda NESTA sessao (1a decisao do dia, ou
+        `last_trade_won` por algum motivo nao acompanhou `last_closed_side`)
+        cai na alternancia de sempre."""
+        last = self._state.last_closed_side
+        won = self._state.last_trade_won
+        if last in ("long", "short") and won is not None:
+            oposto = "short" if last == "long" else "long"
+            candidates = [last, oposto] if won else [oposto, last]
+        else:
+            candidates = ["long", "short"]
+            if last in candidates:
+                candidates.remove(last)
+                candidates.append(last)
         for side in candidates:
             if self._fills_of(side) < self.max_trades_per_side:
                 return side
@@ -1331,9 +1360,18 @@ class Gremah(IntradayStrategy):
                 state.open_side = state.pending_side
                 state.pending_side = None
                 state.pending_bars_waited = 0
+                # Snapshot do P&L acumulado no instante da abertura -- so'
+                # aqui, na 1a fatia (esta condicao so' e' verdadeira uma vez
+                # por entrada, ver comentario em `_SessionState`). Usado por
+                # `_next_side_to_arm` para saber se o round-trip que vai
+                # fechar deu lucro ou prejuizo.
+                state.open_pnl_brl = session_pnl_brl
             return []
 
         if state.open_side is not None:
+            # Fechamento do round-trip (ultima fatia, se `dividir_entrada`) --
+            # compara o P&L acumulado agora contra o snapshot da abertura.
+            state.last_trade_won = (session_pnl_brl - state.open_pnl_brl) > 0.0
             state.last_closed_side = state.open_side
             state.open_side = None
 

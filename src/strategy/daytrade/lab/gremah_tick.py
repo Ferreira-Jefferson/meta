@@ -7,8 +7,11 @@ uma estrategia por arquivo).
 
 O DESENHO e' o mesmo: grade de niveis ao redor do preco, ancora FIXA (preco
 de abertura) ate `fixed_anchor_until`, ROLANTE (preco do momento) depois;
-ordem-limite parada esperando o preco vir ate ela (maker); alterna os lados;
-teto de perda diaria; tamanho de posicao crescendo com o caixa acumulado. O
+ordem-limite parada esperando o preco vir ate ela (maker); repete o lado do
+ultimo trade fechado se ele ganhou, troca se perdeu (alternancia so' na 1a
+decisao do pregao -- ver `_next_side_to_arm`, mudanca 2026-08-27, antes
+alternava sempre); teto de perda diaria; tamanho de posicao crescendo com o
+caixa acumulado. O
 motor (`backtest.intraday.machine`) nao muda uma linha -- ele so' conhece
 `Bar` (ts/open/high/low/close/volume) e decide toque via
 `bar.low <= nivel <= bar.high`. Um tick vira `Bar` com
@@ -557,6 +560,17 @@ class _SessionState:
     long_fills: int = 0
     short_fills: int = 0
     last_closed_side: str | None = None
+    # `last_trade_won`/`entry_session_pnl_brl` (2026-08-27): suportam a
+    # politica de lado "repete o vencedor" de `_next_side_to_arm` -- ver a
+    # docstring dela para o mecanismo. `entry_session_pnl_brl` e' o
+    # `session_pnl_brl` no instante em que a posicao foi aberta (1a fatia,
+    # se `dividir_entrada=True`); `last_trade_won` compara esse snapshot
+    # contra o `session_pnl_brl` no instante em que ela fechou por completo
+    # (ultima fatia) -- mede o round-trip INTEIRO, nao uma fatia isolada.
+    # Os dois resetam a cada sessao (mesmo motivo de `last_closed_side`):
+    # a alternancia continua valendo na 1a decisao de CADA pregao.
+    last_trade_won: bool | None = None
+    entry_session_pnl_brl: float = 0.0
     spacing_ticks_today: int = 1
     profit_ticks_today: int = 1
     stop_ticks_today: int | None = None
@@ -644,8 +658,10 @@ class GremahTick(IntradayStrategy):
         "percentuais diferentes viram o mesmo 1 centavo.",
         "Ate' as 11h de Brasilia a referencia e' a abertura do dia; depois, o preco do "
         "momento. Mesmo corte da gremah, e pelo mesmo motivo — nao foi reotimizado.",
-        "Alterna os lados: depois de fechar uma compra, tenta uma venda, e so' insiste "
-        "no mesmo lado quando o outro bateu o teto de 15 operacoes.",
+        "Depois de fechar um trade, repete o MESMO lado se ele deu lucro; troca de lado "
+        "se deu prejuizo. So' insiste no mesmo lado alem disso quando o outro bateu o "
+        "teto de 15 operacoes. Na primeira operacao do pregao, sem trade anterior no "
+        "dia, alterna a partir do ultimo lado fechado no pregao anterior.",
         "Ordem parada ha' 30 minutos sem ser tocada e' cancelada e refeita no preco "
         "atual. Tempo de relogio, nao contagem de negocios: num papel iliquido podem "
         "passar horas sem negocio nenhum, e contar eventos deixaria a ordem velha "
@@ -1000,10 +1016,39 @@ class GremahTick(IntradayStrategy):
         return self._state.long_fills if side == "long" else self._state.short_fills
 
     def _next_side_to_arm(self) -> str | None:
+        """Repete o lado do ULTIMO trade fechado se ele deu LUCRO; troca de
+        lado se deu prejuizo (ou empatou em 0) -- mudanca de politica
+        2026-08-27, substituindo a alternancia cega que valia ate' entao
+        (fechou, tenta o outro lado, SEMPRE, sem olhar o resultado).
+
+        Achado (linha de pesquisa `linha_diaria`, memoria do projeto
+        `gremah-repetir-ultimo-vencedor-2026-08-26`): confirmado primeiro no
+        motor M1 (`Gremah`, nunca aplicado la' -- decisao pendente do dono) e
+        DEPOIS medido neste motor tick, dedicado (`GremahTickRepetirUltimo
+        Vencedor`, subclasse de pesquisa, nunca em `src/`) -- bate a
+        alternancia em 8 de 9 simbolos calibrados sob capital REAL e portao
+        de capital LIGADO (mediana +27,8%), passa o nulo (sign-flip, custo
+        sempre subtraido) com p<=0,0025 em 7/9 simbolos, sem zeramento novo
+        em nenhum. Ressalva (mesma dos dois motores): CSAN3 fica fraco/
+        inconclusivo (p=0,38 aqui, p=0,92 no M1 -- o mesmo simbolo falha nos
+        dois motores); LPSB3 e' o unico com diferenca negativa aqui (nao
+        significativa, p=0,37) -- nao e' 9/9 "provado", e' maioria forte e
+        estavel entre os dois motores.
+
+        Sem "ultimo trade" ainda (1a decisao da SESSAO -- `last_closed_side`/
+        `last_trade_won` moram em `_SessionState` e resetam em `on_session_
+        start`, ver la') cai na alternancia de sempre: `last_closed_side` no
+        FIM da fila de candidatos. O rastreamento de vitoria/derrota vive no
+        `on_bar` JA EXISTENTE (snapshot de `session_pnl_brl` na abertura e no
+        fechamento da posicao), nao aqui -- este metodo so' LE o resultado."""
         candidates = ["long", "short"]
-        if self._state.last_closed_side in candidates:
-            candidates.remove(self._state.last_closed_side)
-            candidates.append(self._state.last_closed_side)
+        last = self._state.last_closed_side
+        if last in candidates:
+            candidates.remove(last)
+            if self._state.last_trade_won:
+                candidates.insert(0, last)  # ganhou -- repete o mesmo lado primeiro
+            else:
+                candidates.append(last)  # perdeu (ou 1a decisao da sessao) -- alterna
         for side in candidates:
             if self._fills_of(side) < self.max_trades_per_side:
                 return side
@@ -1174,6 +1219,13 @@ class GremahTick(IntradayStrategy):
 
         if positions:
             if state.pending_side is not None:
+                # 1a fatia de uma entrada nova (`positions` acabou de virar
+                # nao-vazio) -- snapshot do P&L do dia ANTES deste trade, pra
+                # `_next_side_to_arm` medir o round-trip inteiro no fechamento
+                # (ver a docstring dela). So' roda aqui: fatias seguintes da
+                # MESMA entrada (`dividir_entrada=True`) tem `pending_side`
+                # ja' None e nao re-entram neste bloco.
+                state.entry_session_pnl_brl = session_pnl_brl
                 if state.pending_side == "long":
                     state.long_fills += 1
                 else:
@@ -1184,6 +1236,11 @@ class GremahTick(IntradayStrategy):
             return []
 
         if state.open_side is not None:
+            # Posicao acabou de fechar por completo (ultima fatia, se
+            # `dividir_entrada=True`) -- compara o P&L do dia agora contra o
+            # snapshot da entrada: mede o LUCRO/PREJUIZO do round-trip
+            # inteiro, nao de uma fatia isolada. `_next_side_to_arm` le' isto.
+            state.last_trade_won = (session_pnl_brl - state.entry_session_pnl_brl) > 0.0
             state.last_closed_side = state.open_side
             state.open_side = None
 
