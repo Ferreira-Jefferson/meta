@@ -353,9 +353,16 @@ class _FakeMT5Broker:
         self.canceladas: list = []
         self.ordens_a_mercado: list = []
         self._ticket = 1000
+        # `None` = nada de outro magic no papel; o teste escreve aqui pra
+        # simular o retorno de `MT5Broker.foreign_activity()` de verdade
+        # (ver `_check_atividade_estranha` em `intraday_runtime.py`).
+        self.atividade_estranha = None
 
     def connect(self):
         return self.conectado
+
+    def foreign_activity(self, ticker):
+        return self.atividade_estranha
 
     def supports_automation(self):
         return True
@@ -2864,3 +2871,103 @@ def test_fatia_de_saida_que_nao_cancelou_nao_e_esquecida(tmp_path):
                                ts=ts)
     execucao2.cancel_exit_limit(ts, reason="flatten")
     assert execucao2.exit_orphan_refs == []
+
+
+# ---------- atividade estranha: robo real vs. ordem manual (2026-08-27) ----
+#
+# Motivado pelo teste ao vivo do dono: comprou/vendeu PMAM3 a mercado direto
+# no terminal, com o robo real (`dt-gremah_tick-pmam3-live`) rodando no mesmo
+# papel, e o diario nunca registrou nada -- `open_position()`/
+# `pending_orders()` filtram por magic de proposito (conta NETTING
+# compartilhada entre slots), entao o robo ficava cego por completo. So'
+# AVISA (nunca soma esse volume ao que o robo controla -- regra 6 do
+# AGENTS.md, `live/` nunca inventa decisao propria).
+
+def _diario_niveis_e_mensagens(rt):
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        return [(r["level"], r["message"]) for r in conn.execute(
+            "SELECT level, message FROM live_events WHERE account_id = ? ORDER BY id",
+            (acc.id,))]
+
+
+def test_atividade_estranha_loga_alerta_uma_vez_so(tmp_path, pregao_aberto):
+    """Detectada, ela e' avisada -- mas so' UMA VEZ, nao a cada passo
+    enquanto persiste (senao spammaria o diario a cada poucos segundos)."""
+    broker = _FakeMT5Broker()
+    broker.atividade_estranha = {
+        "symbol": "PMAM3",
+        "itens": [{"tipo": "posicao", "magic": 0, "quantity": 100}],
+    }
+    barras = [_bar("13:00", 10.00, 10.00, 10.00, 10.00)]
+    rt, feed = _runtime_live(tmp_path, barras, broker)
+
+    rt.run_once(now=_agora("13:01:00"))
+    feed._barras.append(_bar("13:01", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:02:00"))
+    feed._barras.append(_bar("13:02", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:03:00"))
+
+    avisos = [(lvl, m) for lvl, m in _diario_niveis_e_mensagens(rt)
+              if "ATIVIDADE ESTRANHA" in m]
+    assert len(avisos) == 1, avisos
+    assert avisos[0][0] == "warn"
+
+
+def test_atividade_estranha_nao_muda_a_posicao_que_o_robo_controla(tmp_path, pregao_aberto):
+    """O alerta e' so' isso -- alerta. Nunca soma o volume estranho a
+    `posicoes_compra`/`ordens_compra` nem a nada que o robo use pra decidir."""
+    broker = _FakeMT5Broker()
+    broker.atividade_estranha = {
+        "symbol": "PMAM3",
+        "itens": [{"tipo": "posicao", "magic": 0, "quantity": 100}],
+    }
+    barras = [_bar("13:00", 10.00, 10.00, 10.00, 10.00)]
+    rt, _feed = _runtime_live(tmp_path, barras, broker)
+
+    rt.run_once(now=_agora("13:01:00"))
+
+    s = rt.status()["daytrade"]
+    assert s["posicoes_compra"] == 0
+    assert s["posicoes_venda"] == 0
+    assert s["atividade_estranha"] == broker.atividade_estranha
+
+
+def test_atividade_estranha_loga_info_quando_some(tmp_path, pregao_aberto):
+    """Some da corretora -> uma linha INFO avisando que acabou, tambem uma
+    vez so' (nao fica alternando aviso/all-clear a cada passo)."""
+    broker = _FakeMT5Broker()
+    broker.atividade_estranha = {
+        "symbol": "PMAM3",
+        "itens": [{"tipo": "ordem", "magic": 0, "quantity": 100}],
+    }
+    barras = [_bar("13:00", 10.00, 10.00, 10.00, 10.00)]
+    rt, feed = _runtime_live(tmp_path, barras, broker)
+    rt.run_once(now=_agora("13:01:00"))
+
+    broker.atividade_estranha = None
+    feed._barras.append(_bar("13:01", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:02:00"))
+    feed._barras.append(_bar("13:02", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:03:00"))
+
+    eventos = _diario_niveis_e_mensagens(rt)
+    infos = [(lvl, m) for lvl, m in eventos if "nao aparece mais" in m]
+    assert len(infos) == 1, eventos
+    assert infos[0][0] == "info"
+    assert rt.status()["daytrade"]["atividade_estranha"] is None
+
+
+def test_atividade_estranha_none_nao_loga_nada(tmp_path, pregao_aberto):
+    """Caso comum (nada de estranho, sempre): nenhuma linha no diario."""
+    broker = _FakeMT5Broker()
+    barras = [_bar("13:00", 10.00, 10.00, 10.00, 10.00)]
+    rt, feed = _runtime_live(tmp_path, barras, broker)
+
+    rt.run_once(now=_agora("13:01:00"))
+    feed._barras.append(_bar("13:01", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:02:00"))
+
+    eventos = _diario_niveis_e_mensagens(rt)
+    assert not any("ATIVIDADE ESTRANHA" in m or "nao aparece mais" in m
+                   for _lvl, m in eventos)

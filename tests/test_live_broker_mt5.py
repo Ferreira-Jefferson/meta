@@ -74,6 +74,8 @@ def _make_fake_mt5(
     history_deals=None,
     history_deals_raises: bool = False,
     last_error=(0, "sem erro"),
+    positions=None,
+    orders=None,
 ):
     """Monta um `types.ModuleType` que imita a superficie do pacote
     `MetaTrader5` usada por `MT5Broker`, com constantes arbitrarias (o
@@ -112,6 +114,11 @@ def _make_fake_mt5(
     mod.symbol_info_tick = lambda symbol: tick
     mod.order_send = order_send
     mod.history_deals_get = history_deals_get
+    # `positions`/`orders` fixos, ignorando `symbol=` de proposito -- os
+    # testes que usam isto ja montam so' o que importa pro simbolo testado,
+    # imitando `mt5.positions_get(symbol=...)`/`orders_get(symbol=...)`.
+    mod.positions_get = lambda symbol=None: positions if positions is not None else []
+    mod.orders_get = lambda symbol=None: orders if orders is not None else []
 
     return mod, calls
 
@@ -730,3 +737,83 @@ def test_place_fractional_map_nao_interfere_quando_quantidade_ja_fecha_lote_sem_
 
     assert calls["order_send"][0]["symbol"] == "WEGE3"
     assert calls["order_send"][0]["volume"] == pytest.approx(100.0)
+
+
+# ---------- foreign_activity (2026-08-27) ---------------------------------
+#
+# Motivado pelo teste manual ao vivo do dono: comprou/vendeu PMAM3 a mercado
+# direto no terminal, com o robo real rodando no mesmo papel, e o robo nunca
+# soube. `open_position()`/`pending_orders()` filtram por `magic` de
+# proposito (conta NETTING compartilhada) -- `foreign_activity()` e' o
+# complemento que enxerga o que ELES escondem, so' pra alertar.
+
+def _posicao(magic, volume=100.0):
+    return types.SimpleNamespace(magic=magic, volume=volume)
+
+
+def _ordem_pendente(magic, volume_current=100.0):
+    return types.SimpleNamespace(magic=magic, volume_current=volume_current)
+
+
+def test_foreign_activity_none_quando_so_tem_posicao_do_proprio_magic(fake_mt5):
+    fake_mt5(positions=[_posicao(magic=20260817)])
+    broker = MT5Broker(magic=20260817)
+
+    assert broker.foreign_activity("PMAM3") is None
+
+
+def test_foreign_activity_detecta_posicao_de_outro_magic(fake_mt5):
+    fake_mt5(positions=[_posicao(magic=999, volume=100.0)])
+    broker = MT5Broker(magic=20260817, shares_per_lot=1.0)
+
+    resultado = broker.foreign_activity("PMAM3")
+
+    assert resultado == {
+        "symbol": "PMAM3",
+        "itens": [{"tipo": "posicao", "magic": 999, "quantity": 100}],
+    }
+
+
+def test_foreign_activity_detecta_ordem_pendente_de_outro_magic(fake_mt5):
+    fake_mt5(orders=[_ordem_pendente(magic=0, volume_current=100.0)])
+    broker = MT5Broker(magic=20260817)
+
+    resultado = broker.foreign_activity("PMAM3")
+
+    assert resultado == {
+        "symbol": "PMAM3",
+        "itens": [{"tipo": "ordem", "magic": 0, "quantity": 100}],
+    }
+
+
+def test_foreign_activity_ignora_posicao_com_volume_zero(fake_mt5):
+    """Posicao de outro magic mas ja fechada (volume 0) nao e' atividade --
+    e' o mesmo cuidado que `open_position()` ja tem pro proprio magic."""
+    fake_mt5(positions=[_posicao(magic=999, volume=0.0)])
+    broker = MT5Broker(magic=20260817)
+
+    assert broker.foreign_activity("PMAM3") is None
+
+
+def test_foreign_activity_none_quando_positions_get_falha(fake_mt5):
+    """`positions_get` devolvendo `None` (falha da consulta) NAO pode virar
+    alarme -- mesma regra de `open_position`/`pending_orders`: "nao sei" nao
+    e' "tem atividade estranha"."""
+    mod, _calls = fake_mt5()
+    mod.positions_get = lambda symbol=None: None
+    broker = MT5Broker(magic=20260817)
+
+    assert broker.foreign_activity("PMAM3") is None
+
+
+def test_foreign_activity_usa_symbol_for(fake_mt5):
+    """O simbolo consultado na corretora e' o traduzido (`symbol_for`), nao
+    o ticker cru que o resto do sistema usa."""
+    vistos = []
+    mod, _calls = fake_mt5(positions=[_posicao(magic=999)])
+    mod.positions_get = lambda symbol=None: vistos.append(symbol) or [_posicao(magic=999)]
+
+    broker = MT5Broker(magic=20260817)
+    broker.foreign_activity("WEGE3.SA")
+
+    assert vistos == ["WEGE3"]

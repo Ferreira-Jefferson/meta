@@ -272,6 +272,12 @@ class _SessionSnapshot:
     # e' dado de tela, nao de decisao -- o invariante de `restore()` (o robo
     # redecide a ordem, nao herda a de um snapshot velho) fica intacto.
     ordem_em_pe: Optional[dict] = None
+    # ULTIMO resultado de `MT5Broker.foreign_activity()` -- so' para
+    # detectar a TRANSICAO (nada -> algo, algo -> nada) e nao spammar o
+    # diario a cada passo enquanto a atividade estranha persiste (ver
+    # `_check_atividade_estranha`). Persistido para sobreviver a um
+    # restart no meio do pregao sem re-logar o que ja tinha sido avisado.
+    atividade_estranha: Optional[dict] = None
 
     def to_dict(self) -> dict:
         return {
@@ -288,6 +294,7 @@ class _SessionSnapshot:
             "machine": self.machine or {},
             "pending_entry_refs": list(self.pending_entry_refs or []),
             "ordem_em_pe": self.ordem_em_pe,
+            "atividade_estranha": self.atividade_estranha,
         }
 
     @classmethod
@@ -309,6 +316,7 @@ class _SessionSnapshot:
             machine=raw.get("machine") or {},
             pending_entry_refs=list(raw.get("pending_entry_refs") or []),
             ordem_em_pe=raw.get("ordem_em_pe") or None,
+            atividade_estranha=raw.get("atividade_estranha") or None,
         )
 
 
@@ -1025,6 +1033,16 @@ class IntradayLiveRuntime:
                 self._restore(account, hoje)
                 passos.append(self._start_session(conn, account, hoje, now))
 
+            # So' avisa, nunca bloqueia -- ver a docstring de
+            # `_check_atividade_estranha`. Roda a cada passo (nao 1x por
+            # pregao como os portoes acima) porque uma ordem manual pode
+            # acontecer a qualquer momento, nao so' no comeco do dia. DEPOIS
+            # de `_restore` (nao antes): `_restore` troca `self._snapshot`
+            # inteiro por um objeto novo -- gravar o resultado antes disso
+            # seria escrito no snapshot errado, perdido no mesmo passo em
+            # que foi decidido (bug real, pego pelo teste de deduplicacao).
+            self._check_atividade_estranha(conn, account, hoje)
+
             # Ha' quanto tempo este slot nao roda um passo. Lido ANTES de
             # carimbar o passo de agora, senao seria sempre zero.
             parado_ha = self._parado_ha_segundos(now)
@@ -1231,6 +1249,47 @@ class IntradayLiveRuntime:
                    "minimo": round(minimo, 2), "preco": preco,
                    "quantidade": self.config.default_quantity})
         return self._capital_alarm
+
+    def _check_atividade_estranha(self, conn, account: AccountState, session: date) -> None:
+        """Ha' posicao/ordem de OUTRO `magic` neste papel agora? So' avisa
+        -- nunca bloqueia o pregao nem soma esse volume ao que o robo
+        controla (regra 6 do AGENTS.md: `live/` aplica regra declarada,
+        nunca inventa a propria -- reagir de verdade a isso seria uma
+        decisao de trading nova que nenhum backtest validou).
+
+        So' roda em modo LIVE (`self.executor is not None` -- sombra nunca
+        manda ordem pra corretora, entao nao ha "outro magic" pra' ver la).
+        Loga por TRANSICAO, nao a cada passo: `_SessionSnapshot.
+        atividade_estranha` guarda o ultimo resultado, e so' grava evento
+        quando ele muda (nada -> algo: warn; algo -> nada: info) -- senao um
+        passo a cada poucos segundos spammaria o diario inteiro enquanto a
+        atividade persistir.
+
+        Motivado pelo teste manual de 2026-08-27: comprei/vendi PMAM3 a
+        mercado direto no terminal, com o robo real rodando no mesmo papel,
+        e o diario nunca registrou nada -- `open_position()`/
+        `pending_orders()` filtram por magic de proposito (ver as
+        docstrings la), entao o robo ficava cego por completo pra' isso."""
+        if self.executor is None:
+            return
+        ler = getattr(self.broker, "foreign_activity", None)
+        if ler is None:
+            return
+        atual = ler(self.strategy.symbol)
+        anterior = self._snapshot.atividade_estranha
+        if atual == anterior:
+            return
+        self._snapshot.atividade_estranha = atual
+        if atual is not None:
+            self._log(conn, account.id, "warn",
+                      f"ATIVIDADE ESTRANHA em {atual['symbol']}: "
+                      f"{len(atual['itens'])} item(ns) de outro magic "
+                      "(posicao/ordem que este robo nao controla)",
+                      {"sessao": session.isoformat(), **atual})
+        else:
+            self._log(conn, account.id, "info",
+                      "atividade estranha anterior nao aparece mais na corretora",
+                      {"sessao": session.isoformat()})
 
     def _avaliar_sugestao_de_capital(
         self, conn, account: AccountState, session: date, preco: float
@@ -2189,6 +2248,12 @@ class IntradayLiveRuntime:
                 # espelho persistido depois (painel: a maquina do runtime de
                 # LEITURA nasce vazia -- ver `_SessionSnapshot.ordem_em_pe`).
                 "ordem_em_pe": self._espelho_da_ordem_em_pe() or self._snapshot.ordem_em_pe,
+                # So' o ultimo persistido -- ao contrario de `ordem_em_pe`,
+                # nao ha' como recalcular isto na hora sem consultar a
+                # corretora de novo (`_check_atividade_estranha` so' roda
+                # dentro de `run_once`, nunca aqui). `None` na maior parte
+                # do tempo (nada de estranho pra' relatar).
+                "atividade_estranha": self._snapshot.atividade_estranha,
                 # O offset nao e' mais "calibrado ou presumido": ele e'
                 # declarado a partir do fuso medido do servidor. O que o painel
                 # precisa mostrar agora e' se a CONFERENCIA acusou divergencia

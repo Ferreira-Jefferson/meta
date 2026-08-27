@@ -646,6 +646,62 @@ class MT5Broker(Broker):
         except Exception:
             return None
 
+    def foreign_activity(self, ticker: str) -> Optional[dict]:
+        """Ha' posicao ou ordem pendente neste papel com `magic` DIFERENTE
+        do deste robo -- sinal de que alguem (o dono, na mao, ou outro robo)
+        mexeu na mesma conta/simbolo por fora. Devolve um resumo para o
+        runtime LOGAR um alerta (nunca para decidir nada -- ver a docstring
+        do modulo: nenhuma regra de decisao mora aqui), ou `None` quando so'
+        existe (ou nao existe nada) o que e' deste robo.
+
+        Nao substitui `open_position()`/`pending_orders()` (que so' enxergam
+        o que e' DESTE `magic`, de proposito -- contra a mesma conta NETTING
+        compartilhada entre slots, ver as docstrings la): aquelas respondem
+        "quanto eu tenho", esta responde "tem mais alguem aqui alem de mim".
+        Motivado pelo teste manual de 2026-08-27 (compra/venda a mercado de
+        PMAM3 direto no terminal, enquanto o robo real rodava no mesmo papel)
+        -- o robo nunca soube que aquilo tinha acontecido.
+
+        `None` tambem quando nao deu para perguntar (terminal fechado,
+        pacote ausente): "nao sei" nao pode virar alarme de atividade
+        estranha, mesma regra de `open_position`/`pending_orders`."""
+        try:
+            import MetaTrader5 as mt5  # lazy: ver docstring do modulo
+        except Exception:  # pragma: no cover - ambiente sem o pacote
+            return None
+        try:
+            if not self.connect():
+                return None
+            symbol = self.symbol_for(ticker)
+            posicoes = mt5.positions_get(symbol=symbol)
+            if posicoes is None:
+                return None
+            ordens = mt5.orders_get(symbol=symbol)
+            if ordens is None:
+                return None
+            itens = []
+            for p in posicoes:
+                magic = getattr(p, "magic", None)
+                volume = float(getattr(p, "volume", 0.0) or 0.0)
+                if magic != self._magic and volume > 0:
+                    itens.append({
+                        "tipo": "posicao", "magic": magic,
+                        "quantity": int(round(volume * self._shares_per_lot)),
+                    })
+            for o in ordens:
+                magic = getattr(o, "magic", None)
+                volume = float(getattr(o, "volume_current", 0.0) or 0.0)
+                if magic != self._magic and volume > 0:
+                    itens.append({
+                        "tipo": "ordem", "magic": magic,
+                        "quantity": int(round(volume * self._shares_per_lot)),
+                    })
+            if not itens:
+                return None
+            return {"symbol": symbol, "itens": itens}
+        except Exception:
+            return None
+
     def last_price(self, ticker: str) -> Optional[float]:
         """Ultimo preco negociado do papel, ou `None` se nao deu para ler.
 
