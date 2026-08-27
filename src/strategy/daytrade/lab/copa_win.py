@@ -16,7 +16,11 @@ entao:
 | **total** | **7,5 pontos** | **1,5 tick** |
 
 Um alvo de 1 tick (5 pontos) NASCE negativo. E' o oposto do WDO, onde a
-mesma tarifa e' um decimo de tick e o giro alto se paga (ver `copa_wdo.py`).
+mesma tarifa e' um decimo de tick e o giro alto se paga -- foi essa
+economia que motivou uma grade maker de muitos trades pequenos para WDO@
+(`CopaWdo`), mas a tentativa zerou a conta sob capital real de day trade e
+foi removida em 2026-08-27; WDO@ hoje nao tem estrategia propria nesta
+familia.
 Dai o desenho: no WIN o robo precisa de POUCOS trades GRANDES, cada um
 pagando 1,5 tick de pedagio para tentar capturar dezenas de ticks. Foi essa
 assimetria que fechou a decisao do dono de nao ter uma estrategia so' para os
@@ -189,7 +193,7 @@ class CopaWin(IntradayStrategy):
         self._encerrado_hoje = False
         # Barras desde que a ordem de reteste foi armada; `None` = nenhuma em
         # pe'. Espelha `IntradaySessionMachine.resting_limit_bars_waited` de
-        # fora, mesmo mecanismo de `CopaWdo._espera`.
+        # fora.
         self._espera: int | None = None
 
     # ---------- tamanho: sempre fracao do teto ----------------------------

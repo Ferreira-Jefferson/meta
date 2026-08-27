@@ -8,8 +8,12 @@ Isso nao e' preferencia: e' o que a economia MEDIDA dos dois instrumentos
 obriga. A mesma tarifa de R$0,50 por round-trip vale meio tick no WIN e um
 decimo de tick no WDO, e o range diario e' de ~594 ticks contra ~99. Um alvo
 de 1 tick nasce negativo num e sobra 90% no outro. Nenhum conjunto de
-parametros serve para os dois — sao dois desenhos, `CopaWin` (rompimento,
-poucos trades grandes) e `CopaWdo` (grade maker, muitos trades pequenos).
+parametros serve para os dois — o desenho tem de ser por ativo: `CopaWin`
+(rompimento, poucos trades grandes) e' a resposta medida para WIN@. A
+tentativa equivalente para WDO@ (`CopaWdo`, grade maker de muitos trades
+pequenos) zerou a conta sob capital real de day trade (R$300, margem R$150
+x2) no 4o pregao de 123 e foi removida em 2026-08-27 -- WDO@ hoje NAO tem
+estrategia propria registrada nesta familia.
 
 `Copa` e' so' a porta: recebe o simbolo e o teto de contratos e devolve a
 instancia certa. Simbolo sem estrategia propria LEVANTA, do mesmo jeito que
@@ -30,21 +34,26 @@ impedir. Aqui nao ha' o que esquecer: a instancia devolvida E' o robo.
 from __future__ import annotations
 
 from strategy.daytrade.base import IntradayStrategy
-from strategy.daytrade.lab.copa_wdo import CopaWdo
 from strategy.daytrade.lab.copa_win import CopaWin
 
 #: Um arquivo por estrategia (`AGENTS.md`), um simbolo por estrategia. Crescer
 #: esta tabela significa MEDIR o ativo novo do zero (IS + confirmacao OOS),
 #: nunca apontar um simbolo novo para uma classe existente.
+#:
+#: `CopaWdo` (WDO@) foi removida em 2026-08-27: zerou a conta sob capital
+#: real de day trade no 4o pregao de 123 (rerun com R$300 de capital,
+#: margem R$150 x `MARGIN_BUFFER_FUTUROS`). WDO@ nao tem estrategia propria
+#: registrada nesta familia ate' que uma nova seja medida do zero.
 ESTRATEGIA_POR_SIMBOLO: dict[str, type[IntradayStrategy]] = {
     CopaWin.symbol: CopaWin,
-    CopaWdo.symbol: CopaWdo,
 }
 
 
 class Copa:
     """Despachante. `Copa(symbol="WIN@", teto_contratos=12)` devolve um
-    `CopaWin`; `Copa(symbol="WDO@", teto_contratos=4)` devolve um `CopaWdo`.
+    `CopaWin`. `Copa(symbol="WDO@", ...)` LEVANTA `ValueError` -- WDO@ nao
+    tem estrategia propria registrada nesta familia (ver `CopaWdo`, removida
+    em 2026-08-27 por zerar a conta sob capital real).
 
     `teto_contratos` e' obrigatorio e viaja para o robo escolhido: o teto e'
     ENTRADA de configuracao, porque os numeros de 2025 (WIN 15 / WDO 5) podem
