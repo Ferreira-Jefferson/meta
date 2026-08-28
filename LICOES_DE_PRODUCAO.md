@@ -812,7 +812,20 @@ produção tentando subir naquele slot era recusado: o teste ganhou poder de vet
 sobre a operação. Nenhum guard baseado em assinatura de arquivo veria isso —
 tomar uma trava que já existe não muda tamanho nem data do arquivo.
 
-> **Regra:** teste nunca alcança caminho de produção — nem para ler. Onde der
+E a forma mais cara é a terceira, medida no mesmo dia em que as outras duas foram
+corrigidas. A suíte roda em paralelo contra o **banco que a operação escreve**, e
+enquanto rodava seis robôs ficaram **22 minutos sem conseguir gravar**:
+`database is locked`, **1.100 ocorrências**, todas na mesma janela de 30 minutos —
+contra 3 em toda a semana anterior. Não é lentidão. Com espera de 5s por lock e
+passo de 5s, cada passo falhava inteiro: os robôs ficaram cegos, não lentos. Ao
+voltar, os seis declararam buraco de pregão — **81 barras puladas** somadas — e um
+deles **achatou a posição aberta** pelo protocolo de buraco. Uma decisão de saída
+causada pela suíte de testes, não pelo mercado. Naquele dia era sombra; o mesmo
+minuto em modo real é uma saída forçada sem sinal, e o robô que ficou cego não
+viu o próprio stop.
+
+> **Regra:** teste nunca alcança caminho de produção — nem para ler, nem para
+> disputar lock de banco. Onde der
 > para **impedir** (apontar a constante para um diretório temporário em toda a
 > suíte), impedir vale mais que detectar depois; onde só der para detectar, falhe
 > o teste que sujou, no instante em que sujou. E a mensagem de falha tem de
