@@ -20,6 +20,15 @@ from strategy.daytrade.lab.gremah import (
 
 
 def _strat(**kwargs) -> Gremah:
+    # Filtro de qualidade de entrada (2026-08-27) e' PADRAO `True` desde
+    # entao (ver `FILTRO_MINUTOS_DESDE_ABERTURA_MIN_PADRAO`) -- desligado
+    # aqui por padrao porque quase todo teste deste arquivo testa OUTRA
+    # mecanica (troca de fase, sizing, geometria) com barras sinteticas na
+    # abertura (minutos_desde_abertura=0) ou volume alto de proposito, e o
+    # filtro nao pode ser o motivo de nenhum deles falhar. Os testes
+    # dedicados ao filtro (mais abaixo) ligam explicitamente via kwargs.
+    kwargs.setdefault("filtro_minutos_desde_abertura_min", None)
+    kwargs.setdefault("filtro_volume_toque_max", None)
     return Gremah(profit_pct=0.01, spacing_multiplier=2.0, stop_multiplier=20.0,
                   tick_size=0.01, fixed_anchor_until=time(14, 0), **kwargs)
 
@@ -544,6 +553,20 @@ def test_geometria_em_ticks_por_simbolo_e_aplicada_sozinha():
     assert (strat.profit_ticks, strat.spacing_ticks, strat.stop_ticks) == (1, 1, 4)
 
 
+def test_geometria_em_ticks_da_bmgb4_vence_o_override_de_volatilidade():
+    """BMGB4 esta' nas DUAS tabelas (`_VOLATILITY_OVERRIDE_BY_SYMBOL` e
+    `_GEOMETRIA_TICKS_BY_SYMBOL`, desde 2026-08-27, grade 22x22 com capital
+    minimo real, IS+OOS) -- a de ticks tem que vencer, mesmo padrao ja
+    documentado no comentario da CSAN3. Se alguem editar so' uma das duas
+    tabelas, isto pega."""
+    assert _GEOMETRIA_TICKS_BY_SYMBOL["BMGB4"] == (1, 1, 4)
+    assert "BMGB4" in _VOLATILITY_OVERRIDE_BY_SYMBOL
+    strat = Gremah(symbol="BMGB4")
+    assert (strat.profit_ticks, strat.spacing_ticks, strat.stop_ticks) == (1, 1, 4)
+    assert strat.alvo_por_volatilidade is True  # o campo liga sozinho...
+    assert strat._session_ticks(5.13) == (1, 1, 4)  # ...mas os ticks decidem por ultimo
+
+
 def test_geometria_em_ticks_nao_muda_com_o_preco():
     """O ponto de expressar a geometria em ticks: a PMAM3 caiu de R$4,53 para
     R$0,14 dentro da janela de backtest, e no caminho percentual o stop dela
@@ -586,3 +609,70 @@ def test_pmam3_nao_entra_na_geometria_em_ticks_do_motor_tick():
     from strategy.daytrade.lab.gremah_tick import _GEOMETRIA_TICKS_BY_SYMBOL_TICK
     assert "PMAM3" not in _GEOMETRIA_TICKS_BY_SYMBOL_TICK
     assert _GEOMETRIA_TICKS_BY_SYMBOL_TICK["BMGB4"] == (1, 1, 8)
+
+
+# ---------------------------------------------------------------------------
+# FILTRO DE QUALIDADE DE ENTRADA (2026-08-27) -- medido e confirmado OOS em
+# `scripts/daytrade/gremah_signal_quality_2026_08_27.py` (PMAM3/M1, N=439
+# trades OOS-only): minutos_desde_abertura>=216 e volume_toque<=3200 melhoram
+# P&L medio/trade e reduzem MaxDD, mesma direcao no IS e no OOS. Pedido
+# explicito do dono: virar comportamento PADRAO do robo (nao opt-in) -- ver
+# `FILTRO_MINUTOS_DESDE_ABERTURA_MIN_PADRAO`/`FILTRO_VOLUME_TOQUE_MAX_PADRAO`.
+# ---------------------------------------------------------------------------
+
+def test_filtro_qualidade_entrada_ligado_por_padrao():
+    """O ponto central do pedido: quem constrói `Gremah` sem tocar nestes
+    dois parâmetros já opera FILTRADO -- os defaults JÁ SÃO os limiares
+    confirmados, não `None`/desligado."""
+    strat = Gremah(symbol="PMAM3")
+    assert strat.filtro_minutos_desde_abertura_min == pytest.approx(216.0)
+    assert strat.filtro_volume_toque_max == pytest.approx(3200.0)
+
+
+def test_filtro_minutos_desde_abertura_bloqueia_entrada_cedo_demais():
+    strat = _strat(filtro_minutos_desde_abertura_min=216.0)
+    strat.on_session_start(None)
+    ts0 = pd.Timestamp("2026-01-05 13:00", tz="UTC")  # 1a barra -- minutos_desde_abertura = 0
+    bar0 = Bar(ts=ts0, open=5.00, high=5.00, low=5.00, close=5.00, volume=0)
+
+    actions0 = strat.on_bar(ts0, bar0, positions=[], session_pnl_brl=0.0)
+    assert actions0 == []  # bloqueado: 0 < 216, mesmo efeito de nenhum sinal
+    assert strat._state.pending_side is None  # nenhum estado de ordem mudou
+
+    ts1 = ts0 + pd.Timedelta(minutes=216)  # exatamente no limiar
+    bar1 = Bar(ts=ts1, open=5.00, high=5.00, low=5.00, close=5.00, volume=0)
+    actions1 = strat.on_bar(ts1, bar1, positions=[], session_pnl_brl=0.0)
+    assert len(actions1) == 1  # liberado: 216 >= 216 (limiar e' inclusivo)
+
+
+def test_filtro_volume_toque_bloqueia_entrada_com_volume_alto():
+    strat = _strat(filtro_volume_toque_max=3200.0)
+    strat.on_session_start(None)
+    ts0 = pd.Timestamp("2026-01-05 13:00", tz="UTC")
+
+    actions_bloqueado = strat.on_bar(
+        ts0, Bar(ts=ts0, open=5.00, high=5.00, low=5.00, close=5.00, volume=5000),
+        positions=[], session_pnl_brl=0.0,
+    )
+    assert actions_bloqueado == []  # bloqueado: 5000 > 3200
+    assert strat._state.pending_side is None
+
+    actions_liberado = strat.on_bar(
+        ts0, Bar(ts=ts0, open=5.00, high=5.00, low=5.00, close=5.00, volume=1000),
+        positions=[], session_pnl_brl=0.0,
+    )
+    assert len(actions_liberado) == 1  # liberado: 1000 <= 3200
+
+
+def test_filtro_none_explicito_restaura_comportamento_antigo():
+    """Rede de seguranca da regressao: `None` explicito nos dois desliga os
+    filtros e devolve exatamente o comportamento de antes de 2026-08-27 --
+    entrada imediata na 1a barra, mesmo com minutos=0 e volume altissimo."""
+    strat = _strat(filtro_minutos_desde_abertura_min=None, filtro_volume_toque_max=None)
+    strat.on_session_start(None)
+    ts0 = pd.Timestamp("2026-01-05 13:00", tz="UTC")
+    bar0 = Bar(ts=ts0, open=5.00, high=5.00, low=5.00, close=5.00, volume=99_999)
+
+    actions = strat.on_bar(ts0, bar0, positions=[], session_pnl_brl=0.0)
+    assert len(actions) == 1
+    assert actions[0].limit_price == pytest.approx(4.90)

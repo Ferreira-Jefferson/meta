@@ -154,7 +154,8 @@ por um caminho diferente dos outros 9: decisao explicita do dono a
 partir do OOS, nao medicao pelos 4 passos completos."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections import deque
+from dataclasses import dataclass, field
 from datetime import time
 from statistics import median
 
@@ -359,6 +360,46 @@ CAPACIDADE_JANELA_DIAS_PADRAO = 1
 #: ela ja funciona bem (a PMAM3 real, mesmo pouco liquida, tem dezenas de
 #: eventos numa janela de 30min na maior parte do pregao).
 CAPACIDADE_MIN_EVENTOS_PADRAO = 5
+
+#: Filtro de qualidade de ENTRADA (2026-08-27, `scripts/daytrade/signal_
+#: quality_gremahtick_2026_08_27.py` + confirmacao OOS em `signal_quality_
+#: gremahtick_oos_2026_08_27.py`, PMAM3 motor tick, 881 trades OOS): volume
+#: do TICK DE TOQUE -- o proprio negocio que preencheu a entrada. Fill cujo
+#: negocio teve volume MAIOR que este numero e' desfeito (sai logo em
+#: seguida) -- o volume so' e' conhecido DEPOIS que o negocio ja aconteceu,
+#: entao a unica coisa possivel e' ACEITAR ou DESFAZER o fill, nunca evitar
+#: ele (ver `filtro_volume_toque_max` e o bloco de fill em `on_bar`).
+#: Limiar calibrado na metade1 cronologica do IS (mediana), confirmado na
+#: metade2 do IS E, isolado, no OOS puro (p=0,0004): P&L medio/trade sem
+#: filtro R$0,7626 -> com filtro R$0,8185; MaxDD R$14,44 -> R$6,08 (mais que
+#: a metade). Pedido do dono 2026-08-27: aplicar como o novo default de
+#: producao (nao um opt-in desligado) -- `None` desativa e restaura o
+#: comportamento de sempre (aceita qualquer fill).
+FILTRO_VOLUME_TOQUE_MAX_PADRAO = 400.0
+
+#: Filtro de qualidade de ENTRADA (mesma rodada de pesquisa acima): distancia
+#: (em ticks, orientada pelo LADO do trade -- positivo = a favor) entre o
+#: NIVEL da ordem parada (o preco que ela vai preencher, se tocada) e a
+#: media movel dos ate' `JANELA_SMA20_FILTRO_PADRAO` negocios ANTERIORES da
+#: sessao. Ao contrario do volume de toque, esta feature so' usa dado
+#: ANTERIOR ao toque -- entao pode barrar a TENTATIVA de entrada (a
+#: ordem-limite nem chega a ser armada) em vez de precisar desfazer um fill
+#: depois (ver `filtro_distancia_sma20_min_ticks` e `_passa_filtro_
+#: distancia_sma20`). Efeito mais fraco que o do volume de toque -- nao
+#: significativo isolado no OOS (p=0,1168), mas MESMA direcao do IS: P&L
+#: medio/trade sem filtro R$0,7990 -> com filtro R$0,8307; MaxDD R$14,38 ->
+#: R$7,14. Mesmo pedido do dono: default ja' ligado. `None` desativa.
+FILTRO_DISTANCIA_SMA20_MIN_TICKS_PADRAO = 0.70
+
+#: Janela (numero de negocios ANTERIORES) e minimo de negocios dentro dela
+#: antes do filtro acima confiar na media -- EXATOS mesmos numeros de
+#: `signal_quality_gremahtick_2026_08_27.py::_janela_valida` (`k=20`,
+#: `MIN_FRAC=0.5`, `MIN_TICKS_PISO=3` -> minimo real = max(3, round(20 x
+#: 0.5)) = 10). Sessao com menos negocios que o minimo NAO barra a entrada
+#: -- mesma leitura da pesquisa: janela invalida e' dado insuficiente, nunca
+#: reprovacao.
+JANELA_SMA20_FILTRO_PADRAO = 20
+MIN_TICKS_SMA20_FILTRO_PADRAO = 10
 
 
 @dataclass(frozen=True)
@@ -577,6 +618,15 @@ class _SessionState:
     session_stop_armed: bool = False
     session_stop_brl_hoje: float = 0.0
     session_start_ts: pd.Timestamp | None = None
+    # `recent_closes` (2026-08-27): alimenta `filtro_distancia_sma20_min_
+    # ticks` -- ate' `JANELA_SMA20_FILTRO_PADRAO` fechamentos mais o tick
+    # atual (`maxlen=+1`, ver `_passa_filtro_distancia_sma20`, que descarta
+    # o ultimo antes de tirar a media). Reseta a cada sessao de proposito
+    # (mesmo motivo de tudo mais nesta classe): a media nunca atravessa a
+    # virada de pregao.
+    recent_closes: deque = field(
+        default_factory=lambda: deque(maxlen=JANELA_SMA20_FILTRO_PADRAO + 1)
+    )
 
 
 class GremahTick(IntradayStrategy):
@@ -782,6 +832,18 @@ class GremahTick(IntradayStrategy):
                       "Junto com `profit_ticks`, permite escolher alvo e stop de forma "
                       "INDEPENDENTE -- no caminho percentual eles estão amarrados, e subir um "
                       "sobe o outro na mesma proporção.",
+        "filtro_volume_toque_max": "Volume MÁXIMO do negócio que preencheu a entrada (volume "
+                                   "de TOQUE) -- fill com volume MAIOR sai em seguida (só se "
+                                   "sabe o volume do toque DEPOIS que o negócio aconteceu, "
+                                   "então não dá pra evitar, só desfazer). Default 400,0, "
+                                   "confirmado no OOS 2026-08-27 (ver o módulo). Vazio = "
+                                   "desativa, aceita qualquer fill.",
+        "filtro_distancia_sma20_min_ticks": "Distância MÍNIMA (ticks, a favor do lado) entre "
+                                           "o nível da entrada e a média móvel dos últimos 20 "
+                                           "negócios da sessão -- abaixo disso a ordem-limite "
+                                           "nem chega a ser armada. Default 0,70, confirmado no "
+                                           "OOS 2026-08-27 (mesma direção do efeito, ver o "
+                                           "módulo). Vazio = desativa.",
     }
 
     @staticmethod
@@ -821,6 +883,8 @@ class GremahTick(IntradayStrategy):
         capacidade_fracao: float | None = None,
         capacidade_janela_dias: int = CAPACIDADE_JANELA_DIAS_PADRAO,
         capacidade_min_eventos: int = CAPACIDADE_MIN_EVENTOS_PADRAO,
+        filtro_volume_toque_max: float | None = FILTRO_VOLUME_TOQUE_MAX_PADRAO,
+        filtro_distancia_sma20_min_ticks: float | None = FILTRO_DISTANCIA_SMA20_MIN_TICKS_PADRAO,
     ):
         self.symbol = symbol
         self.tick_size = tick_size
@@ -882,6 +946,19 @@ class GremahTick(IntradayStrategy):
         self.capacidade_fracao = abs(capacidade_fracao)
         self.capacidade_janela_dias = max(1, int(capacidade_janela_dias))
         self.capacidade_min_eventos = max(1, int(capacidade_min_eventos))
+        # Filtros de qualidade de ENTRADA (2026-08-27, confirmados no OOS --
+        # ver `FILTRO_VOLUME_TOQUE_MAX_PADRAO`/`FILTRO_DISTANCIA_SMA20_MIN_
+        # TICKS_PADRAO`). `None` desativa cada um independentemente --
+        # convencao aditiva de sempre (compare `margin_per_contract_brl` em
+        # `copa_win.py`): quem nao passa nada opera com os LIMIARES JA'
+        # CONFIRMADOS, pedido explicito do dono, nao "desligado por padrao".
+        self.filtro_volume_toque_max = (
+            None if filtro_volume_toque_max is None else float(filtro_volume_toque_max)
+        )
+        self.filtro_distancia_sma20_min_ticks = (
+            None if filtro_distancia_sma20_min_ticks is None
+            else float(filtro_distancia_sma20_min_ticks)
+        )
         # Sobrevive a `on_session_start` de proposito -- mesmo motivo de
         # `_janela_volume` (mesma classe): a capacidade e' medida em dias
         # ANTERIORES, nao deve zerar entre sessoes.
@@ -1151,11 +1228,51 @@ class GremahTick(IntradayStrategy):
         cauda_lotes = total_lotes - pecas_unitarias
         return (LOTE_PADRAO_B3,) * pecas_unitarias + (cauda_lotes * LOTE_PADRAO_B3,)
 
+    def _level_price(self, anchor: float, spacing_ticks: int, side: str) -> float:
+        """Preco do NIVEL da ordem parada -- onde ela preenche, se tocada.
+        Extraido de `_build_entry` (2026-08-27) para ser reusado tambem por
+        `_passa_filtro_distancia_sma20`, que precisa do mesmo numero ANTES
+        de decidir se arma a ordem."""
+        spacing_off = spacing_ticks * self.tick_size
+        return round(anchor - spacing_off, 2) if side == "long" else round(anchor + spacing_off, 2)
+
+    def _passa_filtro_distancia_sma20(self, side: str, anchor: float, spacing_ticks: int) -> bool:
+        """Filtro de qualidade de ENTRADA (`filtro_distancia_sma20_min_ticks`,
+        ver o modulo) -- so' usa dado ANTERIOR a este negocio (a propria
+        `anchor` e' o preco DESTE tick, ainda nao um toque), entao barra a
+        TENTATIVA de armar a ordem em vez de precisar desfazer um fill
+        depois (compare `filtro_volume_toque_max`, so' conhecido apos o
+        fill, tratado em `on_bar`).
+
+        Mesma formula EXATA de `distancia_sma20_ticks` em
+        `signal_quality_gremahtick_2026_08_27.py::computa_features`: media
+        movel dos ate' `JANELA_SMA20_FILTRO_PADRAO` negocios ANTERIORES da
+        sessao (o tick atual, ja' no fim de `state.recent_closes` porque
+        `on_bar` registra ANTES deste ponto, e' excluido com o `[:-1]`
+        abaixo -- mesma janela `[inicio_sessao, pos)` da pesquisa, exclusiva
+        do toque) contra o preco do NIVEL da entrada, com sinal orientado
+        pelo lado (positivo = media ACIMA do nivel, a favor de um long;
+        ABAIXO, a favor de um short).
+
+        Sem media suficiente ainda (inicio da sessao, menos de
+        `MIN_TICKS_SMA20_FILTRO_PADRAO` negocios vistos) NAO barra -- mesma
+        leitura da pesquisa: janela invalida e' dado insuficiente, nunca
+        reprovacao."""
+        if self.filtro_distancia_sma20_min_ticks is None:
+            return True
+        anteriores = list(self._state.recent_closes)[:-1]
+        if len(anteriores) < MIN_TICKS_SMA20_FILTRO_PADRAO:
+            return True
+        sma20 = sum(anteriores) / len(anteriores)
+        level_price = self._level_price(anchor, spacing_ticks, side)
+        sinal = 1.0 if side == "long" else -1.0
+        distancia_ticks = sinal * (sma20 - level_price) / self.tick_size
+        return distancia_ticks >= self.filtro_distancia_sma20_min_ticks
+
     def _build_entry(self, side: str, anchor: float, spacing_ticks: int, profit_ticks: int, stop_ticks: int | None, ts: pd.Timestamp) -> EnterLimit:
         self.quantity = self._lotes_por_realocacao(anchor, ts) * LOTE_PADRAO_B3
         split = self._dividir_pecas(self.quantity) if self.dividir_entrada else None
-        spacing_off = spacing_ticks * self.tick_size
-        level_price = round(anchor - spacing_off, 2) if side == "long" else round(anchor + spacing_off, 2)
+        level_price = self._level_price(anchor, spacing_ticks, side)
         profit_off = profit_ticks * self.tick_size
         target_price = level_price + profit_off if side == "long" else level_price - profit_off
         stop_price = None
@@ -1203,6 +1320,10 @@ class GremahTick(IntradayStrategy):
         # fora de sinal de entrada -- ver o comentario equivalente em
         # `Gremah.on_bar` (mesma classe `RollingVolumeWindow`).
         self._janela_volume.registrar(ts, bar.volume)
+        # Mesmo mecanismo/motivo, para o filtro `filtro_distancia_sma20_min_
+        # ticks` (2026-08-27) -- `_passa_filtro_distancia_sma20` exclui o
+        # ultimo elemento (este mesmo tick) antes de tirar a media.
+        state.recent_closes.append(bar.close)
 
         if is_fixed_phase and state.open_price is None:
             state.open_price = bar.open
@@ -1233,6 +1354,17 @@ class GremahTick(IntradayStrategy):
                 state.open_side = state.pending_side
                 state.pending_side = None
                 state.pending_since_ts = None
+                if (self.filtro_volume_toque_max is not None
+                        and bar.volume > self.filtro_volume_toque_max):
+                    # Filtro de qualidade de ENTRADA (`filtro_volume_toque_
+                    # max`, 2026-08-27, ver o modulo) -- o fill JA' aconteceu
+                    # (bar.volume aqui e' o volume do proprio negocio que
+                    # tocou, so' conhecido agora); reprovado, a UNICA coisa
+                    # possivel e' desfazer: `Exit` fecha a posicao recem-
+                    # aberta no INICIO da proxima barra e cancela qualquer
+                    # filho ainda pendente do mesmo grupo dividido (mesmo
+                    # mecanismo do stop agregado de sessao, acima).
+                    return [Exit(reason="filtro_volume_toque")]
             return []
 
         if state.open_side is not None:
@@ -1258,17 +1390,24 @@ class GremahTick(IntradayStrategy):
         if next_side is None:
             return actions
 
-        state.pending_side = next_side
-        state.pending_since_ts = ts
-        state.pending_mode = "fixed" if is_fixed_phase else "rolling"
         if is_fixed_phase:
-            entry = self._build_entry(
-                next_side, state.open_price,
-                state.spacing_ticks_today, state.profit_ticks_today, state.stop_ticks_today,
-                ts,
-            )
+            anchor = state.open_price
+            spacing_ticks = state.spacing_ticks_today
+            profit_ticks = state.profit_ticks_today
+            stop_ticks = state.stop_ticks_today
         else:
             anchor = bar.close
             profit_ticks, spacing_ticks, stop_ticks = self._session_ticks(anchor)
-            entry = self._build_entry(next_side, anchor, spacing_ticks, profit_ticks, stop_ticks, ts)
+
+        if not self._passa_filtro_distancia_sma20(next_side, anchor, spacing_ticks):
+            # Filtro de qualidade de ENTRADA (`filtro_distancia_sma20_min_
+            # ticks`, ver o modulo) -- reprovado: NAO arma ordem nenhuma,
+            # igual a nao ter havido sinal nenhum neste negocio (nenhum
+            # estado muda, tenta de novo no proximo tick).
+            return actions
+
+        state.pending_side = next_side
+        state.pending_since_ts = ts
+        state.pending_mode = "fixed" if is_fixed_phase else "rolling"
+        entry = self._build_entry(next_side, anchor, spacing_ticks, profit_ticks, stop_ticks, ts)
         return [entry]

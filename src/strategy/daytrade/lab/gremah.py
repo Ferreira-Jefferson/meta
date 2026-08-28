@@ -256,6 +256,44 @@ CAPACIDADE_FRACAO_PADRAO = 0.10
 CAPACIDADE_JANELA_DIAS_PADRAO = 1
 CAPACIDADE_MIN_EVENTOS_PADRAO = 5
 
+#: FILTRO DE QUALIDADE DE ENTRADA (2026-08-27), medido e confirmado OOS em
+#: `scripts/daytrade/gremah_signal_quality_2026_08_27.py` (PMAM3, motor M1,
+#: trade log de `capital_ladder_gremah_2026_08_27.py`). Pergunta: que
+#: caracteristica da entrada distingue trade vencedor de perdedor -- as duas
+#: abaixo passaram o gate de reproducao (`proxies_reproduziveis`: mesmo sinal
+#: E p<0,05 no pool E p<0,10 em cada metade cronologica do IS) e MANTIVERAM a
+#: mesma direcao numa passada OOS-only (N=439 trades, nunca usada para
+#: calibrar o limiar -- limiar = mediana da METADE 1 do IS, testado CRU na
+#: metade 2 e depois no OOS inteiro):
+#:
+#:   minutos_desde_abertura >= 216 minutos (desde a 1a barra do pregao ate' o
+#:   instante da entrada): 153 mantidos / 286 descartados no OOS; P&L medio/
+#:   trade R$0,7321 -> R$0,8432; MaxDD R$7,10 -> R$4,06.
+#:
+#:   volume_toque <= 3200 (volume da barra em que a entrada de fato acontece):
+#:   191 mantidos / 248 descartados no OOS; P&L medio/trade R$0,7321 ->
+#:   R$0,8608; MaxDD R$7,10 -> R$5,04.
+#:
+#: Pedido explicito do dono (2026-08-27): aplicar AGORA como comportamento
+#: PADRAO do robo (nao opt-in) -- os dois defaults abaixo SAO os limiares
+#: confirmados, nao `None`. Quem quiser o comportamento antigo (sem filtro)
+#: passa `None` explicito num dos dois, ou nos dois.
+#:
+#: `volume_toque` so' e' conhecido de verdade no instante do TOQUE (a barra
+#: que preenche a ordem parada) -- mas a maquina de execucao
+#: (`backtest.intraday.machine`) resolve o toque ANTES de consultar o robo de
+#: novo, entao o robo nunca teria a chance de vetar um toque ja' acontecido.
+#: `_passa_filtro_qualidade_entrada`, abaixo, aplica os dois filtros no
+#: instante em que o robo ARMA uma ordem nova (o unico ponto de decisao que
+#: ele de fato controla): `minutos_desde_abertura` e' o mesmo relogio do
+#: pregao em qualquer um dos dois instantes (arme ou toque), sem aproximacao;
+#: `volume_toque` vira o volume da barra ATUAL (a de armar), a melhor proxy
+#: disponivel ANTES do toque acontecer -- e' exatamente o volume que
+#: `gremah_signal_quality_2026_08_27.py` teria medido se a ordem fosse a
+#: mercado em vez de parada.
+FILTRO_MINUTOS_DESDE_ABERTURA_MIN_PADRAO = 216.0
+FILTRO_VOLUME_TOQUE_MAX_PADRAO = 3200.0
+
 
 @dataclass(frozen=True)
 class _SymbolCapacidade:
@@ -465,6 +503,21 @@ _GEOMETRIA_TICKS_BY_SYMBOL: dict[str, tuple[int, int, int]] = {
     # duas pontas. IS R$ 1.563,39 x 1.269,48 (+23,2%); OOS R$ 201,00 x 169,81
     # (+18,4%), lucro/DD 20,77 x 19,30.
     "KLBN3": (1, 1, 4),
+    # rodada 3 (2026-08-27): grade INDEPENDENTE 22x22 (alvo x stop,
+    # espacamento=alvo) na BMGB4, com o capital MINIMO REAL do ativo
+    # (`alvo_stop_grid_2026_08_27.py` -- uma 1a versao usou capital de teste
+    # arbitrario de R$50.000/portao desligado e achou T1/E1/S6; o dono
+    # apontou o erro, refeita com capital real o vencedor mudou pra S4).
+    # Comparacao LIMPA nas duas pontas: IS pula 0/1 pregao dos dois lados,
+    # OOS pula 38/39 de 50 dos dois lados (nao e' um lado operando muito mais
+    # que o outro, ao contrario de CSAN3/KLBN3 acima).
+    # IS  R$ 1.214,12 contra R$   990,14 da vol-adapt (+22,6%), capital
+    #     inicial R$ 658,00, MaxDD R$ 20,40 contra R$ 22,86 (tambem melhora).
+    # OOS R$    29,82 contra R$    15,41                    (+93,5%), capital
+    #     inicial R$ 1.032,00, MaxDD R$ 15,46 contra R$ 15,35 (empatado).
+    # Passa por cima do override de volatilidade de
+    # `_VOLATILITY_OVERRIDE_BY_SYMBOL`, de proposito, mesmo padrao da CSAN3.
+    "BMGB4": (1, 1, 4),
 }
 
 
@@ -530,6 +583,14 @@ def calibrated_setups() -> tuple[SymbolSetup, ...]:
 @dataclass
 class _SessionState:
     open_price: float | None = None
+    # Timestamp da 1a barra vista NESTA sessao, independente de fase
+    # (fixa/rolante) -- `open_price` so' e' setado em fase fixa (fica `None`
+    # pra sempre num inicio 100% rolante, ver teste
+    # `test_fase_rolante_nao_precisa_de_open_price`), mas
+    # `minutos_desde_abertura` (filtro de qualidade de entrada, ver
+    # `FILTRO_MINUTOS_DESDE_ABERTURA_MIN_PADRAO`) e' "o relogio do pregao" e
+    # precisa de uma abertura mesmo quando o robo comeca direto na rolante.
+    session_open_ts: pd.Timestamp | None = None
     session_halted: bool = False
     pending_side: str | None = None
     pending_mode: str | None = None  # "fixed" ou "rolling" -- modo em que a ordem pendente foi posicionada
@@ -840,6 +901,15 @@ class Gremah(IntradayStrategy):
                       "Junto com `profit_ticks`, permite escolher alvo e stop de forma "
                       "INDEPENDENTE -- no caminho percentual eles estão amarrados, e subir um "
                       "sobe o outro na mesma proporção.",
+        "filtro_minutos_desde_abertura_min": "Minutos desde a abertura do pregão: entradas antes "
+                                             "disto são puladas (medido e confirmado OOS "
+                                             "2026-08-27, PMAM3/M1 -- ver "
+                                             "FILTRO_MINUTOS_DESDE_ABERTURA_MIN_PADRAO). Padrão "
+                                             "216 minutos desde 2026-08-27. Vazio = desliga o "
+                                             "filtro.",
+        "filtro_volume_toque_max": "Volume da barra em que a ordem arma: entradas acima disto "
+                                   "são puladas (mesma medição/confirmação acima). Padrão 3200 "
+                                   "desde 2026-08-27. Vazio = desliga o filtro.",
     }
     @staticmethod
     def calibrated_setups() -> tuple[SymbolSetup, ...]:
@@ -888,6 +958,8 @@ class Gremah(IntradayStrategy):
         capacidade_fracao: float | None = None,
         capacidade_janela_dias: int = CAPACIDADE_JANELA_DIAS_PADRAO,
         capacidade_min_eventos: int = CAPACIDADE_MIN_EVENTOS_PADRAO,
+        filtro_minutos_desde_abertura_min: float | None = FILTRO_MINUTOS_DESDE_ABERTURA_MIN_PADRAO,
+        filtro_volume_toque_max: float | None = FILTRO_VOLUME_TOQUE_MAX_PADRAO,
     ):
         self.symbol = symbol
         self.tick_size = tick_size
@@ -1042,6 +1114,17 @@ class Gremah(IntradayStrategy):
         self.capacidade_fracao = abs(capacidade_fracao)
         self.capacidade_janela_dias = max(1, int(capacidade_janela_dias))
         self.capacidade_min_eventos = max(1, int(capacidade_min_eventos))
+        # Filtro de qualidade de entrada (2026-08-27, medido e confirmado OOS
+        # -- ver a docstring de `FILTRO_MINUTOS_DESDE_ABERTURA_MIN_PADRAO`
+        # acima para o protocolo completo e os numeros). `None` desliga cada
+        # filtro individualmente; o default de cada um JA' E' o limiar
+        # confirmado -- pedido explicito do dono, nao opt-in.
+        self.filtro_minutos_desde_abertura_min = (
+            None if filtro_minutos_desde_abertura_min is None else abs(filtro_minutos_desde_abertura_min)
+        )
+        self.filtro_volume_toque_max = (
+            None if filtro_volume_toque_max is None else abs(filtro_volume_toque_max)
+        )
 
         self._state = _SessionState()
         # Atualizado por `on_capital_update`, chamado pelo motor logo antes de
@@ -1311,6 +1394,28 @@ class Gremah(IntradayStrategy):
             exit_ttl_bars=self.exit_ttl_bars if self.dividir_entrada else None,
         )
 
+    def _passa_filtro_qualidade_entrada(self, ts: pd.Timestamp, bar: Bar) -> bool:
+        """`True` = pode armar a entrada agora; `False` = pular esta barra
+        (mesmo efeito de nenhum sinal ter disparado -- ver `on_bar`, que so'
+        chama isto no ponto em que JA' decidiu que armaria uma ordem nova).
+
+        MESMAS definicoes de `scripts/daytrade/gremah_signal_quality_
+        2026_08_27.py` (ver a docstring de `FILTRO_MINUTOS_DESDE_ABERTURA_
+        MIN_PADRAO` para a medicao completa), com UMA adaptacao necessaria:
+        la' `volume_toque` era o volume da barra do TOQUE (so' existe depois
+        do fill); aqui, no instante em que o robo decide ARMAR a ordem, o
+        toque ainda nao aconteceu -- a barra ATUAL (`bar`) e' a melhor proxy
+        disponivel, e `minutos_desde_abertura` e' o MESMO relogio do pregao
+        nos dois instantes (nao ha aproximacao aqui, so' no volume)."""
+        if self.filtro_minutos_desde_abertura_min is not None:
+            abertura = self._state.session_open_ts
+            minutos = (ts - abertura).total_seconds() / 60.0 if abertura is not None else 0.0
+            if minutos < self.filtro_minutos_desde_abertura_min:
+                return False
+        if self.filtro_volume_toque_max is not None and bar.volume > self.filtro_volume_toque_max:
+            return False
+        return True
+
     def on_bar(
         self,
         ts: pd.Timestamp,
@@ -1321,6 +1426,13 @@ class Gremah(IntradayStrategy):
         state = self._state
         actions: list[IntradayAction] = []
         is_fixed_phase = ts.time() < self.fixed_anchor_until
+
+        # 1a barra vista NESTA sessao (qualquer fase) -- ancora de
+        # `minutos_desde_abertura` no filtro de qualidade de entrada (ver
+        # `_passa_filtro_qualidade_entrada`). Independente de `open_price`
+        # (que so' e' setado em fase fixa, ver comentario em `_SessionState`).
+        if state.session_open_ts is None:
+            state.session_open_ts = ts
 
         # Posicionada UMA vez por sessao, na primeira barra vista -- independente
         # de comecar em fase fixa ou ja' direto em rolante (robo ligado
@@ -1395,6 +1507,12 @@ class Gremah(IntradayStrategy):
 
         next_side = state.pending_side if stale_order else self._next_side_to_arm()
         if next_side is None:
+            return actions
+
+        # Filtro de qualidade de entrada (2026-08-27) -- reprova esta barra
+        # do MESMO jeito que `next_side is None` acima: nenhuma ordem
+        # armada, nenhum estado mudado, tenta de novo na proxima barra.
+        if not self._passa_filtro_qualidade_entrada(ts, bar):
             return actions
 
         state.pending_side = next_side

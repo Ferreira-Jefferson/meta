@@ -61,7 +61,14 @@ def _config() -> IntradayBacktestConfig:
 
 def _strat() -> Gremah:
     return Gremah(profit_pct=0.01, spacing_multiplier=2.0, stop_multiplier=20.0, tick_size=0.01,
-                                  fixed_anchor_until=time(23, 59))  # sempre fase fixa nesta janela de teste
+                  fixed_anchor_until=time(23, 59),  # sempre fase fixa nesta janela de teste
+                  # Filtro de qualidade de entrada (2026-08-27) e' PADRAO
+                  # `True` desde entao -- desligado aqui porque este arquivo
+                  # testa a mecanica de warm start/cold start (calibracao da
+                  # abertura), nao o filtro em si, e a barra "ao vivo" que
+                  # toca o nivel chega bem antes dos 216 minutos.
+                  filtro_minutos_desde_abertura_min=None,
+                  filtro_volume_toque_max=None)
 
 
 def test_cold_start_no_meio_do_pregao_calibra_errado():

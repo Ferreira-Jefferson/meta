@@ -130,7 +130,15 @@ def _runtime(tmp_path, barras, semente=None, execution_mode="shadow", feed=None,
     from strategy.daytrade.lab.gremah import Gremah
 
     kwargs = dict(symbol=SYMBOL, tick_size=0.01, profit_pct=0.01,
-                  spacing_multiplier=2.0, stop_multiplier=20.0)
+                  spacing_multiplier=2.0, stop_multiplier=20.0,
+                  # Filtro de qualidade de entrada (2026-08-27) e' PADRAO
+                  # `True` desde entao -- desligado aqui porque este roteiro
+                  # de barras testa a mecanica ao vivo (fill, persistencia,
+                  # journal), nao o filtro em si (ver `tests/test_gremah.py`
+                  # para os testes dedicados a ele), e as barras sinteticas
+                  # daqui entram logo na abertura (minutos_desde_abertura~0).
+                  filtro_minutos_desde_abertura_min=None,
+                  filtro_volume_toque_max=None)
     kwargs.update(strat_kwargs)
     if feed is None:
         feed = _ScriptedBarFeed(barras, barras[:1] if semente is None else semente)
@@ -413,7 +421,12 @@ def _runtime_live(tmp_path, barras, broker, semente=None, **strat_kwargs):
                   # execucao real recusa operar dividida (por desenho). Quem
                   # quiser testar a divisao de verdade passa
                   # `dividir_entrada=True, exit_ttl_bars=N` via `strat_kwargs`.
-                  dividir_entrada=False)
+                  dividir_entrada=False,
+                  # Filtro de qualidade de entrada (2026-08-27) e' PADRAO
+                  # `True` desde entao -- MESMO MOTIVO de `_runtime` acima:
+                  # este arquivo testa a mecanica ao vivo, nao o filtro.
+                  filtro_minutos_desde_abertura_min=None,
+                  filtro_volume_toque_max=None)
     kwargs.update(strat_kwargs)
     feed = _ScriptedBarFeed(barras, barras[:1] if semente is None else semente)
     rt = IntradayLiveRuntime(
@@ -642,7 +655,9 @@ def test_restart_dentro_da_janela_de_ancora_fixa_cancela_o_ticket_antigo_antes_d
     rt_novo = IntradayLiveRuntime(
         slot=SLOT, strategy=Gremah(symbol=SYMBOL, tick_size=0.01, profit_pct=0.01,
                                    spacing_multiplier=2.0, stop_multiplier=20.0,
-                                   dividir_entrada=False),
+                                   dividir_entrada=False,
+                                   filtro_minutos_desde_abertura_min=None,
+                                   filtro_volume_toque_max=None),
         config=_config(), bar_feed=feed_novo, broker=broker,
         db_path=rt.db_path, execution_mode="live", initial_capital=100.0,
     )
@@ -680,7 +695,9 @@ def test_restart_fora_da_janela_de_ancora_fixa_tambem_cancela_o_ticket_antigo(
     rt_novo = IntradayLiveRuntime(
         slot=SLOT, strategy=Gremah(symbol=SYMBOL, tick_size=0.01, profit_pct=0.01,
                                    spacing_multiplier=2.0, stop_multiplier=20.0,
-                                   dividir_entrada=False),
+                                   dividir_entrada=False,
+                                   filtro_minutos_desde_abertura_min=None,
+                                   filtro_volume_toque_max=None),
         config=_config(), bar_feed=feed_novo, broker=broker,
         db_path=rt.db_path, execution_mode="live", initial_capital=100.0,
     )
@@ -972,7 +989,8 @@ def test_capital_do_slot_dimensiona_a_posicao_e_nao_o_da_config_recebida(tmp_pat
     rt = IntradayLiveRuntime(
         slot=SLOT,
         strategy=Gremah(symbol=SYMBOL, tick_size=0.01, profit_pct=0.01,
-                        spacing_multiplier=2.0, stop_multiplier=20.0),
+                        spacing_multiplier=2.0, stop_multiplier=20.0,
+                        filtro_minutos_desde_abertura_min=None, filtro_volume_toque_max=None),
         config=_config(),           # sai daqui com initial_capital=0.0, de proposito
         bar_feed=feed, broker=_ExplodingBroker(),
         db_path=tmp_path / "live_intraday.sqlite",
@@ -1449,7 +1467,9 @@ def test_estado_da_sessao_sobrevive_a_um_processo_novo(tmp_path, pregao_aberto):
     # processo NOVO, mesmo banco
     rt2 = IntradayLiveRuntime(
         slot=SLOT, strategy=Gremah(symbol=SYMBOL, tick_size=0.01, profit_pct=0.01,
-                                   fixed_anchor_until=time(14, 0)),
+                                   fixed_anchor_until=time(14, 0),
+                                   filtro_minutos_desde_abertura_min=None,
+                                   filtro_volume_toque_max=None),
         config=_config(),
         bar_feed=_ScriptedBarFeed(barras, semente), broker=_ExplodingBroker(),
         db_path=rt.db_path, initial_capital=100.0,

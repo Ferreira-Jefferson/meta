@@ -20,6 +20,16 @@ from strategy.daytrade.lab.gremah_tick import (
 
 
 def _strat(**kwargs) -> GremahTick:
+    # `filtro_volume_toque_max`/`filtro_distancia_sma20_min_ticks` (2026-08-27):
+    # DESLIGADOS por padrão aqui -- os testes deste arquivo cobrem outros
+    # mecanismos (reancoragem por tempo, teto de lotes, divisão de entrada
+    # etc.), com preço sintético constante que o filtro de distância
+    # bloquearia sem relação nenhuma com o que cada teste verifica. Os
+    # testes DEDICADOS aos dois filtros (mais abaixo) passam os valores
+    # explicitamente, inclusive `None` para provar que restaura este mesmo
+    # comportamento de sempre.
+    kwargs.setdefault("filtro_volume_toque_max", None)
+    kwargs.setdefault("filtro_distancia_sma20_min_ticks", None)
     return GremahTick(profit_pct=0.01, spacing_multiplier=2.0, stop_multiplier=20.0,
                        tick_size=0.01, fixed_anchor_until=time(14, 0), **kwargs)
 
@@ -370,3 +380,122 @@ def test_ticks_explicitos_nao_aceitam_zero_nem_negativo():
     assert _strat(profit_ticks=0).profit_ticks == 1
     assert _strat(stop_ticks=-5).stop_ticks == 1
     assert _strat(spacing_ticks=0).spacing_ticks == 1
+
+
+# ---------------------------------------------------------------------------
+# Filtros de qualidade de ENTRADA (2026-08-27) -- `volume_toque` e
+# `distancia_sma20_ticks`, confirmados no OOS (`scripts/daytrade/
+# signal_quality_gremahtick_2026_08_27.py` +
+# `signal_quality_gremahtick_oos_2026_08_27.py`, PMAM3 motor tick). Pedido
+# do dono: aplicar JA' em producao, limiares confirmados como DEFAULT (nao
+# opt-in desligado) -- ver `FILTRO_VOLUME_TOQUE_MAX_PADRAO`/`FILTRO_
+# DISTANCIA_SMA20_MIN_TICKS_PADRAO` no modulo.
+# ---------------------------------------------------------------------------
+
+def test_filtros_qualidade_sinal_ligados_por_padrao():
+    """(a) Construcao DEFAULT (sem passar nada) tem os dois filtros ATIVOS
+    nos limiares confirmados -- nao "desligado por padrao"."""
+    strat = GremahTick(symbol="PMAM3")
+
+    assert strat.filtro_volume_toque_max == pytest.approx(400.0)
+    assert strat.filtro_distancia_sma20_min_ticks == pytest.approx(0.70)
+
+
+def test_filtro_distancia_sma20_bloqueia_reancoragem_contra_a_media():
+    """`filtro_distancia_sma20_min_ticks`: so' usa dado ANTERIOR ao toque,
+    entao barra a TENTATIVA de armar a ordem (nunca precisa desfazer nada).
+    10 ticks parados em 8.00 constroem a media; um pulo de ancora pra 20.00
+    (reancoragem rolante, ordem ficou velha) fica longe DEMAIS da media na
+    direcao ERRADA -- bloqueado, igual a nao ter havido sinal nenhum."""
+    strat = _strat(filtro_distancia_sma20_min_ticks=0.70, rolling_reanchor_after_seconds=5.0)
+    strat.on_session_start(None)
+    ts0 = pd.Timestamp("2026-01-05 15:00:00", tz="UTC")
+    actions0 = strat.on_bar(ts0, Bar(ts=ts0, open=8.00, high=8.00, low=8.00, close=8.00, volume=0), None, 0.0)
+    assert len(actions0) == 1  # 1o tick da sessao: janela vazia, filtro nao bloqueia
+    assert strat._state.pending_side == "long"
+
+    ts = ts0
+    for _ in range(9):  # completa 10 fechamentos anteriores (minimo da janela)
+        ts = ts + pd.Timedelta(seconds=0.1)
+        actions = strat.on_bar(ts, Bar(ts=ts, open=8.00, high=8.00, low=8.00, close=8.00, volume=0), None, 0.0)
+        assert actions == []  # ordem ainda pendente, nao reancora (< 5s)
+
+    # 1h depois, preco salta pra 20.00 -- ordem fica velha (tenta reancorar),
+    # mas a media (10 x 8.00) fica MUITO abaixo do novo nivel: bloqueado.
+    ts_longe = ts0 + pd.Timedelta(hours=1)
+    actions_bloqueadas = strat.on_bar(
+        ts_longe, Bar(ts=ts_longe, open=20.00, high=20.00, low=20.00, close=20.00, volume=0), None, 0.0,
+    )
+    assert actions_bloqueadas == []
+    assert strat._state.pending_side == "long"  # continua a ordem ANTIGA
+    assert strat._state.pending_since_ts == ts0  # nao reancorou de verdade
+
+
+def test_filtro_distancia_sma20_none_desativa_e_reancora_normal():
+    """(b) `filtro_distancia_sma20_min_ticks=None` restaura o comportamento
+    de sempre -- MESMO cenario do teste acima (pulo de preco contra a
+    media), mas agora reancora sem checar distancia nenhuma."""
+    strat = _strat(filtro_distancia_sma20_min_ticks=None, rolling_reanchor_after_seconds=5.0)
+    strat.on_session_start(None)
+    ts0 = pd.Timestamp("2026-01-05 15:00:00", tz="UTC")
+    strat.on_bar(ts0, Bar(ts=ts0, open=8.00, high=8.00, low=8.00, close=8.00, volume=0), None, 0.0)
+    ts = ts0
+    for _ in range(9):
+        ts = ts + pd.Timedelta(seconds=0.1)
+        strat.on_bar(ts, Bar(ts=ts, open=8.00, high=8.00, low=8.00, close=8.00, volume=0), None, 0.0)
+
+    ts_longe = ts0 + pd.Timedelta(hours=1)
+    actions = strat.on_bar(
+        ts_longe, Bar(ts=ts_longe, open=20.00, high=20.00, low=20.00, close=20.00, volume=0), None, 0.0,
+    )
+    assert len(actions) == 1  # sem o filtro, reancora normalmente
+    assert strat._state.pending_since_ts == ts_longe
+
+
+def test_filtro_volume_toque_desfaz_fill_de_volume_alto():
+    """`filtro_volume_toque_max`: so' e' conhecido DEPOIS que o negocio de
+    toque ja aconteceu (o motor ja abriu a posicao ANTES de chamar `on_bar`,
+    ver `IntradaySessionMachine.on_closed_bar`), entao a unica coisa
+    possivel e' desfazer -- `Exit` imediato quando o volume do toque
+    (`bar.volume` NESTA MESMA barra) excede o limiar."""
+    strat = _strat(filtro_volume_toque_max=50.0)
+    strat.on_session_start(None)
+    ts0 = pd.Timestamp("2026-01-05 15:00:00", tz="UTC")
+    actions0 = strat.on_bar(ts0, Bar(ts=ts0, open=8.00, high=8.00, low=8.00, close=8.00, volume=0), None, 0.0)
+    assert len(actions0) == 1
+    assert strat._state.pending_side == "long"
+
+    # o motor "preencheu": proxima chamada chega com posicao ja aberta e o
+    # volume do PROPRIO negocio de toque acima do limiar (50).
+    ts1 = ts0 + pd.Timedelta(seconds=1)
+    actions1 = strat.on_bar(
+        ts1, Bar(ts=ts1, open=7.84, high=7.84, low=7.84, close=7.84, volume=100.0),
+        [object()], 0.0,
+    )
+
+    assert len(actions1) == 1
+    assert actions1[0].reason == "filtro_volume_toque"
+    assert strat._state.pending_side is None
+    assert strat._state.open_side == "long"  # a posicao foi contabilizada como aberta de verdade
+    assert strat._state.long_fills == 1
+
+
+def test_filtro_volume_toque_none_desativa_e_aceita_qualquer_fill():
+    """(b) `filtro_volume_toque_max=None` restaura o comportamento de sempre
+    -- MESMO fill de volume gigante do teste acima, mas agora aceito sem
+    `Exit` nenhum."""
+    strat = _strat(filtro_volume_toque_max=None)
+    strat.on_session_start(None)
+    ts0 = pd.Timestamp("2026-01-05 15:00:00", tz="UTC")
+    strat.on_bar(ts0, Bar(ts=ts0, open=8.00, high=8.00, low=8.00, close=8.00, volume=0), None, 0.0)
+
+    ts1 = ts0 + pd.Timedelta(seconds=1)
+    actions1 = strat.on_bar(
+        ts1, Bar(ts=ts1, open=7.84, high=7.84, low=7.84, close=7.84, volume=999_999.0),
+        [object()], 0.0,
+    )
+
+    assert actions1 == []  # aceito normalmente, sem Exit forcado
+    assert strat._state.pending_side is None
+    assert strat._state.open_side == "long"
+    assert strat._state.long_fills == 1
