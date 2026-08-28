@@ -422,20 +422,35 @@ class WdoComTendencia(WdoGridReloadMaker):
 # 3. dado de hoje (leitura pura do MT5) + config
 # ---------------------------------------------------------------------------
 
+#: Copia em disco do pregao medido. Existe porque `copy_ticks_range` para
+#: de responder depois que o terminal desconecta no fim do dia ("Terminal:
+#: Call failed", medido 2026-08-28 ~18h) -- sem o cache, o teste deixaria
+#: de ser reproduzivel poucas horas depois de ter sido escrito.
+CACHE = ROOT / "data" / "raw_ticks" / f"{SYMBOL_REAL}_{DIA:%Y_%m_%d}.parquet"
+
+
 def carregar_barras_de_hoje() -> pd.DataFrame:
-    """Negocios de hoje do contrato REAL, ja em UTC pela convencao do repo
+    """Negocios do contrato REAL, em UTC pela convencao do repo
     (`mt5_ticks_source` usa `core.b3_session.MT5_SERVER_TIMEZONE`, nunca
     uma constante -- foi errar isso que matou o stop intradiario em
-    2026-08-20)."""
+    2026-08-20).
+
+    Cache em disco primeiro; MT5 so' se ele nao existir, e ai' grava."""
+    if CACHE.exists():
+        return ticks_to_degenerate_bars(pd.read_parquet(CACHE))
+
     from market_data_intraday.mt5_ticks_source import fetch_ticks_range
 
     ticks = fetch_ticks_range(SYMBOL_REAL, DIA.replace(hour=0, minute=0),
                               DIA.replace(hour=23, minute=59))
     if ticks.empty:
         raise SystemExit(
-            f"[tendencia] sem tick de {SYMBOL_REAL} para {DIA:%Y-%m-%d} -- o "
-            "terminal MT5 precisa estar aberto e conectado."
+            f"[tendencia] sem tick de {SYMBOL_REAL} para {DIA:%Y-%m-%d} e sem "
+            f"cache em {CACHE} -- o terminal MT5 precisa estar aberto, "
+            "conectado, e o mercado costuma ter de estar em pregao."
         )
+    CACHE.parent.mkdir(parents=True, exist_ok=True)
+    ticks.to_parquet(CACHE)
     return ticks_to_degenerate_bars(ticks)
 
 
