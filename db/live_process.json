@@ -75,8 +75,8 @@
       }
     },
     "dt-wdo_grid_reload_maker-wdo@-shadow": {
-      "pid": 20128,
-      "started_at": "2026-08-28T17:16:12+00:00",
+      "pid": null,
+      "started_at": null,
       "config": {
         "mode": "mt5",
         "capital": 331.5,
