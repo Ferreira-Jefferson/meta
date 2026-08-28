@@ -294,10 +294,37 @@ Todo o passo roda dentro de uma transação. Qualquer exceção posterior a um e
 real desfaz o registro daquele envio junto — o dinheiro já se moveu e o diário
 finge que não.
 
+O erro custa a ser visto porque a leitura ingênua do código diz o contrário:
+"grava antes de enviar" existia, escrito nessa ordem. Só que gravar dentro de uma
+transação que ainda não fechou **não é durabilidade nenhuma** — era verdade na
+ordem do código-fonte e falso na ordem do disco. Um `rollback` posterior apaga o
+registro exatamente como se ele nunca tivesse sido escrito.
+
+Ao ser perseguido até o fim, o defeito apareceu em **três escalas diferentes**, e
+só a primeira era óbvia:
+
+1. **Entre passos.** A exceção no fim do passo desfaz o envio do começo dele.
+2. **Entre barras do mesmo passo.** O feed devolve tudo que fechou desde a última
+   consulta — não uma barra por chamada. Preenchimento confirmado na barra 1,
+   falha de consulta na barra 2 do mesmo lote, e o diário nega a entrada inteira.
+3. **Dentro de uma única chamada.** Aqui a correção anterior não alcança: uma
+   função que já confirmou um fechamento parcial e levanta antes do `return`
+   perde os eventos acumulados numa variável local — eles morrem com a pilha. No
+   caso medido, `quantity` voltava de 1 para 2: o **dobro** do que a corretora
+   tinha de verdade.
+
 > **Regra:** confirmação de efeito externo (ticket recebido, preenchimento
 > confirmado) vira registro durável **antes** de continuar processando o resto do
-> lote. Se a plataforma nova não permitir isso, a reconciliação contra a
-> corretora (1.8) é a rede — mas é rede, não solução.
+> lote — e uma função que pode levantar depois de já ter confirmado algo real
+> nunca devolve o que confirmou apenas pelo caminho de sucesso. Ou o resultado
+> parcial viaja com o erro, ou é persistido antes de o erro subir. Se a
+> plataforma nova não permitir isso, a reconciliação contra a corretora (1.8) é a
+> rede — mas é rede, não solução.
+
+A escala 3 não é hipótese de laboratório: ela exige entrada dividida **e** saída
+dividida ao mesmo tempo, que é a configuração padrão dos robôs em produção aqui.
+Vale a pena procurar a combinação equivalente na plataforma nova antes de assumir
+que o caso não existe.
 
 ---
 
@@ -762,6 +789,37 @@ E a primeira rodada fechou 13 e declarou o resto "de severidade menor" — relei
 mostrou que 3 dos que sobraram eram CRÍTICOS. **Antes de declarar uma auditoria
 fechada, releia a lista inteira — e grave a lista em disco.**
 
+Corolário do corolário: o próprio relatório de quem corrige carrega a lista
+seguinte. Três achados que os agentes reportaram como "risco residual, não
+corrigi" viraram, cada um, um defeito real e reproduzível quando alguém foi
+verificar. **"Fora de escopo" no relatório de um agente é uma tarefa, não uma
+nota de rodapé.**
+
+### 7.7 A suíte não pode ler nem travar o que a produção usa
+
+Dois testes de painel piscavam conforme os robôs reais estivessem rodando ou não.
+A varredura do padrão achou **seis arquivos** afetados — em um deles, 59 de 60
+testes liam o arquivo de estado real da operação. Os dois que "falhavam" eram só
+os que tinham asserção sensível ao conteúdo; o resto lia em silêncio. Pior: a
+rotina que o painel chama para montar a tela **reescreve** esse arquivo quando
+encontra um processo morto — um teste podia sobrescrever o estado que comanda os
+robôs de verdade.
+
+O mesmo padrão tem uma forma pior, que a detecção não pega. A suíte chamava o
+caminho de linha de comando de verdade e, com ele, **tomava a trava de
+exclusividade do slot na pasta real**. Enquanto a suíte rodava, um robô de
+produção tentando subir naquele slot era recusado: o teste ganhou poder de veto
+sobre a operação. Nenhum guard baseado em assinatura de arquivo veria isso —
+tomar uma trava que já existe não muda tamanho nem data do arquivo.
+
+> **Regra:** teste nunca alcança caminho de produção — nem para ler. Onde der
+> para **impedir** (apontar a constante para um diretório temporário em toda a
+> suíte), impedir vale mais que detectar depois; onde só der para detectar, falhe
+> o teste que sujou, no instante em que sujou. E a mensagem de falha tem de
+> perguntar **quem** escreveu antes de acusar o teste: o robô ao vivo escreve nos
+> mesmos arquivos, de outro processo, e diagnosticar suíte contaminada como bug
+> de código já custou tempo aqui (7.3).
+
 ---
 
 ## Parte 8 — Perguntas a responder antes da primeira ordem real na plataforma nova
@@ -781,17 +839,24 @@ dinheiro ou meses.
 7. A leitura de posição distingue "não há" de "não consegui perguntar"? (1.6)
 8. O que sobrevive a um reinício da plataforma, e o que eu preciso persistir por fora? (2.1)
 9. Como impedir duas instâncias do mesmo robô? A plataforma impede? (2.4)
+10. Dá para gravar de forma durável no meio de uma sequência de ordens, sem
+    perder a sessão e sem um segundo escritor travar a operação em andamento? Se
+    não, qual é o menor lote que pode ser gravado atomicamente? (2.5)
+11. O modelo de erro permite carregar dado junto da exceção — ou recuperar o
+    resultado parcial de uma chamada que abortou no meio? Se não, nada de
+    acumular efeito confirmado em variável local: cada um é emitido assim que
+    confirma. (2.5)
 
 **Sobre o dinheiro**
-10. Dá para consultar a margem exigida por uma ordem e a margem livre da conta? (3.3)
-11. A conta é netting ou hedging? (1.4)
-12. Existe algum limite de perda diária imposto pela plataforma, ou preciso construí-lo? (Parte 0, falha 5)
+12. Dá para consultar a margem exigida por uma ordem e a margem livre da conta? (3.3)
+13. A conta é netting ou hedging? (1.4)
+14. Existe algum limite de perda diária imposto pela plataforma, ou preciso construí-lo? (Parte 0, falha 5)
 
 **Sobre a medida**
-13. O simulador modela posição na fila? Se não, o que ele está respondendo? (4.1)
-14. O horário de sessão que ele usa é fixo ou segue o instrumento? (5.2)
-15. Qual é o edge da estratégia **em ticks** neste instrumento? (4.5)
-16. Uma sequência de stops cabe no capital real? (3.5)
+15. O simulador modela posição na fila? Se não, o que ele está respondendo? (4.1)
+16. O horário de sessão que ele usa é fixo ou segue o instrumento? (5.2)
+17. Qual é o edge da estratégia **em ticks** neste instrumento? (4.5)
+18. Uma sequência de stops cabe no capital real? (3.5)
 
 ---
 
@@ -808,6 +873,8 @@ da amostra, e morreu no primeiro dia sem nunca ter errado um sinal.
 ---
 
 *Fonte deste arquivo: incidente de 2026-08-28 e a auditoria adversarial que o
-seguiu (27 lacunas, 26 fechadas), mais o registro acumulado do projeto. Quando um
-item aqui contradisser o código, o código ganha — e este arquivo está
+seguiu (27 lacunas, todas fechadas), mais os três defeitos que os próprios
+relatórios de correção deixaram anotados como "risco residual" e que, verificados
+depois, eram reais e reproduzíveis. Mais o registro acumulado do projeto. Quando
+um item aqui contradisser o código, o código ganha — e este arquivo está
 desatualizado.*
