@@ -368,7 +368,29 @@ def _connect(db_path: Path = LIVE_DB_PATH) -> sqlite3.Connection:
 
 @contextmanager
 def live_journal(db_path: Path = LIVE_DB_PATH) -> Iterator[sqlite3.Connection]:
-    """Contextmanager de transação, no mesmo estilo de `journal.writer.journal`."""
+    """Contextmanager de transação, no mesmo estilo de `journal.writer.journal`.
+
+    `conn.commit()`/`conn.rollback()` aqui cobrem o que sobrar ATÉ O FIM do
+    `with` — mas nada impede quem chama de commitar ANTES, no meio do
+    bloco, por conta própria. O SQLite aceita commit no meio de uma conexão
+    e reabre uma transação nova implícita para o que vier depois; quem faz
+    isso vira dono de uma fração do trabalho, e uma exceção depois desse
+    ponto só desfaz o que veio depois dele.
+
+    `IntradayLiveRuntime._checkpoint` (`live/intraday_runtime.py`) faz
+    exatamente isso — comita a MESMA conexão logo depois de um efeito
+    colateral externo confirmado (ticket recebido na corretora, fill,
+    proteção SL/TP registrada), para uma exceção mais adiante no mesmo
+    `run_once` (ex.: `BrokerExecutionError` de `kind=FALHA_ALTO`, deixada
+    para propagar de propósito — ver a docstring dela) não apagar, via
+    `rollback()`, o registro de algo que já aconteceu de verdade com
+    dinheiro real (MÉDIO 7, auditoria adversarial 2026-08-28: antes desse
+    checkpoint, qualquer exceção tardia em `run_once` desfazia TUDO desde o
+    início do passo, inclusive uma ordem/fechamento já confirmado pela
+    corretora segundos antes, na mesma chamada). Este contextmanager não
+    precisa saber disso — só precisa não presumir que "uma transação só"
+    é garantia estrutural, porque não é: é o comportamento quando ninguém
+    commita cedo."""
     conn = _connect(db_path)
     try:
         yield conn

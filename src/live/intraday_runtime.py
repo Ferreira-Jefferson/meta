@@ -878,6 +878,46 @@ class IntradayLiveRuntime:
         account.policy_state = estado
         store.save_account(conn, account)
 
+    def _checkpoint(self, conn, account: AccountState) -> None:
+        """Torna DURAVEL, AGORA, tudo que este PASSO ja escreveu no diario --
+        sem esperar `run_once` terminar (MEDIO 7, auditoria adversarial
+        2026-08-28: `db/live.sqlite:369-380` faz `run_once` inteiro rodar
+        numa UNICA transacao, e QUALQUER excecao depois de um efeito
+        colateral REAL confirmado -- ticket recebido em `place_limit`/
+        `place_pending`, fill confirmado, protecao registrada -- desfazia
+        (`rollback()`) o log/`Intent`/`Order`/`Fill`/`live_positions` que
+        descreviam exatamente ISSO, mesmo com o dinheiro ja tendo se movido
+        de verdade segundos antes na mesma chamada).
+
+        Chamado logo apos cada ponto do arquivo onde a corretora ja
+        CONFIRMOU algo (uma barra inteira consumida em `_consume`, a
+        protecao SL/TP registrada em `_ensure_protecao`) -- nunca no MEIO de
+        um desses efeitos, que teria de ser um commit dentro de
+        `intraday_execution.py`, camada que nao tem (e nao deve ganhar,
+        regra 1 do AGENTS.md) conexao de banco nenhuma.
+
+        Por que `conn.commit()` NA PROPRIA conexao do passo, e nao uma
+        segunda conexao ou um arquivo lateral: `db/live.sqlite` esta em WAL
+        com `busy_timeout=5000` (ver `live_store._connect`) -- isso libera
+        leitor+escritor concorrentes, NUNCA dois escritores. Uma segunda
+        conexao tentando escrever aqui ficaria 5s bloqueada contra a
+        transacao externa de `run_once` e entao levantaria "database is
+        locked" -- dentro do caminho que acabou de mandar ordem real, ou
+        seja, trocando um problema por um pior. O SQLite permite comitar no
+        meio de uma conexao e continuar escrevendo numa transacao nova
+        implicita -- e' exatamente a semantica que falta aqui: o que ja e'
+        fato consumado na corretora fica gravado; uma excecao DEPOIS deste
+        ponto desfaz so' o que vier depois.
+
+        Chama `self._persist` primeiro (nunca so' `conn.commit()` cru): o
+        ponto inteiro e' `pending_entry_refs`/`last_bar_ts`/o estado da
+        MAQUINA sobreviverem no snapshot tambem -- e' o que um restart le em
+        `_restore`. Comitar sem persistir deixaria o `Order`/`Fill` gravados
+        mas o ticket pendente fora do `policy_state`, ainda invisivel para
+        o processo que reiniciar."""
+        self._persist(conn, account)
+        conn.commit()
+
     @staticmethod
     def _impedimento_de_hoje(account: AccountState, session: date) -> Optional[str]:
         """O motivo gravado em `policy_state["impedimento"]`, se for do
@@ -1233,6 +1273,13 @@ class IntradayLiveRuntime:
             # corretora e uma conta em risco de ruina nao pode abrir ordem
             # nova, mesmo que o resto do pregao esteja liberado.
             self._ensure_protecao(conn, account, hoje)
+            # CHECKPOINT (MEDIO 7): se `_ensure_protecao` acabou de registrar
+            # SL/TP na corretora (efeito colateral REAL), torna isso durAvel
+            # AGORA -- antes de `_consume`/`_handle_gap` poderem levantar
+            # `FALHA_ALTO` mais adiante neste MESMO passo e apagar, via
+            # rollback, o log que descreve uma protecao que ja' esta' de pe'
+            # na corretora de verdade. Ver `_checkpoint`.
+            self._checkpoint(conn, account)
             # Simetrico do anterior: `_ensure_protecao` cuida da posicao que a
             # maquina CONHECE; este cuida da que ela NAO conhece e a corretora
             # tem. Sem ele ninguem perguntava a corretora "o que existe ai?"
@@ -2280,7 +2327,19 @@ class IntradayLiveRuntime:
         apagaria o proprio alerta que este metodo acabou de gravar, alem de
         nunca persistir o avanco de `last_bar_ts` (ver a docstring do bloco
         equivalente em `_consume`). Qualquer outro `kind` (divergencia de
-        dado) e' RE-LEVANTADO, o comportamento de sempre."""
+        dado) e' RE-LEVANTADO, o comportamento de sempre.
+
+        MEDIO 7 (auditoria adversarial 2026-08-28): `force_flatten` roda
+        UMA vez so' (nao um lote de barras como `_consume`), e' o UNICO
+        efeito colateral real deste metodo, e nada depois dele (`_drena_
+        orfas_de_saida`/`_reconcilia_ordens_de_entrada` sao ambos "nunca
+        levanta", ver as docstrings deles) pode levantar hoje -- ou seja,
+        este caminho JA' nao tinha o bug de `_consume` (uma barra real
+        confirmada seguida de outra que falha alto no MESMO lote). O
+        `self._checkpoint` logo abaixo existe mesmo assim, por consistencia
+        e defesa em profundidade: se algum dia algo for inserido entre a
+        aplicacao dos eventos e o fim deste metodo, o fechamento real ja'
+        confirmado por `force_flatten` continua protegido contra rollback."""
         ultima = barras[-1]
         fechados = []
         try:
@@ -2297,6 +2356,9 @@ class IntradayLiveRuntime:
             if isinstance(evento, PositionClosed):
                 fechados.append(evento)
             self._apply(conn, account, evento, ultima)
+        # CHECKPOINT (MEDIO 7): torna durAvel agora o que `force_flatten` ja'
+        # confirmou de verdade na corretora, antes do resto deste metodo.
+        self._checkpoint(conn, account)
         self._drena_orfas_de_saida(conn, account, ultima.ts)
         # `force_flatten` cancela a `resting_limit` EM MEMORIA -- se o buraco
         # coincidiu com um restart (o caso mais provavel de buraco real), a
@@ -2381,7 +2443,28 @@ class IntradayLiveRuntime:
         (`_close_position` so' muta estado DEPOIS do envio confirmar, ver a
         docstring dela), entao a PROXIMA barra reavalia a condicao de saida
         do zero contra o preco novo, que e' retry de verdade, nao martelo
-        cego."""
+        cego.
+
+        MEDIO 7 (auditoria adversarial 2026-08-28), variante do MESMO gap
+        (f) que sobrava depois da correcao acima: `barras` pode trazer MAIS
+        de uma barra fechada neste UNICO passo (loop do supervisor atrasado
+        -- o feed entrega tudo que fechou desde o ultimo poll, nao 1 barra
+        por chamada). Ordem real confirmada na barra 1 (ticket recebido em
+        `_on_limit_placed`, ou um fechamento em `_on_closed` -- `exit_market`
+        ja' rodou DENTRO de `on_closed_bar`, ver `machine._close_position`)
+        e' jornalizada AQUI (`_apply`), mas so' virava fato duravel no fim de
+        `run_once` -- se a barra 2 do MESMO lote levantasse `FALHA_ALTO`
+        (comportamento correto, ver acima), o rollback do passo inteiro
+        apagava tambem o `Intent`/`Order`/`Fill`/`live_positions` da barra 1,
+        que ja' era dinheiro de verdade movido. `self._checkpoint(conn,
+        account)` no fim de CADA barra fecha isso: comita a conexao deste
+        PASSO (nao uma segunda conexao, ver a docstring de `_checkpoint`)
+        assim que uma barra termina de ser aplicada, entao uma `FALHA_ALTO`
+        de uma barra POSTERIOR do mesmo lote so' desfaz o que essa propria
+        barra tinha escrito -- nunca as anteriores, ja' comitadas. A barra
+        que de fato levanta `FALHA_ALTO` continua sem jornalizar NADA dela
+        mesma (comportamento inalterado, ver acima) -- o que muda e' so' o
+        destino das barras que ja' tinham terminado de aplicar ANTES dela."""
         abertas = fechadas = descartadas = 0
         ultima_descartada = None
         for bar in barras:
@@ -2441,6 +2524,11 @@ class IntradayLiveRuntime:
                 self._apply(conn, account, evento, bar)
             self._drena_orfas_de_saida(conn, account, bar.ts)
             self._snapshot.last_bar_ts = bar.ts
+            # CHECKPOINT (MEDIO 7, ver a docstring acima): esta barra
+            # terminou de aplicar -- torna durAvel AGORA o que ela
+            # jornalizou, antes de a PROXIMA barra do lote poder levantar
+            # `FALHA_ALTO` e desfazer so' o rollback dela.
+            self._checkpoint(conn, account)
         if descartadas:
             # Uma linha por LOTE descartado, nao por barra: sao 1 ou 2 por
             # pregao no caso normal (a cauda de ontem), e o dono pediu que o

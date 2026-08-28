@@ -3929,3 +3929,181 @@ def test_acao_nao_suportada_pela_execucao_real_para_o_robo_uma_vez(tmp_path, pre
 
     # A marca de barra AVANCOU: o passo seguinte nao reprocessa a mesma barra.
     assert rt._snapshot.last_bar_ts is not None
+
+
+# ---------- MEDIO 7, auditoria adversarial 2026-08-28: checkpoint por barra -
+#
+# `run_once` roda inteiro dentro de UMA transacao SQLite (`store.
+# live_journal`). Ate aqui, qualquer excecao levantada DEPOIS de um efeito
+# colateral externo CONFIRMADO (ticket recebido em `place_limit`/
+# `place_pending`, fill confirmado, protecao SL/TP registrada) desfazia --
+# via `conn.rollback()` -- o registro de algo que ja tinha acontecido de
+# verdade na corretora, segundos antes, na MESMA chamada: o dinheiro ja
+# tinha se movido e o diario fingia que nao. Ver `IntradayLiveRuntime.
+# _checkpoint` e a docstring de `_consume`.
+
+def test_falha_alto_em_barra_posterior_do_lote_nao_apaga_fill_real_confirmado_em_barra_anterior(
+    tmp_path, pregao_aberto,
+):
+    """O cenario exato da auditoria: o supervisor entrega DUAS barras num
+    UNICO `run_once` (loop atrasado -- o feed devolve tudo que fechou desde
+    o ultimo poll, nao 1 barra por chamada). A 1a barra do lote confirma o
+    fill REAL do 1o filho de uma entrada dividida -- dinheiro ja moveu,
+    `_on_opened` grava `Intent`/`Order`/`Fill`/`live_positions`. A 2a barra
+    do MESMO lote levanta `FALHA_ALTO` ao checar o 2o filho (terminal "cai"
+    no meio do lote). SEM o checkpoint por barra em `_consume`, o
+    `rollback()` de `store.live_journal` apagaria TAMBEM o fill da 1a
+    barra -- o diario fingiria que a entrada nunca aconteceu."""
+    from live.intraday_execution import BrokerExecutionError
+
+    class _BrokerLeituraFalhaAPartirDe(_FakeMT5Broker):
+        """`position_state` conta as leituras e falha (kind default =
+        `FALHA_ALTO`, ver `MT5IntradayExecution._read_position`) a partir
+        da chamada de numero `falha_a_partir_de` (1-based) -- o CONTADOR e'
+        resetado pelo proprio teste logo antes do passo sob exame, para
+        isolar so' as leituras que importam para o cenario (chamadas de
+        guarda de passos ANTERIORES, ex. `_check_posicao_desconhecida` na
+        calibracao, nao contam)."""
+
+        def __init__(self):
+            super().__init__()
+            self.leituras = 0
+            self.falha_a_partir_de = None
+
+        def position_state(self, ticker):
+            self.leituras += 1
+            if self.falha_a_partir_de is not None and self.leituras >= self.falha_a_partir_de:
+                return {"ok": False, "position": None,
+                        "note": "terminal caiu no meio do lote (simulado no teste)"}
+            return super().position_state(ticker)
+
+    broker = _BrokerLeituraFalhaAPartirDe()
+    script = {
+        0: [EnterLimit(side="long", limit_price=10.00, initial_stop=9.00,
+                       initial_target=11.00, quantity=2, split_quantities=(1, 1),
+                       reason="teste_medio7")],
+    }
+    rt, feed = _runtime_live_scripted(tmp_path, broker, script)
+    rt.run_once(now=_agora("13:00:00"))  # calibracao, feed ainda vazio
+
+    feed._barras.append(_bar("13:01", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:01:00"))  # decide e manda os 2 filhos reais
+    assert len(broker.pendentes_enviadas) == 2
+
+    # o 1o filho JA preencheu de verdade na corretora, antes deste passo.
+    broker.posicao = {"side": "long", "price": 10.00, "quantity": 1, "ticket": 1}
+
+    # o supervisor atrasa: DUAS barras chegam JUNTAS no MESMO passo.
+    feed._barras.append(_bar("13:02", 10.00, 10.00, 10.00, 10.00))
+    feed._barras.append(_bar("13:03", 10.00, 10.00, 10.00, 10.00))
+    broker.leituras = 0
+    broker.falha_a_partir_de = 2  # a leitura da barra 13:02 confirma; a da 13:03 "cai"
+
+    with pytest.raises(BrokerExecutionError):
+        rt.run_once(now=_agora("13:04:00"))
+
+    # o fill REAL confirmado na barra 13:02 tem de ter sobrevivido -- mesmo
+    # com a barra 13:03 do MESMO lote tendo falhado alto logo depois.
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        ordens = conn.execute(
+            "SELECT * FROM live_orders WHERE account_id = ? ORDER BY id", (acc.id,)
+        ).fetchall()
+        posicoes = conn.execute(
+            "SELECT * FROM live_positions WHERE account_id = ?", (acc.id,)
+        ).fetchall()
+        intents = store.all_intents(conn, acc.id)
+        snap = (acc.policy_state or {}).get("intraday") or {}
+
+    assert len(ordens) == 1, "o fill da 1a barra do lote nao pode desaparecer no rollback"
+    assert ordens[0]["filled_qty"] == 1
+    assert ordens[0]["status"] == "filled"
+    assert len(posicoes) == 1
+    assert posicoes[0]["quantity"] == pytest.approx(1.0), "so' o filho que preencheu de verdade"
+    assert len(intents) == 1
+    # o checkpoint tambem torna duravel `last_bar_ts`/o snapshot da maquina
+    # -- o que um RESTART leria em `_restore` se o processo morresse aqui.
+    assert snap.get("last_bar_ts", "").startswith("2026-08-21T13:02")
+    assert rt.machine.position is not None, "em memoria o robo continua sabendo do fill"
+    assert rt.machine.position.quantity == 1
+
+
+def test_protecao_registrada_sobrevive_a_falha_alto_no_mesmo_passo(tmp_path, pregao_aberto):
+    """Segundo ponto da auditoria: `_ensure_protecao` roda ANTES de
+    `_consume` em `run_once` e registra SL/TP REAL na corretora. Se a barra
+    nova do MESMO passo falhar alto (aqui: o STOP acabou de romper e a
+    LEITURA de posicao para fechar "cai" -- terminal fora do ar no meio do
+    passo), o registro de protecao -- que ja e' fato consumado na
+    corretora -- nao pode sumir do diario."""
+    from live.intraday_execution import BrokerExecutionError
+
+    broker = _FakeMT5Broker()
+    rt, feed = _abre_posicao_scriptada(tmp_path, broker)
+    assert broker.protecoes == [], "protecao ainda nao registrada no setup"
+
+    # a barra rompe o stop (9.00): `_ensure_protecao` registra a protecao
+    # ANTES de `_consume` tentar fechar, e so' DEPOIS a LEITURA para fechar
+    # cai.
+    broker.leitura_falha = True
+    feed._barras.append(_bar("13:03", 8.00, 8.00, 8.00, 8.00))
+
+    with pytest.raises(BrokerExecutionError):
+        rt.run_once(now=_agora("13:03:00"))
+
+    assert broker.protecoes, "a corretora recebeu o pedido de protecao"
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        eventos = [e["message"] for e in store.recent_events(conn, acc.id, limit=50)]
+    assert any("protecao registrada" in m for m in eventos), eventos
+
+
+def test_falha_alto_sem_acao_real_antes_nao_deixa_rastro_nenhum(tmp_path, pregao_aberto):
+    """Contrapeso dos dois testes acima: quando NADA de real acontece ainda
+    NESTE passo antes da `FALHA_ALTO` (a corretora ja "caiu" antes mesmo da
+    primeira acao do passo terminar), o rollback continua COMPLETO --
+    exatamente o comportamento de sempre. O checkpoint por barra em
+    `_consume`/`_ensure_protecao` nao inventa durabilidade onde nao ha nada
+    real para proteger."""
+    from live.intraday_execution import BrokerExecutionError
+
+    broker = _FakeMT5Broker()
+    rt, feed = _abre_posicao_scriptada(tmp_path, broker)
+    feed._barras.append(_bar("13:03", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:03:00"))
+    assert len(broker.protecoes) == 1, "setup: protecao ja registrada num passo ANTERIOR"
+    # a corretora agora REPORTA os niveis certos -- sem isto, o passo
+    # seguinte reenviaria a protecao de novo (ver `test_live_protecao_nao_
+    # reenvia_quando_ja_esta_correta`), o que sujaria a comparacao "nada de
+    # novo aconteceu neste passo" que este teste faz.
+    broker.posicao = {**broker.posicao, "sl": 9.00, "tp": 11.00}
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        n_ordens_antes = conn.execute(
+            "SELECT COUNT(*) AS n FROM live_orders WHERE account_id = ?", (acc.id,)
+        ).fetchone()["n"]
+        n_eventos_antes = conn.execute(
+            "SELECT COUNT(*) AS n FROM live_events WHERE account_id = ?", (acc.id,)
+        ).fetchone()["n"]
+
+    # a corretora "cai" ANTES de qualquer coisa nova acontecer neste passo,
+    # e a barra rompe o stop -- a primeira acao real que este passo
+    # tentaria e' exatamente a que falha.
+    broker.leitura_falha = True
+    feed._barras.append(_bar("13:04", 8.00, 8.00, 8.00, 8.00))  # rompe o stop (9.00)
+
+    with pytest.raises(BrokerExecutionError):
+        rt.run_once(now=_agora("13:04:00"))
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        n_ordens_depois = conn.execute(
+            "SELECT COUNT(*) AS n FROM live_orders WHERE account_id = ?", (acc.id,)
+        ).fetchone()["n"]
+        n_eventos_depois = conn.execute(
+            "SELECT COUNT(*) AS n FROM live_events WHERE account_id = ?", (acc.id,)
+        ).fetchone()["n"]
+
+    assert n_ordens_depois == n_ordens_antes, "nada novo -- nada de real aconteceu neste passo"
+    assert n_eventos_depois == n_eventos_antes, "nem o log deste passo sobrevive -- nada a proteger"
+    assert rt.machine.position is not None, "a posicao continua aberta -- corretora recusou a leitura"
