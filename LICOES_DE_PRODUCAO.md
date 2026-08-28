@@ -1,5 +1,12 @@
 # Lições de produção — o que já custou, e a regra que sobrou
 
+> **Registro vivo.** Este arquivo é a FONTE; a versão publicada para leitura está
+> em <https://claude.ai/code/artifact/9a682e56-04b6-4b70-8da3-c5d410076b9d>.
+> Todo bug que custar dinheiro real, todo erro de método que invalidar uma
+> medição e toda lacuna que uma auditoria achar viram item novo aqui — e a
+> página é republicada NA MESMA URL. Ver `CLAUDE.md` § "O Que Já Custou" para a
+> forma de um item e o procedimento.
+
 Este arquivo existe por um motivo específico: **portar a estratégia para outra
 linguagem/plataforma não porta o aprendizado.** O código vai embora; os modos de
 falha ficam. Cada item aqui é um erro que já aconteceu neste projeto, o número

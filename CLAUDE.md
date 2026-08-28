@@ -6,7 +6,25 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Repo-wide rules for all IAs live in `AGENTS.md` (layer boundaries, `journal` schema policy, anti-look-ahead, frontend aesthetic, parallel-test contract, standard backtest table). Read it first — this file only adds Claude-specific operational context on top.
 
-`LICOES_DE_PRODUCAO.md` is the second thing to read before touching execution, sizing, or measurement method. It is the register of errors that already cost real money — the 2026-08-28 incident that zeroed the account, plus the accumulated record — each with the invariant that survived it. Written to be portable across language/platform, so it says *what must be true*, not *which API to call.
+## "O Que Já Custou" — o registro vivo de produção
+
+`LICOES_DE_PRODUCAO.md` is the second thing to read before touching execution, sizing, or measurement method. It is the register of errors that already cost real money — the 2026-08-28 incident that zeroed the account, plus the accumulated record — each with the invariant that survived it. Written to be portable across language/platform, so it says *what must be true*, not *which API to call*.
+
+**Página publicada (leitura): https://claude.ai/code/artifact/9a682e56-04b6-4b70-8da3-c5d410076b9d**
+
+Este registro é **vivo** — pedido do dono, 2026-08-28: "para sempre irmos melhorando os itens e aumentando a referência". Ele existe porque a estratégia vai ser portada para outra linguagem (a da Copa, que não é Python nem MetaTrader), e o código não leva o aprendizado junto — os modos de falha, sim.
+
+**Quando adicionar um item.** Sempre que um bug custar dinheiro real, sempre que um erro de método invalidar uma medição, e sempre que uma auditoria achar uma lacuna. Não espere o dono pedir. Um achado que não vira item aqui está a um `/compact` de deixar de existir — foi exatamente o que aconteceu com a lista dos 27 achados da auditoria, que só existia nos relatórios dos subagentes e teve de ser recuperada do transcript (item 7.6 do próprio documento).
+
+**Como escrever um item.** A forma é fixa e é o que dá valor ao arquivo:
+
+1. **O que aconteceu**, com o número real que custou (R$, contagem, percentual). Sem número o item vira conselho genérico, e conselho genérico ninguém lê duas vezes.
+2. **A regra** — o invariante que sobrou, escrito de forma que valha em qualquer corretora e qualquer linguagem.
+3. Quando a regra depender da plataforma, transforme-a numa **pergunta a fazer à plataforma nova**, e acrescente a pergunta à lista da Parte 8 com a referência de volta ao item.
+
+Fica de fora de propósito: hipótese de estratégia refutada (é resultado de pesquisa, mora na memória do projeto) e detalhe de API que não generaliza.
+
+**Como atualizar a página.** O `.md` no repo é a FONTE; a página é a vista publicada. Depois de editar o markdown, republique **na mesma URL** — `Artifact` com `url: "https://claude.ai/code/artifact/9a682e56-04b6-4b70-8da3-c5d410076b9d"`. Publicar sem passar a `url` cria um artefato NOVO e deixa o link acima morto, que é o oposto do ponto de ele estar anotado aqui.
 
 ## Two products in one repo
 
