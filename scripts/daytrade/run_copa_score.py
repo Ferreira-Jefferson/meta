@@ -56,30 +56,33 @@ from backtest.intraday.report import (  # noqa: E402
 # NUNCA participa da escolha.
 # ---------------------------------------------------------------------------
 CALIBRACAO_IS: dict[str, dict] = {
-    # WIN@ -- melhor `liquido R$` de 540 combinacoes da grade "borda"
-    # (2026-08-26), o passe que abriu `fracao_entrada`, `aquecimento_barras` e
-    # o teto de `max_entradas_dia`, congelados nos dois passes anteriores.
-    # Medido no IN-SAMPLE (2025-12-01 -> 2026-06-12, 129 pregoes com sessao
-    # completa): +R$96.352,80 liquidos = R$746,92/pregao, lucro/DD 5,26,
-    # win 38,3%, 1.086 trades, bloco mediano de 4 pregoes R$2.163, 23/32
-    # blocos positivos, 0,0% de ordens recusadas pelo teto.
+    # WIN@ -- `alvo_vol`/`stop_vol` RECALIBRADOS em 2026-08-28 (pedido do dono),
+    # via varredura completa alvo_vol x stop_vol (1..20 cada, 400 celulas,
+    # 1 contrato, mesmos outros parametros abaixo congelados) --
+    # `scripts/daytrade/copa_win_alvo_stop_grid_2026_08_28.py`/`.csv`.
+    # Escolhido por equilibrio entre Calmar e lucro/trade dentro do IN-SAMPLE
+    # (2025-12-01 -> 2026-06-12, 129 pregoes): +R$7.076,40 liquidos =
+    # R$54,86/pregao, lucro/DD (Calmar) 3,39, win 55,8%, 190 trades,
+    # lucro/trade R$37,24.
     #
-    # DUAS RESSALVAS que o numero sozinho esconde:
+    # CONFIRMADO no OOS (2026-06-15 -> 2026-08-25, 51 pregoes, unlock explicito
+    # do dono em 2026-08-28): em vez de degradar como a calibracao anterior
+    # (alvo_vol=4/stop_vol=2, que caiu de R$62,24 pra R$3,84/pregao no OOS),
+    # este ponto MELHOROU fora da amostra -- R$61,80/pregao, lucro/trade
+    # R$38,43, Calmar 3,04 (82 trades). IS+OOS combinado: R$10.228,00 liquidos,
+    # R$56,82/pregao, Calmar 4,90 (272 trades).
     #
-    # 1. `fracao_entrada=1,0` NAO e' sinal, e' escala. O P&L e' EXATAMENTE
-    #    linear nela (36.987 / 55.480,50 / 73.974 para 0,5 / 0,75 / 1,0 no
-    #    mesmo ponto) e `recusas%` fica em 0,0: o robo abre UMA posicao por
-    #    vez, entao encosta no teto sem nunca ultrapassa-lo e
-    #    `max_open_contracts` nunca recusa nada. Ou seja, dos R$96k, mais da
-    #    metade do salto sobre a calibracao anterior e' so' ter parado de usar
-    #    metade do teto -- e o unico jeito de multiplicar este desenho e'
-    #    subir o TETO, nao melhorar o sinal.
-    # 2. O otimo e' um PICO ESTREITO, nao um plato. Vizinhos imediatos, no
-    #    proprio vencedor: `entrada_ttl_barras` 12/15/20 = 48.694 / 96.353 /
-    #    59.609 e `aquecimento_barras` 30/45/60 = 80.651 / 96.353 / 57.610.
-    #    Cair pela metade a 3 barras do otimo em 129 pregoes e' o formato de
-    #    um numero que o OOS nao costuma confirmar.
-    "WIN@": dict(janela_rompimento=10, alvo_vol=4.0, stop_vol=2.0, trail_vol=None,
+    # RESSALVA (testada explicitamente): o pico NAO se sustenta por escala --
+    # multiplicar o par (19,12) por 0,5x/1,5x/2x/3x destroi o resultado nas
+    # duas direcoes (ex.: 1,5x vira liquido R$914,30, Calmar 0,21; 0,5x vira
+    # R$3.969,70 mas Calmar so' 0,77) -- e' um ponto especifico do grid, nao
+    # uma tendencia continua fora do intervalo 1..20 testado. `janela_rompimento`,
+    # `vol_min_ticks`, `fracao_entrada`, `aquecimento_barras`,
+    # `max_entradas_dia`, `entrada_maker`, `entrada_ttl_barras` NAO foram
+    # re-otimizados nesta rodada -- seguem os valores da calibracao anterior
+    # (2026-08-26, grade "borda" de 540 combinacoes descrita no historico do
+    # arquivo/`copa_win_rompimento_pico_estreito_2026_08_26` na memoria).
+    "WIN@": dict(janela_rompimento=10, alvo_vol=19.0, stop_vol=12.0, trail_vol=None,
                  vol_min_ticks=8.0, fracao_entrada=1.0, aquecimento_barras=45,
                  max_entradas_dia=10, entrada_maker=True, entrada_ttl_barras=15),
     # WDO@ -- melhor `liquido R$` de 384 combinacoes da grade "dirigida"
