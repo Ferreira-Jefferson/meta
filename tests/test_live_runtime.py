@@ -1682,6 +1682,207 @@ def test_execute_session_chamada_duas_vezes_e_idempotente(tmp_path, universe):
     assert acc.positions[TICKER].quantity == ordens[0].filled_qty
 
 
+# ---------- MEDIO 7 (auditoria adversarial 2026-08-28), variante SWING ------
+#
+# `intraday_runtime.py` corrigiu (commit a270a95) uma unica `store.live_journal`
+# cobrindo VARIAS ordens confirmadas pela corretora no mesmo passo: uma
+# excecao numa ordem POSTERIOR desfazia, via rollback, uma ordem ANTERIOR ja
+# confirmada -- com dinheiro real ja movido segundos antes, na mesma chamada.
+# Os tres testes abaixo prova a MESMA classe de bug em `runtime.py` (swing):
+# `execute_session` (entradas), `intraday_tick` (stop) e
+# `reconcile_pending_fills` (EXECUTING) processam cada um uma LISTA de
+# intencoes dentro de uma unica transacao. `LiveRuntime._checkpoint` fecha os
+# tres, no mesmo espirito (mesmo nome de conceito) do fix ja aplicado la.
+
+class _RaisingSecondOrderBroker(Broker):
+    """Confirma a PRIMEIRA ordem normalmente (fill real) e levanta uma
+    excecao NAO TRATADA na SEGUNDA -- simula um bug/erro inesperado no
+    adaptador de corretora (o contrato `Broker.place()` nao promete nunca
+    levantar; so' a IMPLEMENTACAO de `MT5Broker.place()` cerca isso com
+    try/except proprio, ver seu docstring). Usado para provar que uma
+    excecao numa ordem POSTERIOR, no mesmo passo, nao pode desfazer uma
+    ordem ANTERIOR ja confirmada."""
+
+    name = "raising_second"
+    mode = "mt5"
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def place(self, order):
+        self.calls += 1
+        if self.calls == 1:
+            order.status = OrderStatus.FILLED
+            order.filled_qty = order.quantity
+            order.avg_price = 100.0
+            order.fees = 0.0
+            return order
+        raise RuntimeError("falha simulada na segunda ordem do passo")
+
+    def poll(self, order):
+        return order
+
+
+def test_execute_session_entrada_confirmada_sobrevive_a_excecao_em_entrada_posterior(tmp_path):
+    """`execute_session` processa a lista INTEIRA de entradas dentro de uma
+    UNICA `store.live_journal` (linha ~893-955 de `runtime.py`). Duas
+    entradas no mesmo passo: a corretora fake confirma a PRIMEIRA (fill
+    real) e levanta na SEGUNDA. Sem o checkpoint, a excecao da segunda
+    desfazia tambem a primeira -- e' o teste que fica VERMELHO antes da
+    correcao (rodado sem `self._checkpoint(...)` em `_resolve_buy`,
+    `t1 in acc.positions` falha)."""
+    days = clock.sessions_between(date(2030, 1, 1), date(2030, 4, 1))[:2]
+    d0, d1 = days
+    t1, t2 = "AAA.SA", "BBB.SA"
+    _write_parquet(tmp_path, t1, days, [100.0, 100.0])
+    _write_parquet(tmp_path, t2, days, [100.0, 100.0])
+    _write_parquet(tmp_path, BENCHMARK, days, [50_000.0, 50_000.0])
+
+    script = {pd.Timestamp(d0): [
+        Enter(ticker=t1, initial_stop=None, size_hint=0.5),
+        Enter(ticker=t2, initial_stop=None, size_hint=0.5),
+    ]}
+    feed = ReplayFeed()
+    feed.set(t1, 100.0)
+    feed.set(t2, 100.0)
+    broker = _RaisingSecondOrderBroker()
+    rt = LiveRuntime(
+        account_name="teste", strategy=ScriptedStrategy(script),
+        policy=FloorSkim(pct=0.5, floor=1e12), feed=feed, broker=broker,
+        config=BacktestConfig(initial_capital=10_000.0, lot_size=1),
+        tickers=(t1, t2), db_path=tmp_path / "live.sqlite", data_dir=tmp_path,
+    )
+    rt.ensure_account()
+    rt.close_and_decide(d0)
+
+    with pytest.raises(RuntimeError):
+        rt.execute_session(d1)
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, "teste")
+    assert broker.calls == 2  # prova que a segunda ordem foi de fato tentada
+    assert t1 in acc.positions, (
+        "a PRIMEIRA entrada, ja confirmada pela corretora (fill real), nao "
+        "pode ser desfeita por uma excecao na SEGUNDA no mesmo passo"
+    )
+
+
+def test_intraday_tick_saida_confirmada_sobrevive_a_excecao_em_saida_posterior(tmp_path):
+    """Mesmo padrao, no laco de STOP intra-dia (`intraday_tick`): duas
+    posicoes cujo stop dispara na MESMA chamada. A corretora fake confirma a
+    saida da PRIMEIRA e levanta na SEGUNDA; sem o checkpoint, o rollback do
+    passo desfazia tambem a saida ja confirmada da primeira."""
+    days = clock.sessions_between(date(2030, 1, 1), date(2030, 4, 1))[:2]
+    d0, d1 = days
+    t1, t2 = "AAA.SA", "BBB.SA"
+    _write_parquet(tmp_path, t1, days, [100.0, 100.0])
+    _write_parquet(tmp_path, t2, days, [100.0, 100.0])
+    _write_parquet(tmp_path, BENCHMARK, days, [50_000.0, 50_000.0])
+
+    feed = ReplayFeed()
+    broker = _RaisingSecondOrderBroker()
+    rt = LiveRuntime(
+        account_name="teste", strategy=ScriptedStrategy({}),
+        policy=FloorSkim(pct=0.5, floor=1e12), feed=feed, broker=broker,
+        config=BacktestConfig(initial_capital=10_000.0, lot_size=1),
+        tickers=(t1, t2), db_path=tmp_path / "live.sqlite", data_dir=tmp_path,
+    )
+    rt.ensure_account()
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, "teste")
+        for ticker in (t1, t2):
+            pos = LivePosition(ticker=ticker, quantity=10, entry_date=d0,
+                                entry_price=100.0, capital_allocated=1000.0,
+                                current_stop=95.0)
+            store.upsert_position(conn, acc.id, pos)
+
+    feed.set(t1, 90.0)  # abaixo do stop -> dispara
+    feed.set(t2, 90.0)  # abaixo do stop -> dispara
+
+    with pytest.raises(RuntimeError):
+        rt.intraday_tick(d1)
+
+    with store.live_journal(rt.db_path) as conn:
+        acc2 = store.load_account(conn, "teste")
+    assert broker.calls == 2
+    assert t1 not in acc2.positions, (
+        "a saida por stop da PRIMEIRA posicao, ja confirmada pela "
+        "corretora, nao pode ser desfeita pela excecao da SEGUNDA no mesmo "
+        "tick"
+    )
+
+
+class _RaisingSecondPollBroker(Broker):
+    """`poll()` confirma a PRIMEIRA ordem (fill real) e levanta na SEGUNDA --
+    mesma ideia de `_RaisingSecondOrderBroker`, mas no caminho de
+    RECONCILIACAO (`reconcile_pending_fills`), que chama `poll()` (nao
+    `place()`) sobre ordens ja enviadas numa chamada anterior."""
+
+    name = "raising_second_poll"
+    mode = "mt5"
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def place(self, order):  # nao usado neste teste
+        return order
+
+    def poll(self, order):
+        self.calls += 1
+        if self.calls == 1:
+            order.status = OrderStatus.FILLED
+            order.filled_qty = order.quantity
+            order.avg_price = 100.0
+            order.fees = 0.0
+            return order
+        raise RuntimeError("falha simulada no segundo poll do laco")
+
+
+def test_reconcile_pending_fills_saida_confirmada_sobrevive_a_excecao_em_saida_posterior(
+    tmp_path, universe,
+):
+    """Mesmo padrao em `reconcile_pending_fills`: duas intents `EXECUTING`
+    (ordem no ar de uma chamada anterior) resolvidas no MESMO laco, dentro
+    de uma unica transacao. Se o `poll()` da SEGUNDA levantar, o rollback
+    nao pode desfazer o fill que a PRIMEIRA ja confirmou."""
+    from core.live_models import Intent, Order, RobotRole
+
+    data_dir, days = universe
+    d0, d1 = days[0], days[1]
+    t1, t2 = TICKER, "BBB.SA"
+    rt = _runtime(tmp_path, data_dir, {}, capital=10_000.0)
+    rt.ensure_account()
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, "teste")
+        for ticker in (t1, t2):
+            pos = LivePosition(ticker=ticker, quantity=10, entry_date=d0,
+                               entry_price=100.0, capital_allocated=1000.0)
+            store.upsert_position(conn, acc.id, pos)
+            intent = Intent(robot="x", role=RobotRole.INVESTMENT, kind=IntentKind.EXIT,
+                            decided_on=d0, execute_on=d1, ticker=ticker, reason="teste",
+                            status=IntentStatus.EXECUTING)
+            intent_id = store.record_intent(conn, acc.id, intent)
+            order = Order(ticker=ticker, side=OrderSide.SELL, quantity=10,
+                          intent_id=intent_id, status=OrderStatus.SENT)
+            store.record_order(conn, acc.id, order)
+
+    broker = _RaisingSecondPollBroker()
+    rt.broker = broker
+
+    with pytest.raises(RuntimeError):
+        rt.reconcile_pending_fills()
+
+    with store.live_journal(rt.db_path) as conn:
+        acc2 = store.load_account(conn, "teste")
+    assert broker.calls == 2
+    assert t1 not in acc2.positions, (
+        "a saida da PRIMEIRA intent EXECUTING, ja confirmada pelo poll() da "
+        "corretora, nao pode ser desfeita pela excecao da SEGUNDA no mesmo "
+        "laco de reconciliacao"
+    )
+
+
 def test_entrada_inviavel_por_caixa_insuficiente_notifica(tmp_path, universe):
     """Intent de ENTER com caixa menor que 1 lote: confirma o evento
     `warn`/"nao cobre um lote" gravado em `_buy` (`runtime.py`), hoje sem

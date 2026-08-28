@@ -292,6 +292,50 @@ class LiveRuntime:
             "skip_avisado": self._skip_avisado,
         }
 
+    def _checkpoint(self, conn, account: AccountState) -> None:
+        """Torna DURAVEL, AGORA, o que este PASSO ja escreveu no diario — sem
+        esperar `execute_session`/`intraday_tick`/`reconcile_pending_fills`
+        terminar (MEDIO 7, auditoria adversarial 2026-08-28, variante SWING:
+        os tres processam uma LISTA de intencoes dentro de uma unica
+        `store.live_journal`, e uma excecao nao tratada numa intencao
+        POSTERIOR desfazia — via `rollback()` — o `Order`/`Intent`/
+        `live_positions`/caixa de uma intencao ANTERIOR ja confirmada pela
+        corretora na MESMA chamada, com o dinheiro ja tendo se movido de
+        verdade segundos antes. Mesmo padrao, mesmo nome de conceito de
+        `IntradayLiveRuntime._checkpoint` em `live/intraday_runtime.py`, onde
+        o MEDIO 7 original foi corrigido primeiro — ver o docstring de lá e
+        de `journal.live_store.live_journal` para o raciocínio completo.
+
+        Chamado do fim de `_resolve_sell`/`_resolve_buy` — o unico lugar onde
+        as TRES chamadoras (`_sell`, `_buy`, `reconcile_pending_fills`)
+        convergem depois de aplicar o resultado de UMA ordem ao estado da
+        conta. Nunca no MEIO do envio (`_place`, entre `record_order` e
+        `broker.place`): comitar uma ordem gravada como `NEW` mas ainda nao
+        enviada seria o mesmo tipo de mentira do diario, só que na direção
+        contrária (ordem que o diário jura ter tentado, mas nunca tentou de
+        verdade) — pior ainda porque um restart nesse instante não teria
+        como saber se a ordem chegou a sair ou não.
+
+        `conn.commit()` na PROPRIA conexao do passo (nunca uma segunda
+        conexao): `db/live.sqlite` esta em WAL com `busy_timeout=5000` (ver
+        `live_store._connect`) — um segundo escritor concorrente contra a
+        transacao aberta deste passo ficaria 5s bloqueado e levantaria
+        "database is locked" dentro do caminho que acabou de mandar ordem
+        real, trocando um problema por um pior. O SQLite aceita commit no
+        meio de uma conexao e reabre uma transacao nova implicita para o que
+        vier depois — exatamente a semantica que falta aqui.
+
+        Persiste `account` (`store.save_account`, que grava caixa e
+        `policy_state`) ANTES de comitar: as mutacoes de posicao
+        (`upsert_position`/`delete_position`) e de intent/order ja foram
+        gravadas por quem chamou, mas o caixa debitado/creditado em memoria
+        (`account.cash`) e o `policy_state` só chegam ao banco por aqui —
+        sem persistir antes de comitar, o commit tornaria duravel a posicao
+        nova sem o caixa que a pagou."""
+        account.policy_state = self._robot_state()
+        store.save_account(conn, account)
+        conn.commit()
+
     # ---------- infraestrutura de dado ------------------------------------
 
     def sync_data(self) -> StepReport:
@@ -1017,9 +1061,17 @@ class LiveRuntime:
         Compartilhado entre `_sell` (execucao no dia) e
         `reconcile_pending_fills` (confirmacao chegou depois) — o efeito sobre
         caixa/posicao e o MESMO nos dois casos, so muda quando ele acontece.
+
+        Cada `return` faz `self._checkpoint(conn, account)` logo antes —
+        MEDIO 7, variante swing (ver a docstring de `_checkpoint`): as tres
+        chamadoras processam uma LISTA de ordens na mesma `store.live_journal`,
+        e sem tornar durAvel o resultado desta ordem AGORA, uma excecao numa
+        ordem POSTERIOR do mesmo laco desfaria — via rollback — o fill que a
+        corretora ACABOU de confirmar aqui.
         """
         if order.status in (OrderStatus.REJECTED, OrderStatus.CANCELLED):
             store.set_intent_status(conn, intent.id, IntentStatus.REJECTED)
+            self._checkpoint(conn, account)
             return "rejected"
         if order.filled_qty <= 0:
             # Ordem viva, sem fill ainda (MT5 pode confirmar de forma
@@ -1030,6 +1082,7 @@ class LiveRuntime:
             store.set_intent_status(conn, intent.id, IntentStatus.EXECUTING)
             self._log(conn, account.id, "info", "runtime",
                             f"saida de {pos.ticker} aguardando confirmacao (ordem #{order.id})")
+            self._checkpoint(conn, account)
             return "pending"
 
         liquido = (order.avg_price or 0.0) * order.filled_qty - order.fees
@@ -1060,6 +1113,7 @@ class LiveRuntime:
                             f"saida executada: {pos.ticker} {order.filled_qty} "
                             f"@ {order.avg_price or 0.0:.4f}",
                             {"ticker": pos.ticker, "filled_qty": order.filled_qty})
+        self._checkpoint(conn, account)
         return "done"
 
     def _buy(self, conn, account: AccountState, session: date,
@@ -1112,14 +1166,23 @@ class LiveRuntime:
         `fallback_price`/`entry_date` cobrem o caso raro de `order.avg_price`
         vir vazio (nao deveria acontecer num fill real, mas o dado nao pode
         travar a contabilidade se vier faltando).
+
+        Cada `return` faz `self._checkpoint(conn, account)` logo antes — mesmo
+        motivo de `_resolve_sell` (MEDIO 7, variante swing): sem tornar
+        durAvel o resultado desta ordem AGORA, uma excecao numa ordem
+        POSTERIOR do mesmo laco (`execute_session`/`reconcile_pending_fills`)
+        desfaria — via rollback — o fill que a corretora ACABOU de confirmar
+        aqui.
         """
         if order.status in (OrderStatus.REJECTED, OrderStatus.CANCELLED):
             store.set_intent_status(conn, intent.id, IntentStatus.REJECTED)
+            self._checkpoint(conn, account)
             return "rejected"
         if order.filled_qty <= 0:
             store.set_intent_status(conn, intent.id, IntentStatus.EXECUTING)
             self._log(conn, account.id, "info", "runtime",
                             f"entrada em {intent.ticker} aguardando confirmacao (ordem #{order.id})")
+            self._checkpoint(conn, account)
             return "pending"
 
         preco = order.avg_price or fallback_price
@@ -1156,6 +1219,7 @@ class LiveRuntime:
             self._log(conn, account.id, "info", "runtime",
                             f"entrada executada: {intent.ticker} {order.filled_qty} @ {preco:.4f}",
                             {"ticker": intent.ticker, "filled_qty": order.filled_qty})
+        self._checkpoint(conn, account)
         return "done"
 
     # ---------- saque: recomendacao, expiracao, confirmacao humana ---------
