@@ -50,6 +50,12 @@ numero universal:
      R$1,90/ordem na Rico) so quando a quantidade pedida nao fecha o lote
      padrao minimo. Sem valor universal tambem: outra corretora pode nao ter
      fracionario, ou cobrar diferente — confirmar sempre no terminal real.
+     Ticker de futuro continuo (sufixo `"@"`, ex. `"WDO@"`) e' um caso
+     PARTICULAR de `symbol_map` que NAO precisa ser digitado a mao:
+     `detect_futures_symbol_map()` descobre sozinho, a cada chamada, qual e'
+     o contrato com vencimento em aberto no terminal (ver a docstring do
+     metodo) — o `"@"` normalmente so' da cotacao, o servidor recusa ordem
+     nele (retcode 10017 `TRADE_DISABLED`).
   3. `filling_type` — o modo de preenchimento (`ORDER_FILLING_IOC` etc) que a
      corretora aceita para o simbolo varia por corretora/conta. Resolvido
      para `mt5.ORDER_FILLING_IOC` (o mais permissivo/comum) apenas no momento
@@ -73,6 +79,7 @@ esperada e temporaria, nao motivo para derrubar o runtime inteiro.
 from __future__ import annotations
 
 import math
+import re
 from typing import Optional
 
 from core.live_models import Order, OrderSide, OrderStatus
@@ -253,6 +260,48 @@ class MT5Broker(Broker):
             order.note = f"erro inesperado na traducao para MT5: {exc}"
             return order
 
+    def close_position(self, order: Order, position_ticket) -> Order:
+        """Fecha uma posicao EXISTENTE, identificada por `position_ticket` --
+        SEMPRE o `"ticket"` que `open_position()` leu da corretora agora
+        mesmo, nunca um numero que o robo guardou em memoria (ver a checagem
+        de lado que `live/intraday_execution.py::MT5IntradayExecution.
+        exit_market` faz antes de chamar isto).
+
+        Existe separada de `place()` por causa do incidente REAL de
+        2026-08-28 (slot `dt-wdo_grid_reload_maker-wdo@-live`, conta com
+        margem para 1 contrato e 2 abertos): o robo tentou fechar ~24 vezes
+        e a corretora recusou TODAS com `retcode=10006 [MG51] Para abrir
+        novas posicoes`. Causa raiz -- `place()`/`_send()` sempre montavam
+        `TRADE_ACTION_DEAL` SEM o campo `"position"`; sem ele, o motor de
+        risco da corretora nao sabe que a ordem ABATE uma posicao existente
+        e trata como ABERTURA NOVA, que a margem esgotada recusa. A posicao
+        ficou presa, sem stop, sem alvo, atravessando reinicios de processo.
+
+        `place()` continua existindo do jeito que estava (chamado por quem
+        abre posicao, e' o unico ponto de entrada do resto do sistema) --
+        este metodo e' o caminho DEDICADO de fechamento, chamado so por
+        `MT5IntradayExecution.exit_market`."""
+        try:
+            import MetaTrader5 as mt5  # lazy: ver docstring do modulo
+        except Exception as exc:  # pragma: no cover - ambiente sem o pacote
+            order.status = OrderStatus.REJECTED
+            order.note = f"pacote MetaTrader5 indisponivel: {exc}"
+            return order
+        try:
+            if not self.connect():
+                code, desc = self._last_error(mt5)
+                order.status = OrderStatus.REJECTED
+                order.note = (
+                    f"falha ao conectar ao terminal MT5 "
+                    f"(last_error={code}: {desc})"
+                )
+                return order
+            return self._send(mt5, order, position_ticket=position_ticket)
+        except Exception as exc:
+            order.status = OrderStatus.REJECTED
+            order.note = f"erro inesperado na traducao para MT5 (fechamento): {exc}"
+            return order
+
     def _resolve_execution(self, mt5, order: Order):
         """Decide qual simbolo/volume usar para esta ordem: lote padrao
         (GRATUITO na Rico, 2026-08-21) quando a quantidade pedida alcanca o
@@ -290,7 +339,19 @@ class MT5Broker(Broker):
 
         return None
 
-    def _send(self, mt5, order: Order) -> Order:
+    def _send(self, mt5, order: Order, position_ticket: Optional[int] = None) -> Order:
+        """`position_ticket` (gap fechado 2026-08-28, incidente do slot
+        `dt-wdo_grid_reload_maker-wdo@-live`): quando informado, entra no
+        `request` como `"position"` -- o campo que diz ao motor de risco da
+        corretora que esta ordem ABATE uma posicao EXISTENTE, em vez de abrir
+        uma nova. Sem ele, `place()` sempre montava `TRADE_ACTION_DEAL` como
+        se fosse abertura -- e um fechamento de VERDADE, contra margem ja
+        esgotada (o robo tinha 2 contratos numa conta dimensionada pra 1),
+        era recusado com `retcode=10006 [MG51] Para abrir novas posicoes`. A
+        posicao ficou presa ~24 tentativas, sem stop, sem alvo, atravessando
+        reinicios. `place()` continua chamando isto SEM ticket (abertura
+        normal, comportamento de sempre); `close_position()` e' quem sempre
+        passa o ticket -- ver a docstring dele."""
         base_symbol = self.symbol_for(order.ticker)
         resolved = self._resolve_execution(mt5, order)
         if resolved is None:
@@ -346,6 +407,34 @@ class MT5Broker(Broker):
             "type_time": mt5.ORDER_TIME_GTC,
             "type_filling": filling,
         }
+        if position_ticket is not None:
+            # Ver a docstring de `_send` e de `close_position` -- e' o campo
+            # que faz esta ordem ABATER a posicao em vez de tentar abrir uma
+            # nova (incidente 2026-08-28, `retcode=10006 [MG51]`).
+            request["position"] = int(position_ticket)
+        elif order.stop_price is not None or order.target_price is not None:
+            # PROTECAO ATOMICA (incidente 2026-08-28): `sl`/`tp` viajam no
+            # MESMO request que ABRE a posicao. A corretora amarra os dois no
+            # instante do fill -- nao existe instante nenhum em que a posicao
+            # esteja viva e desprotegida, nem que o processo morra entre uma
+            # coisa e outra. Enquanto a protecao era um segundo request
+            # (`TRADE_ACTION_SLTP` no passo seguinte do loop), essa janela
+            # tinha segundos no caso bom e HORAS no caso ruim, que foi o que
+            # aconteceu de verdade. `set_protection` continua existindo como
+            # REDE (protecao que sumiu, stop que a maquina moveu depois),
+            # nunca como o caminho principal.
+            #
+            # So' na ABERTURA: uma ordem de FECHAMENTO (`position_ticket`
+            # preenchido) nao abre nada que precise de protecao, e mandar
+            # `sl`/`tp` nela mexeria na posicao que esta sendo encerrada.
+            sl, tp, _avisos = self._niveis_protecao(
+                mt5, symbol, "long" if is_buy else "short",
+                order.stop_price, order.target_price, price, info=info,
+            )
+            if sl > 0.0:
+                request["sl"] = float(sl)
+            if tp > 0.0:
+                request["tp"] = float(tp)
 
         result = mt5.order_send(request)
         if result is None:
@@ -359,6 +448,29 @@ class MT5Broker(Broker):
             order.note = (
                 f"MT5 recusou a ordem (retcode={result.retcode}): "
                 f"{getattr(result, 'comment', '')}"
+            )
+            return order
+
+        # Gap fechado 2026-08-28 (mesmo incidente do slot
+        # `dt-wdo_grid_reload_maker-wdo@-live`, achado JUNTO com o bug do
+        # `position`): a corretora as vezes devolve `retcode=TRADE_RETCODE_
+        # DONE` ("Request executed") sem ter de fato preenchido nada --
+        # `price=0.0` e `deal=0` no mesmo log real ("fill @ 0.0000 ...
+        # deal=0, comment=Request executed"). Um "sucesso" sem preco nem
+        # deal e' informacao que a corretora nao confirmou de verdade; tratar
+        # como FILLED inventaria um preco de execucao (e um P&L) que nunca
+        # aconteceu. Vira REJECTED com o motivo explicito -- quem chama
+        # (`live/intraday_execution.py`) ja sabe tratar REJECTED como "tenta
+        # de novo", nunca como "nao preencheu".
+        preco_resultado = float(getattr(result, "price", 0.0) or 0.0)
+        deal_resultado = getattr(result, "deal", None)
+        if preco_resultado <= 0.0 or not deal_resultado:
+            order.status = OrderStatus.REJECTED
+            order.note = (
+                f"MT5 devolveu retcode=DONE mas sem confirmacao real de fill "
+                f"(price={preco_resultado}, deal={deal_resultado}, "
+                f"comment={getattr(result, 'comment', '')}) -- nao vou tratar "
+                "como execucao"
             )
             return order
 
@@ -487,6 +599,27 @@ class MT5Broker(Broker):
                 "type_filling": (self._filling_type if self._filling_type is not None
                                  else mt5.ORDER_FILLING_RETURN),
             }
+            protegida = ""
+            if order.stop_price is not None or order.target_price is not None:
+                # PROTECAO ATOMICA -- ver o bloco equivalente em `_send`. Numa
+                # ordem PENDENTE o ganho e' ainda maior: entre registrar a
+                # ordem e ela preencher podem passar minutos ou horas, e o
+                # processo pode morrer no meio. Com `sl`/`tp` amarrados aqui,
+                # a protecao nasce COM a posicao, mesmo que ninguem esteja
+                # vivo para reagir ao fill. A distancia minima da corretora e'
+                # medida contra o proprio nivel da limite (nao contra o preco
+                # corrente) -- e' onde a posicao vai nascer.
+                sl, tp, avisos = self._niveis_protecao(
+                    mt5, symbol, "long" if is_buy else "short",
+                    order.stop_price, order.target_price,
+                    float(order.limit_price), info=info,
+                )
+                if sl > 0.0:
+                    request["sl"] = float(sl)
+                if tp > 0.0:
+                    request["tp"] = float(tp)
+                protegida = (f", sl={sl:.4f} tp={tp:.4f} amarrados na propria ordem"
+                             + ("; " + "; ".join(avisos) if avisos else ""))
             result = mt5.order_send(request)
             if result is None:
                 code, desc = self._last_error(mt5)
@@ -505,7 +638,7 @@ class MT5Broker(Broker):
             order.broker_ref = str(getattr(result, "order", None) or "")
             order.note = (
                 f"ordem-limite pendente registrada em {symbol} @ "
-                f"{order.limit_price:.4f} (ticket={order.broker_ref})"
+                f"{order.limit_price:.4f} (ticket={order.broker_ref}){protegida}"
             )
             return order
         except Exception as exc:
@@ -513,27 +646,71 @@ class MT5Broker(Broker):
             order.note = f"erro inesperado ao registrar ordem pendente no MT5: {exc}"
             return order
 
+    def _pending_order_alive(self, mt5, broker_ref) -> Optional[bool]:
+        """A ordem pendente `broker_ref` ainda esta VIVA no terminal?
+        `True`/`False`, ou `None` quando nao deu para perguntar -- e "nao deu
+        para perguntar" NUNCA pode virar `False` (ver `cancel`)."""
+        try:
+            ticket = int(broker_ref)
+        except (TypeError, ValueError):
+            return None
+        consulta = getattr(mt5, "orders_get", None)
+        if consulta is None:  # pragma: no cover - fake antigo sem o metodo
+            return None
+        try:
+            ordens = consulta(ticket=ticket)
+        except Exception:
+            return None
+        if ordens is None:
+            return None
+        return len(ordens) > 0
+
     def cancel(self, order: Order) -> Order:
         """Remove do terminal a ordem-limite pendente de `order.broker_ref`.
 
+        **So' marca `CANCELLED` o que a corretora CONFIRMOU morto.** Esta
+        regra e' o metodo inteiro, e ela custou caro para ser escrita: a
+        versao anterior marcava `CANCELLED` nos DOIS ramos -- no sucesso e na
+        falha -- "para nao virar retry infinito". Como `CANCELLED` e' estado
+        terminal e todo o rastreamento de ordem orfa filtra por
+        `not is_terminal` (`live/intraday_execution.py::orphan_refs`), o
+        efeito real era que NENHUMA orfa era rastreada nunca: `pending_entry_
+        refs` ficava vazio por construcao, `_drena_orfas_de_saida` nao tinha
+        o que drenar, e `dashboard/live_teardown.py` dava a corretora por
+        limpa e APAGAVA a conta com ordem viva no book. Um cancelamento que
+        falhou e' uma ordem que pode preencher sozinha depois, abrindo
+        posicao sem stop que ninguem esta vigiando.
+
+        Tres desfechos, e a diferenca entre eles e' o ponto:
+
+          - `TRADE_RETCODE_DONE` -> `CANCELLED`. A corretora removeu.
+          - Recusou, e o terminal confirma que o ticket NAO esta mais na
+            lista de pendentes (preencheu, expirou, alguem cancelou na mao)
+            -> `CANCELLED`. O objetivo ja' esta cumprido; nao ha o que
+            remover, e insistir seria retry infinito de verdade.
+          - Recusou, e o ticket AINDA esta vivo -- ou nao deu nem para
+            perguntar (terminal fora do ar, pacote ausente, excecao) ->
+            status INTOCADO (nao-terminal), motivo na nota. Quem chama ja
+            sabe o que fazer com isso: `orphan_refs` recolhe o ticket e o
+            runtime tenta de novo a cada barra ate a corretora confirmar.
+
         Sem `broker_ref` (nunca chegou a ser registrada) cai no default do
-        port (`Broker.cancel`, so marca `CANCELLED` localmente). Uma ordem que
-        o terminal ja nao tem mais -- porque preencheu, expirou ou foi
-        cancelada na mao -- NAO e' erro: o objetivo ("nao existe mais pendente
-        neste ticket") ja esta cumprido, entao vira `CANCELLED` com o motivo
-        na nota, para nao virar um retry infinito a cada barra."""
+        port (`Broker.cancel`, so' marca `CANCELLED` localmente) -- ai' e'
+        honesto: nao existe ordem na corretora para sobrar."""
         if not order.broker_ref:
             return super().cancel(order)
         try:
             import MetaTrader5 as mt5  # lazy: ver docstring do modulo
         except Exception as exc:  # pragma: no cover - ambiente sem o pacote
-            order.note = f"pacote MetaTrader5 indisponivel ao cancelar: {exc}"
+            order.note = (f"pacote MetaTrader5 indisponivel ao cancelar: {exc} -- ordem "
+                          f"{order.broker_ref} NAO confirmada morta, segue vigiada")
             return order
 
         try:
             if not self.connect():
                 code, desc = self._last_error(mt5)
-                order.note = f"falha ao conectar para cancelar (last_error={code}: {desc})"
+                order.note = (f"falha ao conectar para cancelar (last_error={code}: {desc}) "
+                              f"-- ordem {order.broker_ref} NAO confirmada morta, segue vigiada")
                 return order
             result = mt5.order_send({
                 "action": mt5.TRADE_ACTION_REMOVE,
@@ -543,15 +720,34 @@ class MT5Broker(Broker):
                 order.status = OrderStatus.CANCELLED
                 order.note = f"ordem pendente {order.broker_ref} removida do terminal"
                 return order
-            order.status = OrderStatus.CANCELLED
+
+            recusa = (f"retcode={getattr(result, 'retcode', None)}: "
+                      f"{getattr(result, 'comment', '')}")
+            viva = self._pending_order_alive(mt5, order.broker_ref)
+            if viva is False:
+                order.status = OrderStatus.CANCELLED
+                order.note = (
+                    f"ordem pendente {order.broker_ref} ja nao estava viva no terminal "
+                    f"({recusa}) -- confirmado contra a lista de pendentes, nada a remover"
+                )
+                return order
+            if viva is True:
+                order.note = (
+                    f"a corretora RECUSOU remover a ordem pendente {order.broker_ref} "
+                    f"({recusa}) e ela CONTINUA VIVA no terminal -- pode preencher "
+                    "sozinha e abrir posicao; segue vigiada para nova tentativa"
+                )
+                return order
             order.note = (
-                f"ordem pendente {order.broker_ref} ja nao estava viva no terminal "
-                f"(retcode={getattr(result, 'retcode', None)}: "
-                f"{getattr(result, 'comment', '')}) -- nada a remover"
+                f"a corretora recusou remover a ordem pendente {order.broker_ref} "
+                f"({recusa}) e nao deu para confirmar se ela ainda esta viva -- "
+                "tratada como VIVA (segue vigiada), porque 'nao sei' nunca pode "
+                "virar 'ja morreu'"
             )
             return order
         except Exception as exc:
-            order.note = f"erro inesperado ao cancelar ordem pendente: {exc}"
+            order.note = (f"erro inesperado ao cancelar ordem pendente {order.broker_ref}: "
+                          f"{exc} -- NAO confirmada morta, segue vigiada")
             return order
 
     def open_position(self, ticker: str) -> Optional[dict]:
@@ -570,9 +766,329 @@ class MT5Broker(Broker):
 
         Filtra por `magic` porque a conta e' NETTING e compartilhada entre os
         dois slots -- sem o filtro, um robo enxergaria a posicao do outro como
-        sua. Qualquer falha (terminal fechado, resposta inesperada) devolve
-        `None`, e quem chama trata isso como "nao consegui confirmar agora",
-        NUNCA como "esta zerado" (ver `live/intraday_execution.py`)."""
+        sua.
+
+        **Achata o tri-estado**: devolve `None` tanto para "nao ha posicao"
+        quanto para "nao consegui perguntar". Quem precisa distinguir os dois
+        -- e todo caminho que vai MANDAR ORDEM precisa -- usa
+        `position_state()`, que este metodo apenas embrulha. Continua
+        existindo com esta assinatura porque o painel e os dublês de teste
+        so' querem "o que tem aberto", e para eles a diferenca nao muda
+        nada."""
+        estado = self.position_state(ticker)
+        return estado["position"] if estado["ok"] else None
+
+    def position_state(self, ticker: str) -> dict:
+        """Ver `Broker.position_state` -- a versao que de fato distingue
+        "nao ha posicao" (`ok=True, position=None`) de "nao consegui
+        perguntar" (`ok=False`).
+
+        A distincao nao e' teorica. `mt5.positions_get()` devolve `None`
+        quando a consulta FALHA e uma tupla vazia quando ela deu certo e nao
+        ha nada -- e o codigo anterior tratava os dois como "nao ha nada",
+        junto com todo `except Exception`. Um terminal fechado ficava
+        indistinguivel de uma conta zerada, e quem lia isso decidia mandar
+        ordem em cima da resposta errada."""
+        try:
+            import MetaTrader5 as mt5  # lazy: ver docstring do modulo
+        except Exception as exc:  # pragma: no cover - ambiente sem o pacote
+            return {"ok": False, "position": None,
+                    "note": f"pacote MetaTrader5 indisponivel: {exc}"}
+        try:
+            if not self.connect():
+                code, desc = self._last_error(mt5)
+                return {"ok": False, "position": None,
+                        "note": f"sem conexao com o terminal MT5 (last_error={code}: {desc})"}
+            symbol = self.symbol_for(ticker)
+            posicoes = mt5.positions_get(symbol=symbol)
+            if posicoes is None:
+                # `None` aqui e' FALHA de consulta, nao ausencia de posicao --
+                # a resposta de "perguntei e nao ha nada" e' uma tupla vazia.
+                code, desc = self._last_error(mt5)
+                return {"ok": False, "position": None,
+                        "note": (f"positions_get({symbol}) devolveu None "
+                                 f"(last_error={code}: {desc}) -- consulta falhou, "
+                                 "nao e' 'nao ha posicao'")}
+            minhas = [p for p in posicoes if getattr(p, "magic", None) == self._magic]
+            if not minhas:
+                return {"ok": True, "position": None, "note": ""}
+            p = minhas[0]
+            volume = float(getattr(p, "volume", 0.0) or 0.0)
+            if volume <= 0:
+                return {"ok": True, "position": None, "note": ""}
+            # `type` 0 = POSITION_TYPE_BUY, 1 = POSITION_TYPE_SELL.
+            comprado = getattr(p, "type", 0) == getattr(mt5, "POSITION_TYPE_BUY", 0)
+            return {"ok": True, "note": "", "position": {
+                "side": "long" if comprado else "short",
+                "price": float(getattr(p, "price_open", 0.0) or 0.0),
+                "quantity": int(round(volume * self._shares_per_lot)),
+                "ticket": getattr(p, "ticket", None),
+                # SL/TP REGISTRADOS na corretora agora -- 0.0 (ou ausente) e'
+                # o mesmo estado da posicao NUA do incidente 2026-08-28
+                # (ficou com `sl=0.0, tp=0.0` por horas, atravessando 3
+                # reinicios). `_ensure_protecao` (`live/intraday_runtime.py`)
+                # le isto pra' decidir se precisa (re)enviar `set_protection`
+                # -- sem isto ela reenviaria SLTP toda barra, mesmo quando ja
+                # esta' certo.
+                "sl": float(getattr(p, "sl", 0.0) or 0.0),
+                "tp": float(getattr(p, "tp", 0.0) or 0.0),
+            }}
+        except Exception as exc:
+            return {"ok": False, "position": None,
+                    "note": f"erro inesperado ao ler posicao de {ticker}: {exc}"}
+
+    def _niveis_protecao(self, mt5, symbol: str, side: str,
+                         stop: Optional[float], target: Optional[float],
+                         preco_ref: Optional[float],
+                         sl_atual: float = 0.0, tp_atual: float = 0.0,
+                         info=None) -> tuple:
+        """Traduz os niveis que a MAQUINA decidiu para o par `(sl, tp)` que a
+        corretora aceita. Devolve `(sl, tp, avisos)`; `0.0` e' a codificacao
+        do proprio MT5 para "sem nivel deste lado".
+
+        UM SO' lugar calcula isto, e os TRES caminhos que registram protecao
+        usam este metodo -- ordem a mercado (`_send`), ordem-limite pendente
+        (`place_pending`) e o reforco por `TRADE_ACTION_SLTP`
+        (`set_protection`). Ter tres copias da regra era como um caminho
+        acabava mais frouxo que o outro sem ninguem perceber.
+
+        Nada aqui e' DECISAO (regra 6 do AGENTS.md): `stop`/`target` chegam
+        prontos da estrategia/maquina. O que este metodo faz e' so' o ajuste
+        MECANICO que a corretora exige, com tres invariantes que valem para
+        QUALQUER robo (nenhum deles conhece estrategia):
+
+          1. **Nunca apaga.** Um lado sem pedido (`None`) preserva o que ja'
+             esta registrado na posicao, em vez de mandar `0.0`. Num
+             `TRADE_ACTION_SLTP` o campo `0.0` nao significa "deixa como
+             esta": significa REMOVER a protecao daquele lado. Uma estrategia
+             sem alvo (`target=None`) apagava, a cada reforco, o stop... nao:
+             apagava o TP que outra rodada tinha posto -- e uma sem stop
+             apagaria o SL. Preservar e' o unico default seguro.
+          2. **Nunca afrouxa.** Se ja' existe SL registrado e o novo calculo
+             daria mais espaco de perda (long: SL mais BAIXO; short: mais
+             ALTO), fica o mais protetor. Mesma regra de `AdjustStop` que
+             vale no motor inteiro -- stop anda numa direcao so'.
+          3. **Respeita a distancia minima da corretora** (`trade_stops_
+             level`) medida contra `preco_ref` -- o preco de execucao numa
+             ordem a mercado, o proprio nivel da limite numa pendente, o
+             bid/ask corrente num reforco. SL/TP colado demais e' recusado
+             pelo servidor, e uma protecao recusada e' protecao nenhuma.
+             Quando precisa afastar, ANOTA em `avisos`: o nivel registrado
+             ficou diferente do que a maquina pediu, e isso tem de aparecer
+             no diario em vez de sumir.
+        """
+        if info is None:
+            info = mt5.symbol_info(symbol)
+        tick_size = 0.0
+        distancia_min = 0.0
+        if info is not None:
+            tick_size = float(getattr(info, "trade_tick_size", 0.0) or 0.0) or \
+                float(getattr(info, "point", 0.0) or 0.0)
+            passos = getattr(info, "trade_stops_level", None)
+            if not passos:
+                passos = getattr(info, "stops_level", 0) or 0
+            ponto = float(getattr(info, "point", 0.0) or 0.0) or tick_size
+            distancia_min = float(passos) * float(ponto)
+
+        avisos: list[str] = []
+        sl_atual = float(sl_atual or 0.0)
+        tp_atual = float(tp_atual or 0.0)
+
+        def _arredonda(preco: float) -> float:
+            if not tick_size:
+                return float(preco)
+            return round(round(float(preco) / tick_size) * tick_size, 8)
+
+        def _afasta(preco: float, e_stop: bool) -> float:
+            # SL de posicao LONG e TP de posicao SHORT ficam ABAIXO do preco
+            # de referencia; o par oposto (TP long / SL short) fica ACIMA --
+            # `abaixo` da' as duas combinacoes com um XOR.
+            preco = float(preco)
+            if preco_ref is None or distancia_min <= 0:
+                return preco
+            abaixo = (side == "long") == e_stop
+            limite = (float(preco_ref) - distancia_min) if abaixo \
+                else (float(preco_ref) + distancia_min)
+            if (abaixo and preco > limite) or (not abaixo and preco < limite):
+                avisos.append(
+                    f"{'stop' if e_stop else 'alvo'} pedido {preco:.4f} estava mais perto "
+                    f"que a distancia minima da corretora ({distancia_min:.4f}) e foi "
+                    f"afastado para {limite:.4f}"
+                )
+                return limite
+            return preco
+
+        # Invariante 1: lado sem pedido PRESERVA o que ja' esta registrado.
+        sl = _arredonda(_afasta(float(stop), True)) if stop is not None else sl_atual
+        tp = _arredonda(_afasta(float(target), False)) if target is not None else tp_atual
+
+        # Invariante 2: stop nunca afrouxa contra o que ja' esta registrado.
+        if stop is not None and sl_atual > 0:
+            mais_protetor = max(sl, sl_atual) if side == "long" else min(sl, sl_atual)
+            if abs(mais_protetor - sl) > 1e-9:
+                avisos.append(
+                    f"mantido o stop mais protetor ja' registrado ({sl_atual:.4f}) em vez "
+                    f"do calculado agora ({sl:.4f}) -- stop nunca afrouxa"
+                )
+                sl = mais_protetor
+
+        return float(sl), float(tp), avisos
+
+    def set_protection(self, ticker: str, position_ticket, side: str,
+                       stop: Optional[float] = None, target: Optional[float] = None,
+                       sl_atual: float = 0.0, tp_atual: float = 0.0) -> dict:
+        """REFORCO da protecao de uma posicao que ja' existe, via
+        `TRADE_ACTION_SLTP`. **E' a rede, nao o caminho principal**: o
+        caminho principal e' ATOMICO -- `sl`/`tp` viajam no MESMO request
+        que abre a ordem (`_send` e `place_pending`), entao a corretora
+        amarra a protecao no instante do fill, sem processo nenhum no meio e
+        sem janela nenhuma. Este metodo existe para os casos em que aquilo
+        nao basta: protecao que sumiu (humano mexeu no terminal, corretora
+        recusou o SL da abertura), stop que a maquina MOVEU depois (trailing)
+        e posicao herdada de um processo anterior.
+
+        `sl_atual`/`tp_atual` sao o que a corretora reporta AGORA para esta
+        posicao (de `open_position`) -- entram para os invariantes 1 e 2 de
+        `_niveis_protecao`: sem eles, um `target=None` mandaria `tp=0.0` e
+        APAGARIA o alvo registrado, e um stop recalculado poderia afrouxar o
+        que ja' estava mais perto.
+
+        Gap fechado depois do incidente 2026-08-28 (slot
+        `dt-wdo_grid_reload_maker-wdo@-live`): a posicao ficou com `sl=0.0,
+        tp=0.0` NA CORRETORA por HORAS, atravessando 3 reinicios do
+        processo, porque o "stop" deste robo sempre foi logica do LOOP
+        (dispara ordem a mercado quando o nivel rompe) -- nunca uma ordem-
+        stop registrada. Processo morto/reiniciado = posicao nua. O dono:
+        "nao colocou alvo e estope".
+
+        Os tres ajustes mecanicos (arredondar para `trade_tick_size`, afastar
+        pela distancia minima da corretora, nunca afrouxar/apagar) moram em
+        `_niveis_protecao`, compartilhado com os dois caminhos atomicos.
+
+        Devolve `{"ok": bool, "note": str, "sl": float, "tp": float}` --
+        NUNCA levanta (mesmo padrao do resto da classe): falhar ao proteger
+        nao pode derrubar o runtime que acabou de confirmar um fill de
+        verdade, mas tambem nao pode desaparecer em silencio -- quem chama
+        loga alto e tenta de novo no proximo passo (ver
+        `IntradayLiveRuntime._ensure_protecao`). `sl`/`tp` no retorno sao os
+        niveis REGISTRADOS, que podem diferir do pedido (distancia minima da
+        corretora); quem chama guarda esse par para nao ficar reenviando a
+        cada barra um pedido que a corretora sempre ajusta do mesmo jeito."""
+        try:
+            import MetaTrader5 as mt5  # lazy: ver docstring do modulo
+        except Exception as exc:  # pragma: no cover - ambiente sem o pacote
+            return {"ok": False, "note": f"pacote MetaTrader5 indisponivel: {exc}"}
+        try:
+            if not self.connect():
+                code, desc = self._last_error(mt5)
+                return {"ok": False,
+                        "note": f"falha ao conectar ao terminal MT5 (last_error={code}: {desc})"}
+            symbol = self.symbol_for(ticker)
+            info = mt5.symbol_info(symbol)
+            if info is None:
+                return {"ok": False, "note": f"simbolo {symbol} nao encontrado no terminal MT5"}
+
+            tick = mt5.symbol_info_tick(symbol)
+            preco_ref = None
+            if tick is not None:
+                bid = float(getattr(tick, "bid", 0.0) or 0.0)
+                ask = float(getattr(tick, "ask", 0.0) or 0.0)
+                preco_ref = (bid if side == "long" else ask) or None
+
+            sl, tp, avisos = self._niveis_protecao(
+                mt5, symbol, side, stop, target, preco_ref,
+                sl_atual=sl_atual, tp_atual=tp_atual, info=info,
+            )
+            if sl <= 0.0 and tp <= 0.0:
+                # Nada para registrar E nada registrado para preservar --
+                # mandar `sl=0, tp=0` aqui seria um pedido explicito de
+                # REMOVER protecao, o oposto do que este metodo existe para
+                # fazer. Melhor nao enviar request nenhum.
+                return {"ok": False, "sl": 0.0, "tp": 0.0,
+                        "note": "nem stop nem alvo para registrar (e nada registrado a "
+                                "preservar) -- nao vou mandar SLTP zerado, que APAGARIA "
+                                "protecao em vez de por"}
+
+            request = {
+                "action": mt5.TRADE_ACTION_SLTP,
+                "position": int(position_ticket),
+                "symbol": symbol,
+                "sl": float(sl),
+                "tp": float(tp),
+            }
+            result = mt5.order_send(request)
+            if result is None:
+                code, desc = self._last_error(mt5)
+                return {"ok": False, "sl": sl, "tp": tp,
+                        "note": f"order_send (SLTP) devolveu None (last_error={code}: {desc})"}
+            if result.retcode != mt5.TRADE_RETCODE_DONE:
+                return {"ok": False, "sl": sl, "tp": tp,
+                        "note": (f"MT5 recusou SL/TP (retcode={result.retcode}): "
+                                 f"{getattr(result, 'comment', '')}")}
+            nota = f"protecao registrada: sl={sl:.4f} tp={tp:.4f}"
+            if avisos:
+                nota += " (" + "; ".join(avisos) + ")"
+            return {"ok": True, "note": nota, "sl": float(sl), "tp": float(tp)}
+        except Exception as exc:
+            return {"ok": False, "sl": 0.0, "tp": 0.0,
+                    "note": f"erro inesperado ao registrar protecao: {exc}"}
+
+    def account_risk_state(self) -> Optional[dict]:
+        """Equity/margem livre da conta AGORA -- o freio duro de ruina (gap
+        fechado depois do incidente 2026-08-28: a conta chegou a equity
+        NEGATIVA, -R$298,60, com o processo CONTINUANDO a tentar abrir e
+        fechar ordem, sem nenhum freio; o motor de BACKTEST ja tem
+        `wiped_out_at` para isto, o lado ao vivo nao tinha equivalente).
+
+        Devolve `{"equity", "margin_free", "balance"}` (todos em R$) ou
+        `None` se nao deu para perguntar (terminal fechado, pacote ausente)
+        -- mesma politica de erro do resto da classe: "nao sei" nunca vira
+        "esta zerado" nem "esta seguro". Quem chama (`IntradayLiveRuntime.
+        _check_freio_duro`) so' trava a operacao quando o numero volta e ele
+        e' realmente ruim."""
+        try:
+            import MetaTrader5 as mt5  # lazy: ver docstring do modulo
+        except Exception:
+            return None
+        try:
+            if not self.connect():
+                return None
+            info = mt5.account_info()
+            if info is None:
+                return None
+            return {
+                "equity": float(getattr(info, "equity", 0.0) or 0.0),
+                "margin_free": float(getattr(info, "margin_free", 0.0) or 0.0),
+                "balance": float(getattr(info, "balance", 0.0) or 0.0),
+            }
+        except Exception:
+            return None
+
+    def margin_required(self, ticker: str, side: str, quantity: int,
+                        price: float) -> Optional[float]:
+        """Quanto de MARGEM a corretora exige para abrir esta ordem, em R$.
+        `None` = nao deu para perguntar (nunca "e' de graca").
+
+        Quem responde e' o proprio terminal (`mt5.order_calc_margin`), nao
+        uma conta nossa. Isso importa por dois motivos, os dois aprendidos
+        no incidente 2026-08-28:
+
+        1. **A margem real e' da CORRETORA, nao da nossa tabela.** O projeto
+           documenta R$150 para WDO e R$100 para WIN, mas esses numeros sao
+           de tabela e mudam (a B3 remarca margem em dia volatil). Perguntar
+           evita operar contra um numero velho.
+        2. **Serve para comparar com `margin_free`, que e' da CONTA INTEIRA.**
+           Todos os slots de day trade usam o MESMO login MT5 -- a mesma
+           conta, a mesma margem fisica. Qualquer teto calculado a partir de
+           `initial_capital` local a UM processo e' cego para o que o OUTRO
+           slot ja comprometeu. `margin_free` nao e': ele ja desconta tudo
+           que qualquer robo (ou o proprio dono, na mao) abriu. E' a unica
+           fonte que ve a conta como ela e'.
+
+        `quantity` e' em ACOES/CONTRATOS (unidade de `Order.quantity`), como
+        no resto da classe; a conversao para lote e' a mesma de qualquer
+        envio (`_resolve_volume`), entao o numero devolvido corresponde a'
+        ordem que de fato sairia -- nao a uma aproximacao."""
         try:
             import MetaTrader5 as mt5  # lazy: ver docstring do modulo
         except Exception:  # pragma: no cover - ambiente sem o pacote
@@ -581,24 +1097,19 @@ class MT5Broker(Broker):
             if not self.connect():
                 return None
             symbol = self.symbol_for(ticker)
-            posicoes = mt5.positions_get(symbol=symbol)
-            if not posicoes:
+            mt5.symbol_select(symbol, True)
+            info = mt5.symbol_info(symbol)
+            if info is None:
                 return None
-            minhas = [p for p in posicoes if getattr(p, "magic", None) == self._magic]
-            if not minhas:
-                return None
-            p = minhas[0]
-            volume = float(getattr(p, "volume", 0.0) or 0.0)
+            volume = self._resolve_volume(quantity, info)
             if volume <= 0:
                 return None
-            # `type` 0 = POSITION_TYPE_BUY, 1 = POSITION_TYPE_SELL.
-            comprado = getattr(p, "type", 0) == getattr(mt5, "POSITION_TYPE_BUY", 0)
-            return {
-                "side": "long" if comprado else "short",
-                "price": float(getattr(p, "price_open", 0.0) or 0.0),
-                "quantity": int(round(volume * self._shares_per_lot)),
-                "ticket": getattr(p, "ticket", None),
-            }
+            tipo = (mt5.ORDER_TYPE_BUY if str(side).lower() == "long"
+                    else mt5.ORDER_TYPE_SELL)
+            valor = mt5.order_calc_margin(tipo, symbol, volume, float(price))
+            if valor is None:
+                return None
+            return float(valor)
         except Exception:
             return None
 
@@ -764,7 +1275,15 @@ class MT5Broker(Broker):
         `Enabled` -- lida na ABERTURA do terminal e reescrita quando ele
         fecha. Ligar por ali so' funciona com o terminal FECHADO, valendo na
         proxima abertura."""
-        import MetaTrader5 as mt5  # lazy: ver docstring do modulo
+        try:
+            import MetaTrader5 as mt5  # lazy: ver docstring do modulo
+        except Exception:  # pragma: no cover - ambiente sem o pacote
+            # Era o UNICO metodo da classe com o import FORA do `try` -- numa
+            # maquina sem o pacote ele levantava `ModuleNotFoundError` em vez
+            # de devolver `None` como todos os outros. Quem chama
+            # (`IntradayLiveRuntime._check_autotrading`) trata `None` como
+            # "nao deu para saber"; uma excecao ali derrubava o passo inteiro.
+            return None
 
         try:
             info = mt5.terminal_info()
@@ -883,6 +1402,146 @@ class MT5Broker(Broker):
                 mt5.symbol_select(fractional, True)
                 info = mt5.symbol_info(fractional)
                 result[ticker] = fractional if info is not None else base
+            return result
+        except Exception:
+            return None
+
+    # Letra de mes de vencimento B3/CME: F=Jan G=Fev H=Mar J=Abr K=Mai M=Jun
+    # N=Jul Q=Ago U=Set V=Out X=Nov Z=Dez. `\d{1,2}` cobre ano de 1 ou 2
+    # digitos (corretoras variam).
+    _PADRAO_CONTRATO_VENCIMENTO = "[FGHJKMNQUVXZ]\\d{1,2}$"
+
+    #: Quantas barras M1 recentes somar para o desempate de liquidez em
+    #: `_volume_recente_do_contrato` -- generoso o bastante pra suavizar um
+    #: minuto atipico sem pedir historico caro a cada chamada (esta funcao
+    #: roda a cada "Iniciar operacao", nunca em loop apertado).
+    _BARRAS_VOLUME_CONTRATO = 10
+
+    def _volume_recente_do_contrato(self, mt5, nome: str) -> float:
+        """Volume de negociacao RECENTE de `nome`, para desempatar qual
+        contrato concentra a liquidez em `detect_futures_symbol_map`.
+
+        Prefere a soma de `_BARRAS_VOLUME_CONTRATO` barras M1 recentes
+        (`copy_rates_from_pos`) a um tick unico: um so' negocio (ou um tick
+        de BOOK sem trade nenhum) e' ruido demais pra decidir qual dos dois
+        contratos e' o corrente. Cai para o volume do ULTIMO TICK
+        (`symbol_info_tick(...).volume`, o criterio antigo, unico) so' se as
+        barras nao vierem -- terminal sem historico pronto para o simbolo
+        ainda, ou o modulo `MetaTrader5` (real ou fake de teste) nao expor
+        `copy_rates_from_pos` -- nunca deixa a deteccao inteira falhar por
+        causa disto."""
+        copia = getattr(mt5, "copy_rates_from_pos", None)
+        timeframe = getattr(mt5, "TIMEFRAME_M1", None)
+        if copia is not None and timeframe is not None:
+            try:
+                barras = copia(nome, timeframe, 0, self._BARRAS_VOLUME_CONTRATO)
+            except Exception:
+                barras = None
+            if barras is not None and len(barras) > 0:
+                try:
+                    return float(sum(float(b["tick_volume"]) for b in barras))
+                except Exception:
+                    pass
+        tick = mt5.symbol_info_tick(nome)
+        return float(getattr(tick, "volume", 0.0) or 0.0) if tick is not None else 0.0
+
+    def detect_futures_symbol_map(self, tickers) -> Optional[dict[str, str]]:
+        """Descobre, para cada ticker terminado em `"@"` (convencao do
+        projeto para futuro B3 CONTINUO/ajustado -- `WDO@`, `WIN@`), qual e' o
+        contrato REAL com vencimento em aberto no terminal MT5 AGORA -- sem
+        depender de calendario de vencimento hardcoded em lugar nenhum,
+        porque a B3 rola WDO todo mes e WIN a cada dois meses e ninguem devia
+        precisar editar codigo/config toda vez que isso acontece.
+
+        Por que isto e' preciso: o simbolo `@` normalmente so' existe no
+        terminal para dar COTACAO/HISTORICO continuo -- e' dele que vem o
+        preco que a estrategia usa pra decidir (dado valido, e' a mesma serie
+        contra a qual o robo foi validado no backtest). Mas o SERVIDOR da
+        corretora tipicamente recusa ordem nele (`trade_mode` desabilitado no
+        simbolo -- retcode 10017 `TRADE_DISABLED`, achado ao vivo em
+        2026-08-28 no slot do WDO F1: `mt5.symbol_info("WDO@").trade_mode`
+        veio desligado enquanto a cotacao seguia chegando normal). O contrato
+        que de fato negocia tem codigo de vencimento explicito (ex.
+        `"WDOU26"` = setembro/2026).
+
+        Estrategia de deteccao: lista todo simbolo do terminal que comeca com
+        a RAIZ do ticker (`mt5.symbols_get(raiz + "*")`), filtra pelos que
+        batem o padrao RAIZ+LETRA_DE_MES+ANO, descarta os com `trade_mode`
+        desabilitado E os SEM BOOK DE DOIS LADOS (`bid`/`ask` -- ver abaixo),
+        e entre os que sobram escolhe o de MAIOR VOLUME RECENTE (ver
+        `_volume_recente_do_contrato`) -- o contrato corrente (front month)
+        e' sempre o mais liquido por construcao (e' pra ele que a liquidez
+        migra antes do vencimento do anterior). Nao precisa saber QUAL mes
+        e' o corrente: o proprio mercado (via volume) responde isso a cada
+        chamada, entao o mapa se autocorrige sozinho a cada rolagem, sem
+        gente trocar codigo/config — e' chamado de novo a cada "Iniciar
+        operacao" no painel (ver `dashboard/live_control.py::
+        detect_futures_symbol_map`), entao um robo reiniciado no mes
+        seguinte ja pega o contrato novo sozinho.
+
+        Exigir BOOK DE DOIS LADOS (`bid > 0` E `ask > 0`) e' o gap fechado
+        depois do incidente 2026-08-28: num restart, esta funcao escolheu
+        `WDOQ27` (maior volume no criterio antigo, de TICK UNICO) em vez do
+        `WDOU26` correto -- confirmado depois, na mao, que `WDOQ27` tinha
+        `bid=0.0` (sem mercado real; o "volume" veio de um negocio velho
+        preso no ultimo tick). Um contrato sem book de dois lados e' um
+        contrato MORTO, mesmo com `trade_mode` habilitado e um numero de
+        volume qualquer no tick -- nunca deve ser escolhido, custe o que
+        custar ao desempate.
+
+        Tickers que NAO terminam em `"@"` mapeiam para `symbol_for(ticker)`
+        (comportamento de sempre, sem envolver deteccao nenhuma) -- mesmo
+        contrato de "mapa parcial nao quebra tudo" de
+        `detect_fractional_symbol_map`: um ticker `@` sem NENHUM contrato
+        tradavel (ou sem NENHUM com book de dois lados) mapeia pra ele mesmo
+        (degrada pro sintoma atual, `TRADE_DISABLED` ao mandar ordem, em vez
+        de escolher um contrato morto ou derrubar a deteccao inteira por
+        causa de UM ticker).
+
+        Devolve `None` so' se a conexao falhar (mesmo padrao do resto da
+        classe)."""
+        try:
+            import MetaTrader5 as mt5  # lazy: ver docstring do modulo
+        except Exception:
+            return None
+        try:
+            if not self.connect():
+                return None
+            result: dict[str, str] = {}
+            disabled = getattr(mt5, "SYMBOL_TRADE_MODE_DISABLED", 0)
+            for ticker in tickers:
+                base = self.symbol_for(ticker)
+                if not base.endswith("@"):
+                    result[ticker] = base
+                    continue
+                raiz = base[:-1]
+                candidatos = mt5.symbols_get(raiz + "*") or ()
+                padrao = re.compile(f"^{re.escape(raiz)}{self._PADRAO_CONTRATO_VENCIMENTO}")
+                melhor_nome = None
+                melhor_volume = -1.0
+                for info in candidatos:
+                    nome = getattr(info, "name", None)
+                    if not nome or not padrao.match(nome):
+                        continue
+                    if getattr(info, "trade_mode", disabled) == disabled:
+                        continue
+                    mt5.symbol_select(nome, True)
+                    tick = mt5.symbol_info_tick(nome)
+                    # Gap (d), incidente 2026-08-28: um contrato sem BOOK DE
+                    # DOIS LADOS e' morto, mesmo tradavel e mesmo com volume
+                    # no tick (negocio velho, sem ninguem comprando/vendendo
+                    # agora) -- nunca escolher, ver a docstring do metodo.
+                    if tick is None:
+                        continue
+                    bid = float(getattr(tick, "bid", 0.0) or 0.0)
+                    ask = float(getattr(tick, "ask", 0.0) or 0.0)
+                    if bid <= 0.0 or ask <= 0.0:
+                        continue
+                    volume = self._volume_recente_do_contrato(mt5, nome)
+                    if volume > melhor_volume:
+                        melhor_volume = volume
+                        melhor_nome = nome
+                result[ticker] = melhor_nome if melhor_nome is not None else base
             return result
         except Exception:
             return None

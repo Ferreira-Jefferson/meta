@@ -20,10 +20,12 @@ Nada aqui toca corretora de verdade: o broker é um dublê, e o diário roda em
 """
 from __future__ import annotations
 
+from datetime import date
+
 import pytest
 
 from core.config import daytrade_slot
-from core.live_models import OrderStatus
+from core.live_models import LivePosition, OrderStatus
 from dashboard import live_teardown
 from journal import live_store
 
@@ -56,6 +58,12 @@ class _BrokerFalso:
 
     def open_position(self, ticker):
         return dict(self._posicao) if self._posicao else None
+
+    def position_state(self, ticker):
+        """Tri-estado do port (`Broker.position_state`). Um dublê lê estado em
+        memória, então a consulta nunca falha: `ok=True` sempre. Quem precisa
+        testar a falha de LEITURA usa `_BrokerLeituraFalha` abaixo."""
+        return {"ok": True, "position": self.open_position(ticker), "note": ""}
 
     def last_price(self, ticker):
         return self._preco
@@ -301,6 +309,42 @@ def test_caixa_e_zerado_para_o_delete_account_nao_recusar(diario, monkeypatch):
     assert not _existe(SLOT_REAL)
 
 
+def test_sombra_com_posicao_simulada_e_removivel(diario, monkeypatch):
+    """Achado em 2026-08-28: `dt-gremah-pmam3-shadow` tinha uma posição
+    simulada aberta desde o dia anterior (processo já morto) e a remoção
+    recusava com "feche na corretora antes" -- mensagem sem sentido pra um
+    robô que nunca chegou perto de uma corretora. `delete_account` continua
+    recusando conta com `positions`, e é certo que continue (protege o robô
+    REAL); a correção é `remover()` encerrar a posição simulada sozinho antes
+    de chegar lá, sem tocar em broker nenhum."""
+    with live_store.live_journal() as conn:
+        conta = live_store.ensure_account(
+            conn, name=SLOT_SOMBRA.id, mode="mt5", initial_capital=0.0,
+            investment_robot="gremah", withdrawal_robot="", symbol="PMAM3")
+        conta.cash_sombra = 30.0
+        live_store.save_account(conn, conta)
+        live_store.upsert_position(conn, conta.id, LivePosition(
+            ticker="PMAM3", quantity=100, entry_date=date(2026, 8, 27),
+            entry_price=0.14, capital_allocated=14.0,
+            metadata={"side": "long"}))
+
+    def falha_se_chamado(_slot):
+        pytest.fail("sombra não pode falar com corretora nenhuma")
+
+    monkeypatch.setattr(live_teardown, "_broker_do_slot", falha_se_chamado)
+    monkeypatch.setattr(live_teardown, "_processo_do_slot",
+                        lambda _sid: (None, None))
+    monkeypatch.setattr("dashboard.robot_view._ultimo_preco",
+                        lambda _symbol: (0.13, "2026-08-28"))
+
+    resultado = live_teardown.remover(SLOT_SOMBRA, apagar_historico=True)
+
+    assert resultado.posicao_encerrada == {
+        "quantity": 100, "side": "long", "price": 0.13, "pl": -1.0}
+    assert resultado.conta_apagada and not _existe(SLOT_SOMBRA)
+    assert "prejuízo" in resultado.resumo
+
+
 def test_processo_que_morreu_sozinho_nao_e_falha(diario, monkeypatch):
     """Entre a inspeção e o clique o processo pode ter caído. O objetivo
     ("não está mais rodando") já está cumprido."""
@@ -320,3 +364,93 @@ def test_processo_que_morreu_sozinho_nao_e_falha(diario, monkeypatch):
     assert resultado.processo_encerrado is None
     assert any("já não estava" in a for a in resultado.avisos)
     assert resultado.conta_apagada
+
+
+# ---------- gaps fechados na auditoria adversarial de 2026-08-28 ------------
+
+class _BrokerComTicket(_BrokerFalso):
+    """Igual ao `_BrokerFalso`, mas com o caminho DEDICADO de fechamento
+    (`close_position`), que é o que o `MT5Broker` de produção tem."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.fechou_com_ticket = None
+
+    def close_position(self, order, position_ticket):
+        self.fechou_com_ticket = position_ticket
+        return self.place(order)
+
+
+def test_fechamento_na_remocao_usa_close_position_com_o_ticket(diario, monkeypatch):
+    """Mesmo bug MG51 do incidente 2026-08-28, em OUTRO ponto: sem o campo
+    `position` no request, o motor de risco da corretora trata a ordem como
+    ABERTURA nova e recusa quando a margem está esgotada. Aqui dói mais — é o
+    momento em que o dono está tentando sair de tudo."""
+    _conta(SLOT_REAL, cash=30.0)
+    broker = _BrokerComTicket(ordens=[], preco=0.13,
+                              posicao={"side": "long", "price": 0.14,
+                                       "quantity": 100, "ticket": 4242})
+    _monta(monkeypatch, broker=broker)
+
+    live_teardown.remover(SLOT_REAL, apagar_historico=True)
+
+    assert broker.fechou_com_ticket == 4242
+
+
+def test_ordem_que_NAO_cancelou_impede_apagar_a_conta(diario, monkeypatch):
+    """Premissa corrigida: "ordem pendurada não tem risco de mercado enquanto
+    não preenche" é exatamente ao contrário. Uma limite viva no book preenche
+    sozinha e abre posição real — apagar a conta aqui deixa essa posição
+    nascendo sem robô, sem stop, sem diário e sem linha no painel."""
+    _conta(SLOT_REAL, cash=30.0)
+
+    class _NaoCancela(_BrokerFalso):
+        def cancel(self, order):
+            order.note = "a corretora recusou e a ordem CONTINUA VIVA no terminal"
+            return order          # status intocado: NÃO terminal
+
+    broker = _NaoCancela(ordens=[_ordem()])
+    _monta(monkeypatch, broker=broker)
+
+    resultado = live_teardown.remover(SLOT_REAL, apagar_historico=True)
+
+    assert resultado.conta_apagada is False
+    assert _existe(SLOT_REAL), "o cartão tem de continuar na tela"
+    assert any("NÃO foi cancelada" in a for a in resultado.avisos), resultado.avisos
+
+
+def test_leitura_de_posicao_que_falha_impede_apagar_a_conta(diario, monkeypatch):
+    """"Não consegui ler" nunca vira "não há posição". `inspecionar` lia com
+    `open_position`, que achata os dois casos no mesmo `None` — um terminal
+    fora do ar era indistinguível de conta zerada, e a remoção seguia em
+    frente deixando a posição real órfã no MT5 (a falha nº 1 da lista no topo
+    deste arquivo)."""
+    _conta(SLOT_REAL, cash=30.0)
+
+    class _LeituraFalha(_BrokerFalso):
+        def position_state(self, ticker):
+            return {"ok": False, "position": None, "note": "terminal fora do ar"}
+
+    _monta(monkeypatch, broker=_LeituraFalha(ordens=[]))
+
+    with pytest.raises(ValueError, match="leitura da posição"):
+        live_teardown.remover(SLOT_REAL, apagar_historico=True)
+
+    assert _existe(SLOT_REAL), "sem ter tocado em nada"
+
+
+def test_limpar_na_corretora_com_ordem_viva_nao_declara_limpo(diario, monkeypatch):
+    """Teste direto de `_limpar_na_corretora`, que é quem decide se a conta
+    PODE ser apagada. `pending_orders() is None` é "não consegui perguntar",
+    não "não há nenhuma" — sem saber o que existe não dá para afirmar que a
+    corretora ficou limpa."""
+
+    class _SemLista(_BrokerFalso):
+        def pending_orders(self, ticker):
+            return None
+
+    resultado = live_teardown.ResultadoRemocao(slot_id=SLOT_REAL.id, label="X")
+    _monta(monkeypatch, broker=_SemLista(ordens=[]))
+
+    assert live_teardown._limpar_na_corretora(SLOT_REAL, resultado) is False
+    assert any("não respondeu a lista" in a for a in resultado.avisos)

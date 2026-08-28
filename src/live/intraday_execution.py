@@ -61,11 +61,36 @@ class BrokerExecutionError(RuntimeError):
     `orphan_refs` carrega os tickets que o ROLLBACK tambem nao conseguiu
     confirmar mortos (ver `place_limit`). Vazio no caso normal; quando vem
     cheio, quem captura NAO pode esquecer esses tickets -- eles podem
-    seguir vivos no book."""
+    seguir vivos no book.
 
-    def __init__(self, *args, orphan_refs: Optional[list[str]] = None):
+    `kind` (gap f, incidente 2026-08-28): distingue DUAS familias bem
+    diferentes de "nao sei", que `live/intraday_runtime.py` trata de jeito
+    OPOSTO:
+
+      - `FECHAMENTO_RECUSADO` -- a corretora recusou uma ordem de SAIDA
+        (fechamento a mercado ou ordem-limite de saida), mas a posicao
+        continua EXATAMENTE como a maquina ja sabia que estava -- nenhuma
+        divergencia de dado, so' uma ordem que nao passou. SEGURO de
+        capturar e tentar de novo na proxima barra (`IntradayLiveRuntime.
+        _registra_falha_de_fechamento`); e' o caso do incidente real (MG51,
+        ~24 recusas seguidas).
+      - `FALHA_ALTO` (default) -- qualquer coisa que signifique "o que a
+        maquina acha que tem e o que a corretora reporta DIVERGEM" (lado
+        errado, sem conexao pra sequer perguntar) -- capturar e seguir em
+        frente aqui arriscaria operar sobre um estado que ninguem confirmou.
+        Tem de propagar e travar o passo, mesmo comportamento de sempre
+        (antes deste campo existir, TODO `BrokerExecutionError` era assim).
+        Deliberadamente o DEFAULT: um raise novo que esquecer de marcar
+        `kind` cai no lado seguro (propaga), nunca no lado que engole erro."""
+
+    FECHAMENTO_RECUSADO = "fechamento_recusado"
+    FALHA_ALTO = "falha_alto"
+
+    def __init__(self, *args, orphan_refs: Optional[list[str]] = None,
+                kind: str = FALHA_ALTO):
         super().__init__(*args)
         self.orphan_refs: list[str] = list(orphan_refs or [])
+        self.kind = kind
 
 
 def orphan_refs(canceladas: list[Order]) -> list[str]:
@@ -154,10 +179,21 @@ class MT5IntradayExecution:
     # ---------- ordem-limite pendente (ENTRADA) -----------------------------
 
     def place_limit(self, side: str, limit_price: float, quantities: list[int],
-                    ts: pd.Timestamp) -> list[Order]:
+                    ts: pd.Timestamp, stop: Optional[float] = None,
+                    target: Optional[float] = None) -> list[Order]:
         """Registra UMA ordem-limite REAL por elemento de `quantities` (ver
         `EnterLimit.children`) no MESMO nivel. Devolve a lista de `Order`
         (para o runtime journalizar) e guarda os tickets para cancelamento.
+
+        `stop`/`target` sao `EnterLimit.initial_stop`/`initial_target` -- os
+        niveis que a ESTRATEGIA ja decidiu, transportados ate a corretora
+        para viajarem no MESMO request que registra a ordem (ver
+        `MT5Broker.place_pending`). E' o caminho ATOMICO: quando esta ordem
+        preencher, a posicao ja nasce com SL/TP amarrados pela corretora, sem
+        depender de nenhum processo estar vivo naquele instante. Vale para
+        QUALQUER robo -- `initial_stop`/`initial_target` sao o contrato de
+        `EnterLimit`, nao de uma estrategia especifica; quem nao declarar
+        nivel manda `None` e cai no comportamento de antes.
 
         Se qualquer fatia for recusada, CANCELA as ja enviadas antes de
         levantar -- nunca deixa uma entrada posicionada PELA METADE na corretora
@@ -172,6 +208,8 @@ class MT5IntradayExecution:
                 quantity=qty,
                 order_type=OrderType.LIMIT,
                 limit_price=limit_price,
+                stop_price=stop,
+                target_price=target,
                 sent_at=ts.to_pydatetime(),
             )
             enviada = self.broker.place_pending(order)
@@ -300,7 +338,11 @@ class MT5IntradayExecution:
             raise BrokerExecutionError(
                 f"corretora recusou a ordem-limite de SAIDA ({quantity} {self.symbol} @ "
                 f"{limit_price:.4f}): {enviada.note}. A posicao continua aberta na "
-                "corretora, sem fatia nenhuma cancelada."
+                "corretora, sem fatia nenhuma cancelada.",
+                # Nenhuma divergencia de dado -- a posicao continua EXATAMENTE
+                # como a maquina ja sabia, so' uma ordem-limite de SAIDA que nao
+                # passou. Mesma familia de "recusa" do gap (f).
+                kind=BrokerExecutionError.FECHAMENTO_RECUSADO,
             )
         self.pending_exit_order = enviada
         self._exit_baseline_qty = float(current_position_qty)
@@ -348,39 +390,136 @@ class MT5IntradayExecution:
         return {"price": preco, "quantity": int(round(diminuiu))}
 
     def exit_market(self, position, ts: pd.Timestamp, reason: IntradayExitReason) -> dict:
-        """Fecha a posicao A MERCADO e devolve `{"price"}` -- o preco que a
-        corretora de fato executou.
+        """Fecha a posicao A MERCADO e devolve `{"price", "order"}` -- o
+        preco que a corretora de fato executou.
 
         A mercado inclusive no alvo: uma saida por ordem-limite poderia nao
         preencher e deixar a posicao aberta contra o proprio stop. Ver o
-        comentario em `IntradaySessionMachine._close_position`."""
+        comentario em `IntradaySessionMachine._close_position`.
+
+        Gap (a) fechado depois do incidente REAL de 2026-08-28 (slot
+        `dt-wdo_grid_reload_maker-wdo@-live`, ~24 recusas seguidas com
+        `retcode=10006 [MG51] Para abrir novas posicoes`): antes deste
+        metodo mandava a ordem de fechamento direto via `broker.place()`
+        (que monta `TRADE_ACTION_DEAL` SEM dizer qual posicao esta sendo
+        abatida) -- com margem esgotada, a corretora tratava a "venda" como
+        ABERTURA nova e recusava. Agora o ticket vem SEMPRE de uma leitura
+        FRESCA da posicao real (`_read_position()`, nunca de um numero
+        guardado em memoria) e vai para `broker.close_position()`, o
+        caminho dedicado que leva `"position"` no request."""
+        real = self._read_position()
+        if real is None:
+            # `None` aqui e' a corretora CONFIRMANDO que nao ha posicao (ver
+            # `_read_position`: consulta que falha levanta, nunca devolve
+            # `None`). Antes desta distincao existir, um terminal fora do ar
+            # caia neste mesmo ramo e o robo registrava uma saida inventada
+            # para uma posicao que continuava aberta -- e, pior, ficava sem
+            # posicao na maquina, o que desarmava o freio duro.
+            #
+            # A posicao pode ter sido fechada pela PROPRIA protecao SL/TP
+            # registrada na corretora (atomica no request de abertura, ver
+            # `MT5Broker.place_pending`; ou pelo reforco `set_protection`)
+            # alguns instantes antes deste passo -- corrida legitima entre
+            # "a maquina decidiu fechar no fechamento desta barra" e "a
+            # corretora ja tinha fechado no MESMO nivel", porque a protecao
+            # SEMPRE espelha o nivel que a maquina ja decidiu (nunca inventa
+            # um diferente, regra 6 do AGENTS.md). Nao ha posicao para
+            # mandar ordem NENHUMA -- usa o proprio nivel (stop ou alvo,
+            # conforme o motivo) como a melhor aproximacao honesta do preco
+            # de saida, sem consultar deal a deal no terminal; se nem isso
+            # existir (ex.: FORCED_FLATTEN sem nivel), cai para o ultimo
+            # preco negociado antes de desistir.
+            nivel = None
+            if reason == IntradayExitReason.STOP:
+                nivel = position.current_stop
+            elif reason == IntradayExitReason.TARGET:
+                nivel = position.current_target
+            if nivel is None:
+                ultimo_preco = getattr(self.broker, "last_price", None)
+                nivel = ultimo_preco(self.symbol) if ultimo_preco is not None else None
+            if nivel is None:
+                raise BrokerExecutionError(
+                    f"fechamento ({reason.value}) de {self.symbol}: a corretora nao "
+                    f"reporta posicao aberta para este magic, mas a maquina tem "
+                    f"{position.quantity} {position.side} para fechar -- divergencia "
+                    "grave, e sem nivel de referencia para aproximar o preco. Confira "
+                    "o terminal antes de religar este slot."
+                )
+            self.last_exit_order = None
+            return {"price": float(nivel), "order": None}
+        if real["side"] != position.side:
+            raise BrokerExecutionError(
+                f"a corretora reporta posicao {real['side']} em {self.symbol} "
+                f"({real['quantity']} acoes @ {real['price']:.4f}) enquanto a maquina "
+                f"tem uma posicao {position.side} para fechar. Nao vou fechar as "
+                "cegas: confira o terminal antes de religar este slot."
+            )
+
+        # NUNCA fecha mais do que a corretora diz que existe. A maquina so'
+        # decrementa `position.quantity` DEPOIS que `exit_market` volta com
+        # sucesso (`machine._close_position`), entao um fechamento que
+        # preencheu PELA METADE deixava a maquina achando que ainda tem o
+        # total: na tentativa seguinte ela mandaria fechar o tamanho INTEIRO
+        # contra a posicao que sobrou -- e numa conta NETTING uma ordem maior
+        # que a posicao nao "fecha demais", ela INVERTE o lado. O robo sairia
+        # de uma posicao comprada pela metade para uma vendida, sem stop, sem
+        # alvo e sem ninguem ter pedido. `min()` com o numero REAL e' o que
+        # torna a repeticao segura.
+        qtd_real = int(real.get("quantity") or 0)
+        qtd_fechar = min(int(position.quantity), qtd_real) if qtd_real > 0 else 0
+        if qtd_fechar <= 0:
+            raise BrokerExecutionError(
+                f"fechamento ({reason.value}) de {self.symbol}: a corretora reporta "
+                f"posicao de {qtd_real} enquanto a maquina tem {position.quantity} "
+                f"{position.side} -- nao ha quantidade valida para fechar. Confira o "
+                "terminal antes de religar este slot."
+            )
         fechamento = Order(
             ticker=self.symbol,
             side=OrderSide.SELL if position.side == "long" else OrderSide.BUY,
-            quantity=position.quantity,
+            quantity=qtd_fechar,
             order_type=OrderType.MARKET,
             sent_at=ts.to_pydatetime(),
         )
-        executada = self.broker.place(fechamento)
+        ticket = real.get("ticket")
+        fechar_com_ticket = getattr(self.broker, "close_position", None)
+        if ticket is not None and fechar_com_ticket is not None:
+            executada = fechar_com_ticket(fechamento, ticket)
+        else:
+            # Sem ticket (posicao sem o campo, extremamente improvavel em
+            # producao -- `MT5Broker.open_position` sempre devolve `ticket`)
+            # ou sem `close_position` no broker (dublê de teste antigo):
+            # degrada para o `place()` generico, o comportamento de antes
+            # do gap (a). `MT5Broker` de producao SEMPRE tem os dois.
+            executada = self.broker.place(fechamento)
         if executada.status == OrderStatus.REJECTED:
             raise BrokerExecutionError(
-                f"corretora recusou o fechamento ({reason.value}) de {position.quantity} "
+                f"corretora recusou o fechamento ({reason.value}) de {qtd_fechar} "
                 f"{self.symbol}: {executada.note}. A posicao continua ABERTA na "
-                "corretora e na maquina -- vou tentar de novo na proxima barra."
+                "corretora e na maquina -- vou tentar de novo na proxima barra.",
+                # O caso CENTRAL do gap (f): posicao continua exatamente como
+                # estava, so' a ordem de fechamento nao passou -- seguro pra
+                # `IntradayLiveRuntime` capturar, contar e tentar de novo.
+                kind=BrokerExecutionError.FECHAMENTO_RECUSADO,
             )
         if executada.status == OrderStatus.PARTIAL:
             raise BrokerExecutionError(
                 f"fechamento ({reason.value}) de {self.symbol} preencheu so "
-                f"{executada.filled_qty} de {position.quantity} acoes. Sobrou posicao "
+                f"{executada.filled_qty} de {qtd_fechar} acoes. Sobrou posicao "
                 "aberta na corretora; a maquina segue com a posicao inteira e tenta "
-                "fechar o resto na proxima barra, em vez de registrar um trade que "
-                "nao aconteceu por completo."
+                "fechar o resto na proxima barra -- e a proxima tentativa vai ser "
+                "capada pelo que a corretora reportar entao, nunca pelo total antigo.",
+                kind=BrokerExecutionError.FECHAMENTO_RECUSADO,
             )
         if not executada.avg_price:
             raise BrokerExecutionError(
                 f"fechamento de {self.symbol} voltou sem preco medio da corretora "
                 f"(status={executada.status.value}, note={executada.note!r}) -- sem "
-                "esse numero o P&L do trade seria inventado."
+                "esse numero o P&L do trade seria inventado. Gap (b): retcode de "
+                "sucesso sem preco/deal real -- MT5Broker._send ja deveria ter "
+                "recusado isto como REJECTED; esta checagem e' a segunda linha de "
+                "defesa.",
+                kind=BrokerExecutionError.FECHAMENTO_RECUSADO,
             )
         self.last_exit_order = executada
         return {"price": float(executada.avg_price), "order": executada}
@@ -388,15 +527,28 @@ class MT5IntradayExecution:
     # ---------- leitura -----------------------------------------------------
 
     def _read_position(self) -> Optional[dict]:
-        """Posicao da corretora para este simbolo/magic.
+        """Posicao da corretora para este simbolo/magic, ou `None` -- e aqui
+        `None` significa SO' "a corretora respondeu que nao ha posicao".
 
-        `MT5Broker.open_position` devolve `None` tanto para "nao tem posicao"
-        quanto para "nao consegui falar com o terminal" -- por isso a conexao
-        e' conferida ANTES: sem isso, um terminal fechado seria lido como
-        conta zerada."""
+        Toda falha de CONSULTA vira excecao (`ok=False` em
+        `Broker.position_state`), nunca `None`. Antes so' a conexao era
+        conferida antes da leitura, e isso deixava passar todo o resto:
+        `positions_get` devolvendo `None` por erro, um `except Exception`
+        interno, o pacote ausente -- tudo virava "nao ha posicao". Quem le
+        isto decide MANDAR ORDEM (re-armar entrada, registrar saida), entao
+        confundir "nao sei" com "nao ha" e' o caminho mais curto para operar
+        sobre estado imaginario. Ver a secao "Falha de CONSULTA nunca vira
+        'nao preencheu'" no topo do modulo."""
         if not self.broker.connect():
             raise BrokerExecutionError(
                 "sem conexao com o terminal MT5 -- nao da para saber se a ordem "
                 "preencheu. Nao vou presumir que nao preencheu."
             )
-        return self.broker.open_position(self.symbol)
+        estado = self.broker.position_state(self.symbol)
+        if not estado.get("ok"):
+            raise BrokerExecutionError(
+                f"nao consegui LER a posicao de {self.symbol} na corretora: "
+                f"{estado.get('note', '')}. Isto e' 'nao sei', nunca 'esta zerado' -- "
+                "nao vou decidir nada em cima de uma consulta que falhou."
+            )
+        return estado.get("position")

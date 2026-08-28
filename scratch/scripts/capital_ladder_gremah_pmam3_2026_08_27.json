@@ -1,0 +1,113 @@
+{
+  "symbol": "PMAM3",
+  "motor": "m1",
+  "pregoes_is": 119,
+  "janela_inicio": "2025-12-16 13:01:00+00:00",
+  "janela_fim": "2026-06-12 19:54:00+00:00",
+  "capital_nominal_probe_brl": 5000000.0,
+  "n_sementes": 30,
+  "p_alvo": 0.5,
+  "seed_base": 0,
+  "linhas": [
+    {
+      "n_lotes": 1,
+      "trades": 1231,
+      "pior_caso_exigencia_capital_brl": 103.0,
+      "capital_minimo_seguro_brl": 5.104736328125,
+      "capital_que_producao_libera_n_brl": 0.0,
+      "producao_libera_antes_do_seguro": "sim",
+      "maxdd_medio_no_capital_seguro_brl": 16.650483333333366,
+      "maxdd_desvio_no_capital_seguro_brl": 5.8276257859815335
+    },
+    {
+      "n_lotes": 2,
+      "trades": 1174,
+      "pior_caso_exigencia_capital_brl": 206.0,
+      "capital_minimo_seguro_brl": 10.31005859375,
+      "capital_que_producao_libera_n_brl": 96.0,
+      "producao_libera_antes_do_seguro": "nao",
+      "maxdd_medio_no_capital_seguro_brl": 38.457100000000075,
+      "maxdd_desvio_no_capital_seguro_brl": 14.033898971222618
+    },
+    {
+      "n_lotes": 3,
+      "trades": 1193,
+      "pior_caso_exigencia_capital_brl": 309.0,
+      "capital_minimo_seguro_brl": 15.314208984375,
+      "capital_que_producao_libera_n_brl": 248.0,
+      "producao_libera_antes_do_seguro": "nao",
+      "maxdd_medio_no_capital_seguro_brl": 53.32818333333337,
+      "maxdd_desvio_no_capital_seguro_brl": 21.710562395820542
+    },
+    {
+      "n_lotes": 4,
+      "trades": 1201,
+      "pior_caso_exigencia_capital_brl": 412.0,
+      "capital_minimo_seguro_brl": 20.41265869140625,
+      "capital_que_producao_libera_n_brl": 420.0,
+      "producao_libera_antes_do_seguro": "nao",
+      "maxdd_medio_no_capital_seguro_brl": 75.10166666666677,
+      "maxdd_desvio_no_capital_seguro_brl": 22.45518436043048
+    },
+    {
+      "n_lotes": 5,
+      "trades": 1207,
+      "pior_caso_exigencia_capital_brl": 515.0,
+      "capital_minimo_seguro_brl": 25.507965087890625,
+      "capital_que_producao_libera_n_brl": 816.0,
+      "producao_libera_antes_do_seguro": "nao",
+      "maxdd_medio_no_capital_seguro_brl": 80.0523,
+      "maxdd_desvio_no_capital_seguro_brl": 30.181382598297727
+    },
+    {
+      "n_lotes": 6,
+      "trades": 1246,
+      "pior_caso_exigencia_capital_brl": 618.0,
+      "capital_minimo_seguro_brl": 30.60955810546875,
+      "capital_que_producao_libera_n_brl": 1020.0,
+      "producao_libera_antes_do_seguro": "nao",
+      "maxdd_medio_no_capital_seguro_brl": 100.38545000000009,
+      "maxdd_desvio_no_capital_seguro_brl": 33.386227471289054
+    },
+    {
+      "n_lotes": 7,
+      "trades": 1267,
+      "pior_caso_exigencia_capital_brl": 721.0,
+      "capital_minimo_seguro_brl": 35.711151123046875,
+      "capital_que_producao_libera_n_brl": 1320.0000000000002,
+      "producao_libera_antes_do_seguro": "nao",
+      "maxdd_medio_no_capital_seguro_brl": 119.4623166666668,
+      "maxdd_desvio_no_capital_seguro_brl": 34.59865349071271
+    },
+    {
+      "n_lotes": 8,
+      "trades": 1268,
+      "pior_caso_exigencia_capital_brl": 824.0,
+      "capital_minimo_seguro_brl": 40.812744140625,
+      "capital_que_producao_libera_n_brl": null,
+      "producao_libera_antes_do_seguro": "n/d (producao nunca alcanca N no IS real)",
+      "maxdd_medio_no_capital_seguro_brl": 148.45201666666668,
+      "maxdd_desvio_no_capital_seguro_brl": 45.551421828462615
+    },
+    {
+      "n_lotes": 9,
+      "trades": 1391,
+      "pior_caso_exigencia_capital_brl": 927.0,
+      "capital_minimo_seguro_brl": 45.914337158203125,
+      "capital_que_producao_libera_n_brl": null,
+      "producao_libera_antes_do_seguro": "n/d (producao nunca alcanca N no IS real)",
+      "maxdd_medio_no_capital_seguro_brl": 149.9059666666667,
+      "maxdd_desvio_no_capital_seguro_brl": 38.97415874010437
+    },
+    {
+      "n_lotes": 10,
+      "trades": 1448,
+      "pior_caso_exigencia_capital_brl": 1030.0,
+      "capital_minimo_seguro_brl": 51.01593017578125,
+      "capital_que_producao_libera_n_brl": null,
+      "producao_libera_antes_do_seguro": "n/d (producao nunca alcanca N no IS real)",
+      "maxdd_medio_no_capital_seguro_brl": 163.68811666666682,
+      "maxdd_desvio_no_capital_seguro_brl": 42.16075340999013
+    }
+  ]
+}

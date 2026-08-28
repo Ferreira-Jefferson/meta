@@ -225,6 +225,21 @@ class Order:
     quantity: int
     order_type: OrderType = OrderType.MARKET
     limit_price: Optional[float] = None
+    # PROTECAO ATOMICA (incidente 2026-08-28): stop e alvo que a CORRETORA
+    # deve amarrar a posicao no MESMO request que abre a ordem, nao num
+    # request separado depois. Enquanto a protecao era um segundo request
+    # (`TRADE_ACTION_SLTP` no passo seguinte do loop), existia uma janela de
+    # segundos com posicao NUA -- e se o processo morresse dentro dela, a
+    # posicao ficava nua por horas (foi o que aconteceu: `sl=0.0, tp=0.0`
+    # atravessando 3 reinicios). Com estes campos preenchidos o MT5 registra
+    # SL/TP no instante do fill, sem processo nenhum no meio.
+    #
+    # Nao sao decisao: sao SEMPRE o nivel que a estrategia/maquina ja
+    # decidiu (`Enter.initial_stop`/`EnterLimit.initial_stop`, ou
+    # `_Position.current_stop`), so' transportados ate a corretora. Vazios
+    # (`None`) numa ordem de FECHAMENTO, que nao abre nada para proteger.
+    stop_price: Optional[float] = None
+    target_price: Optional[float] = None
     status: OrderStatus = OrderStatus.NEW
     filled_qty: int = 0
     avg_price: Optional[float] = None

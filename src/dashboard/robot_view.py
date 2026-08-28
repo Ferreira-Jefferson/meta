@@ -84,6 +84,15 @@ class RobotAsset:
     price_date: str = ""
     lot_cost: float | None = None
     min_capital: float | None = None
+    # `True` para um robô de FUTURO (`IntradayStrategy.is_futuro`) -- muda a
+    # LEITURA da ficha, não só o número: não há "lote" (é margem por
+    # contrato) e alvo/stop são ticks, não % do preço. `profit_pct`/
+    # `stop_multiplier` acima ficam 0.0 quando isto é `True` (ver `_asset`)
+    # -- o template lê ESTE campo primeiro para nunca confundir "0.0%" com
+    # um alvo real de 0%.
+    is_futuro: bool = False
+    profit_ticks: int | None = None
+    stop_ticks: int | None = None
 
 
 @dataclass(frozen=True)
@@ -165,10 +174,20 @@ def _preco_key(symbol: str) -> tuple[str, float, int]:
     Sem o `mtime` no meio, o cache serviria o preço da primeira renderização
     para sempre e o caixa mínimo da página envelheceria calado enquanto o
     download de minuto continuasse rodando.
-    """
-    from core.config import INTRADAY_DATA_DIR
 
-    caminho = INTRADAY_DATA_DIR / f"{symbol}.parquet"
+    O CAMINHO tem de ser o MESMO que `market_data_intraday.storage.
+    last_close` (chamado por `_ultimo_preco_cached` abaixo) de fato lê --
+    daí o `_parquet_path` importado de lá em vez de reconstruído aqui.
+    Symbol com `@`/`$` (futuro: `WDO@`) sem essa sanitização aponta para um
+    arquivo que nunca existe (`WDO@.parquet` != `WDO_A_.parquet`),
+    `caminho.stat()` sempre cai no `except`, e o cache fica TRAVADO na
+    chave `(symbol, 0.0, 0)` para sempre -- exatamente o problema que este
+    `mtime` existe para evitar, só que sem o sintoma aparecer, porque até
+    2026-08-27 nenhum robô de futuro passava por aqui (achado ao promover a
+    `wdo_grid_reload_maker` ao painel)."""
+    from market_data_intraday.storage import _parquet_path
+
+    caminho = _parquet_path(symbol)
     try:
         st = caminho.stat()
         return (symbol, st.st_mtime, st.st_size)
@@ -197,12 +216,50 @@ def _ultimo_preco(symbol: str) -> tuple[float | None, str]:
     return _ultimo_preco_cached(_preco_key(symbol))
 
 
+def capital_minimo_para(is_futuro: bool, symbol: str, preco: float | None) -> float | None:
+    """Caixa mínimo para abrir 1 posição neste ativo, com ESTE robô.
+
+    Ação: `capital_minimo_brl(preco)` -- depende do preço de hoje. Futuro
+    (`is_futuro=True`): margem do PERFIL x `MARGIN_BUFFER_FUTUROS` -- não
+    depende de preço nenhum (a margem já é o número que a corretora reserva
+    por contrato). `None` quando falta o dado que a fórmula escolhida
+    precisa (preço não salvo, ou perfil sem margem declarada).
+
+    Existe para `app.py` (form de "novo robô" em `/operacao`) e `_asset`
+    abaixo lerem a MESMA regra -- antes desta função, `app.py` chamava
+    `capital_minimo_brl(preco)` direto para todo robô, o que daria um
+    número por volta de R$1 milhão para 1 contrato de WDO@ (`preço x 100 x
+    2`, a fórmula de LOTE DE AÇÃO aplicada a um preço de futuro).
+
+    **Inclui `RESERVA_CAIXA_SEGURANCA` (2026-08-28.)** O portão de entrada
+    liberava com `margem x 2` (R$300 no WDO@) enquanto o dimensionamento de
+    ENTRADA REAL passou a usar `contracts_from_capital_com_reserva`, que
+    empilha mais 1,25 por cima -- R$375. A diferença não era acadêmica: o
+    robô SUBIA no painel, aparecia operando, e tinha toda ordem recusada por
+    `capital_insuficiente` para sempre, em silêncio. Deadlock operacional
+    criado pela própria correção do incidente. Um portão que libera o que a
+    camada seguinte recusa é pior que portão nenhum -- ele mente."""
+    from strategy.daytrade.base import (
+        MARGIN_BUFFER_FUTUROS, RESERVA_CAIXA_SEGURANCA, capital_minimo_brl,
+    )
+
+    if is_futuro:
+        from backtest.intraday.profiles import profile_for
+
+        margem = profile_for(symbol).margin_per_contract_brl
+        if margem is None:
+            return None
+        return margem * MARGIN_BUFFER_FUTUROS * RESERVA_CAIXA_SEGURANCA
+    return capital_minimo_brl(preco) if preco is not None else None
+
+
 def _daytrade_assets(cls, robo) -> tuple[RobotAsset, ...]:
     """Os ativos do robô: os calibrados, se ele declarar; senão o único dele.
 
     Descoberto por `getattr` (ver `Gremah.calibrated_setups`) para esta função
     não precisar saber qual robô de day trade está sendo exibido.
     """
+    is_futuro = getattr(cls, "is_futuro", False)
     setups = getattr(cls, "calibrated_setups", None)
     if setups is None:
         symbol = getattr(robo, "symbol", "")
@@ -214,11 +271,13 @@ def _daytrade_assets(cls, robo) -> tuple[RobotAsset, ...]:
                        getattr(robo, "alvo_por_volatilidade", False),
                        getattr(robo, "alvo_vol_mult", None),
                        getattr(robo, "stop_vol_mult", None),
-                       preco, data),)
+                       preco, data, is_futuro,
+                       getattr(robo, "profit_ticks", None),
+                       getattr(robo, "stop_ticks", None)),)
     ativos = tuple(
         _asset(s.symbol, s.profit_pct, s.stop_multiplier,
                s.alvo_por_volatilidade, s.alvo_vol_mult, s.stop_vol_mult,
-               *_ultimo_preco(s.symbol))
+               *_ultimo_preco(s.symbol), is_futuro, None, None)
         for s in setups()
     )
     # Ordenado pelo CAIXA MÍNIMO, do mais barato ao mais caro. A ordem antiga
@@ -233,13 +292,13 @@ def _daytrade_assets(cls, robo) -> tuple[RobotAsset, ...]:
 
 
 def _asset(symbol, profit_pct, stop_multiplier, alvo_por_volatilidade,
-           alvo_vol_mult, stop_vol_mult, preco, data) -> RobotAsset:
-    # Mora em `daytrade.base` (contrato da família), não na gremah: a regra
-    # "2x o lote" vale para qualquer robô intradiário sem fracionário, e
-    # `live/intraday_runtime.py` consulta a MESMA função — ver AGENTS.md #6.
-    from strategy.daytrade.base import capital_minimo_brl
-
-    lote = preco * 100 if preco is not None else None
+           alvo_vol_mult, stop_vol_mult, preco, data, is_futuro=False,
+           profit_ticks=None, stop_ticks=None) -> RobotAsset:
+    # Futuro não tem "lote" (é 1 CONTRATO, margem por contrato) -- `lote =
+    # preco x 100` e `capital_minimo_brl` (que embute o MESMO x100) são
+    # fórmula de ação. Ver `capital_minimo_para` para o porquê de ramificar
+    # aqui em vez de aplicar a fórmula de ação a um preço de futuro.
+    lote = None if is_futuro else (preco * 100 if preco is not None else None)
     return RobotAsset(
         symbol=symbol,
         profit_pct=profit_pct,
@@ -250,7 +309,10 @@ def _asset(symbol, profit_pct, stop_multiplier, alvo_por_volatilidade,
         price=preco,
         price_date=data,
         lot_cost=lote,
-        min_capital=capital_minimo_brl(preco) if preco is not None else None,
+        min_capital=capital_minimo_para(is_futuro, symbol, preco),
+        is_futuro=is_futuro,
+        profit_ticks=profit_ticks,
+        stop_ticks=stop_ticks,
     )
 
 

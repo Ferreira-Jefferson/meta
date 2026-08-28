@@ -91,6 +91,8 @@ Every backtest / sweep starts from the **real** minimum cash to operate the inst
 | Mini-índice (WIN) | `margem × 2` = **R$100 × 2 = R$200** | `contracts_from_capital(cash, margin=100)` |
 | Mini-dólar (WDO) | `margem × 2` = **R$150 × 2 = R$300** | `contracts_from_capital(cash, margin=150)` |
 
+**Sizing de ENTRADA REAL usa `contracts_from_capital_com_reserva`, não `contracts_from_capital`** (2026-08-28, depois do incidente que zerou a conta). Ela empilha `RESERVA_CAIXA_SEGURANCA = 1.25` por cima do buffer — 20% do caixa nunca entra na conta de quantos contratos cabem. Consequência prática, que muda os números da tabela acima na hora de operar de verdade: **WIN precisa de >R$250 e WDO de >R$375** para abrir 1 contrato. Com o mínimo "de tabela" (R$200/R$300) os robôs ficam INERTES — e isso é informação, não bug: na medição os dois já zeravam sozinhos, o mínimo documentado nunca foi suficiente. A reserva só tornou isso visível no backtest em vez de no extrato.
+
 Use `config_for(..., preco_atual=preco_ref)` para ação e `contracts_from_capital(cash, margin_per_contract, buffer=2.0)` para futuro — nunca digitar o número na mão. `enforce_capital_minimo` fica no default do perfil (ligado para ação) pelo mesmo motivo: desligar mede geometria isolada do caixa, que é outra pergunta. A tabela de saída sempre mostra o capital usado (a coluna, ou implícito em `capital final − líquido R$`).
 
 ## Testes rodam em paralelo — sempre

@@ -184,6 +184,20 @@ class ProcessConfig:
     # fracionário (R$1,90/ordem na Rico) com base na quantidade pedida;
     # este mapa só entra na conta quando o lote padrão não fecha.
     mt5_fractional_map: Optional[dict] = None
+    # Mesmo espírito de `mt5_fractional_map`: detectado sozinho a cada
+    # "Iniciar operação" via `detect_futures_symbol_map()` (consulta o
+    # terminal MT5), nunca digitado pelo usuário -- e nunca bloqueia
+    # `start()` (degrada para o sintoma de hoje, ordem de futuro recusada
+    # pelo servidor, em vez de impedir quem só opera ação de continuar).
+    #
+    # Traduz ticker de futuro CONTÍNUO (`"WDO@"`, `"WIN@"` -- só dá cotação
+    # no terminal) para o contrato REAL com vencimento em aberto AGORA
+    # (ex. `"WDOU26"`) -- é nele que o servidor de fato aceita ordem; achado
+    # ao vivo em 2026-08-28 (slot do WDO F1: "Trade disabled" ao mandar
+    # ordem em `WDO@`). Como é redetectado a cada início, o contrato virado
+    # na rolagem mensal/bimestral (WDO/WIN) é pego sozinho no próximo
+    # "Iniciar operação" -- ninguém precisa editar código/config todo mês.
+    mt5_symbol_map: Optional[dict] = None
 
 
 def _read_all() -> dict:
@@ -572,6 +586,43 @@ def detect_fractional_symbol_map(
     }
 
 
+def detect_futures_symbol_map(
+    slot_id: str, robot_key: Optional[str] = None
+) -> Optional[dict[str, str]]:
+    """Descobre, para o UNIVERSO do slot `slot_id` (robô `robot_key`, se
+    informado), o CONTRATO REAL com vencimento em aberto de cada ticker de
+    futuro contínuo (`"WDO@"`, `"WIN@"`) — ver
+    `MT5Broker.detect_futures_symbol_map` para o mecanismo (maior volume do
+    dia entre os contratos com `trade_mode` habilitado).
+
+    Chamada a cada clique em "Iniciar operação" (`dashboard/app.py`), igual
+    `detect_shares_per_lot`/`detect_fractional_symbol_map` — é isso que faz o
+    contrato virar sozinho na rolagem mensal/bimestral (WDO/WIN) sem ninguém
+    editar código nem configuração: um robô reiniciado no mês seguinte já
+    detecta o contrato novo.
+
+    Mesmo filtro de `detect_fractional_symbol_map`: só entram no mapa os
+    tickers onde a detecção resolveu para um símbolo DIFERENTE do default de
+    `symbol_for()` — um ticker sem `"@"` (ação) nunca aparece aqui.
+
+    Devolve `None` se a corretora não responder ou se o slot não tiver
+    universo — `create_account()`/`start()` tratam isso como "sem mapa"
+    (degrada para o sintoma de hoje, ordem recusada pelo servidor com
+    `TRADE_DISABLED`), nunca como erro fatal que bloqueia o início (ver
+    docstring de `ProcessConfig.mt5_symbol_map`)."""
+    tickers = universe_for_slot(slot_id, robot_key)
+    if not tickers:
+        return None
+    broker = _broker_for_detection()
+    mapa_completo = broker.detect_futures_symbol_map(tickers)
+    if mapa_completo is None:
+        return None
+    return {
+        ticker: simbolo for ticker, simbolo in mapa_completo.items()
+        if simbolo != broker.symbol_for(ticker)
+    }
+
+
 def save_credentials(updates: dict, clear: set[str] = frozenset()) -> None:
     """Mescla campos não vazios do form com o que já estava salvo — mudar só
     o Telegram não obriga a redigitar SMTP/MT5 (campo em branco = "mantém o
@@ -619,7 +670,8 @@ def create_account(config: ProcessConfig):
         slot=config.slot, execution_mode=config.execution_mode,
         feed="yfinance", notify_min_level=config.notify_min_level,
         daily_loss_limit=None, monthly_loss_limit=None,
-        mt5_magic=slot.magic, mt5_shares_per_lot=config.mt5_shares_per_lot, mt5_symbol_map=None,
+        mt5_magic=slot.magic, mt5_shares_per_lot=config.mt5_shares_per_lot,
+        mt5_symbol_map=json.dumps(config.mt5_symbol_map) if config.mt5_symbol_map else None,
         mt5_fractional_map=json.dumps(config.mt5_fractional_map) if config.mt5_fractional_map else None,
     )
     rt = cli.build(args)
@@ -749,24 +801,36 @@ def available_cash(slot_id: str, execution_mode: str = "live") -> Optional[float
 
 
 def _intraday_capital_minimo(robot_key: str, symbol: Optional[str] = None) -> Optional[float]:
-    """Piso de caixa para operar HOJE — `capital_minimo_brl`
-    (`strategy.daytrade.base`) de `symbol`, no último preço salvo localmente.
+    """Piso de caixa para operar HOJE — `capital_minimo_para`
+    (`dashboard.robot_view`) de `symbol`, no último preço salvo localmente.
     `symbol` omitido usa o ativo default do robô.
+
+    Ramifica por `IntradayStrategy.is_futuro` (2026-08-28, corrige o mesmo
+    bug que `capital_minimo_para` já resolveu para o form de "novo robô":
+    aplicar `capital_minimo_brl` — fórmula de LOTE DE AÇÃO, `preço x 100 x
+    2` — a um futuro dá um piso de ~R$1 milhão para WDO@/1 contrato, ou,
+    faltando `_ultimo_preco` salvo pro símbolo, cai silenciosamente no piso
+    genérico do slot (R$50) — os dois errados, nenhum é a margem real
+    (R$150 WDO@/R$100 WIN@ x `MARGIN_BUFFER_FUTUROS`). Esta função vivia
+    sozinha nesta cópia da regra desde antes de `capital_minimo_para`
+    existir; ficou pra trás quando o form foi corrigido.
 
     `None` se o robô não existir no catálogo, o símbolo não tiver perfil
     (`backtest.intraday.profiles.PROFILES`) ou não houver preço salvo ainda
     (parquet ausente) — quem chama decide o degrade, nunca bloqueia por falta
     de dado que não é culpa do dono."""
     from backtest.intraday.profiles import PROFILES
-    from dashboard.robot_view import _ultimo_preco
+    from dashboard.robot_view import _ultimo_preco, capital_minimo_para
     from strategy.daytrade.base import capital_minimo_brl
     from strategy.daytrade.registry import get_daytrade_robot
 
-    if not symbol:
-        try:
-            symbol = get_daytrade_robot(robot_key).symbol
-        except KeyError:
-            return None
+    try:
+        robo = get_daytrade_robot(robot_key)
+    except KeyError:
+        return None
+    symbol = symbol or robo.symbol
+    if getattr(robo, "is_futuro", False):
+        return capital_minimo_para(True, symbol, None)
     perfil = PROFILES.get(symbol)
     if perfil is None:
         return None
@@ -922,6 +986,8 @@ def start(config: ProcessConfig) -> dict:
         ]
         if config.mode == "mt5":
             argv += ["--mt5-shares-per-lot", str(config.mt5_shares_per_lot)]
+            if config.mt5_symbol_map:
+                argv += ["--mt5-symbol-map", json.dumps(config.mt5_symbol_map)]
             if config.mt5_fractional_map:
                 argv += ["--mt5-fractional-map", json.dumps(config.mt5_fractional_map)]
         # Day trade decide barra a barra e o stop dele resolve em barra M1

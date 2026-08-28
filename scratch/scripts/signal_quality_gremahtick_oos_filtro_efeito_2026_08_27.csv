@@ -1,0 +1,3 @@
+feature,direcao,limiar,n_oos,n_mantidos,n_descartados,pnl_sem_filtro_brl,pnl_com_filtro_brl,pnl_por_trade_sem_filtro_brl,pnl_por_trade_com_filtro_brl,maxdd_sem_filtro_brl,maxdd_com_filtro_brl,win_rate_sem_filtro_pct,win_rate_com_filtro_pct,efeito_pnl_por_trade_positivo
+volume_toque,<=,400.0,880,400,480,671.1210000000005,327.3925000000002,0.7626375000000006,0.8184812500000005,14.44199999999995,6.076000000000022,89.0909090909091,90.0,True
+distancia_sma20_ticks,>=,0.7000000000000117,846,448,398,675.9510000000005,372.1375000000002,0.7989964539007098,0.8306640625000005,14.37599999999992,7.136499999999984,90.18912529550828,91.51785714285714,True

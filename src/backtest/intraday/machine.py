@@ -52,6 +52,7 @@ from backtest.intraday.costs import (
 )
 from core.models import IntradayExitReason
 from strategy.daytrade.base import (
+    MARGIN_BUFFER_FUTUROS,
     AdjustStop,
     AdjustTarget,
     Bar,
@@ -61,7 +62,22 @@ from strategy.daytrade.base import (
     IntradayOpenPosition,
     IntradayStrategy,
     Side,
+    contracts_from_capital_com_reserva,
 )
+
+
+class EntradaAMercadoNaoSuportada(NotImplementedError):
+    """A estrategia pediu `Enter` (a mercado) em execucao REAL, que nao tem
+    caminho de execucao confirmado -- so' `EnterLimit` tem.
+
+    Tipo PROPRIO, e nao um `NotImplementedError` cru, porque o runtime ao
+    vivo precisa distinguir esta condicao de OUTRAS que tambem levantam
+    `NotImplementedError` e tem tratamento OPOSTO (a saida dividida sem
+    `exit_ttl_bars`, que tem de falhar ALTO porque deixaria uma posicao
+    JA ABERTA exposta indefinidamente). Aqui nada esta exposto ainda: a
+    entrada simplesmente nao acontece, e o certo e' parar o robo com uma
+    linha clara no diario em vez de repetir a excecao a cada 5s pelo
+    pregao inteiro. Ver `IntradayLiveRuntime._consume`."""
 
 
 @dataclass
@@ -182,6 +198,31 @@ class IntradayBacktestConfig:
     # comportamento (fill, restart, etc); `config_for` liga `True` para
     # todo backtest/sombra real, fechando a divergencia.
     enforce_capital_minimo: bool = False
+    # `True`: o piso de 2x (`capital_minimo_brl`) de `enforce_capital_minimo`
+    # so' vale para a PRIMEIRA sessao em que o robo consegue operar -- dali
+    # em diante, cada sessao seguinte so' precisa cobrir 1x o lote no preco
+    # de abertura DELA (`preco_abertura x default_quantity`), nunca mais 2x.
+    # Reproduz, no BACKTEST, a regra que `live.intraday_runtime.
+    # IntradayLiveRuntime._check_capital` ja aplica ao vivo desde 2026-08-24
+    # (pedido do dono: "a regra do caixa minimo pra operar deve ser aplicado
+    # somente para iniciar a operacao") -- ate esta flag existir, o backtest
+    # ficava mais PESSIMISTA que a producao real: um robo ja de pe, que so'
+    # precisaria comprar 1 lote de hoje, era pulado por exigir o dobro disso
+    # de novo, todo santo pregao (achado ao medir `gremah`/`gremah_tick` em
+    # PMAM3 com preco em queda -- o piso de 2x calculado no preco de HOJE
+    # censurava a maior parte de uma janela de 3 meses em que o preco tinha
+    # sido mais alto no passado).
+    #
+    # Default `False` preserva o comportamento antigo (2x todo pregao, sem
+    # excecao) -- e' o que `enforce_capital_minimo` sempre fez, e o que
+    # `config_for` continua ligando por padrao para acao. So' importa
+    # quando `enforce_capital_minimo=True`; sozinha, nao faz nada.
+    #
+    # Uma sessao RETOMADA (`run_intraday_backtest(resume_same_session=True)`)
+    # conta como "ja iniciado" desde a 1a sessao -- o robo warm-started ja
+    # esta de pe (com posicao por fora), entao a barreira de ENTRADA (2x) ja
+    # foi vencida antes deste backtest comecar.
+    capital_minimo_so_na_entrada: bool = False
     # Teto de contratos SIMULTANEAMENTE abertos -- `None` (default) = sem
     # teto, o comportamento de sempre (acao a vista, onde quem limita e' o
     # caixa: `enforce_capital_minimo` + `initial_capital`).
@@ -241,6 +282,39 @@ class IntradayBacktestConfig:
     # NOVA) reseta para `queue_ahead_qty` outra vez. E' exatamente o custo
     # que o motor antigo cobrava ZERO e este parametro passa a cobrar.
     queue_ahead_qty: float = 0.0
+    # Margem exigida por 1 contrato, em REAIS -- liga o TETO DINAMICO de
+    # exposicao agregada por CAPITAL (2026-08-28, incidente REAL: ver a nota
+    # longa em `strategy.daytrade.base.RESERVA_CAIXA_SEGURANCA`). `None`
+    # (default) preserva o motor antigo por inteiro: so' `max_open_contracts`
+    # (teto ESTATICO, acima) limita, se algum foi configurado.
+    #
+    # Setado, a maquina passa a recusar QUALQUER abertura nova (`Enter` a
+    # mercado OU cada FILHO de `EnterLimit` que preencher, ver `_cabe_no_
+    # teto`/`_cap_capital_atual`) cuja soma com `open_contracts` estoure o
+    # que `contracts_from_capital_com_reserva(initial_capital + realized_pnl,
+    # margin_per_contract_brl, margin_buffer)` autoriza AGORA -- nao uma foto
+    # tirada 1x no inicio do backtest, recalculado a CADA checagem. E'
+    # precisamente o gate que faltava em 2026-08-28: o robo tinha
+    # `max_open_contracts` regulatorio (5 no WDO@, teto oficial da Copa BTG,
+    # NADA a ver com o caixa REAL de R$300 do dono) e nenhum teto atado ao
+    # caixa de verdade -- a segunda entrada independente do grid passou pelo
+    # unico teto que existia (5) sem problema nenhum.
+    #
+    # `config_for` (`backtest.intraday.profiles`) liga isto por PADRAO para
+    # todo perfil de FUTURO com margem conhecida -- e' o mesmo caminho que
+    # `scripts/run_live.py::build_intraday` usa para montar a config real,
+    # entao a operacao ao vivo herda a protecao sem precisar de nenhuma
+    # mudanca em `live/`. `enforce_capital_cap=False` explicito desliga (ex.:
+    # ambiente de margem simulada infinita, Copa BTG).
+    margin_per_contract_brl: float | None = None
+    # Multiplicador de seguranca sobre a margem -- mesmo parametro/mesmo
+    # default de `contracts_from_capital` (`MARGIN_BUFFER_FUTUROS`). So'
+    # importa com `margin_per_contract_brl` setado. A reserva ADICIONAL
+    # (`RESERVA_CAIXA_SEGURANCA`) e' aplicada por CIMA deste valor dentro de
+    # `contracts_from_capital_com_reserva` -- nunca embutida aqui, para o
+    # numero "buffer puro" continuar identico ao que `contracts_from_capital`
+    # sempre recebeu em qualquer outro lugar do repo.
+    margin_buffer: float = MARGIN_BUFFER_FUTUROS
 
 
 @dataclass
@@ -329,13 +403,20 @@ class PositionClosed:
 @dataclass(frozen=True)
 class OrderRejected:
     """Uma entrada foi RECUSADA por inteiro pelo motor, sem virar posicao --
-    hoje so' por `IntradayBacktestConfig.max_open_contracts` (`reason=
-    "max_open_contracts"`). `quantity` e' o que foi pedido e nao entrou;
-    `open_contracts` e' quanto ja estava aberto no momento da recusa.
+    por `IntradayBacktestConfig.max_open_contracts` (`reason=
+    "max_open_contracts"`, teto ESTATICO/regulatorio) ou por
+    `IntradayBacktestConfig.margin_per_contract_brl` (`reason=
+    "capital_insuficiente"`, teto DINAMICO por caixa corrente, 2026-08-28 --
+    ver a nota longa no campo em `IntradayBacktestConfig`). `quantity` e' o
+    que foi pedido e nao entrou; `open_contracts` e' quanto ja estava aberto
+    no momento da recusa; `cap` e' o teto EFETIVO que bloqueou (o menor dos
+    dois, quando os dois estao configurados).
 
     E' um evento, e nao um `raise`, porque bater no teto e' comportamento
     ESPERADO de um ambiente com teto -- o que nao pode e' acontecer em
-    silencio."""
+    silencio (foi exatamente essa recusa que faltou em 2026-08-28: a segunda
+    entrada independente do grid deveria ter virado este evento, e em vez
+    disso virou uma SEGUNDA posicao real)."""
 
     ts: pd.Timestamp
     side: Side
@@ -583,6 +664,15 @@ class IntradaySessionMachine:
         # foi recusado), nunca saidas -- fechar posicao sempre cabe.
         self.ordens_aceitas = 0
         self.ordens_recusadas_por_teto = 0
+        # Mesmo espirito de `ordens_recusadas_por_teto`, mas para a causa
+        # DIFERENTE de recusa (2026-08-28): caixa corrente insuficiente
+        # (`config.margin_per_contract_brl`), nao teto regulatorio de
+        # contratos. Contador SEPARADO de proposito -- misturar as duas
+        # causas no mesmo numero confundiria "a estrategia bate no teto da
+        # competicao" (portao G5 da Copa, sobre DESENHO) com "o caixa real
+        # nao aguenta mais uma entrada" (sobre RISCO DE RUINA) -- perguntas
+        # diferentes, cada uma com sua propria resposta esperada.
+        self.ordens_recusadas_por_capital = 0
 
     # ---------- ciclo de vida da sessao ----------------------------------
 
@@ -760,22 +850,155 @@ class IntradaySessionMachine:
         nao pode conseguir mexer no estado da maquina por descuido."""
         return tuple(self._resting_children_qty)
 
+    def _cap_capital_atual(self) -> int | None:
+        """Teto de contratos que o CAIXA CORRENTE sustenta AGORA, com a
+        reserva de seguranca ja aplicada (`strategy.daytrade.base.
+        contracts_from_capital_com_reserva`) -- `None` quando o teto por
+        capital nao esta configurado (`config.margin_per_contract_brl is
+        None`, comportamento antigo, so' `max_open_contracts` limita).
+
+        Recalculado a CADA chamada, nunca guardado em cache: o caixa muda com
+        `self.realized_pnl` (P&L ja fechado, nesta sessao ou em sessoes
+        anteriores do mesmo backtest) -- reavaliar toda vez e' o que torna
+        este teto um limite VIVO, acompanhando o caixa de verdade, em vez de
+        uma foto tirada 1x no inicio do backtest. Foi exatamente uma foto
+        assim (`config_for(cash_brl=..., margin_per_contract_brl=...)`,
+        estatica por desenho -- ver a docstring la) que NAO existia ligada
+        por padrao na operacao real de 2026-08-28: o teto que a config ao
+        vivo carregava era `max_open_contracts=5`, o numero REGULATORIO da
+        Copa BTG, sem nenhuma relacao com o caixa real de R$300 do dono.
+
+        `caixa_atual = initial_capital + realized_pnl` -- MESMA formula que
+        `on_capital_update` ja passa para a estrategia a cada barra (nunca
+        inclui mark-to-market de posicao aberta: uma posicao só vira caixa
+        de verdade quando FECHA).
+
+        **Este teto e' um limitador de EXPOSICAO NOVA, nao de perda
+        corrente, e nao e' a protecao contra ruina.** Duas cegueiras
+        conhecidas, as duas por ele ser calculado com numeros LOCAIS a um
+        processo: (1) uma posicao aberta sangrando nao entra na conta, entao
+        o teto fica otimista exatamente sob stress; (2) ele nao enxerga os
+        OUTROS slots, que operam a MESMA conta MT5 e a mesma margem fisica.
+        Nenhuma das duas da' para resolver aqui: este modulo e' `feature` e
+        roda identico no BACKTEST, onde nao existe corretora para perguntar.
+        Quem fecha as duas e' o portao de envio ao vivo
+        (`IntradayLiveRuntime._check_margem_da_conta`), que compara a margem
+        exigida contra `margin_free` da conta -- numero que ja desconta tudo
+        que qualquer robo (ou o proprio dono) tem aberto.
+
+        `hard_cap=config.max_open_contracts`: o
+        teto por capital so' pode ENCOLHER o que o teto estatico ja permitia,
+        nunca crescer alem dele (mesma regra que `contracts_from_capital`
+        sempre aplicou ao seu proprio `hard_cap`)."""
+        cfg = self.config
+        if cfg.margin_per_contract_brl is None:
+            return None
+        caixa_atual = cfg.initial_capital + self.realized_pnl
+        return contracts_from_capital_com_reserva(
+            caixa_atual, cfg.margin_per_contract_brl, cfg.margin_buffer,
+            hard_cap=cfg.max_open_contracts,
+        )
+
+    def _cap_efetivo(self) -> int | None:
+        """Teto REALMENTE em vigor agora -- o teto por CAPITAL quando
+        configurado (que ja' e' o MENOR entre ele mesmo e o teto ESTATICO,
+        via `hard_cap` em `_cap_capital_atual`), senao o teto ESTATICO puro
+        (`config.max_open_contracts`, possivelmente `None` = sem teto
+        nenhum, o comportamento de sempre para quem nunca liga nenhum dos
+        dois)."""
+        if self.config.margin_per_contract_brl is not None:
+            return self._cap_capital_atual()
+        return self.config.max_open_contracts
+
     def _cabe_no_teto(self, quantity: int) -> bool:
-        cap = self.config.max_open_contracts
+        cap = self._cap_efetivo()
         return cap is None or (self.open_contracts + quantity) <= cap
 
     def _recusa_por_teto(self, ts: pd.Timestamp, side: Side, quantity: int,
                          order_kind: str) -> "OrderRejected":
         """Registra e descreve UMA recusa por teto. Nao mexe em posicao nem
         em ordem parada -- quem chama decide o que fazer com a ordem
-        recusada (hoje: descartada, ver `on_closed_bar`)."""
+        recusada (hoje: descartada, ver `on_closed_bar`).
+
+        Distingue a CAUSA (2026-08-28): se o teto por CAPITAL esta
+        configurado e e' ele quem esta amarrando agora (`<=` o teto estatico,
+        quando os dois existem -- capital so' pode ser o fator mais
+        apertado, nunca o contrario, por construcao de `_cap_capital_atual`),
+        conta em `ordens_recusadas_por_capital` com `reason=
+        "capital_insuficiente"`; senao conta em `ordens_recusadas_por_teto`
+        com `reason="max_open_contracts"` (comportamento antigo, intacto)."""
+        cap_capital = self._cap_capital_atual()
+        cap_estatico = self.config.max_open_contracts
+        limitado_por_capital = cap_capital is not None and (
+            cap_estatico is None or cap_capital <= cap_estatico
+        )
+        if limitado_por_capital:
+            self.ordens_recusadas_por_capital += 1
+            return OrderRejected(
+                ts=ts, side=side, quantity=quantity,
+                open_contracts=self.open_contracts,
+                cap=int(cap_capital or 0),
+                order_kind=order_kind, reason="capital_insuficiente",
+            )
         self.ordens_recusadas_por_teto += 1
         return OrderRejected(
             ts=ts, side=side, quantity=quantity,
             open_contracts=self.open_contracts,
-            cap=int(self.config.max_open_contracts or 0),
+            cap=int(cap_estatico or 0),
             order_kind=order_kind, reason="max_open_contracts",
         )
+
+    def _entrar_a_mercado(self, pending: Enter, ts: pd.Timestamp, bar: Bar) -> list[MachineEvent]:
+        """Abre `pending` a mercado nesta barra -- quem chama garante que a
+        maquina esta (ou acabou de ficar, por reversao) FLAT antes de
+        chamar. Teto de contratos e' checado AQUI, nao antes: so' faz
+        sentido recusar por teto uma entrada que de fato tentaria abrir
+        (ver `on_closed_bar`, secao 3)."""
+        if self.execution is not None:
+            # Entrada A MERCADO ao vivo nao esta implementada de proposito:
+            # nenhum robo intradiario em operacao emite `Enter` (a familia
+            # `gremah` so' usa `EnterLimit`, que e' o proprio ponto do
+            # desenho -- ser maker). Falhar alto aqui e' melhor que simular
+            # o fill a mercado com o `open` da barra e mandar dinheiro real
+            # contra um preco inventado.
+            raise EntradaAMercadoNaoSuportada(
+                "entrada a mercado (`Enter`) nao suportada em execucao real -- "
+                f"o robo {self.strategy.name!r} pediu uma. So `EnterLimit` "
+                "(ordem-limite pendente) tem caminho de execucao confirmado "
+                "pela corretora; ver `live/intraday_execution.py`."
+            )
+        events: list[MachineEvent] = []
+        cfg = self.config
+        if not self._cabe_no_teto(pending.quantity or cfg.default_quantity):
+            events.append(self._recusa_por_teto(
+                ts, pending.side, pending.quantity or cfg.default_quantity, "market"))
+            return events
+        entry_side: Literal["buy", "sell"] = "buy" if pending.side == "long" else "sell"
+        entry_px = apply_intraday_slippage(bar.open, entry_side, cfg.costs)
+        nova_posicao = _Position(
+            side=pending.side,
+            entry_ts=ts,
+            entry_price=entry_px,
+            quantity=pending.quantity or cfg.default_quantity,
+            current_stop=pending.initial_stop,
+            current_target=pending.initial_target,
+            metadata=dict(pending.metadata or {}),
+        )
+        self.positions.append(nova_posicao)
+        self.ordens_aceitas += 1
+        events.append(PositionOpened(
+            ts=ts, side=nova_posicao.side, price=entry_px,
+            quantity=nova_posicao.quantity, stop=nova_posicao.current_stop,
+            target=nova_posicao.current_target, order_kind="market",
+            reason=pending.reason, bar=bar,
+        ))
+        # entrada a mercado supera qualquer ordem-limite ainda pendente
+        if self.resting_limit is not None:
+            events.append(LimitCancelled(order=self.resting_limit, ts=ts, reason="superseded"))
+            self.resting_limit = None
+            self._resting_children_qty = []
+            self._queue_ahead_remaining = 0.0
+        return events
 
     def unrealized_brl(self, price: float) -> float:
         """Marcacao a mercado da SOMA de todas as posicoes abertas a `price`
@@ -979,19 +1202,6 @@ class IntradaySessionMachine:
             # TODAS as posicoes abertas de uma vez (ex.: stop agregado de
             # sessao, `IntradayExitReason.SIGNAL`) -- nao existe "Exit de uma
             # posicao so'" no contrato da estrategia.
-            # Teto de contratos (`config.max_open_contracts`): uma entrada A
-            # MERCADO que nao cabe e' recusada por INTEIRO aqui, antes de
-            # qualquer execucao -- nunca truncada para o que sobra do teto
-            # (ver o comentario do campo). So' vale quando o robo esta flat:
-            # com posicao aberta, um `Enter` ja e' descartado mais abaixo por
-            # outro motivo, e conta-lo como recusa de teto seria mentira.
-            if (isinstance(self.pending, Enter) and not self.positions
-                    and not self._cabe_no_teto(self.pending.quantity or cfg.default_quantity)):
-                events.append(self._recusa_por_teto(
-                    ts, self.pending.side,
-                    self.pending.quantity or cfg.default_quantity, "market"))
-                self.pending = None
-
             if isinstance(self.pending, Exit) and self.positions:
                 for pos in list(self.positions):
                     events.append(self._close_position(pos, ts, bar.open, IntradayExitReason.SIGNAL))
@@ -1000,49 +1210,33 @@ class IntradaySessionMachine:
                 if orfa is not None:
                     events.append(orfa)
             elif isinstance(self.pending, Enter) and not self.positions:
-                pending = self.pending
-                if self.execution is not None:
-                    # Entrada A MERCADO ao vivo nao esta implementada de
-                    # proposito: nenhum robo intradiario em operacao emite
-                    # `Enter` (a familia `gremah` so' usa `EnterLimit`, que e'
-                    # o proprio ponto do desenho -- ser maker). Falhar alto
-                    # aqui e' melhor que simular o fill a mercado com o `open`
-                    # da barra e mandar dinheiro real contra um preco
-                    # inventado.
-                    raise NotImplementedError(
-                        "entrada a mercado (`Enter`) nao suportada em execucao real -- "
-                        f"o robo {self.strategy.name!r} pediu uma. So `EnterLimit` "
-                        "(ordem-limite pendente) tem caminho de execucao confirmado "
-                        "pela corretora; ver `live/intraday_execution.py`."
-                    )
-                entry_side: Literal["buy", "sell"] = "buy" if pending.side == "long" else "sell"
-                entry_px = apply_intraday_slippage(bar.open, entry_side, cfg.costs)
-                nova_posicao = _Position(
-                    side=pending.side,
-                    entry_ts=ts,
-                    entry_price=entry_px,
-                    quantity=pending.quantity or cfg.default_quantity,
-                    current_stop=pending.initial_stop,
-                    current_target=pending.initial_target,
-                    metadata=dict(pending.metadata or {}),
-                )
-                self.positions.append(nova_posicao)
-                self.ordens_aceitas += 1
+                events.extend(self._entrar_a_mercado(self.pending, ts, bar))
                 self.pending = None
-                events.append(PositionOpened(
-                    ts=ts, side=nova_posicao.side, price=entry_px,
-                    quantity=nova_posicao.quantity, stop=nova_posicao.current_stop,
-                    target=nova_posicao.current_target, order_kind="market",
-                    reason=pending.reason, bar=bar,
-                ))
-                # entrada a mercado supera qualquer ordem-limite ainda pendente
-                if self.resting_limit is not None:
-                    events.append(LimitCancelled(order=self.resting_limit, ts=ts, reason="superseded"))
-                    self.resting_limit = None
-                    self._resting_children_qty = []
-                    self._queue_ahead_remaining = 0.0
+            elif (isinstance(self.pending, Enter) and self.positions
+                    and self.pending.side != self.positions[0].side):
+                # Sinal oposto ao lado aberto (2026-08-28, pedido do dono):
+                # ate aqui um `Enter` com posicao aberta era descartado em
+                # silencio, sem excecao nem evento -- nem piramide nem
+                # reversao existiam. Reversao e' o caso DIFERENTE de
+                # piramide: nao acumula, troca de lado. Fecha a
+                # posicao atual e abre a nova no MESMO open desta barra --
+                # uma unica transicao de estado, nao duas barras (fechar
+                # agora, abrir so' na proxima teria o robo flat por 1 barra
+                # inteira sem nenhum motivo, alem de arriscar um segundo
+                # `Enter` "descartado por posicao aberta" bem no meio).
+                pending = self.pending
+                for pos in list(self.positions):
+                    events.append(self._close_position(pos, ts, bar.open, IntradayExitReason.SIGNAL))
+                orfa = self._cancelar_resting_orfa(ts)
+                if orfa is not None:
+                    events.append(orfa)
+                events.extend(self._entrar_a_mercado(pending, ts, bar))
+                self.pending = None
             else:
-                self.pending = None  # Enter com posicao ja aberta (ou Exit sem posicao): descartado
+                # Enter para o MESMO lado com posicao ja aberta (nao ha' o
+                # que trocar -- pedido do dono: "sinal pra mesma posicao,
+                # nada deve ser feito") ou Exit sem posicao: descartado.
+                self.pending = None
 
             # (3b) ordem-limite (maker) pendente: preenche no PRIMEIRO
             # toque de `bar.low`/`bar.high`, ao preco exato do nivel —

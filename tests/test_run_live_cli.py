@@ -111,6 +111,38 @@ def test_build_mt5_repassa_fractional_map_para_o_broker(cli, isolated_db):
     assert rt.broker._fractional_map == mapa
 
 
+def test_build_mt5_repassa_symbol_map_para_o_broker(cli, isolated_db):
+    """`--mt5-symbol-map` (JSON) precisa chegar ao `MT5Broker` -- e' o mapa
+    que traduz ticker do sistema pro simbolo real cadastrado no terminal
+    (ver docstring de `live/broker_mt5.py`, ponto 2)."""
+    import json as json_mod
+
+    mapa = {"WEGE3.SA": "WEGE3X"}
+    rt = cli.build(_args(mode="mt5", mt5_shares_per_lot=1.0,
+                          mt5_symbol_map=json_mod.dumps(mapa)))
+    assert rt.broker._symbol_map == mapa
+
+
+def test_build_intraday_repassa_symbol_map_para_o_broker(cli):
+    """REGRESSAO 2026-08-28: `build_intraday` nunca passava `symbol_map` pro
+    `MT5Broker` (diferente de `build_daily`, que ja fazia) -- toda ordem de
+    futuro no day trade (WDO@/WIN@) ia sempre pro ticker CONTINUO, que so'
+    da' cotacao; o servidor recusa ordem nele (retcode 10017
+    `TRADE_DISABLED`, achado ao vivo em 2026-08-28 no slot do WDO F1).
+    `build_intraday` exige terminal MT5 real pra montar o runtime inteiro
+    (`symbol_economics`/`MT5Feed` nao tem fake neste ambiente) -- a prova
+    aqui e' estatica: o codigo-fonte tem de montar o `MT5Broker` com
+    `symbol_map=symbol_map` (lido de `args.mt5_symbol_map`), igual
+    `build_daily` ja faz (ver `test_build_mt5_repassa_symbol_map_para_o_
+    broker` acima, que prova o mesmo pro caminho DIARIO com broker de
+    verdade)."""
+    import inspect
+
+    fonte = inspect.getsource(cli.build_intraday)
+    assert "args.mt5_symbol_map" in fonte
+    assert "symbol_map=symbol_map" in fonte
+
+
 # ---------- disjuntor SEMPRE ativo, nao e escolha de quem opera (2026-08-19) -
 
 def test_build_sem_limites_no_form_ainda_ativa_disjuntor_com_default_da_classe(cli, isolated_db):

@@ -9,6 +9,10 @@ db/*.sqlite-journal
 db/*.sqlite-wal
 db/*.sqlite-shm
 db/live_secrets.json
+# Travas de exclusividade por slot (live/slot_lock.py) -- estado de RUNTIME
+# desta maquina: o arquivo nao tem conteudo util, quem responde 'em uso?' e' a
+# trava do SO, que morre com o processo.
+db/locks/
 db/live_process.dt-*.log
 frag2.html
 .DS_Store

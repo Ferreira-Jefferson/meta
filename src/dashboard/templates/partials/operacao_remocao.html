@@ -33,18 +33,30 @@
   {% else %}
   <h3 id="ops-remocao-titulo" class="ops-modal-title">Remover {{ remocao.label }}?</h3>
 
-  {% if remocao.ordens or remocao.posicao %}
-  <p class="ops-modal-body">
-    Este robô ainda tem coisa viva na corretora. Removê-lo desfaz tudo abaixo,
-    nesta ordem, e só então tira o cartão da tela.
-  </p>
-  {% elif remocao.e_sombra %}
+  {% if remocao.e_sombra %}
   {#  Sombra não teve a corretora consultada, e dizer que teve seria mentira:
       um robô de sombra nunca chega a ter `executor`, então não existe ordem
-      dele para estar pendurada. #}
+      dele para estar pendurada. Uma posição AQUI é só uma linha em
+      `live_positions` (bookkeeping simulado), nunca exposição no MT5 --
+      dizer "coisa viva na corretora" pra ela seria mentir na direção
+      oposta. #}
+  {% if remocao.posicao %}
+  <p class="ops-modal-body">
+    Robô de <strong>sombra</strong> — nunca esteve na corretora, mas ainda tem
+    uma posição <strong>simulada</strong> aberta no nosso registro. Removê-lo
+    encerra essa posição localmente (pelo último preço salvo) antes de tirar
+    o cartão da tela.
+  </p>
+  {% else %}
   <p class="ops-modal-body">
     Robô de <strong>sombra</strong> — ele nunca envia ordem para a corretora,
     então não há nada pendurado lá. O que a remoção faz:
+  </p>
+  {% endif %}
+  {% elif remocao.ordens or remocao.posicao %}
+  <p class="ops-modal-body">
+    Este robô ainda tem coisa viva na corretora. Removê-lo desfaz tudo abaixo,
+    nesta ordem, e só então tira o cartão da tela.
   </p>
   {% else %}
   <p class="ops-modal-body">
@@ -84,10 +96,10 @@
     <li>
       <strong>A posição de {{ remocao.posicao.quantity }} {{ remocao.symbol }}
       ({{ "comprada" if remocao.posicao.side == "long" else "vendida" }} a
-      R$ {{ remocao.posicao.price | num_br }}) é encerrada a mercado.</strong>
+      R$ {{ remocao.posicao.price | num_br }}) é encerrada{{ " localmente (sem corretora)" if remocao.e_sombra else " a mercado" }}.</strong>
       {% if remocao.pl_estimado is not none %}
-      Pelo último preço negociado (R$ {{ remocao.preco_atual | num_br }}), isso
-      realiza
+      Pelo último preço {{ "salvo" if remocao.e_sombra else "negociado" }}
+      (R$ {{ remocao.preco_atual | num_br }}), isso realiza
       {% if remocao.pl_estimado >= 0 %}
       um <span class="pos">lucro de R$ {{ remocao.pl_estimado | num_br }}</span>.
       {% else %}

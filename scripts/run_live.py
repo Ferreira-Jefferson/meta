@@ -283,7 +283,7 @@ def build_intraday(args):
     Um slot SEM símbolo (id fora do formato dinâmico) cai no default da
     classe: mantém funcionando qualquer invocação antiga da linha de comando,
     sem inventar um ativo."""
-    from backtest.intraday.profiles import PROFILES, config_for
+    from backtest.intraday.profiles import config_for, profile_for
     from live.intraday_feed import feed_for
     from live.intraday_runtime import IntradayLiveRuntime
     from market_data_intraday.mt5_source import symbol_economics
@@ -308,17 +308,27 @@ def build_intraday(args):
             "--mt5-shares-per-lot é obrigatório no modo mt5 — confira o "
             "symbol_info do SEU terminal MT5 antes de operar."
         )
-    if symbol not in PROFILES:
+    try:
+        profile = profile_for(symbol)
+    except KeyError as e:
         raise ValueError(
             f"símbolo {symbol!r} do robô {strategy_obj.name!r} não tem perfil econômico "
-            f"declarado em backtest.intraday.profiles.PROFILES — sem custo, corte de "
-            "flatten e lote de referência não há como operar honestamente."
-        )
-    profile = PROFILES[symbol]
+            f"declarado em backtest.intraday.profiles.PROFILES/FUTURES_PROFILES — sem "
+            "custo, corte de flatten e lote de referência não há como operar honestamente."
+        ) from e
 
     from live.broker_mt5 import MT5Broker  # import tardio: so quando de fato usado
 
     credenciais = _mt5_credentials()
+    # `symbol_map` traduz o ticker do robo (`WDO@`, `WIN@` -- continuo, so'
+    # cotacao) pro contrato REAL com vencimento em aberto (ex. `"WDOU26"`) --
+    # sem ele, toda ordem de futuro no dia trade e' recusada pelo servidor
+    # (retcode 10017 `TRADE_DISABLED`, achado ao vivo em 2026-08-28). Vem
+    # detectado sozinho a cada "Iniciar operacao"
+    # (`dashboard/live_control.py::detect_futures_symbol_map`), nunca digitado
+    # a mao -- mesmo padrao de `build_daily`, que ja fazia isto (este caminho
+    # so' nao fazia ainda porque nenhum robo de futuro tinha ido a producao).
+    symbol_map = json.loads(args.mt5_symbol_map) if args.mt5_symbol_map else None
     # Day trade NUNCA conhece mercado fracionario -- nem `--mt5-fractional-map`
     # (pedido explicito do dono, 2026-08-22). `args.mt5_fractional_map` e'
     # ignorado de proposito aqui, mesmo se alguem passar a flag na linha de
@@ -329,7 +339,7 @@ def build_intraday(args):
     # cada round-trip; uma ordem fracionaria custaria R$1,90 fixos a mais por
     # ordem na Rico, o que inviabilizaria o robo.
     broker = MT5Broker(magic=slot.magic, shares_per_lot=args.mt5_shares_per_lot,
-                       **credenciais)
+                       symbol_map=symbol_map, **credenciais)
 
     # A economia do contrato vem do TERMINAL (tick size/value reais), nunca
     # hardcoded — mesma filosofia de `MT5Feed` autocalibrar o fuso.
@@ -594,8 +604,26 @@ def cmd_terminal(args) -> None:
 
 def cmd_loop(args) -> None:
     from live import clock
+    from live.slot_lock import SlotEmUso, lock_slot
 
     slot = _resolve_slot(args)
+    # Exclusividade por slot ANTES de montar qualquer coisa -- a guarda de
+    # processo duplicado so' existia no botao do painel (`live_control.
+    # start()`), e este caminho (CLI direta, servico NSSM) passava livre.
+    # Dois processos no mesmo slot compartilham o `magic` e enxergam a ordem
+    # e a posicao do outro como suas. Ver `live/slot_lock.py`.
+    try:
+        with lock_slot(slot.id):
+            _loop_travado(args, slot)
+    except SlotEmUso as e:
+        print(f"[erro fatal] {e}", flush=True)
+        sys.exit(1)
+
+
+def _loop_travado(args, slot) -> None:
+    """O laco do supervisor, ja com a exclusividade do slot garantida."""
+    from live import clock
+
     rt = build(args)
     print(f"supervisor do slot '{slot.id}' ativo — passo a cada {args.seconds}s, so na "
           f"janela de pregao B3 +/-1h (fora dela, dorme ate a janela abrir de novo; "

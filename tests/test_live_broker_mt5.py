@@ -22,7 +22,7 @@ import types
 import pytest
 
 from live.broker_mt5 import MT5Broker
-from core.live_models import Order, OrderSide, OrderStatus
+from core.live_models import Order, OrderSide, OrderStatus, OrderType
 
 
 # ---------- prova de import lazy (roda antes de qualquer mock) ------------
@@ -76,6 +76,8 @@ def _make_fake_mt5(
     last_error=(0, "sem erro"),
     positions=None,
     orders=None,
+    positions_get_none: bool = False,
+    orders_by_ticket=None,
 ):
     """Monta um `types.ModuleType` que imita a superficie do pacote
     `MetaTrader5` usada por `MT5Broker`, com constantes arbitrarias (o
@@ -91,6 +93,10 @@ def _make_fake_mt5(
     mod.ORDER_TIME_GTC = 104
     mod.ORDER_FILLING_IOC = 105
     mod.TRADE_RETCODE_DONE = 106
+    # SLTP (gap c, `MT5Broker.set_protection`) -- valor arbitrario, mesma
+    # regra do resto: o codigo sob teste so compara igualdade, nunca o
+    # numero em si.
+    mod.TRADE_ACTION_SLTP = 107
 
     def initialize(**kwargs):
         calls["initialize"] += 1
@@ -114,11 +120,39 @@ def _make_fake_mt5(
     mod.symbol_info_tick = lambda symbol: tick
     mod.order_send = order_send
     mod.history_deals_get = history_deals_get
+    mod.TRADE_ACTION_REMOVE = 108
+    mod.TRADE_ACTION_PENDING = 109
+    mod.ORDER_TYPE_BUY_LIMIT = 110
+    mod.ORDER_TYPE_SELL_LIMIT = 111
+    mod.ORDER_TIME_DAY = 112
+    mod.ORDER_FILLING_RETURN = 113
+    mod.POSITION_TYPE_BUY = 0
+
     # `positions`/`orders` fixos, ignorando `symbol=` de proposito -- os
     # testes que usam isto ja montam so' o que importa pro simbolo testado,
     # imitando `mt5.positions_get(symbol=...)`/`orders_get(symbol=...)`.
-    mod.positions_get = lambda symbol=None: positions if positions is not None else []
-    mod.orders_get = lambda symbol=None: orders if orders is not None else []
+    #
+    # `positions_get_none` imita a FALHA de consulta do pacote real, que
+    # devolve `None` -- diferente da tupla vazia de "perguntei e nao ha
+    # nada". Ver `MT5Broker.position_state`.
+    def positions_get(symbol=None):
+        if positions_get_none:
+            return None
+        return positions if positions is not None else []
+
+    # `ticket=` e' como `MT5Broker._pending_order_alive` pergunta se UM
+    # ticket especifico continua vivo no book (`cancel` depende disso para
+    # nao mentir). `orders_by_ticket` mapeia ticket -> lista devolvida;
+    # `None` como valor imita a falha de consulta.
+    def orders_get(symbol=None, ticket=None):
+        if ticket is not None:
+            if orders_by_ticket is None:
+                return []
+            return orders_by_ticket.get(ticket, [])
+        return orders if orders is not None else []
+
+    mod.positions_get = positions_get
+    mod.orders_get = orders_get
 
     return mod, calls
 
@@ -385,6 +419,113 @@ def test_place_sem_tick_rejeita(fake_mt5):
     assert result.status == OrderStatus.REJECTED
 
 
+# ---------- gap (b), incidente 2026-08-28: retcode=DONE sem fill real ------
+#
+# Log real do slot `dt-wdo_grid_reload_maker-wdo@-live`: "fill @ 0.0000 via
+# MT5 em WDOU26 (deal=0, comment=Request executed)" -- a corretora devolveu
+# retcode=TRADE_RETCODE_DONE ("sucesso") mas sem preco nem deal de verdade.
+# `_send` tem de recusar isso, nunca inventar um fill com preco 0.
+
+def test_place_retcode_done_com_price_zero_rejeita_sem_inventar_fill(fake_mt5):
+    info = _symbol_info()
+    result = _order_send_result(retcode=106, price=0.0, deal=0, comment="Request executed")
+    fake_mt5(symbol_info=info, tick=_tick(), order_send_result=result, history_deals=[])
+
+    broker = MT5Broker()
+    resultado = broker.place(Order(ticker="WEGE3.SA", side=OrderSide.BUY, quantity=10))
+
+    assert resultado.status == OrderStatus.REJECTED
+    assert resultado.filled_qty == 0
+    assert "price=0.0" in resultado.note or "0.0" in resultado.note
+    assert "deal=0" in resultado.note
+
+
+def test_place_retcode_done_com_deal_zero_mas_price_valido_rejeita(fake_mt5):
+    """Mesmo com preco > 0, `deal=0` (nenhum negocio de fato casado) tambem
+    nao pode virar FILLED -- os dois sinais sao checados independentes."""
+    info = _symbol_info()
+    result = _order_send_result(retcode=106, price=50.1, deal=0)
+    fake_mt5(symbol_info=info, tick=_tick(), order_send_result=result, history_deals=[])
+
+    broker = MT5Broker()
+    resultado = broker.place(Order(ticker="WEGE3.SA", side=OrderSide.BUY, quantity=10))
+
+    assert resultado.status == OrderStatus.REJECTED
+
+
+def test_place_retcode_done_com_price_e_deal_validos_continua_filled(fake_mt5):
+    """Regressao do caminho feliz: nao pode ficar mais restritivo do que
+    devia."""
+    info = _symbol_info()
+    result = _order_send_result(retcode=106, price=50.1, volume=10.0, deal=42)
+    fake_mt5(symbol_info=info, tick=_tick(bid=49.9, ask=50.1),
+             order_send_result=result, history_deals=[])
+
+    broker = MT5Broker()
+    resultado = broker.place(Order(ticker="WEGE3.SA", side=OrderSide.BUY, quantity=10))
+
+    assert resultado.status == OrderStatus.FILLED
+    assert resultado.avg_price == pytest.approx(50.1)
+
+
+# ---------- gap (a), incidente 2026-08-28: fechamento leva o campo "position" -
+
+def test_close_position_inclui_o_ticket_no_request(fake_mt5):
+    """O coracao do gap (a): fechar tem de dizer pra corretora QUAL posicao
+    esta sendo abatida (`request["position"]`) -- sem isto o motor de risco
+    trata como abertura nova e recusa com margem esgotada (retcode=10006
+    [MG51], o incidente real)."""
+    info = _symbol_info()
+    result = _order_send_result(retcode=106, price=49.9, volume=100.0, deal=77)
+    mod, calls = fake_mt5(symbol_info=info, tick=_tick(bid=49.9, ask=50.1),
+                          order_send_result=result, history_deals=[])
+
+    broker = MT5Broker()
+    fechamento = Order(ticker="WEGE3.SA", side=OrderSide.SELL, quantity=100)
+    resultado = broker.close_position(fechamento, position_ticket=123456)
+
+    assert resultado.status == OrderStatus.FILLED
+    assert calls["order_send"][0]["position"] == 123456
+
+
+def test_place_normal_de_abertura_nao_leva_campo_position(fake_mt5):
+    """`place()` (abertura, comportamento de sempre) NUNCA deve incluir
+    `"position"` -- so' `close_position()` (fechamento dedicado) leva."""
+    info = _symbol_info()
+    result = _order_send_result(retcode=106, price=50.1, deal=42)
+    mod, calls = fake_mt5(symbol_info=info, tick=_tick(bid=49.9, ask=50.1),
+                          order_send_result=result, history_deals=[])
+
+    broker = MT5Broker()
+    broker.place(Order(ticker="WEGE3.SA", side=OrderSide.BUY, quantity=100))
+
+    assert "position" not in calls["order_send"][0]
+
+
+def test_close_position_retcode_recusado_vira_rejected(fake_mt5):
+    info = _symbol_info()
+    result = _order_send_result(retcode=999999, comment="[MG51] Para abrir novas posicoes")
+    fake_mt5(symbol_info=info, tick=_tick(), order_send_result=result)
+
+    broker = MT5Broker()
+    resultado = broker.close_position(
+        Order(ticker="WDO@", side=OrderSide.BUY, quantity=1), position_ticket=999)
+
+    assert resultado.status == OrderStatus.REJECTED
+    assert "MG51" in resultado.note
+
+
+def test_close_position_sem_conexao_rejeita_sem_excecao(fake_mt5):
+    fake_mt5(initialize_ok=False, last_error=(10004, "terminal nao encontrado"))
+    broker = MT5Broker()
+
+    resultado = broker.close_position(
+        Order(ticker="WDO@", side=OrderSide.BUY, quantity=1), position_ticket=999)
+
+    assert resultado.status == OrderStatus.REJECTED
+    assert "10004" in resultado.note
+
+
 # ---------- comissao -------------------------------------------------------
 
 def test_comissao_soma_commission_swap_fee_do_primeiro_deal(fake_mt5):
@@ -508,6 +649,351 @@ def test_cash_balance_account_info_none_devolve_none(fake_mt5):
     broker = MT5Broker()
 
     assert broker.cash_balance() is None
+
+
+# ---------- gap (e), incidente 2026-08-28: freio duro de equity/margem -----
+
+def test_account_risk_state_devolve_equity_margem_livre_e_balance(fake_mt5):
+    mod, calls = fake_mt5(initialize_ok=True)
+    mod.account_info = lambda: types.SimpleNamespace(
+        balance=300.0, equity=-298.60, margin_free=-150.0)
+    broker = MT5Broker()
+
+    estado = broker.account_risk_state()
+
+    assert estado == {"equity": -298.60, "margin_free": -150.0, "balance": 300.0}
+
+
+def test_account_risk_state_falha_de_conexao_devolve_none_sem_excecao(fake_mt5):
+    fake_mt5(initialize_ok=False, last_error=(10004, "terminal nao encontrado"))
+    broker = MT5Broker()
+
+    assert broker.account_risk_state() is None
+
+
+def test_account_risk_state_account_info_none_devolve_none(fake_mt5):
+    mod, calls = fake_mt5(initialize_ok=True)
+    mod.account_info = lambda: None
+    broker = MT5Broker()
+
+    assert broker.account_risk_state() is None
+
+
+# ---------- gap (c), incidente 2026-08-28: SL/TP registrado na corretora ---
+
+def _symbol_info_protecao(trade_tick_size=0.5, point=0.5, trade_stops_level=10):
+    return types.SimpleNamespace(
+        trade_tick_size=trade_tick_size, point=point, trade_stops_level=trade_stops_level,
+    )
+
+
+def test_set_protection_manda_sltp_com_position_e_niveis_arredondados(fake_mt5):
+    mod, calls = fake_mt5(symbol_info=_symbol_info_protecao(), tick=_tick(bid=5200.0, ask=5200.5),
+                          order_send_result=_order_send_result(retcode=106))
+    broker = MT5Broker()
+
+    resultado = broker.set_protection("WDO@", position_ticket=555, side="long",
+                                      stop=5187.3, target=5220.2)
+
+    assert resultado["ok"] is True
+    enviado = calls["order_send"][0]
+    assert enviado["action"] == mod.TRADE_ACTION_SLTP
+    assert enviado["position"] == 555
+    # 5187.3 arredondado pro tick 0.5 mais proximo -> 5187.5; 5220.2 -> 5220.0.
+    assert enviado["sl"] == pytest.approx(5187.5)
+    assert enviado["tp"] == pytest.approx(5220.0)
+
+
+def test_set_protection_afasta_nivel_colado_no_preco_pelo_stops_level(fake_mt5):
+    """`trade_stops_level=10` pontos, `point=0.5` -> distancia minima 5.0. Um
+    stop pedido a 5199.9 (a 0.1 do bid=5200.0, bem dentro do minimo) tem de
+    ser AFASTADO para o limite, nao enviado colado -- a corretora recusaria
+    por granularidade/distancia."""
+    mod, calls = fake_mt5(symbol_info=_symbol_info_protecao(), tick=_tick(bid=5200.0, ask=5200.5),
+                          order_send_result=_order_send_result(retcode=106))
+    broker = MT5Broker()
+
+    broker.set_protection("WDO@", position_ticket=555, side="long", stop=5199.9, target=None)
+
+    enviado = calls["order_send"][0]
+    # limite = bid(5200.0) - distancia(5.0) = 5195.0
+    assert enviado["sl"] == pytest.approx(5195.0)
+    assert enviado["tp"] == pytest.approx(0.0)  # sem alvo -> TP zerado, nunca inventado
+
+
+def test_set_protection_recusa_da_corretora_devolve_ok_false_sem_excecao(fake_mt5):
+    mod, calls = fake_mt5(
+        symbol_info=_symbol_info_protecao(), tick=_tick(bid=5200.0, ask=5200.5),
+        order_send_result=_order_send_result(retcode=999999, comment="invalid stops"))
+    broker = MT5Broker()
+
+    resultado = broker.set_protection("WDO@", position_ticket=555, side="long", stop=5100.0)
+
+    assert resultado["ok"] is False
+    assert "invalid stops" in resultado["note"]
+
+
+def test_set_protection_falha_de_conexao_devolve_ok_false_sem_excecao(fake_mt5):
+    fake_mt5(initialize_ok=False, last_error=(10004, "terminal nao encontrado"))
+    broker = MT5Broker()
+
+    resultado = broker.set_protection("WDO@", position_ticket=1, side="long", stop=5100.0)
+
+    assert resultado["ok"] is False
+
+
+def test_open_position_reporta_sl_tp_atuais(fake_mt5):
+    """`_ensure_protecao` (runtime) precisa saber o que JA esta registrado
+    na corretora pra nao reenviar SLTP toda barra -- `open_position` tem de
+    devolver `sl`/`tp` junto do resto."""
+    mod, calls = fake_mt5(initialize_ok=True)
+    mod.POSITION_TYPE_BUY = 0
+    posicao = types.SimpleNamespace(
+        magic=20260817, volume=1.0, type=0, price_open=5200.0, ticket=42,
+        sl=5187.5, tp=5220.0,
+    )
+    mod.positions_get = lambda symbol=None: [posicao]
+    broker = MT5Broker(magic=20260817)
+
+    resultado = broker.open_position("WDO@")
+
+    assert resultado["sl"] == pytest.approx(5187.5)
+    assert resultado["tp"] == pytest.approx(5220.0)
+
+
+# ---------- cancel: so' marca CANCELLED o que a corretora CONFIRMOU morto --
+#
+# Estes cinco testes guardam a invariante que estava QUEBRADA ate 2026-08-28:
+# `cancel` marcava `CANCELLED` nos dois ramos (sucesso e falha). Como
+# `CANCELLED` e' terminal e todo o rastreamento de orfa filtra por
+# `not is_terminal`, nenhuma ordem orfa era rastreada NUNCA -- e
+# `live_teardown` apagava a conta dando a corretora por limpa.
+
+def _pendente(ticket="777"):
+    return Order(ticker="WDO@", side=OrderSide.BUY, quantity=1,
+                 broker_ref=ticket, status=OrderStatus.SENT)
+
+
+def test_cancel_confirmado_pela_corretora_fica_cancelled(fake_mt5):
+    mod, calls = fake_mt5(initialize_ok=True,
+                          order_send_result=_order_send_result(retcode=106))
+    broker = MT5Broker()
+
+    devolvida = broker.cancel(_pendente())
+
+    assert devolvida.status == OrderStatus.CANCELLED
+    assert calls["order_send"][0]["action"] == mod.TRADE_ACTION_REMOVE
+
+
+def test_cancel_recusado_com_ordem_AINDA_VIVA_nao_fica_cancelled(fake_mt5):
+    """O caso que custou caro: a corretora recusa remover e a ordem CONTINUA
+    no book. Marcar `CANCELLED` aqui apagava o ticket do rastreamento de
+    orfas -- e essa ordem preenche sozinha depois, abrindo posicao sem stop
+    que ninguem esta vigiando."""
+    viva = types.SimpleNamespace(ticket=777, volume_current=1.0)
+    fake_mt5(initialize_ok=True,
+             order_send_result=_order_send_result(retcode=999, comment="recusado"),
+             orders_by_ticket={777: [viva]})
+    broker = MT5Broker()
+
+    devolvida = broker.cancel(_pendente("777"))
+
+    assert devolvida.status != OrderStatus.CANCELLED
+    assert not devolvida.is_terminal, "ordem viva tem de continuar rastreavel como orfa"
+    assert "CONTINUA VIVA" in devolvida.note
+
+
+def test_cancel_recusado_mas_ordem_sumiu_do_book_fica_cancelled(fake_mt5):
+    """Recusa porque o ticket ja nao existe (preencheu, expirou, cancelado na
+    mao) e' objetivo CUMPRIDO -- ai `CANCELLED` e' honesto, e insistir seria
+    retry infinito de verdade."""
+    fake_mt5(initialize_ok=True,
+             order_send_result=_order_send_result(retcode=999, comment="nao existe"),
+             orders_by_ticket={777: []})
+    broker = MT5Broker()
+
+    devolvida = broker.cancel(_pendente("777"))
+
+    assert devolvida.status == OrderStatus.CANCELLED
+    assert "confirmado contra a lista de pendentes" in devolvida.note
+
+
+def test_cancel_sem_conseguir_confirmar_trata_como_VIVA(fake_mt5):
+    """"Nao sei" nunca pode virar "ja morreu": se nem da' pra perguntar se a
+    ordem existe, ela segue vigiada."""
+    mod, _ = fake_mt5(initialize_ok=True,
+                      order_send_result=_order_send_result(retcode=999))
+
+    def explode(symbol=None, ticket=None):
+        raise RuntimeError("terminal caiu no meio da consulta")
+
+    mod.orders_get = explode
+    broker = MT5Broker()
+
+    devolvida = broker.cancel(_pendente("777"))
+
+    assert not devolvida.is_terminal
+    assert "nao sei" in devolvida.note
+
+
+def test_cancel_sem_conexao_nao_fica_cancelled(fake_mt5):
+    fake_mt5(initialize_ok=False, last_error=(10004, "terminal fechado"))
+    broker = MT5Broker()
+
+    devolvida = broker.cancel(_pendente())
+
+    assert not devolvida.is_terminal
+    assert "NAO confirmada morta" in devolvida.note
+
+
+# ---------- protecao ATOMICA: sl/tp no MESMO request que abre a ordem -------
+
+def test_place_pending_leva_sl_e_tp_no_proprio_request(fake_mt5):
+    """A invariante central depois do incidente 2026-08-28: entre registrar a
+    ordem-limite e ela preencher podem passar horas, e o processo pode morrer
+    no meio. Com `sl`/`tp` amarrados na PROPRIA ordem, a corretora protege a
+    posicao no instante do fill -- sem processo nenhum no meio."""
+    mod, calls = fake_mt5(initialize_ok=True, symbol_info=_symbol_info(),
+                          order_send_result=_order_send_result(retcode=106, order=555))
+    broker = MT5Broker()
+    order = Order(ticker="WDO@", side=OrderSide.BUY, quantity=1,
+                  order_type=OrderType.LIMIT, limit_price=5200.0,
+                  stop_price=5180.0, target_price=5205.0)
+
+    devolvida = broker.place_pending(order)
+
+    enviado = calls["order_send"][0]
+    assert enviado["action"] == mod.TRADE_ACTION_PENDING
+    assert enviado["sl"] == pytest.approx(5180.0)
+    assert enviado["tp"] == pytest.approx(5205.0)
+    assert devolvida.status == OrderStatus.SENT
+
+
+def test_place_pending_sem_niveis_nao_manda_sl_nem_tp(fake_mt5):
+    """Estrategia que nao declara stop/alvo continua funcionando como antes --
+    a protecao atomica e' oportunista, nao um requisito novo."""
+    _mod, calls = fake_mt5(initialize_ok=True, symbol_info=_symbol_info(),
+                           order_send_result=_order_send_result(retcode=106, order=555))
+    broker = MT5Broker()
+
+    broker.place_pending(Order(ticker="WDO@", side=OrderSide.BUY, quantity=1,
+                               order_type=OrderType.LIMIT, limit_price=5200.0))
+
+    assert "sl" not in calls["order_send"][0]
+    assert "tp" not in calls["order_send"][0]
+
+
+def test_ordem_a_mercado_de_ABERTURA_leva_sl_tp(fake_mt5):
+    _mod, calls = fake_mt5(initialize_ok=True, symbol_info=_symbol_info(),
+                           tick=_tick(bid=5199.5, ask=5200.0),
+                           order_send_result=_order_send_result(retcode=106, price=5200.0))
+    broker = MT5Broker()
+
+    broker.place(Order(ticker="WDO@", side=OrderSide.BUY, quantity=1,
+                       stop_price=5180.0, target_price=5210.0))
+
+    assert calls["order_send"][0]["sl"] == pytest.approx(5180.0)
+    assert calls["order_send"][0]["tp"] == pytest.approx(5210.0)
+
+
+def test_ordem_de_FECHAMENTO_nunca_leva_sl_tp(fake_mt5):
+    """Uma ordem que ABATE posicao nao abre nada que precise de protecao, e
+    mandar `sl`/`tp` nela mexeria na posicao que esta sendo encerrada."""
+    _mod, calls = fake_mt5(initialize_ok=True, symbol_info=_symbol_info(),
+                           tick=_tick(bid=5199.5, ask=5200.0),
+                           order_send_result=_order_send_result(retcode=106, price=5200.0))
+    broker = MT5Broker()
+
+    broker.close_position(
+        Order(ticker="WDO@", side=OrderSide.SELL, quantity=1,
+              stop_price=5180.0, target_price=5210.0),
+        position_ticket=99)
+
+    enviado = calls["order_send"][0]
+    assert enviado["position"] == 99
+    assert "sl" not in enviado and "tp" not in enviado
+
+
+# ---------- set_protection: nunca APAGA, nunca AFROUXA ---------------------
+
+def test_set_protection_sem_alvo_PRESERVA_o_tp_registrado(fake_mt5):
+    """Num `TRADE_ACTION_SLTP`, `tp=0.0` nao e' "deixa como esta": e' REMOVER
+    o alvo. Uma estrategia sem alvo apagava, a cada reforco, o TP que ja
+    estava registrado na posicao."""
+    _mod, calls = fake_mt5(initialize_ok=True, symbol_info=_symbol_info(),
+                           tick=_tick(bid=5199.5, ask=5200.0),
+                           order_send_result=_order_send_result(retcode=106))
+    broker = MT5Broker()
+
+    resultado = broker.set_protection("WDO@", position_ticket=42, side="long",
+                                      stop=5180.0, target=None,
+                                      sl_atual=0.0, tp_atual=5220.0)
+
+    assert resultado["ok"] is True
+    assert calls["order_send"][0]["tp"] == pytest.approx(5220.0), \
+        "o alvo ja registrado tem de ser preservado, nunca zerado"
+
+
+def test_set_protection_nunca_AFROUXA_o_stop_ja_registrado(fake_mt5):
+    """Long com SL em 5190 nao pode ter o stop recuado para 5180 -- stop anda
+    numa direcao so', mesma regra de `AdjustStop` no motor inteiro."""
+    _mod, calls = fake_mt5(initialize_ok=True, symbol_info=_symbol_info(),
+                           tick=_tick(bid=5199.5, ask=5200.0),
+                           order_send_result=_order_send_result(retcode=106))
+    broker = MT5Broker()
+
+    broker.set_protection("WDO@", position_ticket=42, side="long",
+                          stop=5180.0, target=None, sl_atual=5190.0, tp_atual=0.0)
+
+    assert calls["order_send"][0]["sl"] == pytest.approx(5190.0)
+
+
+def test_set_protection_sem_nada_a_registrar_nao_manda_request(fake_mt5):
+    """Sem stop, sem alvo e sem nada registrado a preservar, um SLTP zerado
+    seria um pedido explicito de REMOVER protecao -- o oposto do que este
+    metodo existe para fazer."""
+    _mod, calls = fake_mt5(initialize_ok=True, symbol_info=_symbol_info(),
+                           tick=_tick(), order_send_result=_order_send_result(retcode=106))
+    broker = MT5Broker()
+
+    resultado = broker.set_protection("WDO@", position_ticket=42, side="long")
+
+    assert resultado["ok"] is False
+    assert calls["order_send"] == []
+
+
+# ---------- position_state: "nao ha posicao" != "nao consegui perguntar" ----
+
+def test_position_state_consulta_que_falha_devolve_ok_false(fake_mt5):
+    """`positions_get` devolve `None` quando a CONSULTA falha e tupla vazia
+    quando ela deu certo e nao ha nada. Confundir as duas fazia um terminal
+    fora do ar virar "conta zerada" -- e o robo decidia mandar ordem em cima
+    disso."""
+    fake_mt5(initialize_ok=True, positions_get_none=True)
+    broker = MT5Broker()
+
+    estado = broker.position_state("WDO@")
+
+    assert estado["ok"] is False
+    assert estado["position"] is None
+    assert broker.open_position("WDO@") is None
+
+
+def test_position_state_sem_posicao_devolve_ok_true(fake_mt5):
+    fake_mt5(initialize_ok=True, positions=[])
+    broker = MT5Broker()
+
+    estado = broker.position_state("WDO@")
+
+    assert estado["ok"] is True
+    assert estado["position"] is None
+
+
+def test_position_state_sem_conexao_devolve_ok_false(fake_mt5):
+    fake_mt5(initialize_ok=False, last_error=(10004, "terminal fechado"))
+    broker = MT5Broker()
+
+    assert broker.position_state("WDO@")["ok"] is False
 
 
 # ---------- detect_shares_per_lot (nao digitado, detectado do terminal) ----
@@ -817,3 +1303,213 @@ def test_foreign_activity_usa_symbol_for(fake_mt5):
     broker.foreign_activity("WEGE3.SA")
 
     assert vistos == ["WEGE3"]
+
+
+# ---------- detect_futures_symbol_map (futuro continuo "@" -> contrato real) --
+
+def _futuro(nome, trade_mode=4, volume=0.0, bid=5200.0, ask=5200.5):
+    """`trade_mode=4` imita `SYMBOL_TRADE_MODE_FULL` do pacote real; o valor
+    numerico nao importa pro codigo sob teste (so' compara contra
+    `SYMBOL_TRADE_MODE_DISABLED`, que o fake abaixo fixa em 0).
+
+    `bid`/`ask` default para um book de DOIS LADOS valido (gap (d),
+    incidente 2026-08-28) -- testes que precisam de um contrato MORTO (sem
+    mercado, como o `WDOQ27` real que motivou a checagem) passam `bid=0.0`
+    ou `ask=0.0` explicitamente."""
+    return types.SimpleNamespace(name=nome, trade_mode=trade_mode), volume, bid, ask
+
+
+def _instala_futuros(mod, *pares):
+    """`pares`: sequencia de `(symbol_info, volume, bid, ask)` (ver
+    `_futuro`) -- monta `symbols_get` (devolve todos os `symbol_info`) e
+    `symbol_info_tick` (devolve volume/bid/ask daquele simbolo)."""
+    infos = [info for info, _vol, _bid, _ask in pares]
+    ticks = {info.name: (vol, bid, ask) for info, vol, bid, ask in pares}
+    mod.SYMBOL_TRADE_MODE_DISABLED = 0
+    mod.symbols_get = lambda pattern: [i for i in infos if i.name.startswith(pattern[:-1])]
+
+    def _tick(symbol):
+        vol, bid, ask = ticks.get(symbol, (0.0, 0.0, 0.0))
+        return types.SimpleNamespace(volume=vol, bid=bid, ask=ask)
+
+    mod.symbol_info_tick = _tick
+
+
+def test_detect_futures_symbol_map_escolhe_contrato_de_maior_volume(fake_mt5):
+    """O contrato corrente (front month) e' sempre o mais liquido -- entre
+    dois vencimentos tradaveis, o mapa escolhe o de maior volume do dia, sem
+    precisar saber qual mes e' "o certo"."""
+    mod, _calls = fake_mt5(initialize_ok=True)
+    _instala_futuros(
+        mod,
+        _futuro("WDOU26", volume=120.0),
+        _futuro("WDOV26", volume=9500.0),
+    )
+    broker = MT5Broker()
+
+    assert broker.detect_futures_symbol_map(["WDO@"]) == {"WDO@": "WDOV26"}
+
+
+def test_detect_futures_symbol_map_ignora_contrato_com_trade_mode_desabilitado(fake_mt5):
+    """O simbolo continuo (`"WDO@"`) tipicamente aparece no proprio
+    `symbols_get("WDO*")` com volume alto mas `trade_mode` desabilitado --
+    tem de ser descartado mesmo tendo o maior volume, senao o mapa devolveria
+    o proprio sintoma que motivou a deteccao."""
+    mod, _calls = fake_mt5(initialize_ok=True)
+    _instala_futuros(
+        mod,
+        _futuro("WDO@", trade_mode=0, volume=999999.0),
+        _futuro("WDOU26", trade_mode=4, volume=50.0),
+    )
+    broker = MT5Broker()
+
+    assert broker.detect_futures_symbol_map(["WDO@"]) == {"WDO@": "WDOU26"}
+
+
+def test_detect_futures_symbol_map_filtra_simbolos_fora_do_padrao_de_vencimento(fake_mt5):
+    """`symbols_get("WDO*")` pode devolver simbolos que comecam com a raiz
+    mas nao sao um contrato de vencimento (ex. um indice ou derivado com nome
+    parecido) -- o padrao RAIZ+LETRA_DE_MES+ANO exclui esses."""
+    mod, _calls = fake_mt5(initialize_ok=True)
+    _instala_futuros(
+        mod,
+        _futuro("WDOFUT", volume=99999.0),
+        _futuro("WDO26", volume=99999.0),
+        _futuro("WDOU26", volume=10.0),
+    )
+    broker = MT5Broker()
+
+    assert broker.detect_futures_symbol_map(["WDO@"]) == {"WDO@": "WDOU26"}
+
+
+def test_detect_futures_symbol_map_sem_contrato_tradavel_mantem_ticker_original(fake_mt5):
+    """Nenhum candidato tradavel encontrado: mapeia pro proprio simbolo base
+    -- degrada pro sintoma de hoje (ordem recusada) em vez de quebrar."""
+    mod, _calls = fake_mt5(initialize_ok=True)
+    _instala_futuros(mod, _futuro("WDOU26", trade_mode=0, volume=10.0))
+    broker = MT5Broker()
+
+    assert broker.detect_futures_symbol_map(["WDO@"]) == {"WDO@": "WDO@"}
+
+
+def test_detect_futures_symbol_map_ticker_sem_arroba_mapeia_para_symbol_for(fake_mt5):
+    """Ticker que nao e' futuro continuo (sem sufixo `"@"`, ex. acao) nunca
+    aciona a deteccao -- mapeia direto pro resultado de `symbol_for`."""
+    mod, _calls = fake_mt5(initialize_ok=True)
+    broker = MT5Broker()
+
+    assert broker.detect_futures_symbol_map(["PMAM3.SA"]) == {"PMAM3.SA": "PMAM3"}
+
+
+def test_detect_futures_symbol_map_respeita_symbol_map_customizado_na_base(fake_mt5):
+    """Se `symbol_map` ja tem override pra este ticker, a deteccao parte
+    dele -- um override pra algo que NAO termina em `"@"` pula a deteccao de
+    futuro inteira (mesmo espirito de `detect_fractional_symbol_map`)."""
+    mod, _calls = fake_mt5(initialize_ok=True)
+    broker = MT5Broker(symbol_map={"WDO@": "WDOX_FIXO"})
+
+    assert broker.detect_futures_symbol_map(["WDO@"]) == {"WDO@": "WDOX_FIXO"}
+
+
+def test_detect_futures_symbol_map_mistura_futuro_e_acao(fake_mt5):
+    """Universo misto (ex. slot com mais de um papel): cada ticker resolve
+    de forma independente, sem exigir uniformidade entre eles."""
+    mod, _calls = fake_mt5(initialize_ok=True)
+    _instala_futuros(mod, _futuro("WDOU26", volume=10.0))
+    broker = MT5Broker()
+
+    assert broker.detect_futures_symbol_map(["WDO@", "PMAM3.SA"]) == {
+        "WDO@": "WDOU26", "PMAM3.SA": "PMAM3",
+    }
+
+
+def test_detect_futures_symbol_map_falha_de_conexao_devolve_none_sem_excecao(fake_mt5):
+    fake_mt5(initialize_ok=False, last_error=(10004, "terminal nao encontrado"))
+    broker = MT5Broker()
+
+    assert broker.detect_futures_symbol_map(["WDO@"]) is None
+
+
+# ---------- gap (d), incidente 2026-08-28: contrato SEM MERCADO nunca vence -
+#
+# Reproducao do bug real: num restart, a deteccao escolheu `WDOQ27` (maior
+# volume no criterio de TICK UNICO) em vez do `WDOU26` correto -- confirmado
+# na mao que `WDOQ27` tinha `bid=0.0` (sem book de dois lados, contrato sem
+# mercado). O criterio novo tem de descartar isso mesmo com volume alto.
+
+def test_detect_futures_symbol_map_descarta_contrato_com_bid_zero_mesmo_com_volume_alto(fake_mt5):
+    mod, _calls = fake_mt5(initialize_ok=True)
+    _instala_futuros(
+        mod,
+        # WDOQ27: exatamente o bug real -- volume alto (tick preso de negocio
+        # velho), mas SEM mercado (bid=0.0).
+        _futuro("WDOQ27", volume=999999.0, bid=0.0, ask=5225.0),
+        _futuro("WDOU26", volume=50.0, bid=5224.5, ask=5225.0),
+    )
+    broker = MT5Broker()
+
+    assert broker.detect_futures_symbol_map(["WDO@"]) == {"WDO@": "WDOU26"}
+
+
+def test_detect_futures_symbol_map_descarta_contrato_com_ask_zero(fake_mt5):
+    mod, _calls = fake_mt5(initialize_ok=True)
+    _instala_futuros(
+        mod,
+        _futuro("WDOQ27", volume=999999.0, bid=5224.0, ask=0.0),
+        _futuro("WDOU26", volume=50.0, bid=5224.5, ask=5225.0),
+    )
+    broker = MT5Broker()
+
+    assert broker.detect_futures_symbol_map(["WDO@"]) == {"WDO@": "WDOU26"}
+
+
+def test_detect_futures_symbol_map_sem_nenhum_candidato_com_book_mantem_ticker_original(fake_mt5):
+    """Todos os candidatos tradaveis estao sem book de dois lados -- degrada
+    pro sintoma atual (mapeia pro proprio ticker `@`) em vez de escolher um
+    contrato morto."""
+    mod, _calls = fake_mt5(initialize_ok=True)
+    _instala_futuros(mod, _futuro("WDOU26", volume=10.0, bid=0.0, ask=0.0))
+    broker = MT5Broker()
+
+    assert broker.detect_futures_symbol_map(["WDO@"]) == {"WDO@": "WDO@"}
+
+
+def test_detect_futures_symbol_map_usa_volume_de_barras_recentes_quando_disponivel(fake_mt5):
+    """Com `copy_rates_from_pos` disponivel (terminal real), o desempate usa
+    a SOMA de barras M1 recentes, nao o tick unico -- WDOU26 tem tick.volume
+    MAIOR mas WDOV26 tem mais volume ACUMULADO nas ultimas barras, que e' o
+    sinal mais robusto de qual contrato concentra a liquidez agora."""
+    mod, _calls = fake_mt5(initialize_ok=True)
+    _instala_futuros(
+        mod,
+        _futuro("WDOU26", volume=500.0),   # tick unico alto...
+        _futuro("WDOV26", volume=10.0),    # ...mas tick unico baixo aqui
+    )
+    mod.TIMEFRAME_M1 = 1
+
+    def _copy_rates(nome, timeframe, start, count):
+        barras_por_simbolo = {
+            "WDOU26": [{"tick_volume": 5.0}] * count,       # pouco volume por barra
+            "WDOV26": [{"tick_volume": 900.0}] * count,     # muito volume por barra
+        }
+        return barras_por_simbolo.get(nome, [])
+
+    mod.copy_rates_from_pos = _copy_rates
+    broker = MT5Broker()
+
+    assert broker.detect_futures_symbol_map(["WDO@"]) == {"WDO@": "WDOV26"}
+
+
+def test_detect_futures_symbol_map_cai_para_tick_unico_quando_barras_indisponiveis(fake_mt5):
+    """Sem `copy_rates_from_pos` no modulo (nem real nem fake) -- degrada pro
+    criterio antigo (tick unico) em vez de quebrar a deteccao inteira."""
+    mod, _calls = fake_mt5(initialize_ok=True)
+    _instala_futuros(
+        mod,
+        _futuro("WDOU26", volume=120.0),
+        _futuro("WDOV26", volume=9500.0),
+    )
+    assert not hasattr(mod, "copy_rates_from_pos")
+    broker = MT5Broker()
+
+    assert broker.detect_futures_symbol_map(["WDO@"]) == {"WDO@": "WDOV26"}

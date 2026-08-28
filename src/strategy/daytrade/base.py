@@ -754,3 +754,83 @@ def contracts_from_capital(
     if hard_cap is not None:
         contratos = min(contratos, max(0, int(hard_cap)))
     return contratos
+
+
+# ---------- reserva de seguranca sobre CAPITAL (2026-08-28, incidente REAL) -
+# `wdo_grid_reload_maker` (WDO@, capital real R$300) operou pela primeira vez
+# ao vivo em 2026-08-28 e ZEROU a conta: saldo final -R$298,60, equity
+# NEGATIVA. Forense confirmado no terminal MT5: dois deals de ABERTURA
+# (`475209192` as 11:58:59 e `475209197` as 11:59:04, mesmo magic, volume 1
+# cada) -- DUAS entradas INDEPENDENTES do grid, consolidadas pela conta
+# NETTING numa unica posicao de -2 contratos. Com 2 contratos a margem
+# exigida DOBROU, a margem livre da conta ficou NEGATIVA, e a corretora
+# passou a recusar toda ordem nova -- inclusive as de FECHAMENTO (erro
+# `[MG51] Para abrir novas posicoes`) -- prendendo a conta numa posicao
+# perdedora sem conseguir sair.
+#
+# `contracts_from_capital(300, 150, buffer=2.0)` da' EXATAMENTE 1 contrato
+# (300 = 150 x 2.0 x 1) -- matematicamente correto, mas SEM NENHUMA folga: o
+# calculo "cabe exatamente 1" e o calculo "cabe exatamente 2" ficam separados
+# por UM UNICO evento (uma segunda entrada independente que nao deveria ter
+# passado pelo teto agregado, ver `backtest.intraday.machine.
+# IntradaySessionMachine._cap_capital_atual`). O dono foi explicito sobre o
+# que quer daqui pra frente: "operou com todos os contratos, ao inves de
+# fazer uma estrategia segura mantendo sempre um caixa de seguranca".
+#
+# `RESERVA_CAIXA_SEGURANCA` e' a resposta a isso -- um SEGUNDO fator de
+# seguranca, empilhado por CIMA de `MARGIN_BUFFER_FUTUROS` (que ja dobra a
+# margem exigida por contrato, mas por um motivo DIFERENTE: cobrir 1 troca de
+# lado, ver a nota longa em `MARGIN_BUFFER_FUTUROS`). Multiplicador em vez de
+# fracao subtraida do caixa por ser a mesma forma matematica que o repo ja usa
+# em `buffer` -- os dois compoem por multiplicacao no MESMO denominador
+# (`margin_per_contract_brl x buffer x RESERVA_CAIXA_SEGURANCA`), nunca dois
+# mecanismos concorrentes. `1.25` equivale a reservar 20% do caixa fora do
+# calculo (`1 - 1/1.25 = 0.20`) -- NAO E' MEDICAO, e' DECISAO, mesmo espirito
+# de `MARGIN_BUFFER_FUTUROS`: nao existe (ainda) estatistica de chamada de
+# margem/slippage de fechamento neste repo para calibrar o numero certo.
+# Ponto de apoio parcial (nao prova): a escada de capital medida por Monte
+# Carlo de rejeicao de fila (`scripts/daytrade/capital_ladder_wdof1_
+# oos_2026_08_27.py`, achado independente e ANTERIOR a este incidente) ja
+# tinha encontrado que N=1 contrato de WDO F1 precisa de ~R$360 no OOS para
+# nunca zerar em 30 sementes (20% acima do piso ingenuo de R$300) -- mesma
+# ORDEM DE GRANDEZA da reserva aqui escolhida, por um caminho totalmente
+# diferente (rejeicao de ordem, nao exposicao agregada).
+#
+# Efeito HONESTO e deliberado: para uma conta EXATAMENTE no piso de
+# `MARGIN_BUFFER_FUTUROS` (como o WDO@ a R$300 do incidente), esta reserva
+# reduz a capacidade calculada para MENOS de 1 contrato inteiro -- ou seja,
+# sob esta regra, R$300 deixa de ser "capital minimo real" suficiente para
+# abrir nenhum contrato COM folga. Isto e' proposital, nao um efeito colateral
+# a esconder: o proprio incidente mostra que operar exatamente no limite, sem
+# nenhuma folga, e' o que quebrou a conta. Quem quiser o numero CRU (sem
+# reserva) continua podendo chamar `contracts_from_capital` direto -- esta
+# funcao NUNCA o substitui, so' e' o caminho que qualquer sizing de ENTRADA
+# REAL (motor ou estrategia) deve preferir.
+RESERVA_CAIXA_SEGURANCA = 1.25
+
+
+def contracts_from_capital_com_reserva(
+    cash_brl: float,
+    margin_per_contract_brl: float,
+    buffer: float = MARGIN_BUFFER_FUTUROS,
+    reserva: float = RESERVA_CAIXA_SEGURANCA,
+    hard_cap: int | None = None,
+) -> int:
+    """`contracts_from_capital` (ver la' a mecanica pura, casos de borda e
+    tolerancia de ponto flutuante -- tudo herdado sem mudanca) com a reserva
+    de seguranca de `RESERVA_CAIXA_SEGURANCA` ja aplicada ao `buffer`.
+
+    E' o UNICO caminho que o motor (`backtest.intraday.machine.
+    IntradaySessionMachine`) e as estrategias com dimensionamento dinamico
+    por capital (`WdoGridReloadMaker`, `CopaWin`) devem usar para transformar
+    caixa corrente em "quantos contratos e' seguro ABRIR/MANTER agora" -- ter
+    UM lugar so' fazendo essa conta e' o que garante que o motor e a
+    estrategia nunca divergem sobre o numero (AGENTS.md: "um numero declarado
+    em dois lugares e' um numero que vai divergir"). `contracts_from_capital`
+    pura continua existindo e nao e' substituida -- serve para quem
+    deliberadamente quer o numero CRU (ex.: `config_for(cash_brl=...,
+    margin_per_contract_brl=...)`, um snapshot explicito e documentado, ou
+    scripts de pesquisa que exploram a sensibilidade ao buffer)."""
+    return contracts_from_capital(
+        cash_brl, margin_per_contract_brl, buffer=buffer * reserva, hard_cap=hard_cap,
+    )

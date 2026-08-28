@@ -1,0 +1,67 @@
+{
+  "symbol": "WIN@",
+  "params": {
+    "janela_rompimento": 10,
+    "alvo_vol": 4.0,
+    "stop_vol": 2.0,
+    "trail_vol": null,
+    "vol_min_ticks": 8.0,
+    "fracao_entrada": 1.0,
+    "aquecimento_barras": 45,
+    "max_entradas_dia": 10,
+    "entrada_maker": true,
+    "entrada_ttl_barras": 15
+  },
+  "unlock_reason": "Validacao final autorizada pelo dono em 2026-08-27 para consolidar capital/sinal antes de atualizar producao",
+  "modelo_custo": {
+    "fee_round_trip_brl_por_contrato": 0.5,
+    "exchange_fee_pct_per_leg": 0.0,
+    "slippage_ticks": 1.0,
+    "tick_size": 5.0,
+    "point_value_brl": 0.2,
+    "target_fills_as_maker": true,
+    "limit_fill_capped_by_volume": true,
+    "ambiguous_bar_resolution": "stop_first",
+    "queue_ahead_qty": 0.0,
+    "max_open_contracts": 1,
+    "session_end_policy": "fixed"
+  },
+  "janelas": {
+    "IS": "72730 barras M1, 129 pregoes, 2025-12-01 -> 2026-06-12",
+    "OOS": "28736 barras M1, 51 pregoes, 2026-06-15 -> 2026-08-25",
+    "combinado": "101466 barras M1, 180 pregoes, 2025-12-01 -> 2026-08-25"
+  },
+  "rodadas": {
+    "IS": {
+      "pregoes": 129,
+      "trades": 1086,
+      "liquido_brl": 8029.4,
+      "liquido_por_pregao_brl": 62.243410852713176,
+      "liquido_brl_com_pedagio": 5857.4,
+      "liquido_por_pregao_brl_com_pedagio": 45.40620155038759,
+      "recusas_pct": 0.0
+    },
+    "OOS": {
+      "pregoes": 51,
+      "trades": 425,
+      "liquido_brl": 195.9,
+      "liquido_por_pregao_brl": 3.8411764705882354,
+      "liquido_brl_com_pedagio": -654.1,
+      "liquido_por_pregao_brl_com_pedagio": -12.825490196078432,
+      "recusas_pct": 0.0
+    },
+    "IS+OOS combinado": {
+      "pregoes": 180,
+      "trades": 1511,
+      "liquido_brl": 8225.3,
+      "liquido_por_pregao_brl": 45.69611111111111,
+      "liquido_brl_com_pedagio": 5203.3,
+      "liquido_por_pregao_brl_com_pedagio": 28.907222222222224,
+      "recusas_pct": 0.0
+    }
+  },
+  "memoria_2026_08_26": {
+    "is_por_pregao_brl": 62.24,
+    "oos_por_pregao_brl": 3.84
+  }
+}

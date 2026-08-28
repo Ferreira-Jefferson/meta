@@ -27,7 +27,11 @@ from dataclasses import dataclass
 from datetime import time
 from typing import Literal
 
-from strategy.daytrade.base import capital_minimo_brl
+from strategy.daytrade.base import (
+    MARGIN_BUFFER_FUTUROS,
+    capital_minimo_brl,
+    contracts_from_capital,
+)
 
 from backtest.intraday.costs import (
     B3_EQUITY_EXCHANGE_FEE_PCT_PER_LEG,
@@ -73,6 +77,30 @@ class SymbolProfile:
     # competicao com teto de posicao declara o teto OFICIAL aqui, e quem roda
     # um teste com folga passa `max_open_contracts=` para `config_for`.
     max_open_contracts: int | None = None
+    # `True` so' para um perfil de FUTURO (`_futures_profile`, nunca
+    # `_equity_profile`) -- distingue os dois caminhos de dimensionamento de
+    # `config_for` (caixa-por-lote em acao via `capital_minimo_brl`;
+    # margem-por-contrato em futuro via `strategy.daytrade.base.
+    # contracts_from_capital`, 2026-08-26). Campo explicito em vez de
+    # inferir de `session_end_policy`/`price_tick_size` (que existem por
+    # OUTRO motivo, documentado nos proprios campos) -- misturar duas
+    # finalidades num campo so' e' o tipo de acoplamento que este modulo
+    # ja evita (ver docstring de `_equity_profile`).
+    is_futures: bool = False
+    # Margem exigida por 1 contrato, em REAIS -- alimenta `contracts_from_
+    # capital`/o painel (`dashboard/robot_view.py`), nunca o motor de
+    # backtest (que usa `max_open_contracts`, nao caixa). `None` para toda
+    # acao (o limitador la e' `capital_minimo_brl`, nao margem).
+    #
+    # VALOR APROXIMADO, nao verificado via MT5 (`order_calc_margin`/
+    # `symbol_info_margin`, hoje NAO consultado neste repo -- ver a nota
+    # longa em `strategy.daytrade.base.MARGIN_BUFFER_FUTUROS`). Vem da
+    # margem PROMOCIONAL de day trade que o dono relatou (~R$100 mini-
+    # indice, ~R$150 mini-dolar, 2026-08-27) -- o mesmo numero que
+    # `daytrade_capital_real_gate_2026_08_27` ja usa em toda a escada de
+    # capital. Declarado AQUI para nao continuar espalhado em scripts
+    # ad-hoc (o mesmo erro que motivou `price_tick_size` existir).
+    margin_per_contract_brl: float | None = None
 
 
 #: Corte IS/OOS de TODA a familia de acoes calibrada em 2026-08-22. Declarado
@@ -166,6 +194,7 @@ def _futures_profile(
     price_tick_size: float,
     max_open_contracts: int,
     medicao: str,
+    margin_per_contract_brl: float,
 ) -> SymbolProfile:
     """Perfil de um MINI-FUTURO da B3 (serie continua) operado em contratos.
 
@@ -180,7 +209,24 @@ def _futures_profile(
     `ts.time()` direto contra este campo (`session_end_policy="fixed"`).
 
     `medicao`: o que foi medido no parquet deste simbolo, para o numero de
-    corte nao ficar orfao de evidencia."""
+    corte nao ficar orfao de evidencia.
+
+    `margin_per_contract_brl` e' OBRIGATORIO (2026-08-28). Era opcional, com
+    default `None` -- e `None` desliga o teto de contratos por caixa
+    (`IntradaySessionMachine._cap_capital_atual` devolve `None`), deixando
+    valer so' `max_open_contracts`, que e' o limite REGULATORIO da Copa BTG
+    e nao tem relacao nenhuma com o dinheiro do dono. Foi exatamente esse
+    estado que o WDO F1 tinha no dia em que zerou a conta. Um perfil de
+    futuro novo que esquecesse o argumento reproduziria o incidente ponto
+    por ponto, sem erro nenhum no caminho -- entao agora nao da' para
+    esquecer."""
+    if margin_per_contract_brl is None or float(margin_per_contract_brl) <= 0:
+        raise ValueError(
+            "perfil de FUTURO exige margin_per_contract_brl > 0: sem ele o "
+            "teto de contratos por caixa fica desligado e so' sobra o limite "
+            "regulatorio, que nao conhece o caixa do dono (ver incidente "
+            "2026-08-28)."
+        )
     return SymbolProfile(
         frozen_cutoff=OOS_CUTOFF,
         frozen_note=(
@@ -197,6 +243,8 @@ def _futures_profile(
         default_quantity=1,  # 1 CONTRATO -- futuro nao tem lote de 100
         price_tick_size=price_tick_size,
         max_open_contracts=max_open_contracts,
+        is_futures=True,
+        margin_per_contract_brl=margin_per_contract_brl,
     )
 
 
@@ -217,6 +265,7 @@ FUTURES_PROFILES: dict[str, SymbolProfile] = {
             "2.968 pts, soma|C-O| por pregao 29.722 pts, 563 barras/pregao, "
             "17,4M contratos/dia de giro."
         ),
+        margin_per_contract_brl=100.0,
     ),
     "WDO@": _futures_profile(
         session_end_time=time(21, 30),  # 18:30 de Brasilia (fecho medido 18:29)
@@ -227,6 +276,7 @@ FUTURES_PROFILES: dict[str, SymbolProfile] = {
             "49,3 pts, soma|C-O| por pregao 570 pts, 570 barras/pregao, "
             "2,4M contratos/dia de giro."
         ),
+        margin_per_contract_brl=150.0,
     ),
 }
 
@@ -294,6 +344,10 @@ def config_for(
     limit_fill_capped_by_volume: bool = True,
     enforce_capital_minimo: bool | None = None,
     max_open_contracts: int | None = None,
+    cash_brl: float | None = None,
+    margin_per_contract_brl: float | None = None,
+    enforce_capital_cap: bool | None = None,
+    margin_buffer: float = MARGIN_BUFFER_FUTUROS,
 ) -> IntradayBacktestConfig:
     """Monta o `IntradayBacktestConfig` de um perfil + a economia do simbolo
     lida do terminal (`market_data_intraday.mt5_source.symbol_economics`).
@@ -341,7 +395,76 @@ def config_for(
     isto, o backtest deixava a estrategia "comprar" um lote que a conta nao
     pagaria de verdade, produzindo MaxDD abaixo de -100% (impossivel sem
     margem) -- o robo ao vivo jamais teria essa chance. So' desliga quem
-    passar `False` explicitamente."""
+    passar `False` explicitamente.
+
+    `cash_brl`/`margin_per_contract_brl` (2026-08-26, ADITIVO -- objetivo
+    novo do dono de escalar contratos de futuro sozinho conforme o
+    caixa/margem permitir, ver `strategy.daytrade.base.contracts_from_
+    capital`): caminho OPCIONAL para computar `max_open_contracts`
+    AUTOMATICAMENTE a partir do capital, em vez de um numero fixo digitado
+    a mao. So' entra em acao quando as TRES condicoes valem ao mesmo tempo:
+    (1) os dois foram passados, (2) `max_open_contracts` explicito NAO foi
+    passado (explicito sempre vence -- mesma regra de sempre), e (3)
+    `profile.is_futures` (o teto por capital nao significa nada numa acao,
+    que e' limitada por caixa via `enforce_capital_minimo`). Quando entra,
+    o teto OFICIAL do perfil (`profile.max_open_contracts`, ex.: 15 no WIN,
+    5 no WDO) e' usado como `hard_cap` de `contracts_from_capital` -- o robo
+    escala com o capital, mas nunca ALEM do teto declarado. Passar os dois
+    parametros para um perfil de acao (`is_futures=False`) e' erro do
+    chamador (`ValueError`) -- confundir os dois seria misturar dois
+    limitadores que nao tem nada a ver um com o outro.
+
+    `enforce_capital_cap`/`margin_buffer` (2026-08-28, DEFAULT-ON para
+    futuro -- incidente REAL: `wdo_grid_reload_maker`, WDO@, R$300, zerou a
+    conta ao vivo abrindo 2 contratos simultaneos porque o UNICO teto que a
+    config carregava era `max_open_contracts=5`, o numero REGULATORIO da
+    Copa BTG, sem nenhuma relacao com o caixa real do dono). Diferente de
+    `cash_brl`/`margin_per_contract_brl` acima (que computam um `max_open_
+    contracts` ESTATICO, uma foto tirada 1x aqui dentro), este caminho liga
+    `IntradayBacktestConfig.margin_per_contract_brl` (a partir de `profile.
+    margin_per_contract_brl`, sem precisar de nenhum parametro novo com o
+    valor -- ja esta' no perfil) para o motor recalcular o teto por capital a
+    CADA barra, contra o caixa DE VERDADE (`initial_capital + realized_pnl`
+    da propria run, ver `IntradaySessionMachine._cap_capital_atual`), com a
+    reserva de seguranca de `strategy.daytrade.base.RESERVA_CAIXA_SEGURANCA`
+    ja aplicada.
+
+    `None` (default) ativa sozinho quando `profile.is_futures` e `profile.
+    margin_per_contract_brl` sao conhecidos -- e' esse o caminho que
+    `scripts/run_live.py::build_intraday` usa para montar a config real (sem
+    passar nenhum destes parametros novos), entao a operacao ao vivo herda a
+    protecao automaticamente, sem precisar de nenhuma mudanca em `live/`.
+    `False` explicito desliga (ambiente de margem simulada infinita, Copa
+    BTG, ou sensibilidade deliberada sem o teto por caixa). `True` explicito
+    sem `profile.margin_per_contract_brl` conhecido e' erro do chamador
+    (`ValueError`) -- pedir um teto que nao ha dado para calcular seria um
+    "sem teto" silencioso disfarcado de pedido atendido.
+
+    O teto por capital NUNCA aumenta `max_open_contracts` (o campo que este
+    montador resolve logo acima, via `teto`) -- so' pode ENCOLHER o que a
+    run permitiria durante a execucao, dinamicamente, conforme o caixa muda
+    (ver a docstring do campo em `IntradayBacktestConfig`)."""
+    if enforce_capital_cap is None:
+        enforce_capital_cap = profile.is_futures and profile.margin_per_contract_brl is not None
+    if enforce_capital_cap and (not profile.is_futures or profile.margin_per_contract_brl is None):
+        raise ValueError(
+            "config_for: enforce_capital_cap=True pedido, mas o perfil nao declara "
+            "`is_futures`+`margin_per_contract_brl` -- nao ha dado para calcular o "
+            "teto por capital (pedir um teto sem como calcula-lo viraria 'sem teto' "
+            "silencioso)."
+        )
+    if (cash_brl is None) != (margin_per_contract_brl is None):
+        raise ValueError(
+            "config_for: passe `cash_brl` e `margin_per_contract_brl` JUNTOS "
+            "(um sem o outro nao computa nada) ou nenhum dos dois."
+        )
+    if cash_brl is not None and not profile.is_futures:
+        raise ValueError(
+            "config_for: `cash_brl`/`margin_per_contract_brl` so fazem sentido "
+            "para um perfil de FUTURO (`profile.is_futures=True`) -- uma acao e' "
+            "limitada por caixa (`enforce_capital_minimo`/`capital_minimo_brl`), "
+            "nunca por margem-por-contrato."
+        )
     if initial_capital is None:
         if preco_atual is None:
             raise ValueError(
@@ -352,6 +475,17 @@ def config_for(
     elif preco_atual is not None:
         raise ValueError("config_for: passe `initial_capital` OU `preco_atual`, nao os dois.")
     teto = profile.max_open_contracts if max_open_contracts is None else max_open_contracts
+    if (
+        max_open_contracts is None
+        and profile.is_futures
+        and cash_brl is not None
+        and margin_per_contract_brl is not None
+    ):
+        teto = contracts_from_capital(
+            cash_brl=cash_brl,
+            margin_per_contract_brl=margin_per_contract_brl,
+            hard_cap=profile.max_open_contracts,
+        )
     if enforce_capital_minimo is None:
         enforce_capital_minimo = profile.max_open_contracts is None
     if profile.price_tick_size is not None:
@@ -379,4 +513,6 @@ def config_for(
         limit_fill_capped_by_volume=limit_fill_capped_by_volume,
         enforce_capital_minimo=enforce_capital_minimo,
         max_open_contracts=teto,
+        margin_per_contract_brl=(profile.margin_per_contract_brl if enforce_capital_cap else None),
+        margin_buffer=margin_buffer,
     )

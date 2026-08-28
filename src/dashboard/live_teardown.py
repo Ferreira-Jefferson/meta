@@ -38,7 +38,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from typing import Optional
 
-from core.live_models import Order, OrderSide, OrderStatus, OrderType
+from core.live_models import Fill, Order, OrderSide, OrderStatus, OrderType
 
 #: Abaixo disto o caixa é considerado zerado — mesma tolerância que
 #: `dashboard/app.py::operacao_caixa` usa no ledger manual (capital pequeno:
@@ -266,6 +266,7 @@ def inspecionar(slot) -> Pendencias:
     modo = _modo_do_slot(slot, processo)
 
     caixa = caixa_real = 0.0
+    posicao_sombra = None
     with live_store.live_journal() as conn:
         conta = live_store.load_account(conn, slot.id)
         if conta is not None:
@@ -273,6 +274,8 @@ def inspecionar(slot) -> Pendencias:
             # lado seguro, o mesmo que `Pendencias.impedimento` assume: real.
             caixa = float(conta.cash_for(modo or "live"))
             caixa_real = float(conta.cash)
+            if slot.symbol:
+                posicao_sombra = conta.positions.get(slot.symbol)
 
     base = dict(
         slot_id=slot.id, label=slot.label, symbol=slot.symbol or "",
@@ -281,9 +284,25 @@ def inspecionar(slot) -> Pendencias:
     )
 
     # Sombra nunca mandou ordem: perguntar à corretora custaria uma conexão
-    # para receber, por construção, uma lista vazia.
+    # para receber, por construção, lista vazia. Mas uma posição SIMULADA
+    # (`live_positions`, a mesma tabela que o robô real usa) pode existir de
+    # verdade -- ela é o que `delete_account`/`archive_account` recusam se
+    # ninguém a encerrar antes (achado em 2026-08-28: robô de sombra parado
+    # há um dia com posição aberta no registro, e a remoção falhava com uma
+    # mensagem que fala de MT5 num robô que nunca chegou perto de um). Expor
+    # aqui é o que faz o popup avisar e `remover()` saber o que fechar.
     if modo == "shadow" or not slot.symbol:
-        return Pendencias(ordens=[], **base)
+        if posicao_sombra is None:
+            return Pendencias(ordens=[], **base)
+        from dashboard.robot_view import _ultimo_preco
+
+        preco_atual, _ = _ultimo_preco(slot.symbol)
+        posicao = {
+            "side": posicao_sombra.metadata.get("side") or "long",
+            "quantity": posicao_sombra.quantity,
+            "price": posicao_sombra.entry_price,
+        }
+        return Pendencias(ordens=[], posicao=posicao, preco_atual=preco_atual, **base)
 
     broker = _broker_do_slot(slot)
     try:
@@ -293,7 +312,16 @@ def inspecionar(slot) -> Pendencias:
         if ordens is None:
             return Pendencias(
                 erro_corretora="a consulta de ordens pendentes não voltou", **base)
-        posicao = broker.open_position(slot.symbol)
+        # `position_state`, não `open_position`: aquele achata "não há posição"
+        # e "não consegui perguntar" no mesmo `None`, e aqui a diferença decide
+        # se o dono pode apagar o robô. Ler errado deixaria uma posição real
+        # órfã no terminal, que é a falha nº 1 da lista no topo deste arquivo.
+        estado = broker.position_state(slot.symbol)
+        if not estado.get("ok"):
+            return Pendencias(
+                erro_corretora=f"a leitura da posição não voltou: {estado.get('note', '')}",
+                **base)
+        posicao = estado.get("position")
         preco = broker.last_price(slot.symbol) if posicao else None
     except Exception as e:  # noqa: BLE001 - qualquer falha aqui é "não sei"
         return Pendencias(erro_corretora=f"{type(e).__name__}: {e}", **base)
@@ -356,7 +384,15 @@ def remover(slot, apagar_historico: bool = False) -> ResultadoRemocao:
             resultado.avisos.append(
                 f"o processo {pend.processo_pid} já não estava mais rodando.")
 
-    if pend.ordens or pend.posicao:
+    if pend.e_sombra:
+        # Sombra nunca teve corretora: a "posição" aqui é só uma linha em
+        # `live_positions`, a mesma tabela que o robô real usa para
+        # bookkeeping -- sem encerrá-la, `delete_account`/`archive_account`
+        # recusam com o MESMO guard que protege um robô real de virar posição
+        # órfã no MT5, só que não há MT5 nenhum para essa exposição existir.
+        if pend.posicao:
+            _encerrar_posicao_sombra(slot, resultado)
+    elif pend.ordens or pend.posicao:
         if not _limpar_na_corretora(slot, resultado):
             # Posição que não fechou é o único desfecho em que apagar a conta
             # seria PIOR que parar no meio: o robô sai da tela e a exposição
@@ -412,9 +448,20 @@ def _limpar_na_corretora(slot, resultado: ResultadoRemocao) -> bool:
 
     Falha de ordem vira AVISO em vez de exceção: uma que não cancelou não
     pode impedir que as outras cancelem nem que a posição seja encerrada, e o
-    dono precisa terminar sabendo o que ficou para trás. Posição é diferente
-    de ordem: ordem pendurada que sobrou não tem risco de mercado enquanto
-    não preenche, posição aberta tem — por isso só ela decide o `False`."""
+    dono precisa terminar sabendo o que ficou para trás. Mas ela também
+    **impede a conta de ser apagada** (`False`), junto com a posição aberta.
+
+    Isso é uma CORREÇÃO de premissa (2026-08-28). O texto que estava aqui
+    dizia que "ordem pendurada que sobrou não tem risco de mercado enquanto
+    não preenche" — e é exatamente ao contrário: uma ordem-limite viva no
+    book preenche sozinha, sem ninguém clicar em nada, e abre uma posição
+    real. Apagar a conta nesse estado deixa essa posição nascendo sem robô,
+    sem stop, sem diário e sem linha no painel. "Enquanto não preenche" não
+    é uma garantia, é o intervalo antes do problema.
+
+    Piorava por um segundo motivo, já corrigido: `MT5Broker.cancel` marcava
+    `CANCELLED` mesmo quando a corretora RECUSAVA o cancelamento, então este
+    laço via sucesso onde não houve e nunca chegava a avisar nada."""
     broker = _broker_do_slot(slot)
     if not broker.connect():
         resultado.avisos.append(
@@ -422,11 +469,16 @@ def _limpar_na_corretora(slot, resultado: ResultadoRemocao) -> bool:
             "confira ordens e posição no MT5.")
         return False
 
+    limpo = True
     ordens = broker.pending_orders(slot.symbol)
     if ordens is None:
         resultado.avisos.append(
             "a corretora não respondeu a lista de ordens pendentes — confira no MT5.")
         ordens = []
+        # `None` é "não consegui perguntar", não "não há nenhuma" (ver a
+        # docstring de `pending_orders`). Sem saber o que existe, não dá para
+        # afirmar que a corretora ficou limpa.
+        limpo = False
     for o in ordens:
         pedido = Order(
             ticker=slot.symbol,
@@ -442,11 +494,21 @@ def _limpar_na_corretora(slot, resultado: ResultadoRemocao) -> bool:
             resultado.ordens_canceladas.append(str(o["ticket"]))
         else:
             resultado.avisos.append(
-                f"a ordem #{o['ticket']} não foi cancelada: {devolvida.note}")
+                f"a ordem #{o['ticket']} NÃO foi cancelada e pode preencher sozinha, "
+                f"abrindo posição sem robô nenhum vigiando: {devolvida.note}")
+            limpo = False
 
-    posicao = broker.open_position(slot.symbol)
+    estado = broker.position_state(slot.symbol)
+    if not estado.get("ok"):
+        # "Não consegui perguntar" nunca vira "não há posição" — apagar a
+        # conta aqui deixaria uma posição real órfã no terminal.
+        resultado.avisos.append(
+            f"não consegui ler a posição de {slot.symbol} na corretora "
+            f"({estado.get('note', '')}) — confira no MT5.")
+        return False
+    posicao = estado.get("position")
     if not posicao:
-        return True
+        return limpo
     fechamento = Order(
         ticker=slot.symbol,
         side=OrderSide.SELL if posicao["side"] == "long" else OrderSide.BUY,
@@ -454,7 +516,19 @@ def _limpar_na_corretora(slot, resultado: ResultadoRemocao) -> bool:
         order_type=OrderType.MARKET,
         sent_at=datetime.now(timezone.utc),
     )
-    executada = broker.place(fechamento)
+    # `close_position` (com o ticket), NUNCA `place()`: sem o campo
+    # `"position"` no request o motor de risco da corretora trata a ordem
+    # como ABERTURA nova e recusa quando a margem está esgotada -- foi
+    # exatamente isso que travou ~24 tentativas de fechamento no incidente de
+    # 2026-08-28 (`retcode=10006 [MG51] Para abrir novas posições`). Este era
+    # o mesmo bug, no caminho de remover um robô: o lugar em que ele dói mais,
+    # porque é o momento em que o dono está tentando sair de tudo.
+    fechar_com_ticket = getattr(broker, "close_position", None)
+    ticket = posicao.get("ticket")
+    if fechar_com_ticket is not None and ticket is not None:
+        executada = fechar_com_ticket(fechamento, ticket)
+    else:
+        executada = broker.place(fechamento)
     if executada.status not in (OrderStatus.FILLED, OrderStatus.PARTIAL) or not executada.avg_price:
         resultado.avisos.append(
             f"a posição de {posicao['quantity']} {slot.symbol} NÃO foi encerrada "
@@ -477,4 +551,76 @@ def _limpar_na_corretora(slot, resultado: ResultadoRemocao) -> bool:
             f"o fechamento preencheu só {executada.filled_qty} de "
             f"{posicao['quantity']} ações — o resto continua aberto no MT5.")
         return False
-    return True
+    return limpo
+
+
+def _encerrar_posicao_sombra(slot, resultado: ResultadoRemocao) -> None:
+    """Fecha localmente a posição SIMULADA de um robô de sombra -- ele nunca
+    teve corretora para consultar, então não há ordem para cancelar nem
+    posição para encerrar lá fora. Sem isto, `delete_account`/
+    `archive_account` recusam com o mesmo guard que protege um robô REAL de
+    virar posição órfã no MT5 (`account.positions`), apesar de não haver
+    nenhuma exposição de verdade -- só uma linha em `live_positions`, a
+    mesma tabela que o robô real usa para bookkeeping.
+
+    Relê a posição agora (não confia no que `inspecionar()` viu antes do
+    processo morrer, mesmo motivo de `remover()` reler a corretora): o
+    processo já foi encerrado no passo anterior, então nada mais está
+    escrevendo nesta conta.
+
+    Preço de saída: o último fechamento de minuto salvo (`_ultimo_preco`),
+    o mesmo número que a ficha do robô usa para estimar P&L de posição
+    aberta. Sem preço salvo, sai pelo próprio preço de entrada (PnL zero)
+    -- estimar é melhor que travar a remoção, mas inventar um preço seria
+    pior que os dois. Credita em `cash_sombra` (nunca `cash`, o ledger
+    manual real) -- mesma regra de `IntradayLiveRuntime._on_closed`."""
+    from dashboard.robot_view import _ultimo_preco
+    from journal import live_store
+
+    with live_store.live_journal() as conn:
+        conta = live_store.load_account(conn, slot.id)
+        if conta is None:
+            return
+        pos = conta.positions.get(slot.symbol)
+        if pos is None:
+            return
+
+        preco_atual, _ = _ultimo_preco(slot.symbol)
+        preco = preco_atual if preco_atual is not None else pos.entry_price
+        lado = pos.metadata.get("side") or "long"
+        delta = preco - pos.entry_price
+        if lado == "short":
+            delta = -delta
+        pnl = round(delta * pos.quantity, 2)
+        liberado = pos.entry_price * pos.quantity
+
+        ordem = Order(
+            ticker=slot.symbol,
+            side=OrderSide.SELL if lado == "long" else OrderSide.BUY,
+            quantity=pos.quantity,
+            order_type=OrderType.MARKET,
+            status=OrderStatus.FILLED,
+            filled_qty=pos.quantity,
+            avg_price=preco,
+            sent_at=datetime.now(timezone.utc),
+            note="encerrada ao remover o robô (sombra, sem corretora)",
+        )
+        order_id = live_store.record_order(conn, conta.id, ordem)
+        live_store.record_fill(conn, Fill(
+            order_id=order_id, quantity=pos.quantity, price=preco,
+            ts=datetime.now(timezone.utc),
+        ))
+        live_store.delete_position(conn, conta.id, slot.symbol)
+        conta.cash_sombra += liberado + pnl
+        live_store.save_account(conn, conta)
+        live_store.log_event(
+            conn, conta.id, "info", "teardown",
+            f"posição simulada de {pos.quantity} {slot.symbol} encerrada a "
+            f"R$ {preco:.2f} ao remover o robô "
+            f"({'lucro' if pnl >= 0 else 'prejuízo'} de R$ {abs(pnl):.2f})",
+            {"quantity": pos.quantity, "side": lado, "price": preco, "pnl_brl": pnl},
+        )
+
+    resultado.posicao_encerrada = {
+        "quantity": pos.quantity, "side": lado, "price": preco, "pl": pnl,
+    }

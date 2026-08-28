@@ -80,6 +80,20 @@ def test_list_daytrade_robots_inclui_gremah_com_o_simbolo_dele():
     assert robos["gremah"].symbol == "PMAM3"
 
 
+def test_list_daytrade_robots_inclui_wdo_grid_reload_maker_como_futuro():
+    """`wdo_grid_reload_maker` (TOP-1 desde 2026-08-27) é o primeiro robô de
+    FUTURO a entrar neste catálogo -- `is_futuro=True` é o que faz o form de
+    "novo robô" em `/operacao` usar margem em vez de lote de ação para o
+    caixa mínimo (ver `dashboard/robot_view.py::capital_minimo_para`)."""
+    from strategy.daytrade.registry import list_daytrade_robots
+
+    robos = {r.key: r for r in list_daytrade_robots()}
+    assert "wdo_grid_reload_maker" in robos
+    assert robos["wdo_grid_reload_maker"].symbol == "WDO@"
+    assert robos["wdo_grid_reload_maker"].is_futuro is True
+    assert robos["wdo_grid_reload_maker"].feed_kind == "tick"
+
+
 def test_get_daytrade_robot_desconhecido_levanta_keyerror():
     from strategy.daytrade.registry import get_daytrade_robot
 
@@ -131,6 +145,7 @@ def test_operacao_iniciar_daytrade_primeira_vez_sem_robo_no_form_usa_default_do_
     monkeypatch.setattr(live_control, "start", lambda cfg: captured.append(cfg))
     monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot, robot_key=None: 1.0)
     monkeypatch.setattr(live_control, "detect_fractional_symbol_map", lambda slot, robot_key=None: None)
+    monkeypatch.setattr(live_control, "detect_futures_symbol_map", lambda slot, robot_key=None: None)
 
     client.post(f"/operacao/{DAYTRADE}/caixa", data={"caixa": "100.00"})
     resp = client.post(f"/operacao/{DAYTRADE}/iniciar", data={})
@@ -156,6 +171,7 @@ def test_operacao_iniciar_daytrade_robo_explicito_no_form_e_respeitado(
 
     monkeypatch.setattr(live_control, "detect_shares_per_lot", _detect)
     monkeypatch.setattr(live_control, "detect_fractional_symbol_map", lambda slot, robot_key=None: None)
+    monkeypatch.setattr(live_control, "detect_futures_symbol_map", lambda slot, robot_key=None: None)
 
     client.post(f"/operacao/{DAYTRADE}/caixa", data={"caixa": "100.00"})
     resp = client.post(f"/operacao/{DAYTRADE}/iniciar", data={"robo": "gremah"})
@@ -184,6 +200,7 @@ def test_operacao_iniciar_daytrade_nunca_repassa_mapa_fracionario(
     # mock devolve um mapa NAO-vazio de proposito.
     monkeypatch.setattr(live_control, "detect_fractional_symbol_map",
                         lambda slot, robot_key=None: {"PMAM3": "PMAM3F"})
+    monkeypatch.setattr(live_control, "detect_futures_symbol_map", lambda slot, robot_key=None: None)
 
     client.post(f"/operacao/{DAYTRADE}/caixa", data={"caixa": "100.00"})
     resp = client.post(f"/operacao/{DAYTRADE}/iniciar", data={"robo": "gremah"})
@@ -191,6 +208,32 @@ def test_operacao_iniciar_daytrade_nunca_repassa_mapa_fracionario(
     assert resp.status_code == 200
     assert len(captured) == 1
     assert captured[0].mt5_fractional_map is None
+
+
+def test_operacao_iniciar_daytrade_usa_mapa_de_futuro_detectado_no_config(
+    isolated_journal, client, monkeypatch,
+):
+    """Contraprova do teste anterior: day trade É o único slot que consulta
+    `detect_futures_symbol_map()` (só ele opera futuro, WIN@/WDO@) -- achado
+    ao vivo em 2026-08-28 (slot do WDO F1: ordem em `WDO@` recusada pelo
+    servidor, "Trade disabled", porque o `"@"` contínuo só dá cotação). O
+    mapa detectado (ex. `WDO@` -> `WDOU26`, contrato com vencimento em
+    aberto) tem de chegar até `ProcessConfig` -- é ele que faz
+    `MT5Broker.symbol_for()` traduzir pro contrato que o servidor de fato
+    aceita ordem."""
+    captured: list = []
+    monkeypatch.setattr(live_control, "start", lambda cfg: captured.append(cfg))
+    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot, robot_key=None: 1.0)
+    monkeypatch.setattr(live_control, "detect_fractional_symbol_map", lambda slot, robot_key=None: None)
+    monkeypatch.setattr(live_control, "detect_futures_symbol_map",
+                        lambda slot, robot_key=None: {"WDO@": "WDOU26"})
+
+    client.post(f"/operacao/{DAYTRADE}/caixa", data={"caixa": "100.00"})
+    resp = client.post(f"/operacao/{DAYTRADE}/iniciar", data={"robo": "gremah"})
+
+    assert resp.status_code == 200
+    assert len(captured) == 1
+    assert captured[0].mt5_symbol_map == {"WDO@": "WDOU26"}
 
 
 def test_operacao_iniciar_daytrade_usa_piso_do_robo_nao_o_piso_generico_do_slot(
@@ -205,6 +248,7 @@ def test_operacao_iniciar_daytrade_usa_piso_do_robo_nao_o_piso_generico_do_slot(
     monkeypatch.setattr(live_control, "start", lambda cfg: called.append(cfg))
     monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot, robot_key=None: 1.0)
     monkeypatch.setattr(live_control, "detect_fractional_symbol_map", lambda slot, robot_key=None: None)
+    monkeypatch.setattr(live_control, "detect_futures_symbol_map", lambda slot, robot_key=None: None)
     monkeypatch.setattr(live_control, "min_cash_for", lambda slot, robot_key=None: 900.0)
 
     client.post(f"/operacao/{DAYTRADE}/caixa", data={"caixa": "100.00"})
@@ -225,6 +269,7 @@ def test_operacao_iniciar_daytrade_usa_o_modo_fixo_do_slot(
     monkeypatch.setattr(live_control, "start", lambda cfg: captured.append(cfg))
     monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot, robot_key=None: 1.0)
     monkeypatch.setattr(live_control, "detect_fractional_symbol_map", lambda slot, robot_key=None: None)
+    monkeypatch.setattr(live_control, "detect_futures_symbol_map", lambda slot, robot_key=None: None)
 
     client.post(f"/operacao/{DAYTRADE}/caixa", data={"caixa": "100.00"})
     resp = client.post(f"/operacao/{DAYTRADE}/iniciar", data={"robo": "gremah"})
@@ -247,6 +292,7 @@ def test_operacao_iniciar_daytrade_slot_live_ignora_campo_de_form_forjado(
     monkeypatch.setattr(live_control, "start", lambda cfg: captured.append(cfg))
     monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot, robot_key=None: 1.0)
     monkeypatch.setattr(live_control, "detect_fractional_symbol_map", lambda slot, robot_key=None: None)
+    monkeypatch.setattr(live_control, "detect_futures_symbol_map", lambda slot, robot_key=None: None)
 
     resp = client.post(f"/operacao/{DAYTRADE_LIVE}/iniciar",
                        data={"robo": "gremah", "execution_mode": "shadow"})
@@ -266,6 +312,7 @@ def test_operacao_iniciar_daytrade_slot_shadow_ignora_campo_de_form_forjado(
     monkeypatch.setattr(live_control, "start", lambda cfg: captured.append(cfg))
     monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot, robot_key=None: 1.0)
     monkeypatch.setattr(live_control, "detect_fractional_symbol_map", lambda slot, robot_key=None: None)
+    monkeypatch.setattr(live_control, "detect_futures_symbol_map", lambda slot, robot_key=None: None)
 
     client.post(f"/operacao/{DAYTRADE}/caixa", data={"caixa": "100.00"})
     resp = client.post(f"/operacao/{DAYTRADE}/iniciar",
@@ -294,6 +341,7 @@ def test_operacao_iniciar_daytrade_sombra_usa_cash_sombra_para_piso_e_capital(
     monkeypatch.setattr(live_control, "start", lambda cfg: captured.append(cfg))
     monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot, robot_key=None: 1.0)
     monkeypatch.setattr(live_control, "detect_fractional_symbol_map", lambda slot, robot_key=None: None)
+    monkeypatch.setattr(live_control, "detect_futures_symbol_map", lambda slot, robot_key=None: None)
 
     resp = client.post(f"/operacao/{DAYTRADE}/iniciar",
                        data={"robo": "gremah", "execution_mode": "shadow"})
@@ -323,6 +371,7 @@ def test_operacao_iniciar_daytrade_live_usa_cash_real_mesmo_com_sombra_alto(
     monkeypatch.setattr(live_control, "start", lambda cfg: called.append(cfg))
     monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot, robot_key=None: 1.0)
     monkeypatch.setattr(live_control, "detect_fractional_symbol_map", lambda slot, robot_key=None: None)
+    monkeypatch.setattr(live_control, "detect_futures_symbol_map", lambda slot, robot_key=None: None)
 
     resp = client.post(f"/operacao/{DAYTRADE_LIVE}/iniciar", data={"robo": "gremah"})
 
@@ -353,6 +402,7 @@ def test_operacao_iniciar_colisao_de_simbolo_mostra_modal_com_botao_de_parar(
     monkeypatch.setattr(live_control, "start", _start)
     monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot, robot_key=None: 1.0)
     monkeypatch.setattr(live_control, "detect_fractional_symbol_map", lambda slot, robot_key=None: None)
+    monkeypatch.setattr(live_control, "detect_futures_symbol_map", lambda slot, robot_key=None: None)
 
     resp = client.post(f"/operacao/{DAYTRADE}/iniciar", data={"robo": "gremah"})
 
@@ -383,6 +433,7 @@ def test_operacao_iniciar_colisao_de_simbolo_com_ordens_desabilita_parar(
     monkeypatch.setattr(live_control, "start", _start)
     monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot, robot_key=None: 1.0)
     monkeypatch.setattr(live_control, "detect_fractional_symbol_map", lambda slot, robot_key=None: None)
+    monkeypatch.setattr(live_control, "detect_futures_symbol_map", lambda slot, robot_key=None: None)
 
     resp = client.post(f"/operacao/{DAYTRADE}/iniciar", data={"robo": "gremah"})
 
@@ -413,6 +464,7 @@ def test_operacao_iniciar_daytrade_primeira_vez_em_sombra_nao_infla_initial_capi
     monkeypatch.setattr(live_control, "start", lambda cfg: captured.append(cfg))
     monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot, robot_key=None: 1.0)
     monkeypatch.setattr(live_control, "detect_fractional_symbol_map", lambda slot, robot_key=None: None)
+    monkeypatch.setattr(live_control, "detect_futures_symbol_map", lambda slot, robot_key=None: None)
 
     resp = client.post(f"/operacao/{DAYTRADE}/iniciar",
                        data={"robo": "gremah", "execution_mode": "shadow"})
@@ -563,6 +615,7 @@ def test_operacao_iniciar_daytrade_conta_existente_ignora_robo_do_form(
     _create_daytrade_account(db_path, investment_robot="gremah")
     monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot, robot_key=None: 1.0)
     monkeypatch.setattr(live_control, "detect_fractional_symbol_map", lambda slot, robot_key=None: None)
+    monkeypatch.setattr(live_control, "detect_futures_symbol_map", lambda slot, robot_key=None: None)
 
     captured: list = []
     monkeypatch.setattr(live_control, "start", lambda cfg: captured.append(cfg))

@@ -88,6 +88,7 @@ from typing import Optional
 import pandas as pd
 
 from backtest.intraday.machine import (
+    EntradaAMercadoNaoSuportada,
     IntradayBacktestConfig,
     IntradaySessionMachine,
     LimitCancelled,
@@ -158,6 +159,67 @@ def _hora_brt(ts) -> str:
 
 
 MAX_GAP_SECONDS = 15 * 60.0
+
+#: Gap (f), incidente 2026-08-28: quantas recusas SEGUIDAS de fechamento
+#: (`BrokerExecutionError` vindo de `MT5IntradayExecution.exit_market`) o
+#: robo tenta sozinho, a cada passo, antes de acionar o freio duro
+#: (`_SessionSnapshot.disaster_halt`) e parar de insistir na mesma
+#: cadencia. O incidente real teve ~24 recusas seguidas (MG51, margem
+#: esgotada) sem NENHUMA escalar alem de log repetido -- um numero pequeno
+#: aqui e' deliberado: depois de algumas tentativas martelando a MESMA
+#: causa estrutural (margem, book morto, autotrading desligado), continuar
+#: batendo a cada 5s nao resolve nada sozinho, so' produz mais linha de
+#: log. Zerado a cada fechamento que DA CERTO (ver `_on_closed`/
+#: `_on_closed_partial`), entao uma falha isolada e transitoria nunca chega
+#: perto do teto.
+MAX_CLOSE_REFUSALS_BEFORE_HALT = 5
+
+#: Fracao do capital do slot que este robo pode perder NUM PREGAO antes do
+#: freio duro travar a sessao. Default de projeto, nao medicao -- o dono pode
+#: sobrescrever por slot (`perda_maxima_dia_brl` no construtor).
+#:
+#: Por que ele existe: ate 2026-08-28 o UNICO freio ao vivo era `equity <=
+#: 0` -- patrimonio ja negativo. Entre "esta indo mal" e "morreu" nao havia
+#: nada. O `session_stop_brl` que ALGUMAS estrategias implementam nao cobre
+#: isto por tres motivos: e' opcional por robo, olha so' P&L JA REALIZADO, e
+#: so' impede entrada NOVA -- nunca limita quanto uma posicao ja aberta pode
+#: perder. No incidente real a perda inteira (-R$295) estava NAO REALIZADA
+#: por uma hora, com a corretora recusando o fechamento; nenhum stop de
+#: sessao teria visto um centavo dela.
+#:
+#: Este freio olha o P&L do pregao MARCADO A MERCADO (realizado + aberto),
+#: entao dispara com a posicao ainda de pe -- que e' o unico momento em que
+#: disparar ainda serve pra alguma coisa.
+FRACAO_PERDA_MAXIMA_DIA = 0.30
+
+#: Quanta margem livre a conta precisa ter, como multiplo do que a ordem
+#: exige, para o envio ser autorizado. E' o mesmo fator 2.0 que o projeto ja
+#: usa como buffer de margem em todo dimensionamento
+#: (`MARGIN_BUFFER_FUTUROS`/`capital_minimo_brl`, ver CLAUDE.md) -- aplicado
+#: agora tambem no portao de ENVIO, contra a margem REAL da conta.
+#:
+#: O fator importa mais do que parece. No incidente, depois do 1o contrato a
+#: margem livre era ~R$150 e o 2o contrato exigia R$150: com fator 1.0 o
+#: envio passaria (150 >= 150) e a conta zerava do mesmo jeito. Com 2.0 ele
+#: e' recusado (150 < 300). Um portao que so' impede o impossivel nao e'
+#: portao -- ele tem de impedir o ULTIMO passo que ainda cabia.
+MARGEM_LIVRE_MINIMA_FATOR = 2.0
+
+#: Quantas leituras SEGUIDAS de `account_risk_state()` podem falhar antes de
+#: o robo parar de operar. "Nao sei" isolado nunca e' motivo de freio (a
+#: politica do arquivo inteiro), mas "nao sei" CONTINUADO e' outra coisa:
+#: significa operar por tempo ilimitado sem nenhuma leitura de risco, com o
+#: unico freio de ruina cego. O desenho antigo apostava que quem nao consegue
+#: ler equity tambem vai falhar em mandar ordem -- razoavel, e nao garantido
+#: por nada. A ~5s por passo, 20 leituras sao ~100s de terminal mudo.
+MAX_LEITURAS_DE_RISCO_FALHAS = 20
+
+#: Teto de envios de ordem numa janela de 60s. A operacao normal decide no
+#: MAXIMO uma entrada por barra fechada (1/min em M1) mais o cancelamento da
+#: substituida -- este teto e' ~15x isso, entao so' e' alcancado por um laco
+#: patologico, nunca por reancoragem legitima. Existe porque o incidente de
+#: 2026-08-28 martelou ~24 ordens em poucos minutos sem nada contar.
+MAX_ENVIOS_POR_MINUTO = 30
 
 
 def _unanime(valores):
@@ -278,6 +340,22 @@ class _SessionSnapshot:
     # `_check_atividade_estranha`). Persistido para sobreviver a um
     # restart no meio do pregao sem re-logar o que ja tinha sido avisado.
     atividade_estranha: Optional[dict] = None
+    # Freio duro (gap (e)/(f), incidente 2026-08-28): a conta chegou a
+    # equity NEGATIVA (-R$298,60) com o processo CONTINUANDO a abrir e
+    # fechar ordem, sem freio nenhum -- e as ~24 recusas seguidas de
+    # fechamento (MG51) nunca escalaram alem de log repetido. `disaster_halt`
+    # e' persistido (nao so' em memoria) DE PROPOSITO: um restart no meio do
+    # freio nao pode "esquecer" que a sessao esta travada e voltar a tentar
+    # abrir ordem nova sozinho. Dura o resto da SESSAO -- reseta sozinho no
+    # proximo pregao (`_SessionSnapshot` novo), porque nao ha caminho
+    # automatico de "equity voltou, libera de novo": isso e' decisao do
+    # DONO (deposito, investigacao), nunca do robo (regra 6 do AGENTS.md).
+    disaster_halt: bool = False
+    disaster_reason: Optional[str] = None
+    # Recusas de FECHAMENTO seguidas (zerado a cada fechamento que da certo,
+    # ver `_registra_falha_de_fechamento`/`_on_closed`) -- e' o contador que
+    # decide quando `disaster_halt` liga sozinho por gap (f).
+    close_refusal_count: int = 0
 
     def to_dict(self) -> dict:
         return {
@@ -295,6 +373,9 @@ class _SessionSnapshot:
             "pending_entry_refs": list(self.pending_entry_refs or []),
             "ordem_em_pe": self.ordem_em_pe,
             "atividade_estranha": self.atividade_estranha,
+            "disaster_halt": self.disaster_halt,
+            "disaster_reason": self.disaster_reason,
+            "close_refusal_count": self.close_refusal_count,
         }
 
     @classmethod
@@ -317,6 +398,9 @@ class _SessionSnapshot:
             pending_entry_refs=list(raw.get("pending_entry_refs") or []),
             ordem_em_pe=raw.get("ordem_em_pe") or None,
             atividade_estranha=raw.get("atividade_estranha") or None,
+            disaster_halt=bool(raw.get("disaster_halt") or False),
+            disaster_reason=raw.get("disaster_reason") or None,
+            close_refusal_count=int(raw.get("close_refusal_count") or 0),
         )
 
 
@@ -339,6 +423,7 @@ class IntradayLiveRuntime:
         execution_mode: str = "shadow",
         initial_capital: float = 0.0,
         clock_feed=None,
+        perda_maxima_dia_brl: Optional[float] = None,
     ) -> None:
         if execution_mode not in ("shadow", "live"):
             raise ValueError(
@@ -369,6 +454,16 @@ class IntradayLiveRuntime:
         # so' nasce com o numero certo.
         self.initial_capital = float(initial_capital)
         self.config = replace(config, initial_capital=self.initial_capital)
+        # Teto de perda do PREGAO, marcado a mercado (ver
+        # `FRACAO_PERDA_MAXIMA_DIA` e `_check_freio_duro`). `None` = usa a
+        # fracao default sobre o capital do slot; `0.0` (ou negativo)
+        # DESLIGA o freio de perda -- o que so' faz sentido em teste, e
+        # nunca em conta com dinheiro: o teto de ruina (`equity <= 0`)
+        # continua valendo de qualquer jeito, mas ele so' age quando ja e'
+        # tarde demais.
+        if perda_maxima_dia_brl is None:
+            perda_maxima_dia_brl = FRACAO_PERDA_MAXIMA_DIA * self.initial_capital
+        self.perda_maxima_dia_brl = float(perda_maxima_dia_brl)
         self.bar_feed = bar_feed
         self.broker = broker
         self.notifier = notifier if notifier is not None else NullNotifier()
@@ -430,6 +525,45 @@ class IntradayLiveRuntime:
         # propria corretora (`_recusa_de_envio`).
         self._autotrading_ok_for: Optional[date] = None
         self._autotrading_alarmado = False
+        # Ultimo resultado de `_ensure_protecao`, POR TICKET de posicao --
+        # so' para nao repetir o alerta de "nao consegui proteger" a cada
+        # passo enquanto a falha persiste (mesmo padrao de
+        # `_autotrading_alarmado`). Em memoria, nao persistido: um restart
+        # tenta de novo e alerta de novo se ainda estiver falhando, o que e'
+        # o comportamento certo (nao ha motivo pra "lembrar" silencio de um
+        # processo que nem existe mais).
+        #
+        # Por TICKET, e nao um flag so' do processo: era um booleano unico, e
+        # bastava UMA falha para o robo ficar mudo sobre TODAS as posicoes
+        # seguintes -- a posicao B falhava em proteger e ninguem era avisado,
+        # porque a posicao A ja tinha gasto o unico alerta que existia.
+        self._protecao_alarmada: set = set()
+        # Ticket -> (stop_pedido, alvo_pedido, sl_registrado, tp_registrado)
+        # do ultimo `set_protection` que a corretora ACEITOU. Existe para o
+        # reforco nao virar um loop: a corretora pode registrar um nivel
+        # DIFERENTE do pedido (distancia minima dela), e comparar o pedido
+        # com o registrado daria divergencia eterna -- a cada barra o robo
+        # reenviaria, e a cada reenvio o nivel seria recalculado contra o
+        # preco NOVO, fazendo o stop "fugir" do preco conforme ele se
+        # aproxima. Guardando o par, so' reenvia quando algo de fato mudou
+        # (a maquina moveu o stop, ou a protecao sumiu da corretora).
+        self._protecao_registrada: dict = {}
+        # Tickets de posicao que a corretora reporta para o magic deste robo
+        # e que a MAQUINA nao conhece -- avisados uma vez cada (ver
+        # `_check_posicao_desconhecida`).
+        self._posicao_desconhecida_avisada: set = set()
+        # Envios ja' recusados por margem da conta, para nao repetir a mesma
+        # linha no diario a cada barra enquanto a conta segue apertada (ver
+        # `_check_margem_da_conta`). So' em memoria: um processo novo alerta
+        # de novo, que e' o certo.
+        self._margem_alarmada: set = set()
+        # Leituras SEGUIDAS de risco que falharam (ver
+        # `MAX_LEITURAS_DE_RISCO_FALHAS`). Zerado a cada leitura que volta.
+        self._risco_ilegivel_seguidas = 0
+        # Instantes (UTC) dos ultimos envios de ordem, para a janela rolante
+        # de `MAX_ENVIOS_POR_MINUTO`. Em memoria: o alvo e' um laco dentro de
+        # UM processo, e um restart ja quebra o laco por construcao.
+        self._envios_recentes: list = []
 
     def _numero_ordem_atual(self) -> int:
         """Numero de rodada em uso agora -- ver o campo `trade_num` em
@@ -891,6 +1025,17 @@ class IntradayLiveRuntime:
         restaurada = self._snapshot.session == session and bool(self._snapshot.machine)
         pnl_antes, flat_antes = self.machine.session_pnl, self.machine.flattened
 
+        self._resincroniza_capital(conn, account, session)
+
+        # ANTES de qualquer decisao nova: o que a corretora tem pendurado
+        # deste robo e ninguem esta vigiando? Aqui `machine.resting_limit` e'
+        # sempre `None` (restore() nao a repoe -- ver a docstring dela), entao
+        # TODA ordem-limite viva no book e' orfa por definicao, inclusive uma
+        # que este processo mandou e nunca chegou a persistir. Limpar antes de
+        # decidir e' o que impede o warm start de somar uma segunda ordem por
+        # cima da do processo anterior.
+        self._reconcilia_ordens_de_entrada(conn, account, session, pd.Timestamp(now))
+
         self._seed_volume_window(session)
         self._seed_daily_volatility(session)
         self._seed_typical_trade_size(session)
@@ -908,7 +1053,19 @@ class IntradayLiveRuntime:
                 # aqui dentro e inexistente na corretora: o robo esperaria por
                 # um fill que nunca poderia acontecer, porque ninguem chegou a
                 # registrar a ordem. Registrar aqui e' o que fecha esse buraco.
-                if self.executor is not None and isinstance(pending, EnterLimit):
+                # `self.machine.resting_limit is pending` NAO e' redundante
+                # com `isinstance(pending, EnterLimit)`: `resume_session`
+                # RECUSA plantar a ordem quando ja existe posicao aberta
+                # (`if self.positions: return`, ver a docstring dela --
+                # plantar por cima deixaria a ordem orfa). Sem esta checagem
+                # o runtime mandava a ordem REAL para a corretora assim
+                # mesmo, com a maquina explicitamente NAO vigiando ela: uma
+                # entrada extra, sobre uma posicao que ja existe, que
+                # ninguem esperava nem contabilizava. Identidade (`is`), nao
+                # igualdade -- o que interessa e' que a maquina adotou ESTE
+                # objeto.
+                if (self.executor is not None and isinstance(pending, EnterLimit)
+                        and self.machine.resting_limit is pending):
                     if self._snapshot.pending_entry_refs:
                         # Restart no meio do pregao com uma ordem ja' posicionada:
                         # `warm_start_calibration` acabou de RECALCULAR a
@@ -924,27 +1081,45 @@ class IntradayLiveRuntime:
                         self._aplica_cancelamento(conn, account, self.executor.cancel_stale_refs(
                             self._snapshot.pending_entry_refs, ts=seed_bars[-1].ts,
                         ))
-                    # Mesma recusa possivel do envio por barra, mesmo
-                    # tratamento (ver `_recusa_de_envio`): `resume_session`
-                    # acabou de plantar a ordem em `resting_limit`, e uma
-                    # recusa aqui a deixaria vigiada sem existir no book.
-                    try:
-                        enviadas = self.executor.place_limit(
-                            side=pending.side, limit_price=pending.limit_price,
-                            quantities=pending.children(self.config.default_quantity),
-                            ts=seed_bars[-1].ts,
-                        )
-                    except BrokerExecutionError as erro:
-                        self._recusa_de_envio(conn, account, session,
-                                              self._snapshot.trade_num, erro)
+                    # Mesmo portao de margem do envio por barra: o warm start
+                    # tambem manda ordem REAL, e um restart nao e' motivo pra
+                    # ele pular a conferencia que a barra faz.
+                    sem_margem = self._check_margem_da_conta(
+                        pending.side,
+                        sum(pending.children(self.config.default_quantity)),
+                        pending.limit_price)
+                    if sem_margem is not None:
+                        # Mesmo desfecho de uma recusa da corretora: a maquina
+                        # larga a `resting_limit` e o pregao segue normalmente
+                        # (o robo re-arma pelo criterio dele quando a conta
+                        # comportar). Nao ha ordem no book pra limpar.
+                        self._recusa_por_margem(conn, account, session,
+                                                self._snapshot.trade_num, sem_margem)
                     else:
-                        # SOMA, nao substitui: um ticket que o cancelamento
-                        # acima nao confirmou morto continua precisando de
-                        # vigilancia (`_aplica_cancelamento`).
-                        self._snapshot.pending_entry_refs = list(dict.fromkeys(
-                            (self._snapshot.pending_entry_refs or [])
-                            + [o.broker_ref for o in enviadas if o.broker_ref]
-                        ))
+                        # Mesma recusa possivel do envio por barra, mesmo
+                        # tratamento (ver `_recusa_de_envio`): `resume_session`
+                        # acabou de plantar a ordem em `resting_limit`, e uma
+                        # recusa aqui a deixaria vigiada sem existir no book.
+                        try:
+                            enviadas = self.executor.place_limit(
+                                side=pending.side, limit_price=pending.limit_price,
+                                quantities=pending.children(self.config.default_quantity),
+                                ts=seed_bars[-1].ts,
+                                # Protecao ATOMICA -- ver `place_limit`.
+                                stop=pending.initial_stop,
+                                target=self._alvo_atomico(pending),
+                            )
+                        except BrokerExecutionError as erro:
+                            self._recusa_de_envio(conn, account, session,
+                                                  self._snapshot.trade_num, erro)
+                        else:
+                            # SOMA, nao substitui: um ticket que o cancelamento
+                            # acima nao confirmou morto continua precisando de
+                            # vigilancia (`_aplica_cancelamento`).
+                            self._snapshot.pending_entry_refs = list(dict.fromkeys(
+                                (self._snapshot.pending_entry_refs or [])
+                                + [o.broker_ref for o in enviadas if o.broker_ref]
+                            ))
                 modo, semente = "warm_start", len(seed_bars)
                 self._snapshot.session = session
                 # NUNCA anda pra tras: num restart (`restaurada=True`) o
@@ -1031,7 +1206,16 @@ class IntradayLiveRuntime:
 
             if self._calibrated_for != hoje:
                 self._restore(account, hoje)
-                passos.append(self._start_session(conn, account, hoje, now))
+                if self._snapshot.disaster_halt:
+                    # Freio duro persistido de uma sessao ANTERIOR do MESMO
+                    # pregao (restart no meio do freio, gap g) -- nao faz
+                    # `_start_session` (que inclui warm start, e warm start
+                    # pode ARMAR ordem-limite nova): so' calibra o marcador
+                    # e deixa o `_check_freio_duro` logo abaixo confirmar e
+                    # tentar zerar o que sobrou.
+                    self._calibrated_for = hoje
+                else:
+                    passos.append(self._start_session(conn, account, hoje, now))
 
             # So' avisa, nunca bloqueia -- ver a docstring de
             # `_check_atividade_estranha`. Roda a cada passo (nao 1x por
@@ -1042,6 +1226,24 @@ class IntradayLiveRuntime:
             # seria escrito no snapshot errado, perdido no mesmo passo em
             # que foi decidido (bug real, pego pelo teste de deduplicacao).
             self._check_atividade_estranha(conn, account, hoje)
+
+            # Protecao SL/TP + freio duro de equity/margem (gap c/e/f/g,
+            # incidente 2026-08-28) -- SEMPRE, antes de qualquer barra nova
+            # ser consumida: uma posicao aberta precisa estar protegida na
+            # corretora e uma conta em risco de ruina nao pode abrir ordem
+            # nova, mesmo que o resto do pregao esteja liberado.
+            self._ensure_protecao(conn, account, hoje)
+            # Simetrico do anterior: `_ensure_protecao` cuida da posicao que a
+            # maquina CONHECE; este cuida da que ela NAO conhece e a corretora
+            # tem. Sem ele ninguem perguntava a corretora "o que existe ai?"
+            # a menos que a maquina ja acreditasse ter alguma coisa.
+            self._check_posicao_desconhecida(conn, account, hoje)
+            alarme_freio = self._check_freio_duro(conn, account, hoje)
+            if alarme_freio is not None:
+                self._gravar_impedimento(conn, account, f"freio duro: {alarme_freio}", hoje)
+                self._persist(conn, account)
+                return passos + [StepReport("daytrade_freio_duro", hoje, phase=fase,
+                                            detail={"motivo": alarme_freio})]
 
             # Ha' quanto tempo este slot nao roda um passo. Lido ANTES de
             # carimbar o passo de agora, senao seria sempre zero.
@@ -1226,11 +1428,34 @@ class IntradayLiveRuntime:
         inicio (`live_control.start()`, tambem mode-aware) deixava o robo
         SUBIR usando o saldo de sombra, so' para este gate recusar toda barra
         do dia seguinte comparando contra o caixa real, que pode ser bem
-        menor (ou zero)."""
+        menor (ou zero).
+
+        FUTURO (`self.strategy.is_futuro`) ramifica para MARGEM, nao preco
+        (2026-08-28, bug real corrigido): `preco x default_quantity` e' o
+        custo de COMPRAR o lote -- a conta certa so' para ACAO, onde nao ha
+        alavancagem. Aplicada sem ramificar a um futuro (`default_quantity=1`
+        no perfil), isso vira o valor NOCIONAL cheio de 1 contrato (~R$5.000+
+        no WDO@), nao a margem (~R$150 WDO@/R$100 WIN@) que a corretora de
+        fato reserva -- um robo com o caixa MINIMO REAL do instrumento
+        (`strategy.daytrade.base.capital_minimo_brl`/`CAPITAL_MINIMO.md`,
+        R$300 no WDO@) nunca cobriria o preco cheio e o alarme dispararia
+        TODO pregao, todo dia, sem exceção. O piso dia-a-dia usa 1x a margem
+        (nao `MARGIN_BUFFER_FUTUROS`, que so' se aplica na ENTRADA -- ver
+        `dashboard.robot_view.capital_minimo_para` -- mesma relaxacao 2x
+        entrada / 1x dia-a-dia que ja existe para acao)."""
         if self._capital_checked_for == session:
             return self._capital_alarm
 
-        minimo = preco * self.config.default_quantity
+        if getattr(self.strategy, "is_futuro", False):
+            from backtest.intraday.profiles import profile_for
+
+            margem = profile_for(self.strategy.symbol).margin_per_contract_brl
+            minimo = (
+                preco * self.config.default_quantity if margem is None
+                else margem * self.config.default_quantity
+            )
+        else:
+            minimo = preco * self.config.default_quantity
         self._capital_checked_for = session
         self._capital_minimo_hoje = minimo
         saldo = account.cash_for(self.execution_mode)
@@ -1289,6 +1514,677 @@ class IntradayLiveRuntime:
         else:
             self._log(conn, account.id, "info",
                       "atividade estranha anterior nao aparece mais na corretora",
+                      {"sessao": session.isoformat()})
+
+    # ---------- protecao SL/TP na corretora (gap c/g, incidente 2026-08-28) -
+
+    @staticmethod
+    def _alvo_atomico(order) -> Optional[float]:
+        """O alvo pode ser amarrado NA ORDEM (TP da corretora), ou a maquina
+        tem de continuar dona dele?
+
+        Devolve `initial_target` -- exceto quando a estrategia declarou
+        `exit_split_unit`, e ai devolve `None`. Motivo, e nao e' preciosismo:
+        com saida fatiada a maquina posiciona ordens-limite REAIS de
+        fechamento, uma por fatia (`place_exit_limit`). Um TP da corretora no
+        MESMO nivel fecharia a posicao INTEIRA ao mesmo tempo em que a limite
+        de UMA fatia preenche -- e numa conta NETTING as duas somadas passam
+        do tamanho da posicao e ABREM o lado contrario. Trocar uma posicao
+        desprotegida por uma posicao invertida nao e' progresso.
+
+        O STOP nao tem esse problema e vai sempre: fatia de saida so' existe
+        no alvo, e um SL que feche tudo antes so' faz a maquina descobrir no
+        passo seguinte que ja nao ha posicao -- caminho que `exit_market` ja
+        trata. Sem `exit_split_unit` (o caso comum) o alvo tambem vai, e ai o
+        TP da corretora e' ESTRITAMENTE melhor que o que existia: dispara no
+        toque do nivel, que e' exatamente o que o backtest simula, em vez de
+        so' no fechamento da barra M1 seguinte.
+
+        Regra por CAMPO DECLARADO de `EnterLimit`, nunca por nome de robo --
+        vale para qualquer estrategia, presente ou futura."""
+        if getattr(order, "exit_split_unit", None):
+            return None
+        return getattr(order, "initial_target", None)
+
+    def _ensure_protecao(self, conn, account: AccountState, session: date) -> None:
+        """Garante que toda posicao aberta deste robo tem SL (e TP, quando a
+        estrategia tiver alvo) REGISTRADO NA CORRETORA -- nunca so' na
+        cabeca do processo.
+
+        Motivado pelo incidente 2026-08-28 (slot `dt-wdo_grid_reload_maker-
+        wdo@-live`): a posicao ficou com `sl=0.0, tp=0.0` na corretora por
+        HORAS, atravessando 3 reinicios, porque o "stop" deste robo sempre
+        foi logica do LOOP do processo (dispara ordem a mercado quando o
+        nivel rompe) -- processo morto/reiniciado = posicao nua. Eu (o
+        dono) precisei anexar SL/TP na mao pra estancar.
+
+        Roda em TODO passo com posicao aberta -- nao so' na entrada -- de
+        proposito: e' o que fecha o gap de RESTART (gap g). Um processo novo
+        reidrata a posicao (`_restore`) mas o SL/TP da corretora vive na
+        POSICAO, nao no processo -- confirmar de novo a cada passo e' uma
+        leitura barata (`open_position`) e e' o que pega tanto o restart
+        quanto qualquer outra forma da protecao ter sumido (ex.: humano
+        mexendo no terminal).
+
+        So' MODIFICA quando falta (0.0/None na corretora) ou diverge do que
+        a maquina quer -- reenviar toda barra com o MESMO nivel so' gastaria
+        requisicao a toa. `stop`/`target` sao SEMPRE os niveis que a MAQUINA
+        ja decidiu (`_Position.current_stop`/`current_target`) -- nunca
+        calculados aqui (regra 6 do AGENTS.md: `live/` nao decide).
+
+        Numa conta NETTING so' existe UMA posicao consolidada por simbolo:
+        com mais de uma `_Position` independente (sombra por lote, nunca em
+        execucao real -- `self.executor is None` cobre isso, ver a docstring
+        da classe) so' a primeira e' usada como referencia."""
+        if self.executor is None or not self.machine.positions:
+            return
+        setter = getattr(self.broker, "set_protection", None)
+        if setter is None:
+            return
+        real = self.broker.open_position(self.strategy.symbol)
+        if real is None or real.get("ticket") is None:
+            # Sem ticket nao da pra proteger. Nao e' um erro NOVO: se o
+            # terminal estiver fora do ar ou a posicao nao bater, o resto do
+            # passo (`_read_position`/`limit_fill`/`exit_market`) ja vai
+            # detectar e falhar alto por conta propria.
+            return
+        ticket = real["ticket"]
+        sl_atual = float(real.get("sl") or 0.0)
+        tp_atual = float(real.get("tp") or 0.0)
+        pos = self.machine.positions[0]
+        alvo_sl = pos.current_stop
+        alvo_tp = pos.current_target
+
+        # Ja registrado com ESTE pedido e a corretora continua com os mesmos
+        # niveis que ela mesma aceitou? Nada a fazer. Comparar o par
+        # (pedido, registrado) em vez de "pedido == registrado" e' o que
+        # impede o reenvio eterno quando a corretora ajusta o nivel pela
+        # distancia minima dela -- ver `_protecao_registrada`.
+        anterior = self._protecao_registrada.get(ticket)
+        if anterior is not None:
+            pedido_sl, pedido_tp, reg_sl, reg_tp = anterior
+            mesmo_pedido = (pedido_sl == alvo_sl and pedido_tp == alvo_tp)
+            mesmo_registro = (abs(reg_sl - sl_atual) <= 1e-6 and abs(reg_tp - tp_atual) <= 1e-6)
+            if mesmo_pedido and mesmo_registro:
+                self._protecao_alarmada.discard(ticket)
+                return
+
+        falta_sl = (alvo_sl is not None and abs(float(alvo_sl) - sl_atual) > 1e-6)
+        falta_tp = (alvo_tp is not None and abs(float(alvo_tp) - tp_atual) > 1e-6)
+        if not (falta_sl or falta_tp):
+            self._protecao_alarmada.discard(ticket)
+            self._protecao_registrada[ticket] = (alvo_sl, alvo_tp, sl_atual, tp_atual)
+            return
+        resultado = setter(self.strategy.symbol, ticket, pos.side,
+                           stop=alvo_sl, target=alvo_tp,
+                           # O que a corretora tem AGORA: sem isto um
+                           # `target=None` mandaria `tp=0.0` e APAGARIA o alvo
+                           # ja registrado, e um stop recalculado poderia
+                           # afrouxar o que ja estava mais perto. Ver
+                           # `MT5Broker._niveis_protecao`, invariantes 1 e 2.
+                           sl_atual=sl_atual, tp_atual=tp_atual)
+        if resultado.get("ok"):
+            self._protecao_alarmada.discard(ticket)
+            self._protecao_registrada[ticket] = (
+                alvo_sl, alvo_tp,
+                float(resultado.get("sl") or 0.0), float(resultado.get("tp") or 0.0),
+            )
+            self._log(conn, account.id, "info",
+                      f"protecao registrada na corretora para {self.strategy.symbol}: "
+                      f"{resultado.get('note', '')}",
+                      {"sessao": session.isoformat(), "ticket": ticket,
+                       "stop": alvo_sl, "target": alvo_tp})
+        elif ticket not in self._protecao_alarmada:
+            self._protecao_alarmada.add(ticket)
+            self._log(conn, account.id, "error",
+                      f"NAO CONSEGUI proteger a posicao de {self.strategy.symbol} na "
+                      f"corretora (SL/TP ausente ou divergente): {resultado.get('note', '')} "
+                      "-- tentando de novo a cada passo ate confirmar (ver incidente "
+                      "2026-08-28: posicao ficou sem SL/TP por horas, atravessando 3 "
+                      "reinicios)",
+                      {"sessao": session.isoformat(), "ticket": ticket,
+                       "stop": alvo_sl, "target": alvo_tp})
+
+    def _tem_ordem_em_transito(self) -> bool:
+        """Ha' alguma ordem REAL viva ou recem-preenchida que ainda explica
+        uma divergencia entre o que a corretora tem e o que a maquina sabe?
+
+        E' o filtro que separa "divergencia" de "atraso normal": entre a
+        corretora preencher uma ordem-limite e a maquina rodar `limit_fill`
+        na barra seguinte, a posicao existe la e nao aqui -- e isso e' o
+        funcionamento correto, nao um problema. Mesma coisa do lado da saida
+        (a posicao encolhe na corretora antes da maquina contabilizar) e das
+        fatias de uma entrada dividida que ainda nao preencheram todas."""
+        if self.executor is None:
+            return False
+        # `executor.pending_orders` NAO entra: ele guarda as `Order` do ultimo
+        # grupo enviado e so' e' limpo por `cancel_limit` -- depois de um fill
+        # normal ele continua cheio para sempre, e usa-lo aqui desligaria a
+        # conferencia pelo resto do pregao. Quem de fato diz "ainda ha fill a
+        # chegar" e' a maquina (`resting_limit`, zerado quando o ultimo filho
+        # preenche) e os tickets que o cancelamento nao confirmou.
+        return bool(
+            self.machine.resting_limit is not None
+            or self._snapshot.pending_entry_refs
+            or self.executor.pending_exit_order is not None
+            or self.executor.exit_orphan_refs
+        )
+
+    def _resincroniza_capital(self, conn, account: AccountState, session: date) -> None:
+        """Repoe o capital do slot a partir do LEDGER, a cada pregao.
+
+        `initial_capital` era lido UMA vez, na construcao do runtime, e nunca
+        mais. Mas o processo `loop` roda continuo (nao reinicia todo dia) e o
+        ledger e' editavel no painel a qualquer momento -- entao o dono podia
+        sacar metade do caixa, corrigir o numero na tela, e o robo continuar
+        dimensionando lote e teto de contratos contra o valor antigo, mais
+        alto, barra a barra, ate alguem reiniciar o processo. O portao de
+        inicio de pregao (`_check_capital`) ja lia o numero novo; quem
+        decide QUANTO comprar, nao.
+
+        `machine.config` junto, e nao so' `self.config`: sao objetos
+        distintos depois do `replace` (dataclass frozen), e e' o da maquina
+        que alimenta `on_capital_update` e `_cap_capital_atual` a cada barra.
+
+        Segue `execution_mode` (`cash_for`) pelo mesmo motivo de
+        `_check_capital`: sombra dimensiona contra `cash_sombra`, nunca
+        contra o dinheiro real."""
+        try:
+            saldo = float(account.cash_for(self.execution_mode))
+        except Exception:  # noqa: BLE001 - ledger ilegivel nunca derruba o robo
+            return
+        if abs(saldo - self.initial_capital) < 0.005:
+            return
+        antes = self.initial_capital
+        self.initial_capital = saldo
+        self.config = replace(self.config, initial_capital=saldo)
+        self.machine.config = self.config
+        # O teto de perda acompanha o capital -- a menos que o dono tenha
+        # fixado um numero proprio no construtor, que nao pode ser
+        # sobrescrito por um saque.
+        if abs(self.perda_maxima_dia_brl
+               - FRACAO_PERDA_MAXIMA_DIA * antes) < 0.005:
+            self.perda_maxima_dia_brl = FRACAO_PERDA_MAXIMA_DIA * saldo
+        self._log(conn, account.id, "info",
+                  f"capital do slot: R$ {antes:.2f} -> R$ {saldo:.2f} "
+                  "(lido do ledger no comeco do pregao)",
+                  {"pregao": session.isoformat(), "antes": round(antes, 2),
+                   "agora": round(saldo, 2)})
+
+    def _check_cadencia_de_ordens(self, ts) -> Optional[str]:
+        """Envios demais numa janela de 60s? Devolve o motivo, ou `None`.
+
+        Nenhum contador existia: o unico teto de repeticao era o de RECUSAS
+        DE FECHAMENTO (`MAX_CLOSE_REFUSALS_BEFORE_HALT`). Reancoragem de
+        entrada nao tinha limite algum, e o loop do supervisor nao impoe
+        cadencia minima entre envios -- entao um laco patologico (decisao
+        que se repete, feed devolvendo a mesma barra, estrategia oscilando
+        entre dois niveis) manda ordem a cada passo, indefinidamente, sem
+        que nada perceba. E' o padrao que o incidente exibiu do lado do
+        fechamento, e que do lado da entrada continuava aberto.
+
+        Janela ROLANTE, nao contador de sessao: um teto por pregao ou e'
+        alto demais pra pegar o laco, ou baixo demais e mata operacao
+        legitima num dia movimentado. Ver `MAX_ENVIOS_POR_MINUTO`."""
+        agora = pd.Timestamp(ts)
+        corte = agora - pd.Timedelta(seconds=60)
+        self._envios_recentes = [t for t in self._envios_recentes if t > corte]
+        if len(self._envios_recentes) < MAX_ENVIOS_POR_MINUTO:
+            self._envios_recentes.append(agora)
+            return None
+        return (
+            f"{len(self._envios_recentes)} envios de ordem em 60s (teto "
+            f"{MAX_ENVIOS_POR_MINUTO}) -- isto e' laco, nao operacao"
+        )
+
+    def _check_margem_da_conta(self, side: str, quantidade: int,
+                               price: float) -> Optional[str]:
+        """A CONTA aguenta esta entrada? Devolve o motivo da recusa, ou
+        `None` se pode enviar.
+
+        Este e' o unico portao do sistema que ve a conta como ela e'. Todos
+        os outros tetos -- `_check_capital`, `_cabe_no_teto`,
+        `_cap_capital_atual` -- sao calculados a partir de
+        `config.initial_capital + realized_pnl`: numeros locais a UM
+        processo. Isso e' cego para duas coisas ao mesmo tempo:
+
+        1. **Os outros slots.** Todo robo de day trade conecta no MESMO
+           terminal, com o MESMO login -- uma unica conta, uma unica margem
+           fisica. Dois slots em simbolos diferentes (WDO@ e WIN@) com
+           R$400 digitados em cada um comprometem margem contra uma conta
+           que tem R$400 no total, e cada um passa no proprio teto sozinho.
+           E' o padrao do incidente 2026-08-28 -- exposicao agregada nunca
+           somada -- so' que a soma que faltava agora e' entre PROCESSOS.
+        2. **A perda ainda ABERTA.** `realized_pnl` so' anda quando a
+           posicao FECHA. Uma posicao sangrando -R$500 sem ter fechado
+           deixa o teto local otimista exatamente sob stress. `margin_free`
+           ja desconta tudo -- inclusive o que o dono abriu na mao.
+
+        Perguntar a' corretora resolve os dois de uma vez, sem inventar
+        ledger nenhum entre processos: ela ja e' o lugar onde a soma existe.
+
+        "Nao sei" (`None` de qualquer das duas consultas) NAO bloqueia --
+        mesma politica do resto do arquivo. Quem nao consegue nem ler a
+        conta ja vai falhar no envio, com erro mais especifico."""
+        if self.executor is None:
+            return None
+        calc = getattr(self.broker, "margin_required", None)
+        if calc is None:
+            return None
+        exigido = calc(self.strategy.symbol, side, int(quantidade), float(price))
+        if exigido is None or exigido <= 0:
+            return None
+        ler = getattr(self.broker, "account_risk_state", None)
+        estado = ler() if ler is not None else None
+        if estado is None:
+            return None
+        livre = estado.get("margin_free")
+        if livre is None:
+            return None
+        minimo = exigido * MARGEM_LIVRE_MINIMA_FATOR
+        if float(livre) >= minimo:
+            return None
+        return (
+            f"margem livre da conta R$ {float(livre):.2f} < R$ {minimo:.2f} "
+            f"(a ordem exige R$ {exigido:.2f} e o projeto pede "
+            f"{MARGEM_LIVRE_MINIMA_FATOR:.0f}x de folga). A conta e' COMPARTILHADA "
+            "entre os slots -- este numero ja desconta o que os outros robos "
+            "e o proprio dono tem aberto"
+        )
+
+    def _recusa_por_margem(self, conn, account: AccountState, sessao: date,
+                           numero: Optional[int], motivo: str) -> None:
+        """Desfaz a vigilancia de uma ordem que NAO foi enviada por falta de
+        margem na conta -- mesmo desfecho de uma recusa da corretora, e pelo
+        mesmo motivo (a maquina ja gravou `resting_limit` e ficaria esperando
+        um fill impossivel). Nada foi ao book, entao nao ha ticket orfao."""
+        self._recusa_de_envio(
+            conn, account, sessao, numero,
+            BrokerExecutionError(f"nao enviei: {motivo}", orphan_refs=[]))
+
+    def _reconcilia_ordens_de_entrada(self, conn, account: AccountState,
+                                      session: date, ts) -> None:
+        """Pergunta a' CORRETORA quais ordens-limite deste robo estao vivas e
+        cancela toda que a maquina nao esta vigiando.
+
+        A corretora e' a unica memoria durAvel que este sistema tem de uma
+        ordem enviada. Todo o resto -- `pending_entry_refs`, o snapshot, o
+        diario -- so' vira linha durAvel no `_persist` do FIM do passo, e o
+        envio acontece no MEIO dele. Entre um e outro ha uma janela em que a
+        ordem existe no book e nao existe em lugar nenhum nosso: processo
+        morto ali (kill, falta de luz, OOM) e o restart nao sabe do ticket,
+        redecide do zero e pode mandar uma SEGUNDA ordem no mesmo nivel. E'
+        o "2 contratos numa conta de 1" do incidente 2026-08-28, do lado da
+        entrada. Nenhum arquivo nosso escrito "mais cedo" resolve isso de
+        verdade -- a corretora ja sabe, basta perguntar.
+
+        A regra e' uma so' e nao depende de estrategia nenhuma: **ordem de
+        entrada que ninguem vigia tem de morrer.** "Vigiada" e' ter a
+        `resting_limit` da maquina apontando pra ela; qualquer ticket fora
+        disso preenche sozinho e abre posicao que nenhum robo pediu, sem
+        stop na conta de ninguem e sem aparecer no painel.
+
+        Chamada em dois pontos, ambos onde a maquina PROVADAMENTE nao vigia
+        nada: no topo de `_start_session` (processo novo -- `restore()` nao
+        repoe `resting_limit` de proposito, ela e' decisao redecidida a cada
+        processo) e em `_handle_gap` depois do `force_flatten`. Com isso a
+        reconciliacao deixa de ser efeito colateral de "a estrategia decidiu
+        entrar de novo" -- que era o unico gatilho que existia, e que nunca
+        dispara num mercado sem sinal.
+
+        `pending_orders() is None` ("nao consegui perguntar") nao cancela
+        nada e nao alarma: mesma politica do resto do arquivo. Mas tambem
+        nao limpa `pending_entry_refs` -- o que nao foi confirmado morto
+        continua sendo tratado como vivo."""
+        if self.executor is None:
+            return
+        vigiados: set[str] = set()
+        if self.machine.resting_limit is not None:
+            vigiados = {str(r) for r in (self._snapshot.pending_entry_refs or [])}
+
+        consulta = getattr(self.broker, "pending_orders", None)
+        na_corretora = consulta(self.strategy.symbol) if consulta is not None else None
+        if na_corretora is None:
+            # Nao da' pra confirmar o que existe la'. Ainda assim cancela o
+            # que ESTE processo tem registrado e nao vigia -- e' informacao
+            # que ja temos, e nao usa-la seria escolher a ignorancia.
+            soltos = [r for r in (self._snapshot.pending_entry_refs or [])
+                      if str(r) not in vigiados]
+            if soltos:
+                self._aplica_cancelamento(
+                    conn, account, self.executor.cancel_stale_refs(soltos, ts=ts))
+            return
+
+        tickets = [str(o.get("ticket")) for o in na_corretora if o.get("ticket")]
+        # ADOCAO: ticket que a corretora tem e este processo nunca soube que
+        # existia. E' exatamente o que a janela acima produz.
+        desconhecidos = [t for t in tickets if t not in vigiados
+                         and t not in {str(r) for r in (self._snapshot.pending_entry_refs or [])}]
+        if desconhecidos:
+            self._snapshot.pending_entry_refs = list(dict.fromkeys(
+                (self._snapshot.pending_entry_refs or []) + desconhecidos))
+            self._log(conn, account.id, "error",
+                      f"ORDEM ORFA em {self.strategy.symbol}: a corretora tem "
+                      f"{len(desconhecidos)} ordem(ns) pendente(s) no magic deste robo "
+                      f"que este processo nao conhecia ({', '.join(desconhecidos)}). "
+                      "Adotei e vou cancelar -- ordem que ninguem vigia preenche "
+                      "sozinha (ver incidente 2026-08-28).",
+                      {"sessao": session.isoformat(), "tickets": desconhecidos})
+
+        orfaos = [t for t in tickets if t not in vigiados]
+        # Registrado aqui e ja' fora do book (preencheu, expirou, foi
+        # cancelado na mao): nao aparece em `tickets`, entao nao entra aqui.
+        # Some sozinho quando `_aplica_cancelamento` confirmar -- ou fica,
+        # se a corretora nao confirmar, que e' o comportamento certo.
+        soltos = [r for r in (self._snapshot.pending_entry_refs or [])
+                  if str(r) not in vigiados and str(r) not in set(orfaos)]
+        alvo = orfaos + [str(r) for r in soltos]
+        if not alvo:
+            return
+        self._aplica_cancelamento(
+            conn, account, self.executor.cancel_stale_refs(alvo, ts=ts))
+
+    def _check_posicao_desconhecida(self, conn, account: AccountState, session: date) -> None:
+        """A corretora reporta exposicao com o magic DESTE robo que a maquina
+        nao conhece -- ou nao conhece do TAMANHO certo? Alarme alto e freio.
+
+        O buraco que isto fecha: NINGUEM perguntava a corretora o que existe
+        a menos que a maquina ja acreditasse ter alguma coisa. Todas as
+        leituras de posicao (`_ensure_protecao`, `limit_fill`, `exit_market`)
+        so' acontecem dentro de um caminho que ja pressupoe posicao. Uma
+        posicao que a maquina perdeu de vista -- restart que nao reidratou,
+        fill que chegou depois do processo morrer -- ficava INVISIVEL: sem
+        stop reforcado, sem aparecer no painel, sem entrar em nenhuma conta.
+
+        Duas divergencias, nao uma. A segunda e' a forma exata do incidente
+        de 2026-08-28: a maquina achava que tinha UM contrato e a corretora
+        tinha DOIS (duas entradas independentes consolidadas pela conta
+        NETTING). Ninguem comparava os dois numeros, entao o robo passou o
+        pregao inteiro dimensionando stop, alvo e fechamento pela metade da
+        exposicao que de fato existia.
+
+        So' compara quando nao ha ordem em transito (`_tem_ordem_em_transito`)
+        -- senao o atraso normal entre o fill na corretora e o `limit_fill`
+        da maquina viraria alarme a cada entrada.
+
+        Nao fecha sozinho de proposito. Fechar as cegas uma exposicao cuja
+        origem ninguem entendeu troca um problema conhecido por um
+        desconhecido, e nesta conta ja houve um fechamento recusado ~24
+        vezes. O que ele faz e' o que da' para fazer com certeza: gritar no
+        diario (nivel `error` notifica) e travar a abertura de ordem nova
+        pelo resto da sessao, do mesmo jeito que o freio duro -- assim a
+        exposicao para de crescer enquanto o dono decide.
+
+        Roda so' em execucao REAL: em sombra nao existe corretora para
+        divergir."""
+        if self.executor is None or self._tem_ordem_em_transito():
+            return
+        estado = self.broker.position_state(self.strategy.symbol)
+        if not estado.get("ok"):
+            # "Nao consegui perguntar" nunca vira alarme -- mesma politica do
+            # resto do arquivo. Quem precisa de certeza para operar ja falha
+            # alto por conta propria (`_read_position`).
+            return
+        real = estado.get("position")
+        qtd_real = int((real or {}).get("quantity") or 0)
+        qtd_maquina = int(sum(p.quantity for p in self.machine.positions))
+        if qtd_real == qtd_maquina:
+            return
+        if qtd_real == 0:
+            # A maquina acha que tem e a corretora diz que nao ha nada. NAO e'
+            # alarme daqui: a protecao SL/TP registrada na corretora fecha a
+            # posicao sozinha por desenho, e `exit_market` ja trata esse
+            # encontro na proxima barra. Alarmar aqui transformaria o
+            # funcionamento correto do stop em incidente.
+            return
+        ticket = (real or {}).get("ticket")
+        chave = f"{ticket}:{qtd_real}"
+        if chave in self._posicao_desconhecida_avisada:
+            return
+        self._posicao_desconhecida_avisada.add(chave)
+        motivo = (
+            f"a corretora reporta {qtd_real} {self.strategy.symbol} "
+            f"{(real or {}).get('side')} @ {(real or {}).get('price')} no magic deste "
+            f"robo (ticket {ticket}, sl={(real or {}).get('sl')} "
+            f"tp={(real or {}).get('tp')}), mas a maquina sabe de {qtd_maquina} -- "
+            "exposicao FORA de controle"
+        )
+        self._snapshot.disaster_halt = True
+        self._snapshot.disaster_reason = motivo
+        self._log(conn, account.id, "error",
+                  f"EXPOSICAO DIVERGENTE em {self.strategy.symbol}: {motivo}. Parei de "
+                  "abrir ordem nova. NAO vou fechar sozinho -- confira o terminal e "
+                  "decida (ver incidente 2026-08-28).",
+                  {"sessao": session.isoformat(), "ticket": ticket,
+                   "quantidade_corretora": qtd_real, "quantidade_maquina": qtd_maquina,
+                   "lado": (real or {}).get("side")})
+
+    # ---------- freio duro de equity/margem (gap e/f, incidente 2026-08-28) -
+
+    def _check_freio_duro(self, conn, account: AccountState, session: date) -> Optional[str]:
+        """Equity ou margem livre em risco de ruina? Devolve o motivo do
+        freio, ou `None` se pode operar normalmente.
+
+        Motivado pelo incidente 2026-08-28: a conta chegou a equity NEGATIVA
+        (-R$298,60) com o processo CONTINUANDO a tentar abrir e fechar
+        ordem, sem nenhum freio -- o motor de BACKTEST ja tem `wiped_out_at`
+        para isto, o lado ao vivo nao tinha nada equivalente.
+
+        So' roda em execucao REAL (`self.executor is not None`): sombra
+        nunca manda ordem, entao nao ha risco de conta real pra travar.
+
+        Uma vez TRIPADO (`disaster_halt=True`, persistido -- ver
+        `_SessionSnapshot`), fica tripado pelo resto da SESSAO: nao ha
+        caminho automatico de "equity voltou, libera de novo" -- recuperar
+        de patrimonio negativo (ou perto disso) e' decisao do DONO
+        (deposito, investigacao), nunca do robo (regra 6 do AGENTS.md).
+        Reseta sozinho no PROXIMO pregao (sessao nova = snapshot novo).
+
+        `None` (nao deu pra perguntar ao terminal) NUNCA vira alarme --
+        mesma politica do resto do arquivo (`_check_autotrading` etc): "nao
+        sei" nao e' motivo de freio, e quem nao consegue nem ler o terminal
+        ja vai falhar em outro lugar com erro mais especifico."""
+        if self.executor is None:
+            return None
+        if self._snapshot.disaster_halt:
+            self._tenta_zerar_por_freio_duro(conn, account, session)
+            return self._snapshot.disaster_reason
+
+        # (1) TETO DE PERDA DO PREGAO, marcado a mercado. Vem ANTES do teste
+        # de ruina de proposito: e' o freio que dispara enquanto ainda ha o
+        # que salvar. O de baixo (`equity <= 0`) so' constata o obito.
+        perda = self._perda_do_pregao_brl()
+        if (self.perda_maxima_dia_brl > 0 and perda is not None
+                and perda >= self.perda_maxima_dia_brl):
+            motivo = (
+                f"perda de R$ {perda:.2f} no pregao (teto R$ "
+                f"{self.perda_maxima_dia_brl:.2f}), marcada a mercado -- "
+                "inclui a posicao ainda aberta"
+            )
+            self._snapshot.disaster_halt = True
+            self._snapshot.disaster_reason = motivo
+            self._log(conn, account.id, "error",
+                      f"FREIO DE PERDA em {self.strategy.symbol}: {motivo}. Parando de "
+                      "abrir ordem nova e tentando zerar o que estiver aberto. Nao "
+                      "volta sozinho neste pregao.",
+                      {"sessao": session.isoformat(), "perda_brl": round(perda, 2),
+                       "teto_brl": round(self.perda_maxima_dia_brl, 2)})
+            self._tenta_zerar_por_freio_duro(conn, account, session)
+            return motivo
+
+        # (2) RUINA DA CONTA -- ultimo recurso, e da conta INTEIRA (todos os
+        # slots somados), nao so' deste robo.
+        ler = getattr(self.broker, "account_risk_state", None)
+        if ler is None:
+            return None
+        estado = ler()
+        if estado is None:
+            # "Nao sei" isolado nao freia. "Nao sei" CONTINUADO freia: seguir
+            # operando sem NENHUMA leitura de risco e' apostar que quem nao
+            # le equity tambem nao consegue mandar ordem -- uma suposicao
+            # razoavel que nada no codigo garante.
+            self._risco_ilegivel_seguidas += 1
+            if self._risco_ilegivel_seguidas < MAX_LEITURAS_DE_RISCO_FALHAS:
+                return None
+            motivo = (
+                f"{self._risco_ilegivel_seguidas} leituras seguidas de "
+                "equity/margem falharam -- estou operando sem enxergar o risco "
+                "da conta"
+            )
+            self._snapshot.disaster_halt = True
+            self._snapshot.disaster_reason = motivo
+            self._log(conn, account.id, "error",
+                      f"FREIO DURO em {self.strategy.symbol}: {motivo}. Parando de "
+                      "abrir ordem nova e tentando zerar o que estiver aberto.",
+                      {"sessao": session.isoformat(),
+                       "leituras_falhas": self._risco_ilegivel_seguidas})
+            self._tenta_zerar_por_freio_duro(conn, account, session)
+            return motivo
+        self._risco_ilegivel_seguidas = 0
+        equity = estado.get("equity")
+        margem_livre = estado.get("margin_free")
+        equity_ruim = equity is not None and equity <= 0.0
+        margem_ruim = margem_livre is not None and margem_livre <= 0.0
+        if not (equity_ruim or margem_ruim):
+            return None
+
+        motivo = (
+            f"equity R$ {equity:.2f}" if equity is not None else "equity desconhecida"
+        ) + " / " + (
+            f"margem livre R$ {margem_livre:.2f}" if margem_livre is not None
+            else "margem livre desconhecida"
+        ) + " -- conta em risco de ruina"
+        self._snapshot.disaster_halt = True
+        self._snapshot.disaster_reason = motivo
+        self._log(conn, account.id, "error",
+                  f"FREIO DURO em {self.strategy.symbol}: {motivo}. Parando de abrir "
+                  "ordem nova e tentando zerar o que estiver aberto. Nao volta sozinho "
+                  "-- precisa de intervencao (ver incidente 2026-08-28).",
+                  {"sessao": session.isoformat(), "equity": equity, "margem_livre": margem_livre})
+        self._tenta_zerar_por_freio_duro(conn, account, session)
+        return motivo
+
+    def _perda_do_pregao_brl(self) -> Optional[float]:
+        """Quanto ESTE robo perdeu hoje, marcado a mercado, em R$ positivos
+        (0.0 ou negativo = nao esta perdendo). `None` = nao da' para dizer.
+
+        Realizado (`machine.session_pnl`) MAIS o que esta aberto
+        (`machine.unrealized_brl`). O segundo termo e' o ponto: no incidente
+        de 2026-08-28 a perda inteira -- -R$295 -- ficou NAO REALIZADA por
+        uma hora, enquanto a corretora recusava o fechamento. Um freio que
+        so' olhasse P&L fechado nao teria visto um centavo dela ate ser
+        tarde. E' tambem o que separa este numero do `session_stop_brl` que
+        algumas estrategias tem: aquele e' opcional, por robo, so' realizado,
+        e so' impede entrada NOVA.
+
+        Sem posicao aberta nao precisa de preco nenhum. Com posicao aberta e
+        sem cotacao, devolve `None` -- "nao sei" nunca vira "nao esta
+        perdendo", mas tambem nao vira freio (mesma politica do arquivo)."""
+        realizado = float(self.machine.session_pnl or 0.0)
+        if not self.machine.positions:
+            return -realizado
+        ultimo = getattr(self.broker, "last_price", None)
+        preco = ultimo(self.strategy.symbol) if ultimo is not None else None
+        if preco is None:
+            return None
+        return -(realizado + self.machine.unrealized_brl(float(preco)))
+
+    def _tenta_zerar_por_freio_duro(self, conn, account: AccountState, session: date) -> None:
+        """Tenta fechar A MERCADO o que estiver aberto, sob o freio duro.
+
+        Usa `MT5Broker.last_price()` como referencia (nao uma barra fechada
+        -- o freio pode disparar entre barras, e esperar a proxima so' pra
+        ter um OHLC seria adiar de proposito o que precisa acontecer AGORA).
+        Sem preco de referencia, so' desiste desta tentativa (tenta de novo
+        no proximo passo, ~5s depois) -- mandar ordem as cegas, sem preco
+        NENHUM, e' pior do que esperar.
+
+        **Ordem viva conta tanto quanto posicao aberta.** Antes esta funcao
+        saia na primeira linha quando `machine.positions` estava vazio -- e
+        com isso o freio duro deixava intacta a ordem-limite PARADA no book.
+        O robo entrava em "nao abro mais nada" com uma ordem que abre
+        sozinha: bastava o preco tocar o nivel para nascer uma posicao nova,
+        numa conta que o proprio robo acabou de declarar em risco de ruina, e
+        com o robo agora cego (freio tripado = nao consome barra, nao
+        redecide). `force_flatten` ja sabia fechar as duas coisas -- ninguem
+        chegava a chama-lo."""
+        tem_posicao = bool(self.machine.positions)
+        tem_ordem = (
+            self.machine.resting_limit is not None
+            or bool(self._snapshot.pending_entry_refs)
+            or (self.executor is not None and bool(self.executor.pending_orders))
+        )
+        if not (tem_posicao or tem_ordem):
+            return
+        ultimo_preco = getattr(self.broker, "last_price", None)
+        preco = ultimo_preco(self.strategy.symbol) if ultimo_preco is not None else None
+        if preco is None and tem_posicao:
+            self._log(conn, account.id, "error",
+                      f"freio duro sem preco de referencia para zerar {self.strategy.symbol} "
+                      "-- tento de novo no proximo passo", {"sessao": session.isoformat()})
+            return
+        if preco is None:
+            # Sem posicao, so' ordem viva: cancelar nao precisa de preco
+            # nenhum (`force_flatten` nao toca em `price` quando nao ha
+            # posicao), e adiar o cancelamento por falta de cotacao deixaria
+            # de pe exatamente a ordem que este freio existe para tirar.
+            preco = 0.0
+        agora = pd.Timestamp(datetime.now(timezone.utc))
+        bar_sintetica = Bar(ts=agora, open=preco, high=preco, low=preco, close=preco, volume=0.0)
+        try:
+            eventos = self.machine.force_flatten(agora, preco)
+        except BrokerExecutionError as erro:
+            # So' `FECHAMENTO_RECUSADO` e' capturado -- ver a docstring de
+            # `_consume` para o motivo (uma divergencia de dado, `FALHA_
+            # ALTO`, precisa propagar e travar o passo, nao virar retry
+            # silencioso).
+            if erro.kind != BrokerExecutionError.FECHAMENTO_RECUSADO:
+                raise
+            self._registra_falha_de_fechamento(conn, account, session, erro)
+            return
+        for evento in eventos:
+            self._apply(conn, account, evento, bar_sintetica)
+        # `_on_limit_cancelled` cancela pelo que ESTE processo tem em memoria
+        # (`executor.pending_orders`), que nasce vazio depois de um restart --
+        # ai o unico registro do ticket vivo e' `pending_entry_refs`,
+        # persistido. Sem esta varredura, um freio duro logo apos um restart
+        # deixava no book exatamente a ordem que ele existe para tirar.
+        if self.executor is not None and self._snapshot.pending_entry_refs:
+            self._aplica_cancelamento(conn, account, self.executor.cancel_stale_refs(
+                self._snapshot.pending_entry_refs, ts=agora))
+        self._drena_orfas_de_saida(conn, account, agora)
+
+    def _registra_falha_de_fechamento(self, conn, account: AccountState, session: date,
+                                      erro: BrokerExecutionError) -> None:
+        """Gap (f): a corretora recusou um fechamento -- SEMPRE vira evento
+        no diario (com notificacao, ver `_log`), e depois de
+        `MAX_CLOSE_REFUSALS_BEFORE_HALT` recusas SEGUIDAS aciona o freio
+        duro.
+
+        Motivado pelo incidente 2026-08-28: a corretora recusou ~24 vezes
+        seguidas o fechamento do slot `dt-wdo_grid_reload_maker-wdo@-live`
+        (MG51, margem esgotada) e NADA disso apareceu no diario nem
+        alertou ninguem -- so' uma linha `[erro]` repetida no log bruto do
+        processo, que ninguem olha em tempo real. Duas coisas fechadas
+        aqui: visibilidade (toda recusa vira evento + notificacao, sempre)
+        e limite (martelar a corretora a cada poucos segundos por horas nao
+        resolve um problema estrutural de margem/protecao -- so' produz
+        mais linha de log)."""
+        self._snapshot.close_refusal_count += 1
+        n = self._snapshot.close_refusal_count
+        self._log(conn, account.id, "error",
+                  f"RECUSA DE FECHAMENTO #{n} em {self.strategy.symbol}: {erro} -- "
+                  "posicao continua ABERTA, tentando de novo",
+                  {"sessao": session.isoformat(), "tentativa": n, "erro": str(erro)})
+        if n >= MAX_CLOSE_REFUSALS_BEFORE_HALT and not self._snapshot.disaster_halt:
+            motivo = (
+                f"{n} recusas SEGUIDAS de fechamento em {self.strategy.symbol} (ultima: "
+                f"{erro}) -- parando de bater na mesma cadencia; precisa de intervencao "
+                "manual (conferir margem/SL-TP na corretora, ver incidente 2026-08-28)."
+            )
+            self._snapshot.disaster_halt = True
+            self._snapshot.disaster_reason = motivo
+            self._log(conn, account.id, "error", f"FREIO DURO: {motivo}",
                       {"sessao": session.isoformat()})
 
     def _avaliar_sugestao_de_capital(
@@ -1374,14 +2270,39 @@ class IntradayLiveRuntime:
                     barras: list[Bar], parado_ha: float) -> StepReport:
         """Buraco grande: o processo ficou fora do ar. Nao reprocessa (isso
         seria tomar decisoes velhas contra precos que ja passaram) — achata a
-        posicao com o evento de preco MAIS RECENTE e recomeca a sessao dali."""
+        posicao com o evento de preco MAIS RECENTE e recomeca a sessao dali.
+
+        `force_flatten` pode levantar `BrokerExecutionError`. So' `kind=
+        FECHAMENTO_RECUSADO` (fechamento recusado pela corretora, posicao
+        continua exatamente como estava) e' capturada e registrada aqui em
+        vez de propagar, pelo MESMO motivo de `_consume`: `store.
+        live_journal` faz ROLLBACK em qualquer excecao, e deixar propagar
+        apagaria o proprio alerta que este metodo acabou de gravar, alem de
+        nunca persistir o avanco de `last_bar_ts` (ver a docstring do bloco
+        equivalente em `_consume`). Qualquer outro `kind` (divergencia de
+        dado) e' RE-LEVANTADO, o comportamento de sempre."""
         ultima = barras[-1]
         fechados = []
-        for evento in self.machine.force_flatten(ultima.ts, ultima.close):
+        try:
+            eventos = self.machine.force_flatten(ultima.ts, ultima.close)
+        except BrokerExecutionError as erro:
+            if erro.kind != BrokerExecutionError.FECHAMENTO_RECUSADO:
+                raise
+            self._registra_falha_de_fechamento(conn, account, session, erro)
+            self._snapshot.last_bar_ts = ultima.ts
+            return StepReport("daytrade_buraco_recusa_fechamento", session,
+                              detail={"parado_segundos": round(parado_ha, 1),
+                                      "erro": str(erro)})
+        for evento in eventos:
             if isinstance(evento, PositionClosed):
                 fechados.append(evento)
             self._apply(conn, account, evento, ultima)
         self._drena_orfas_de_saida(conn, account, ultima.ts)
+        # `force_flatten` cancela a `resting_limit` EM MEMORIA -- se o buraco
+        # coincidiu com um restart (o caso mais provavel de buraco real), a
+        # memoria deste processo ja nasceu vazia e ele nao tem o que cancelar,
+        # mesmo com um ticket REAL vivo no book. Quem sabe e' a corretora.
+        self._reconcilia_ordens_de_entrada(conn, account, session, ultima.ts)
         self._log(conn, account.id, "error",
                   f"buraco de {parado_ha / 60.0:.0f} min sem rodar; {len(barras)} "
                   f"barra(s) puladas"
@@ -1433,7 +2354,34 @@ class IntradayLiveRuntime:
 
         O descarte cobre tambem `_acumula_volume_no_nivel`: volume de ontem
         contado no nivel de uma ordem de hoje mediria penetracao que nunca
-        aconteceu (ver `_penetration_ticks`)."""
+        aconteceu (ver `_penetration_ticks`).
+
+        `on_closed_bar` pode levantar `BrokerExecutionError`. So' a
+        variante `kind=FECHAMENTO_RECUSADO` (a corretora recusou uma ordem
+        de SAIDA, mas a posicao continua exatamente como a maquina ja
+        sabia) e' capturada AQUI -- qualquer outra (`FALHA_ALTO`: lado
+        errado na corretora, sem conexao pra confirmar nada -- uma
+        DIVERGENCIA de dado, nao uma recusa de ordem) e' RE-LEVANTADA, o
+        comportamento de sempre (falhar alto e deixar o supervisor tentar
+        de novo do zero, sem journalizar nada no meio do caminho -- ver
+        `docstring` de `BrokerExecutionError.kind`).
+
+        Gap (f), incidente 2026-08-28: ate aqui a excecao (de QUALQUER
+        `kind`) subia sem ser capturada, e `store.live_journal` faz
+        ROLLBACK em qualquer excecao -- ou seja, qualquer `_log`/journal
+        que este passo tivesse escrito ANTES da recusa desaparecia junto, e
+        a marca de barra (`last_bar_ts`) nunca avancava. Isso fazia o
+        supervisor reprocessar a MESMA barra a cada ~5s (o passo dele),
+        martelando a corretora contra a MESMA decisao repetidas vezes -- e'
+        o padrao observado no incidente real (~24 recusas seguidas em poucos
+        minutos). Para `FECHAMENTO_RECUSADO`, a excecao agora e' capturada
+        AQUI: `_registra_falha_de_fechamento` grava o alerta (que sobrevive
+        porque a transacao COMMITA no fim de `run_once`) e a marca avanca
+        ate esta barra -- a posicao continua aberta NA MAQUINA
+        (`_close_position` so' muta estado DEPOIS do envio confirmar, ver a
+        docstring dela), entao a PROXIMA barra reavalia a condicao de saida
+        do zero contra o preco novo, que e' retry de verdade, nao martelo
+        cego."""
         abertas = fechadas = descartadas = 0
         ultima_descartada = None
         for bar in barras:
@@ -1443,7 +2391,49 @@ class IntradayLiveRuntime:
                 self._snapshot.last_bar_ts = bar.ts
                 continue
             self._acumula_volume_no_nivel(bar)
-            for evento in self.machine.on_closed_bar(bar):
+            try:
+                eventos = self.machine.on_closed_bar(bar)
+            except BrokerExecutionError as erro:
+                if erro.kind != BrokerExecutionError.FECHAMENTO_RECUSADO:
+                    raise
+                self._snapshot.last_bar_ts = bar.ts
+                self._registra_falha_de_fechamento(conn, account, session, erro)
+                detalhe = {"barras": len(barras), "entradas": abertas, "saidas": fechadas,
+                          "modo": self.execution_mode, "erro": str(erro)}
+                if descartadas:
+                    detalhe["descartadas"] = descartadas
+                return StepReport("daytrade_recusa_fechamento", session, detail=detalhe)
+            except EntradaAMercadoNaoSuportada as erro:
+                # A estrategia pediu `Enter` a mercado, que nao tem caminho
+                # de execucao real. Isto NAO e' um erro transitorio: e' um
+                # robo que nunca vai conseguir operar neste modo, e a barra
+                # seguinte vai levantar de novo. Sem esta captura o passo
+                # inteiro subia,
+                # o journal fazia ROLLBACK, `last_bar_ts` nao avancava e o
+                # supervisor reprocessava a MESMA barra a cada ~5s pelo
+                # pregao inteiro -- muito log, nenhuma informacao, e nada no
+                # painel dizendo por que o robo nao opera.
+                #
+                # Agnostico de estrategia de proposito: qualquer robo que
+                # emita uma acao nao suportada para aqui do mesmo jeito.
+                motivo = (
+                    f"a estrategia pediu uma acao que a execucao real nao "
+                    f"suporta: {erro}"
+                )
+                self._snapshot.last_bar_ts = bar.ts
+                self._snapshot.disaster_halt = True
+                self._snapshot.disaster_reason = motivo
+                self._log(conn, account.id, "error",
+                          f"ROBO INCOMPATIVEL com execucao real em "
+                          f"{self.strategy.symbol}: {motivo}. Parei -- este robo "
+                          "precisa de entrada por ordem-limite (maker) para operar "
+                          "com dinheiro de verdade.",
+                          {"sessao": session.isoformat(), "erro": str(erro)})
+                detalhe = {"barras": len(barras), "entradas": abertas,
+                           "saidas": fechadas, "modo": self.execution_mode,
+                           "erro": str(erro)}
+                return StepReport("daytrade_robo_incompativel", session, detail=detalhe)
+            for evento in eventos:
                 if isinstance(evento, PositionOpened):
                     abertas += 1
                 elif isinstance(evento, PositionClosed):
@@ -1550,6 +2540,32 @@ class IntradayLiveRuntime:
                 conn, account,
                 self.executor.cancel_stale_refs(
                     self._snapshot.pending_entry_refs, ts=evento.ts))
+        # A CONTA aguenta? Ultimo portao antes do book, e o unico que soma a
+        # conta inteira (outros slots, posicao aberta do dono) -- ver
+        # `_check_margem_da_conta`. Recusar uma entrada e' sempre melhor do
+        # que abrir uma que a conta nao sustenta.
+        sem_margem = self._check_margem_da_conta(
+            evento.order.side, qtd, evento.order.limit_price)
+        if sem_margem is not None:
+            if sem_margem not in self._margem_alarmada:
+                self._margem_alarmada.add(sem_margem)
+            self._recusa_por_margem(conn, account, self._snapshot.session,
+                                    numero, sem_margem)
+            return
+        # Laco de envio -- ver `_check_cadencia_de_ordens`. Vem DEPOIS da
+        # margem de proposito: gastar uma vaga da janela numa ordem que a
+        # conta nem comporta seria contar o que nao aconteceu.
+        em_laco = self._check_cadencia_de_ordens(evento.ts)
+        if em_laco is not None:
+            self._snapshot.disaster_halt = True
+            self._snapshot.disaster_reason = em_laco
+            self._log(conn, account.id, "error",
+                      f"FREIO DE CADENCIA em {self.strategy.symbol}: {em_laco}. "
+                      "Parei de mandar ordem.",
+                      {"sessao": self._snapshot.session.isoformat(),
+                       "numero_ordem": numero})
+            self.machine.discard_resting_limit()
+            return
         # Um filho REAL por elemento de `EnterLimit.split_quantities` (ver a
         # docstring de `EnterLimit.children` e a Fase 2 em
         # `live/intraday_execution.py`) -- `[quantity]` quando a ordem nao
@@ -1560,6 +2576,15 @@ class IntradayLiveRuntime:
                 limit_price=evento.order.limit_price,
                 quantities=evento.order.children(self.config.default_quantity),
                 ts=evento.ts,
+                # Protecao ATOMICA: o stop e o alvo que a estrategia declarou
+                # nesta `EnterLimit` viajam no MESMO request que registra a
+                # ordem na corretora, entao a posicao nasce protegida no
+                # instante do fill -- sem janela, sem depender deste processo
+                # estar vivo. `_ensure_protecao` continua rodando, agora como
+                # REDE (protecao que sumiu, stop movido depois), nao como o
+                # caminho principal. Ver `MT5Broker.place_pending`.
+                stop=evento.order.initial_stop,
+                target=self._alvo_atomico(evento.order),
             )
         except BrokerExecutionError as erro:
             self._recusa_de_envio(conn, account, self._snapshot.session, numero, erro)
@@ -1945,6 +2970,12 @@ class IntradayLiveRuntime:
         unica fonte de verdade de caixa que temos (ver
         `dashboard/app.py::operacao_caixa`). O resultado sombra acumula em
         `policy_state`, separado, e aparece no painel como tal."""
+        # Gap (f): um fechamento (total OU parcial, ver o desvio logo
+        # abaixo) que DA CERTO zera a contagem de recusas seguidas -- ela
+        # existe pra' pegar uma sequencia estrutural de recusa (margem,
+        # protecao, autotrading), nao pra' penalizar para sempre um robo que
+        # teve UMA recusa isolada e depois seguiu fechando normalmente.
+        self._snapshot.close_refusal_count = 0
         if self.machine.position is not None:
             self._on_closed_partial(conn, account, evento)
             return
@@ -2290,5 +3321,11 @@ class IntradayLiveRuntime:
                 # ficou gravado (processo morto antes de resolver) nao pode
                 # pintar de vermelho um pregao que nem comecou.
                 "impedimento": self._impedimento_de_hoje(account, session),
+                # Freio duro (gap e/f, incidente 2026-08-28) -- estado
+                # visivel pro painel sem tocar na corretora (lido do
+                # snapshot persistido, mesmo padrao de `capital_alarme`).
+                "freio_duro": self._snapshot.disaster_halt,
+                "freio_duro_motivo": self._snapshot.disaster_reason,
+                "recusas_fechamento_seguidas": self._snapshot.close_refusal_count,
             },
         }

@@ -211,6 +211,36 @@ def test_start_mt5_com_fractional_map_inclui_json_no_argv(isolated, monkeypatch)
     assert json.loads(argv[argv.index("--mt5-fractional-map") + 1]) == {"WEGE3.SA": "WEGE3F"}
 
 
+def test_start_mt5_sem_symbol_map_nao_inclui_flag_no_argv(isolated, monkeypatch):
+    """Sem contrato de futuro detectado (`mt5_symbol_map=None`), o argv não
+    ganha `--mt5-symbol-map` -- `run_live.py::build()` cai no ticker cru
+    (mesmo sintoma de hoje pra futuro, sem quebrar quem só opera ação)."""
+    _seed_cash(isolated["db"], "swing", 1_000.0)
+    captured: list = []
+    monkeypatch.setattr(live_control.subprocess, "Popen",
+                        _fake_popen(poll_value=None, captured_argv=captured))
+
+    live_control.start(_cfg(mt5_symbol_map=None))
+
+    assert len(captured) == 1
+    assert "--mt5-symbol-map" not in captured[0]
+
+
+def test_start_mt5_com_symbol_map_inclui_json_no_argv(isolated, monkeypatch):
+    """Contrato de futuro detectado (ex. `WDO@` -> `WDOU26`) vira JSON em
+    `--mt5-symbol-map` -- o MESMO formato que `run_live.py::build()` já sabe
+    ler (`json.loads`)."""
+    _seed_cash(isolated["db"], "swing", 1_000.0)
+    captured: list = []
+    monkeypatch.setattr(live_control.subprocess, "Popen",
+                        _fake_popen(poll_value=None, captured_argv=captured))
+
+    live_control.start(_cfg(mt5_symbol_map={"WDO@": "WDOU26"}))
+
+    argv = captured[0]
+    assert json.loads(argv[argv.index("--mt5-symbol-map") + 1]) == {"WDO@": "WDOU26"}
+
+
 def test_create_account_serializa_fractional_map_em_json_para_build(monkeypatch):
     """`create_account()` chama `cli.build(args)` (o MESMO `run_live.py`) --
     `args.mt5_fractional_map` precisa chegar como STRING json (ou `None`),
@@ -255,6 +285,49 @@ def test_create_account_sem_fractional_map_passa_none_para_build(monkeypatch):
     live_control.create_account(_cfg(mt5_fractional_map=None))
 
     assert captured_args[0].mt5_fractional_map is None
+
+
+def test_create_account_serializa_symbol_map_em_json_para_build(monkeypatch):
+    """`args.mt5_symbol_map` precisa chegar como STRING json (ou `None`),
+    nunca como dict cru, porque `build()` faz
+    `json.loads(args.mt5_symbol_map)`."""
+    captured_args: list = []
+
+    class _FakeRuntime:
+        def ensure_account(self):
+            return "conta-fake"
+
+    class _FakeCli:
+        @staticmethod
+        def build(args):
+            captured_args.append(args)
+            return _FakeRuntime()
+
+    monkeypatch.setattr(live_control, "_load_cli", lambda: _FakeCli)
+
+    resultado = live_control.create_account(_cfg(mt5_symbol_map={"WDO@": "WDOU26"}))
+
+    assert resultado == "conta-fake"
+    assert json.loads(captured_args[0].mt5_symbol_map) == {"WDO@": "WDOU26"}
+
+
+def test_create_account_sem_symbol_map_passa_none_para_build(monkeypatch):
+    captured_args: list = []
+
+    class _FakeRuntime:
+        def ensure_account(self):
+            return "conta-fake"
+
+    class _FakeCli:
+        @staticmethod
+        def build(args):
+            captured_args.append(args)
+            return _FakeRuntime()
+
+    monkeypatch.setattr(live_control, "_load_cli", lambda: _FakeCli)
+    live_control.create_account(_cfg(mt5_symbol_map=None))
+
+    assert captured_args[0].mt5_symbol_map is None
 
 
 def test_create_account_usa_o_magic_do_slot_nunca_um_fixo(monkeypatch):
@@ -991,3 +1064,69 @@ def test_detect_fractional_symbol_map_falha_de_conexao_devolve_none(monkeypatch)
                         lambda **kwargs: _FakeFractionalBroker(None, [], **kwargs))
 
     assert live_control.detect_fractional_symbol_map(DAYTRADE) is None
+
+
+class _FakeFuturesBroker:
+    def __init__(self, value, captured, **kwargs):
+        captured.append(kwargs)
+        self._value = value
+
+    def detect_futures_symbol_map(self, tickers):
+        self.tickers = list(tickers)
+        return self._value
+
+    def symbol_for(self, ticker):
+        # Mesmo default de `MT5Broker.symbol_for` -- usado pra filtrar do
+        # mapa os tickers onde a deteccao devolveu so' o simbolo base (ex.
+        # acao, sem "@").
+        return ticker[: -len(".SA")] if ticker.endswith(".SA") else ticker
+
+
+def test_detect_futures_symbol_map_do_slot_de_day_trade(monkeypatch):
+    """WDO@ -> WDOU26 e' o que torna a ordem de futuro executavel (achado ao
+    vivo em 2026-08-28: "Trade disabled" mandando ordem direto em WDO@)."""
+    monkeypatch.setattr(live_control, "load_credentials", lambda: {"mt5_login": "12345"})
+    captured: list = []
+    fakes: list = []
+    import live.broker_mt5 as broker_mt5
+
+    def _factory(**kwargs):
+        fake = _FakeFuturesBroker({"WDO@": "WDOU26"}, captured, **kwargs)
+        fakes.append(fake)
+        return fake
+
+    monkeypatch.setattr(broker_mt5, "MT5Broker", _factory)
+
+    # id dinamico `dt-<robo>-<ativo>-<modo>` (`core.config.daytrade_slot_id`):
+    # robo/ativo nao podem conter "-" (e' o separador), so' "wdo@" com "@".
+    assert live_control.detect_futures_symbol_map("dt-wdo_grid_reload_maker-wdo@-shadow") == {
+        "WDO@": "WDOU26",
+    }
+    assert captured[0]["login"] == 12345
+
+
+def test_detect_futures_symbol_map_filtra_quem_nao_e_futuro(monkeypatch):
+    """`MT5Broker.detect_futures_symbol_map` devolve mapa COMPLETO (com
+    fallback pro simbolo base); esta funcao filtra so' quem de fato resolveu
+    pra um contrato diferente -- ticker de acao nunca aparece aqui."""
+    monkeypatch.setattr(live_control, "load_credentials", lambda: {})
+    import live.broker_mt5 as broker_mt5
+    monkeypatch.setattr(
+        broker_mt5, "MT5Broker",
+        lambda **kwargs: _FakeFuturesBroker({"PMAM3": "PMAM3"}, [], **kwargs),
+    )
+
+    assert live_control.detect_futures_symbol_map(DAYTRADE) == {}
+
+
+def test_detect_futures_symbol_map_falha_de_conexao_devolve_none(monkeypatch):
+    """Terminal fechado/deslogado: repassa `None` -- o chamador
+    (`app.py::operacao_iniciar`) trata como "sem mapa" (degrada pro sintoma
+    de hoje, ordem de futuro recusada), nunca como erro fatal que bloqueia o
+    início."""
+    monkeypatch.setattr(live_control, "load_credentials", lambda: {})
+    import live.broker_mt5 as broker_mt5
+    monkeypatch.setattr(broker_mt5, "MT5Broker",
+                        lambda **kwargs: _FakeFuturesBroker(None, [], **kwargs))
+
+    assert live_control.detect_futures_symbol_map(DAYTRADE) is None

@@ -89,7 +89,7 @@ from strategy.daytrade.base import (
     IntradayAction,
     IntradayOpenPosition,
     IntradayStrategy,
-    contracts_from_capital,
+    contracts_from_capital_com_reserva,
     no_tick,
 )
 
@@ -262,13 +262,22 @@ class CopaWin(IntradayStrategy):
 
         `teto_efetivo` e' `teto_contratos` (comportamento de sempre) quando
         `margin_per_contract_brl` e' `None`. Setado, vira `min(teto_
-        contratos, contracts_from_capital(caixa_atual, margin_per_
-        contract_brl, margin_buffer))` -- o caixa real do robo so' pode
-        ENCOLHER a entrada abaixo do teto oficial da competicao, nunca
-        cresce-la acima dele (ver a secao do modulo)."""
+        contratos, contracts_from_capital_com_reserva(caixa_atual,
+        margin_per_contract_brl, margin_buffer))` -- o caixa real do robo
+        so' pode ENCOLHER a entrada abaixo do teto oficial da competicao,
+        nunca cresce-la acima dele (ver a secao do modulo).
+
+        `contracts_from_capital_com_reserva` (nao a versao pura) desde
+        2026-08-28, MESMA reserva de seguranca que `backtest.intraday.
+        machine.IntradaySessionMachine._cap_capital_atual` aplica no teto
+        agregado do motor -- ver `strategy.daytrade.base.RESERVA_CAIXA_
+        SEGURANCA`. Consistencia entre "o que a estrategia pede" e "o que o
+        motor deixa abrir" e' o ponto inteiro: pedir mais do que o motor vai
+        aceitar so' produziria recusas (`OrderRejected(reason=
+        "capital_insuficiente")`) em vez de uma entrada menor e aceita."""
         teto_efetivo = self.teto_contratos
         if self.margin_per_contract_brl is not None:
-            teto_por_caixa = contracts_from_capital(
+            teto_por_caixa = contracts_from_capital_com_reserva(
                 self._cash_atual_brl, self.margin_per_contract_brl, self.margin_buffer,
             )
             teto_efetivo = min(self.teto_contratos, teto_por_caixa)

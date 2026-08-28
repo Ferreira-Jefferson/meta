@@ -63,6 +63,39 @@ class Broker(ABC):
             order.status = OrderStatus.CANCELLED
         return order
 
+    def position_state(self, ticker: str) -> dict:
+        """Posicao aberta deste robo em `ticker`, em TRI-ESTADO -- devolve
+        `{"ok": bool, "position": dict | None, "note": str}`.
+
+        Existe porque `open_position()` devolve `None` para DUAS coisas que
+        nao podem ser confundidas: "perguntei a corretora e nao ha posicao
+        nenhuma" e "nao consegui perguntar". Tratar a segunda como a primeira
+        e' o erro mais caro que este sistema pode cometer -- e' assim que o
+        robo re-arma ordem sobre uma posicao que existe, ou registra uma
+        saida que nunca aconteceu. `ok=False` significa exatamente "NAO SEI",
+        e quem chama tem de tratar como incerteza, nunca como zero.
+
+        Default do port: pergunta `open_position()` e assume que a resposta
+        e' confiavel (`ok=True`). Serve para os dublês de teste, que leem
+        estado em memoria e nao tem como falhar na consulta. `MT5Broker`
+        sobrescreve com a versao que de fato distingue os dois casos."""
+        leitor = getattr(self, "open_position", None)
+        if leitor is None:
+            return {"ok": True, "position": None,
+                    "note": "este broker nao reporta posicao"}
+        return {"ok": True, "position": leitor(ticker), "note": ""}
+
+    def margin_required(self, ticker: str, side: str, quantity: int,
+                        price: float) -> Optional[float]:
+        """Margem em R$ que a corretora exige para abrir esta ordem, ou
+        `None` = "este broker nao sabe responder" (nunca "e' de graca").
+
+        Default `None` pelo mesmo motivo de `cash_balance`: so' uma conexao
+        de corretora de verdade sabe. Quem chama trata `None` como "nao
+        sei", e "nao sei" nunca autoriza nem bloqueia sozinho -- ver
+        `IntradayLiveRuntime._check_margem_da_conta`."""
+        return None
+
     def supports_automation(self) -> bool:
         """Se este broker pode operar sem confirmacao humana no meio. Hoje a
         unica implementacao de producao e MT5, que sempre pode: True."""

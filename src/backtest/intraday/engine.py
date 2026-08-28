@@ -70,16 +70,18 @@ class IntradayBacktestResult:
     # sozinho e' R$15.195, muito acima do caixa de teste).
     wiped_out_at: pd.Timestamp | None = None
     # Sessoes PULADAS por `config.enforce_capital_minimo` -- o caixa
-    # disponivel na abertura nao cobria `capital_minimo_brl` no preco do
-    # dia, entao a sessao inteira roda em branco (nenhuma decisao do robo).
-    # Ate 2026-08-24 esta era a MESMA regra do gate diario de
-    # `live.intraday_runtime.IntradayLiveRuntime._check_capital`; o dono
-    # pediu para o 2x so' valer na ENTRADA (`live_control.start`), entao o
-    # gate diario ao vivo passou a exigir so' 1x o lote -- este flag de
-    # backtest continua em 2x (dimensiona a calibracao, nao decide se um
-    # robo ja rodando pode continuar). Vazio quando o flag esta desligado
-    # (default de quem monta `IntradayBacktestConfig` na mao) ou quando o
-    # caixa sempre cobriu o minimo.
+    # disponivel na abertura nao cobria o piso do dia, entao a sessao
+    # inteira roda em branco (nenhuma decisao do robo). O piso e' sempre
+    # `capital_minimo_brl` (2x o lote) por padrao (`config.
+    # capital_minimo_so_na_entrada=False`) -- MESMA regra do gate diario de
+    # `live.intraday_runtime.IntradayLiveRuntime._check_capital` ate
+    # 2026-08-24. Dai o dono pediu para o 2x so' valer na ENTRADA
+    # (`live_control.start`), o gate diario ao vivo passou a exigir so' 1x
+    # o lote -- e o backtest ganhou o MESMO comportamento, opt-in, via
+    # `capital_minimo_so_na_entrada=True` (ver a docstring do campo em
+    # `IntradayBacktestConfig`). Vazio quando `enforce_capital_minimo` esta
+    # desligado (default de quem monta `IntradayBacktestConfig` na mao) ou
+    # quando o caixa sempre cobriu o minimo.
     sessoes_puladas_por_capital: list = field(default_factory=list)
     # Diagnostico do teto de contratos (`IntradayBacktestConfig.
     # max_open_contracts`), copiado da maquina no fim da run. Zerados quando
@@ -89,6 +91,17 @@ class IntradayBacktestResult:
     # medido nao descreve o desenho que ela acha que tem.
     ordens_aceitas: int = 0
     ordens_recusadas_por_teto: int = 0
+    # Diagnostico do teto de contratos por CAPITAL (`IntradayBacktestConfig.
+    # margin_per_contract_brl`, 2026-08-28 -- ver a nota longa no campo em
+    # `IntradayBacktestConfig` e em `strategy.daytrade.base.RESERVA_CAIXA_
+    # SEGURANCA`), copiado da maquina no fim da run. Zerado quando o teto por
+    # capital nao esta configurado. SEPARADO de `ordens_recusadas_por_teto`
+    # de proposito -- sao causas diferentes de recusa (regulatoria vs caixa
+    # real), e esta e' a metrica que teria denunciado o incidente de
+    # 2026-08-28 ANTES de virar prejuizo real: uma segunda entrada do grid
+    # que hoje abriria posicao de verdade passaria a aparecer aqui, nunca em
+    # silencio.
+    ordens_recusadas_por_capital: int = 0
 
 
 def _bar_volume(row: pd.Series) -> float:
@@ -159,6 +172,13 @@ def run_intraday_backtest(
     # diaria` ja descartou ao agregar.
     previous_daily_medianas: deque[float] = deque(maxlen=_CAUDA_DIAS_MAXIMA)
     sessoes_puladas_por_capital: list[pd.Timestamp] = []
+    # Ver a docstring de `IntradayBacktestConfig.capital_minimo_so_na_entrada`.
+    # Comeca `True` numa sessao RETOMADA (o robo warm-started ja esta de pe);
+    # senao `False` ate a 1a sessao em que o caixa cobre o piso de ENTRADA.
+    # So' importa quando `config.capital_minimo_so_na_entrada=True` -- com o
+    # default (`False`), o gate abaixo usa sempre `capital_minimo_brl` (2x) e
+    # esta variavel fica sem efeito.
+    robo_ja_iniciado = resume_same_session
     # Declarado ANTES do loop (nao dentro): se TODA sessao for pulada por
     # `enforce_capital_minimo` (capital insuficiente o backtest inteiro), o
     # corpo do loop que normalmente atribui isto nunca roda, e o `return`
@@ -182,7 +202,15 @@ def run_intraday_backtest(
         if not is_resumed_session and config.enforce_capital_minimo:
             caixa_disponivel = config.initial_capital + machine.realized_pnl
             preco_abertura = float(session_df.iloc[0]["open"])
-            minimo_hoje = capital_minimo_brl(preco_abertura, config.default_quantity)
+            # Ver `IntradayBacktestConfig.capital_minimo_so_na_entrada`: uma
+            # vez que o robo ja iniciou, o piso vira 1x o lote de hoje (nao
+            # mais 2x) -- mesma regra de `live.intraday_runtime.
+            # IntradayLiveRuntime._check_capital`.
+            minimo_hoje = (
+                preco_abertura * config.default_quantity
+                if config.capital_minimo_so_na_entrada and robo_ja_iniciado
+                else capital_minimo_brl(preco_abertura, config.default_quantity)
+            )
             if caixa_disponivel < minimo_hoje:
                 sessoes_puladas_por_capital.append(session_df.index[0])
                 session_bars_puladas = [bar_from_row(ts, row) for ts, row in session_df.iterrows()]
@@ -197,6 +225,7 @@ def run_intraday_backtest(
                 if mediana_dia is not None:
                     previous_daily_medianas.append(mediana_dia)
                 continue
+            robo_ja_iniciado = True
         # `seed_volume_window` (RollingVolumeWindow) precisa da CAUDA do
         # pregao anterior para completar a janela de volume rolante logo na
         # abertura -- pulado para a sessao RESUMIDA porque ela ja foi
@@ -293,4 +322,5 @@ def run_intraday_backtest(
                                    metrics=result_metrics, wiped_out_at=wiped_out_at,
                                    sessoes_puladas_por_capital=sessoes_puladas_por_capital,
                                    ordens_aceitas=machine.ordens_aceitas,
-                                   ordens_recusadas_por_teto=machine.ordens_recusadas_por_teto)
+                                   ordens_recusadas_por_teto=machine.ordens_recusadas_por_teto,
+                                   ordens_recusadas_por_capital=machine.ordens_recusadas_por_capital)

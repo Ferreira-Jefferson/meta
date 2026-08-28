@@ -15,11 +15,15 @@ import pytest
 from strategy.daytrade.base import (
     CAPITAL_MINIMO_EM_LOTES,
     LOTE_PADRAO_B3,
+    MARGIN_BUFFER_FUTUROS,
+    RESERVA_CAIXA_SEGURANCA,
     Bar,
     JanelaVolatilidadeDiaria,
     RollingVolumeWindow,
     barra_diaria,
     capital_minimo_brl,
+    contracts_from_capital,
+    contracts_from_capital_com_reserva,
 )
 
 
@@ -228,3 +232,136 @@ def test_janela_volatilidade_descarta_alem_do_tamanho_declarado():
     for rng in (1.0, 2.0, 3.0):
         janela.registrar_dia(_bar_ohlc("18:00", 10.0, 10.0 + rng, 10.0, 10.0))
     assert janela.range_mediano() == pytest.approx(2.0)
+
+
+# ---------- contracts_from_capital (2026-08-26, Frente F0 -- equivalente de
+# `capital_minimo_brl` para FUTURO: o limitador de tamanho e' MARGEM por
+# contrato, nao caixa por lote) ----------------------------------------------
+
+def test_contracts_from_capital_zero_quando_nao_cobre_1_contrato():
+    """Caixa abaixo de `margin * buffer` nao sustenta nem 1 contrato -- 0,
+    nunca negativo, nunca um erro (o robo so' espera ter caixa, mesmo
+    espirito de `enforce_capital_minimo` recusando o pregao)."""
+    assert contracts_from_capital(cash_brl=100.0, margin_per_contract_brl=1_000.0) == 0
+    assert contracts_from_capital(cash_brl=0.0, margin_per_contract_brl=1_000.0) == 0
+    assert contracts_from_capital(cash_brl=-50.0, margin_per_contract_brl=1_000.0) == 0
+
+
+def test_contracts_from_capital_exatamente_1_contrato():
+    """Caixa exatamente igual a `margin * buffer` sustenta 1 contrato --
+    testa a tolerancia de ponto flutuante do `floor` (1.0 exato nao pode
+    truncar para 0 por erro de representacao binaria, o classico `1000.0 /
+    500.0` que pode virar `1.9999999999998` num calculo intermediario)."""
+    margem = 500.0
+    caixa_exata = margem * MARGIN_BUFFER_FUTUROS
+    assert contracts_from_capital(cash_brl=caixa_exata, margin_per_contract_brl=margem) == 1
+    # um centavo A MENOS de verdade nao fecha o contrato -- fica em 0
+    assert contracts_from_capital(cash_brl=caixa_exata - 0.01, margin_per_contract_brl=margem) == 0
+    # um centavo A MAIS nao e' o suficiente para abrir um 2o (precisaria do dobro)
+    assert contracts_from_capital(cash_brl=caixa_exata + 0.01, margin_per_contract_brl=margem) == 1
+    # caso classico de erro de ponto flutuante: 3 x (margem*buffer) construido
+    # por soma repetida pode ficar a 1 ULP abaixo do valor exato -- ainda tem
+    # que fechar 3 contratos, nao 2.
+    caixa_por_soma = sum([margem * MARGIN_BUFFER_FUTUROS] * 3)
+    assert contracts_from_capital(cash_brl=caixa_por_soma, margin_per_contract_brl=margem) == 3
+
+
+def test_contracts_from_capital_varios_contratos_escala_com_o_caixa():
+    margem = 500.0
+    assert contracts_from_capital(cash_brl=margem * MARGIN_BUFFER_FUTUROS * 3, margin_per_contract_brl=margem) == 3
+    assert contracts_from_capital(cash_brl=margem * MARGIN_BUFFER_FUTUROS * 3.9, margin_per_contract_brl=margem) == 3
+    assert contracts_from_capital(cash_brl=margem * MARGIN_BUFFER_FUTUROS * 10, margin_per_contract_brl=margem) == 10
+
+
+def test_contracts_from_capital_hard_cap_realmente_limita():
+    """Mesmo com caixa de sobra, `hard_cap` e' o teto -- e' o encaixe com o
+    teto OFICIAL de um instrumento (`SymbolProfile.max_open_contracts`,
+    ex.: 15 no WIN, 5 no WDO): o robo escala com o capital, mas nunca alem
+    do que o instrumento/regulamento permite."""
+    assert contracts_from_capital(
+        cash_brl=1_000_000.0, margin_per_contract_brl=500.0, hard_cap=5,
+    ) == 5
+    # hard_cap so' LIMITA -- nunca aumenta alem do que o caixa sustentaria
+    assert contracts_from_capital(
+        cash_brl=500.0 * MARGIN_BUFFER_FUTUROS, margin_per_contract_brl=500.0, hard_cap=99,
+    ) == 1
+    assert contracts_from_capital(
+        cash_brl=1_000_000.0, margin_per_contract_brl=500.0, hard_cap=None,
+    ) > 5
+
+
+def test_contracts_from_capital_buffer_customizado_sobrescreve_o_default():
+    """Quem tiver dado real de margem/chamada de margem (ver docstring de
+    `MARGIN_BUFFER_FUTUROS`) pode calibrar um `buffer` proprio -- o default
+    e' so' o ponto de partida seguro, nao uma constante travada."""
+    margem = 1_000.0
+    com_buffer_1x = contracts_from_capital(cash_brl=margem, margin_per_contract_brl=margem, buffer=1.0)
+    assert com_buffer_1x == 1
+    com_buffer_default = contracts_from_capital(cash_brl=margem, margin_per_contract_brl=margem)
+    assert com_buffer_default == 0  # o default (2x) exige o dobro para o mesmo caixa
+
+
+def test_contracts_from_capital_rejeita_margem_ou_buffer_nao_positivos():
+    with pytest.raises(ValueError):
+        contracts_from_capital(cash_brl=10_000.0, margin_per_contract_brl=0.0)
+    with pytest.raises(ValueError):
+        contracts_from_capital(cash_brl=10_000.0, margin_per_contract_brl=-500.0)
+    with pytest.raises(ValueError):
+        contracts_from_capital(cash_brl=10_000.0, margin_per_contract_brl=500.0, buffer=0.0)
+
+
+# ---------- contracts_from_capital_com_reserva (2026-08-28, incidente REAL --
+# `wdo_grid_reload_maker` zerou a conta ao vivo com WDO@/R$300 abrindo 2
+# contratos simultaneos; ver a docstring de `RESERVA_CAIXA_SEGURANCA`) -------
+
+def test_reserva_reproduz_exatamente_o_incidente_wdo_r300():
+    """O numero do incidente: WDO@ a R$300, margem R$150 -- SEM reserva
+    (`contracts_from_capital` puro) da' exatamente 1 contrato, zero folga.
+    COM a reserva, o mesmo caixa nao fecha nem 1 -- e' a leitura honesta de
+    que R$300 opera exatamente na borda, sem nenhuma margem de erro."""
+    assert contracts_from_capital(cash_brl=300.0, margin_per_contract_brl=150.0) == 1
+    assert contracts_from_capital_com_reserva(cash_brl=300.0, margin_per_contract_brl=150.0) == 0
+
+
+def test_reserva_e_buffer_compoem_por_multiplicacao():
+    """`contracts_from_capital_com_reserva` e' `contracts_from_capital` com
+    `buffer x reserva` no lugar de `buffer` -- mesma mecanica/tolerancia de
+    ponto flutuante, testada aqui so' pela composicao dos dois fatores."""
+    margem = 1_000.0
+    buffer = 2.0
+    reserva = 1.25
+    caixa = margem * buffer * reserva * 4  # sustenta exatamente 4 contratos com os dois fatores
+    assert contracts_from_capital_com_reserva(
+        cash_brl=caixa, margin_per_contract_brl=margem, buffer=buffer, reserva=reserva,
+    ) == 4
+    assert contracts_from_capital_com_reserva(
+        cash_brl=caixa, margin_per_contract_brl=margem, buffer=buffer, reserva=reserva,
+    ) == contracts_from_capital(cash_brl=caixa, margin_per_contract_brl=margem, buffer=buffer * reserva)
+
+
+def test_reserva_default_e_a_constante_do_modulo():
+    """Nao passar `reserva` usa `RESERVA_CAIXA_SEGURANCA` -- garante que o
+    default nao pode divergir silenciosamente da constante documentada."""
+    assert contracts_from_capital_com_reserva(cash_brl=10_000.0, margin_per_contract_brl=1_000.0) == \
+        contracts_from_capital_com_reserva(cash_brl=10_000.0, margin_per_contract_brl=1_000.0,
+                                            reserva=RESERVA_CAIXA_SEGURANCA)
+
+
+def test_reserva_hard_cap_continua_funcionando():
+    """`hard_cap` viaja intacto para `contracts_from_capital` -- a reserva
+    nao muda essa mecanica (o teto oficial do instrumento continua sendo o
+    teto, independente de quanto caixa sobra)."""
+    assert contracts_from_capital_com_reserva(
+        cash_brl=1_000_000.0, margin_per_contract_brl=150.0, hard_cap=5,
+    ) == 5
+
+
+def test_reserva_nunca_devolve_mais_contratos_que_a_versao_pura():
+    """Para QUALQUER caixa, a versao com reserva e' <= a versao pura -- a
+    reserva so' pode ENCOLHER a capacidade calculada, nunca aumenta-la
+    (verificado numa faixa de caixas, nao so' um ponto)."""
+    margem = 150.0
+    for caixa in (0.0, 100.0, 299.0, 300.0, 301.0, 900.0, 10_000.0, 1_000_000.0):
+        crua = contracts_from_capital(cash_brl=caixa, margin_per_contract_brl=margem)
+        com_reserva = contracts_from_capital_com_reserva(cash_brl=caixa, margin_per_contract_brl=margem)
+        assert com_reserva <= crua

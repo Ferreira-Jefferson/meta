@@ -34,7 +34,7 @@ from journal import live_store as store
 from live import clock as live_clock
 from live import intraday_runtime as itr_mod
 from live.intraday_runtime import MAX_GAP_SECONDS, IntradayLiveRuntime
-from strategy.daytrade.base import Bar, EnterLimit, IntradayStrategy
+from strategy.daytrade.base import Bar, Enter, EnterLimit, IntradayStrategy
 
 # O slot de day trade e' DINAMICO desde 2026-08-22: o id carrega robo+ativo
 # e, desde 2026-08-24, o modo de execucao (`dt-<robo>-<ativo>-<modo>`) -- o
@@ -214,18 +214,25 @@ def test_numero_de_ordem_e_o_mesmo_do_armar_ate_a_saida_e_avanca_na_proxima_roda
     """Pedido do dono: o diario tem de deixar claro qual `entrada`/`saida`
     pertence a qual `ordem posicionada`, mesmo com mais de uma rodada no mesmo
     pregao -- sem isto, so' dava pra saber "quem disparou" lendo o codigo
-    (o que motivou a pergunta 3x numa mesma conversa). A 1a rodada (long,
-    alvo 9.90) tem de carimbar `#01` em posicionada/entrada/saida; a 2a rodada
-    (short, o robo se re-arma sozinho depois de fechar a 1a) tem de vir com
-    `#02` do jeito, mesmo entrelacada no mesmo `run_once`."""
+    (o que motivou a pergunta 3x numa mesma conversa). A 1a rodada tem de
+    carimbar `#01` em posicionada/entrada/saida; a 2a tem de vir com `#02` do
+    jeito, mesmo entrelacada no mesmo `run_once`.
+
+    ROTEIRO ATUALIZADO em 2026-08-28. O de antes assumia que "a recarga
+    seguinte e' do OUTRO lado (short)" -- alternancia pura, que
+    `_next_side_to_arm` deixou de fazer em 2026-08-26 (memoria
+    `gremah_repetir_ultimo_vencedor`: depois de um trade LUCRATIVO o robo
+    REPETE o lado, e isso venceu em 9/9 simbolos). Como a #01 fecha no alvo,
+    a #02 tambem e' long -- o teste ficou vermelho por dois dias medindo um
+    comportamento que o robo nao tem mais. O que ele mede continua sendo o
+    NUMERO da rodada, nao o lado."""
     barras = [
         _bar("13:00", 10.00, 10.00, 10.00, 10.00),  # abertura: arma a 1a (long)
         _bar("13:01", 10.00, 10.00, 9.79, 9.85),    # toca o nivel long (9.80)
         _bar("13:02", 9.85, 9.91, 9.85, 9.90),      # toca o alvo (9.90) -- fecha #01
-        _bar("13:03", 9.90, 9.90, 9.90, 9.90),
-        _bar("13:04", 9.90, 10.21, 9.90, 10.15),    # sobe e toca o novo nivel (short arma #02)
-        _bar("13:05", 10.15, 10.10, 9.95, 10.00),   # cai de volta pro alvo do short
-        _bar("13:06", 10.00, 10.00, 9.95, 9.98),
+        _bar("13:03", 9.90, 9.90, 9.79, 9.85),      # repete LONG e ja' preenche #02
+        _bar("13:04", 9.85, 9.91, 9.85, 9.90),      # toca o alvo de novo -- fecha #02
+        _bar("13:05", 9.90, 9.90, 9.90, 9.90),
     ]
     rt, _feed = _runtime(tmp_path, barras)
 
@@ -251,9 +258,9 @@ def test_numero_de_ordem_e_o_mesmo_do_armar_ate_a_saida_e_avanca_na_proxima_roda
     assert de_ordem == [
         "LONG #01 100 lotes PMAM3 @ 9.8000 (stop 7.8000 / alvo 9.9000)",
         "TARGET LONG #01 100 lotes PMAM3 @ 9.9000 - R$ +10.00",
-        "LIMITE SHORT #02 100 lotes PMAM3 @ 10.2000",
-        "SHORT #02 100 lotes PMAM3 @ 10.2000 (stop 12.2000 / alvo 10.1000)",
-        "TARGET SHORT #02 100 lotes PMAM3 @ 10.1000 - R$ +10.00",
+        "LIMITE LONG #02 100 lotes PMAM3 @ 9.8000",
+        "LONG #02 100 lotes PMAM3 @ 9.8000 (stop 7.8000 / alvo 9.9000)",
+        "TARGET LONG #02 100 lotes PMAM3 @ 9.9000 - R$ +10.00",
         # o robo se rearma de novo com a ultima barra do roteiro -- rodada
         # #03, ainda sem fill: prova que o numero segue avancando (nao
         # empaca em #02) mesmo sem uma saida fechando-a antes do fim do teste.
@@ -346,7 +353,8 @@ def test_sombra_reporta_o_resultado_no_status_sem_misturar_com_o_caixa(tmp_path,
 
 class _FakeMT5Broker:
     """Corretora falsa com o contrato que `MT5IntradayExecution` usa:
-    `connect`, `place_pending`, `cancel`, `open_position`, `place`.
+    `connect`, `place_pending`, `cancel`, `open_position`, `place`,
+    `close_position`, `set_protection`, `account_risk_state`, `last_price`.
 
     `posicao` e' o que a corretora "tem" -- o teste escreve nela para simular
     o fill (ou a ausencia dele) sem depender de OHLC nenhum."""
@@ -365,6 +373,48 @@ class _FakeMT5Broker:
         # simular o retorno de `MT5Broker.foreign_activity()` de verdade
         # (ver `_check_atividade_estranha` em `intraday_runtime.py`).
         self.atividade_estranha = None
+        # Gap (a): tickets recebidos em CADA chamada de `close_position` --
+        # prova de que o fechamento sempre leva o ticket da posicao REAL,
+        # nunca manda ordem "as cegas".
+        self.close_tickets: list = []
+        # Gap (c): chamadas de `set_protection`, na ordem -- cada item e'
+        # `(ticket, side, stop, target)`.
+        self.protecoes: list = []
+        # `None` = sem resposta configurada (metodo ausente no double antigo
+        # -- ver os testes que usam `del broker.set_protection`/etc para
+        # simular um broker que nao suporta o gap ainda). Testes de gap (c)
+        # setam isto para controlar sucesso/recusa.
+        self.protecao_ok = True
+        self.protecao_note = "protecao registrada"
+        # Gap (e): estado de risco que `_check_freio_duro` le. `None` =
+        # "nao deu pra perguntar" (mesma politica do broker real).
+        self.risco = None
+        # Gap (e)/(f): usado pelo freio duro para achar preco de referencia
+        # quando `open_position()` ja nao tem mais posicao NENHUMA pra
+        # marcar (o cenario comum: acabou de fechar) -- e' o preco usado
+        # pra fechar A MERCADO quando ha posicao viva.
+        self.ultimo_preco = 9.90
+        # Gap (a)/(f): quando `True`, `close_position`/`place` (usados no
+        # caminho de fechamento) SEMPRE recusam -- simula a recusa
+        # persistente do incidente real (MG51).
+        self.recusa_fechamento = False
+        self.motivo_recusa_fechamento = "MT5 recusou a ordem (retcode=10006): [MG51] Para abrir novas posicoes"
+        # Quando `True`, `position_state` responde "NAO CONSEGUI LER" em vez
+        # de "nao ha posicao" -- os dois eram indistinguiveis antes de
+        # 2026-08-28 (`open_position` devolvia `None` para ambos), e e' a
+        # confusao que fazia um terminal fora do ar virar "conta zerada".
+        self.leitura_falha = False
+        # Ultimo par (sl, tp) que `set_protection` registrou -- so' para
+        # inspecao nos testes de protecao.
+        self.posicao_sl_tp = (0.0, 0.0)
+        # `pending_orders()`: `None` = "nao consegui perguntar" (default, o
+        # comportamento que todo teste anterior via, porque o metodo nao
+        # existia). Lista = a corretora respondeu.
+        self.pendentes_na_corretora = None
+        # `margin_required()`: `None` = "nao sei" (nunca bloqueia). Numero =
+        # margem em R$ POR CONTRATO/ACAO que a corretora exigiria.
+        self.margem_por_contrato = None
+        self.margens_perguntadas: list = []
 
     def connect(self):
         return self.conectado
@@ -396,8 +446,23 @@ class _FakeMT5Broker:
     def open_position(self, ticker):
         return self.posicao
 
-    def place(self, order):
-        """Ordem a mercado (fechamento) -- preenche a `preco_de_saida`."""
+    def position_state(self, ticker):
+        """Tri-estado do port (`Broker.position_state`): distingue "não há
+        posição" de "não consegui perguntar". Um dublê lê estado em memória,
+        então a consulta só falha quando o teste manda (`leitura_falha`)."""
+        if self.leitura_falha:
+            return {"ok": False, "position": None,
+                    "note": "leitura de posicao falhou (simulado no teste)"}
+        return {"ok": True, "position": self.posicao, "note": ""}
+
+    def last_price(self, ticker):
+        return self.ultimo_preco
+
+    def _preenche_fechamento(self, order):
+        if self.recusa_fechamento:
+            order.status = OrderStatus.REJECTED
+            order.note = self.motivo_recusa_fechamento
+            return order
         self.ordens_a_mercado.append(order)
         order.status = OrderStatus.FILLED
         order.filled_qty = order.quantity
@@ -405,6 +470,57 @@ class _FakeMT5Broker:
         order.broker_ref = "saida-9999"
         self.posicao = None
         return order
+
+    def place(self, order):
+        """Ordem a mercado (fechamento) -- preenche a `preco_de_saida`.
+
+        So' e' o caminho usado quando o fechamento NAO leva ticket (ver
+        `close_position` abaixo, que e' o caminho normal desde o gap (a))."""
+        return self._preenche_fechamento(order)
+
+    def close_position(self, order, position_ticket):
+        """Fechamento DEDICADO (gap (a)) -- grava o ticket recebido em
+        `close_tickets` antes de preencher exatamente como `place()`, pra
+        os testes existentes (que checam `ordens_a_mercado`) continuarem
+        valendo e os testes NOVOS (que checam `close_tickets`) confirmarem
+        que o ticket chegou."""
+        self.close_tickets.append(position_ticket)
+        return self._preenche_fechamento(order)
+
+    def set_protection(self, ticker, position_ticket, side, stop=None, target=None,
+                       sl_atual=0.0, tp_atual=0.0):
+        # `sl_atual`/`tp_atual`: o que a corretora tem REGISTRADO agora. O
+        # broker real usa para nunca APAGAR o lado sem pedido nem AFROUXAR um
+        # stop ja registrado (`MT5Broker._niveis_protecao`). Aqui o dublê so'
+        # espelha o que seria registrado, preservando o lado sem pedido.
+        self.protecoes.append((position_ticket, side, stop, target))
+        sl = float(stop) if stop is not None else float(sl_atual or 0.0)
+        tp = float(target) if target is not None else float(tp_atual or 0.0)
+        if self.protecao_ok:
+            self.posicao_sl_tp = (sl, tp)
+        return {"ok": self.protecao_ok, "note": self.protecao_note, "sl": sl, "tp": tp}
+
+    def account_risk_state(self):
+        return self.risco
+
+    def pending_orders(self, ticker):
+        """O que a CORRETORA diz estar pendurado no magic deste robo.
+
+        `None` (default) = "nao consegui perguntar", que e' o estado em que
+        todos os testes anteriores a 2026-08-28 rodavam (o metodo nem existia
+        no dublê). Um teste que queira a corretora RESPONDENDO escreve a
+        lista em `pendentes_na_corretora` -- e' assim que se exercita a
+        ADOCAO de ticket que este processo nunca soube que existia."""
+        return self.pendentes_na_corretora
+
+    def margin_required(self, ticker, side, quantity, price):
+        """Margem que a corretora exigiria por esta ordem. `None` (default)
+        = "nao sei", que por politica NUNCA bloqueia -- os testes que nao
+        falam de margem seguem passando sem tocar em nada."""
+        if self.margem_por_contrato is None:
+            return None
+        self.margens_perguntadas.append((side, quantity, price))
+        return self.margem_por_contrato * float(quantity)
 
     preco_de_saida = 9.90
 
@@ -549,6 +665,10 @@ def test_live_fecha_a_mercado_e_usa_o_preco_executado_pela_corretora(tmp_path, p
     saida = broker.ordens_a_mercado[0]
     assert saida.order_type == OrderType.MARKET
     assert saida.side == OrderSide.SELL
+    # Gap (a), incidente 2026-08-28: o fechamento tem de levar o ticket da
+    # posicao REAL (`broker.posicao["ticket"]` = 77) -- nunca uma ordem "as
+    # cegas" sem dizer qual posicao esta sendo abatida.
+    assert broker.close_tickets == [77]
     s = rt.status()
     assert s["daytrade"]["trades_na_sessao"] == 1
     # (9.88 - 9.80) * 1 acao = +0,08, debitado no CAIXA (nao em sombra)
@@ -557,6 +677,48 @@ def test_live_fecha_a_mercado_e_usa_o_preco_executado_pela_corretora(tmp_path, p
     # `caixa_sombra` (saldo paralelo) fica INTOCADO em execucao real -- so'
     # `cash` recebe o P&L quando `execution_mode="live"`.
     assert s["daytrade"]["caixa_sombra"] == pytest.approx(100.0)
+
+
+# ---------- gap (a)/(c), incidente 2026-08-28: corrida com a protecao ------
+
+def test_live_fechamento_quando_corretora_ja_fechou_por_protecao_usa_nivel_do_stop(
+    tmp_path, pregao_aberto,
+):
+    """Corrida legitima: a protecao SL/TP registrada na corretora (gap c) ja
+    fechou a posicao alguns instantes antes deste passo, no MESMO nivel que a
+    maquina ia usar. `exit_market` nao pode mandar ordem NENHUMA (nao ha mais
+    posicao pra fechar) nem falhar alto -- usa o proprio nivel de stop como
+    o preco de saida, a aproximacao honesta sem consultar deal a deal."""
+    broker = _FakeMT5Broker()
+    script = {
+        0: [EnterLimit(side="long", limit_price=10.00, initial_stop=9.00,
+                       initial_target=11.00, quantity=1, reason="teste_corrida_protecao")],
+    }
+    rt, feed = _runtime_live_scripted(tmp_path, broker, script)
+    rt.run_once(now=_agora("13:00:00"))
+
+    feed._barras.append(_bar("13:01", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:01:00"))
+
+    broker.posicao = {"side": "long", "price": 10.00, "quantity": 1, "ticket": 1}
+    feed._barras.append(_bar("13:02", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:02:00"))
+    assert rt.machine.position is not None
+
+    # a protecao da corretora ja fechou a posicao ANTES desta barra chegar.
+    broker.posicao = None
+    feed._barras.append(_bar("13:03", 9.50, 9.50, 8.50, 8.90))  # rompe o stop (9.00)
+    rt.run_once(now=_agora("13:03:00"))
+
+    assert rt.machine.position is None, "fechou mesmo sem ordem a mercado nova"
+    assert broker.ordens_a_mercado == [], "nenhuma ordem nova foi mandada"
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        ordem = conn.execute(
+            "SELECT * FROM live_orders WHERE account_id = ? AND side = 'sell' ORDER BY id",
+            (acc.id,),
+        ).fetchone()
+    assert ordem["avg_price"] == pytest.approx(9.00), "usou o nivel do STOP como preco de saida"
 
 
 def test_live_sem_conexao_com_o_terminal_nao_conclui_que_nao_preencheu(tmp_path, pregao_aberto):
@@ -1121,16 +1283,25 @@ def test_short_grava_quantidade_negativa_na_posicao(tmp_path, pregao_aberto):
     """Short foi verificado no terminal real (2026-08-21). `live_positions.
     quantity` negativa faz a marcacao a mercado sair correta sem nenhuma
     mudanca de schema: `market_value = price * quantity` fica negativo, que e'
-    exatamente o que uma posicao vendida vale."""
+    exatamente o que uma posicao vendida vale.
+
+    `max_trades_per_side=1` (adicionado em 2026-08-28) e' o que forca o short
+    a existir: o long fecha no ALVO, e desde 2026-08-26 o robo REPETE o lado
+    depois de um trade lucrativo (memoria `gremah_repetir_ultimo_vencedor`)
+    em vez de alternar. Com o lado long esgotado no teto, `_next_side_to_arm`
+    volta a escolher short -- que e' o que este teste precisa medir. O
+    roteiro antigo dependia da alternancia pura e ficou vermelho por dois
+    dias sem que nada estivesse errado no codigo de producao."""
     barras = [
         _bar("13:00", 10.00, 10.00, 10.00, 10.00),
         _bar("13:01", 10.00, 10.00, 9.79, 9.85),   # long em 9.80
         _bar("13:02", 9.85, 9.91, 9.85, 9.90),     # alvo 9.90 -> fecha long
-        # A recarga seguinte e' do OUTRO lado (short), ancorada na abertura:
-        # 10.00 + 20 ticks de espacamento = 10.20. Esta barra atravessa.
+        # Com o long no teto, a recarga e' do OUTRO lado (short), ancorada na
+        # abertura: 10.00 + 20 ticks de espacamento = 10.20. Esta barra
+        # atravessa.
         _bar("13:03", 9.90, 10.21, 9.90, 10.15),
     ]
-    rt, _feed = _runtime(tmp_path, barras)
+    rt, _feed = _runtime(tmp_path, barras, max_trades_per_side=1)
 
     rt.run_once(now=_agora("13:05:00"))
 
@@ -2085,10 +2256,9 @@ def test_status_traz_ganhos_perdas_cagr_dd_e_acerto_por_lado_de_ponta_a_ponta(
         _bar("13:00", 10.00, 10.00, 10.00, 10.00),  # abertura: posiciona a 1a (long)
         _bar("13:01", 10.00, 10.00, 9.79, 9.85),    # toca o nivel long (9.80)
         _bar("13:02", 9.85, 9.91, 9.85, 9.90),      # toca o alvo (9.90) -- fecha #01 (+10)
-        _bar("13:03", 9.90, 9.90, 9.90, 9.90),
-        _bar("13:04", 9.90, 10.21, 9.90, 10.15),    # sobe e toca o novo nivel (short posiciona #02)
-        _bar("13:05", 10.15, 10.10, 9.95, 10.00),   # cai de volta pro alvo do short -- fecha #02 (+10)
-        _bar("13:06", 10.00, 10.00, 9.95, 9.98),
+        _bar("13:03", 9.90, 9.90, 9.79, 9.85),      # repete LONG (ganhou) e preenche #02
+        _bar("13:04", 9.85, 9.91, 9.85, 9.90),      # toca o alvo de novo -- fecha #02 (+10)
+        _bar("13:05", 9.90, 9.90, 9.90, 9.90),
     ]
     rt, _feed = _runtime(tmp_path, barras)
     rt.run_once(now=_agora("13:07:00"))
@@ -2099,29 +2269,34 @@ def test_status_traz_ganhos_perdas_cagr_dd_e_acerto_por_lado_de_ponta_a_ponta(
     assert s["perdas_dia"] == 0.0
     assert s["lucro_acumulado"] == 20.0
     assert s["prejuizo_acumulado"] == 0.0
-    # capital inicial de teste = R$100 (ver `_runtime`); +10 e' 10% de retorno
+    # capital inicial de teste = R$100 (ver `_runtime`); +20 e' 20% de retorno
     assert s["retorno_dia_pct"] == 20.0
     assert s["dd_dia_pct"] == 0.0
     assert s["retorno_acumulado_pct"] == 20.0
     assert s["dd_acumulado_pct"] == 0.0
-    assert s["acerto_compra_pct"] == 100  # rodada #01 (long) ganhou
-    assert s["acerto_venda_pct"] == 100   # rodada #02 (short) ganhou
+    assert s["acerto_compra_pct"] == 100  # as duas rodadas (long) ganharam
+    # Sem NENHUMA rodada vendida no roteiro, a taxa e' `None` ("nao houve"),
+    # nunca 0 ("houve e errou todas") -- distincao que o painel mostra com
+    # texto diferente. As duas rodadas sao long porque o robo REPETE o lado
+    # depois de um trade lucrativo desde 2026-08-26 (memoria
+    # `gremah_repetir_ultimo_vencedor`); o roteiro antigo assumia alternancia
+    # pura e ficou vermelho medindo um comportamento aposentado.
+    assert s["acerto_venda_pct"] is None
 
     # #01 nasce do WARM START (planta direto em `resting_limit`, sem passar
     # por `_on_limit_placed` -- nunca loga "posicionada", ver a docstring de
-    # `_numero_ordem_atual`), entao so' #02 (short) e #03 (long) contam como
-    # ARMADAS aqui. `_on_opened` grava "entrada" independente da origem da
-    # ordem, entao o preenchimento de #01 ainda entra no numerador/
-    # denominador da taxa de preenchimento de compra (so' nao no de armadas).
-    assert s["ordens_compra"] == 1   # so' #03 (long) -- #01 (long) foi warm start
-    assert s["ordens_venda"] == 1    # #02 (short)
-    assert s["preenchida_compra_pct"] == 100  # entrada #01 (long) preencheu
-    assert s["preenchida_venda_pct"] == 100   # entrada #02 (short) preencheu
-    # nocional das armadas -- #03 (long) e #02 (short) tem quantidade x
-    # preco > 0, nao precisa do valor exato aqui (isso ja' e' coberto por
-    # `test_ordens_por_lado_conta_armada_preenchida_e_cancelada`).
+    # `_numero_ordem_atual`), entao so' #02 e #03 contam como ARMADAS aqui.
+    # `_on_opened` grava "entrada" independente da origem da ordem, entao o
+    # preenchimento de #01 ainda entra no numerador/denominador da taxa de
+    # preenchimento de compra (so' nao no de armadas).
+    assert s["ordens_compra"] == 2   # #02 e #03 -- #01 foi warm start
+    assert s["ordens_venda"] == 0
+    assert s["preenchida_compra_pct"] == 100  # as duas entradas preencheram
+    assert s["preenchida_venda_pct"] is None
+    # nocional das armadas -- nao precisa do valor exato aqui (isso ja' e'
+    # coberto por `test_ordens_por_lado_conta_armada_preenchida_e_cancelada`).
     assert s["valor_ordens_compra"] > 0
-    assert s["valor_ordens_venda"] > 0
+    assert s["valor_ordens_venda"] == 0
 
     # sem posicao aberta no fim do roteiro (so' uma ordem #03 pendente)
     assert s["posicoes_compra"] == 0
@@ -2991,3 +3166,766 @@ def test_atividade_estranha_none_nao_loga_nada(tmp_path, pregao_aberto):
     eventos = _diario_niveis_e_mensagens(rt)
     assert not any("ATIVIDADE ESTRANHA" in m or "nao aparece mais" in m
                    for _lvl, m in eventos)
+
+
+# ---------- gap (c)/(g), incidente 2026-08-28: protecao SL/TP na corretora -
+#
+# A posicao real ficou com `sl=0.0, tp=0.0` na corretora por HORAS,
+# atravessando 3 reinicios do processo -- o "stop" deste robo sempre foi
+# logica do LOOP (dispara ordem a mercado quando o nivel rompe), nunca uma
+# ordem-stop registrada. `_ensure_protecao` fecha isso.
+
+def _abre_posicao_scriptada(tmp_path, broker, *, stop=9.00, target=11.00, quantity=1):
+    """Monta um runtime `_ScriptedDaytrade` com UMA entrada (`initial_stop`/
+    `initial_target` conhecidos) e a leva ate a posicao CONFIRMADA aberta --
+    setup comum aos testes de protecao/freio duro/recusa de fechamento
+    abaixo. Devolve `(rt, feed)` com a posicao ja aberta e vigiada."""
+    script = {
+        0: [EnterLimit(side="long", limit_price=10.00, initial_stop=stop,
+                       initial_target=target, quantity=quantity, reason="teste")],
+    }
+    rt, feed = _runtime_live_scripted(tmp_path, broker, script)
+    rt.run_once(now=_agora("13:00:00"))
+
+    feed._barras.append(_bar("13:01", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:01:00"))
+
+    broker.posicao = {"side": "long", "price": 10.00, "quantity": quantity, "ticket": 1,
+                      "sl": 0.0, "tp": 0.0}
+    feed._barras.append(_bar("13:02", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:02:00"))
+    assert rt.machine.position is not None
+    return rt, feed
+
+
+def test_live_entrada_registra_protecao_sl_tp_na_corretora(tmp_path, pregao_aberto):
+    """Assim que a posicao abre, o PROXIMO passo tem de registrar SL/TP na
+    corretora -- os mesmos niveis que a maquina ja decidiu (`initial_stop`/
+    `initial_target`), nunca um valor calculado por `live/`."""
+    broker = _FakeMT5Broker()
+    rt, feed = _abre_posicao_scriptada(tmp_path, broker)
+
+    feed._barras.append(_bar("13:03", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:03:00"))
+
+    assert broker.protecoes, "protecao tem de ser registrada com a posicao ja aberta"
+    ticket, side, stop, target = broker.protecoes[-1]
+    assert ticket == 1
+    assert side == "long"
+    assert stop == pytest.approx(9.00)
+    assert target == pytest.approx(11.00)
+    assert rt.status()["daytrade"]  # so' garante que status() nao quebra com protecao pendente
+
+
+def test_live_protecao_nao_reenvia_quando_ja_esta_correta(tmp_path, pregao_aberto):
+    """Depois de registrada e confirmada (a corretora agora REPORTA os
+    niveis certos), o proximo passo NAO reenvia -- reenviar toda barra so'
+    gastaria requisicao a toa."""
+    broker = _FakeMT5Broker()
+    rt, feed = _abre_posicao_scriptada(tmp_path, broker)
+
+    feed._barras.append(_bar("13:03", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:03:00"))
+    assert len(broker.protecoes) == 1
+
+    broker.posicao = {**broker.posicao, "sl": 9.00, "tp": 11.00}
+    feed._barras.append(_bar("13:04", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:04:00"))
+
+    assert len(broker.protecoes) == 1, "ja estava certo -- nao reenviou"
+
+
+def test_live_protecao_reenviada_apos_restart_quando_corretora_perdeu_sl_tp(
+    tmp_path, pregao_aberto,
+):
+    """Gap (g): um PROCESSO NOVO (restart), com a corretora reportando
+    `sl=0/tp=0` de novo (o cenario do incidente: protecao perdida por fora),
+    reconcilia sozinho no PRIMEIRO passo -- sem precisar de nenhuma memoria
+    do processo anterior, so' comparando o que a maquina quer contra o que a
+    corretora tem agora."""
+    broker = _FakeMT5Broker()
+    rt, feed = _abre_posicao_scriptada(tmp_path, broker)
+    feed._barras.append(_bar("13:03", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:03:00"))
+    assert len(broker.protecoes) == 1
+
+    # "reinicia o processo": runtime NOVO, mesmo banco/broker; a corretora
+    # esta com sl=0/tp=0 de novo (posicao NUA, o sintoma do incidente real).
+    broker.posicao = {**broker.posicao, "sl": 0.0, "tp": 0.0}
+    rt_novo = IntradayLiveRuntime(
+        slot=SLOT, strategy=_ScriptedDaytrade(SYMBOL, {}), config=_config(),
+        bar_feed=_ScriptedBarFeed([], []), broker=broker,
+        db_path=rt.db_path, execution_mode="live", initial_capital=100.0,
+    )
+    rt_novo.run_once(now=_agora("13:04:00"))
+
+    assert len(broker.protecoes) == 2, "reconciliou sozinho no primeiro passo pos-restart"
+    ticket, side, stop, target = broker.protecoes[-1]
+    assert stop == pytest.approx(9.00) and target == pytest.approx(11.00)
+
+
+# ---------- gap (e), incidente 2026-08-28: freio duro de equity/margem -----
+#
+# A conta chegou a equity NEGATIVA (-R$298,60) com o processo CONTINUANDO a
+# tentar abrir/fechar ordem, sem freio nenhum.
+
+def test_live_freio_duro_equity_negativa_bloqueia_e_tenta_zerar(tmp_path, pregao_aberto):
+    broker = _FakeMT5Broker()
+    rt, feed = _abre_posicao_scriptada(tmp_path, broker)
+
+    broker.risco = {"equity": -298.60, "margin_free": -150.0}
+    broker.ultimo_preco = 9.50
+    passos = rt.run_once(now=_agora("13:03:00"))
+
+    assert rt._snapshot.disaster_halt is True
+    assert "ruina" in (rt._snapshot.disaster_reason or "")
+    assert rt.machine.position is None, "tentou zerar e conseguiu (broker aceita o fechamento)"
+    assert any(p.action == "daytrade_freio_duro" for p in passos), passos
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        eventos = [e["message"] for e in store.recent_events(conn, acc.id, limit=50)]
+    assert any("FREIO DURO" in m for m in eventos), eventos
+    assert rt.status()["daytrade"]["freio_duro"] is True
+
+
+def test_live_freio_duro_persiste_no_proximo_passo_sem_reabrir(tmp_path, pregao_aberto):
+    """Uma vez tripado, o freio dura o resto da SESSAO -- o proximo passo
+    continua barrado, mesmo com barra nova chegando, mesmo que a posicao ja
+    tenha sido zerada."""
+    broker = _FakeMT5Broker()
+    rt, feed = _abre_posicao_scriptada(tmp_path, broker)
+    broker.risco = {"equity": -298.60, "margin_free": -150.0}
+    rt.run_once(now=_agora("13:03:00"))
+    assert rt._snapshot.disaster_halt is True
+
+    feed._barras.append(_bar("13:04", 10.00, 10.00, 10.00, 10.00))
+    passos = rt.run_once(now=_agora("13:04:00"))
+
+    assert passos[-1].action == "daytrade_freio_duro"
+    assert rt.machine.position is None
+
+
+def test_live_freio_duro_nao_dispara_com_equity_positiva(tmp_path, pregao_aberto):
+    """Regressao do caminho feliz: equity/margem positivas nao acionam nada."""
+    broker = _FakeMT5Broker()
+    rt, feed = _abre_posicao_scriptada(tmp_path, broker)
+
+    broker.risco = {"equity": 500.0, "margin_free": 200.0}
+    feed._barras.append(_bar("13:03", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:03:00"))
+
+    assert rt._snapshot.disaster_halt is False
+    assert rt.machine.position is not None
+
+
+def test_live_sombra_ignora_freio_duro(tmp_path, pregao_aberto):
+    """Sombra nunca manda ordem pra corretora -- `_check_freio_duro` nao tem
+    o que travar la (o dublê `_ExplodingBroker` nem tem `account_risk_state`,
+    e mesmo que tivesse, `self.executor is None` corta antes)."""
+    barras = [
+        _bar("13:00", 10.00, 10.00, 10.00, 10.00),
+        _bar("13:01", 10.00, 10.00, 9.79, 9.85),
+        _bar("13:02", 9.85, 9.91, 9.85, 9.90),
+    ]
+    rt, _feed = _runtime(tmp_path, barras)
+
+    passos = rt.run_once(now=_agora("13:05:00"))
+
+    assert not any(p.action == "daytrade_freio_duro" for p in passos)
+    assert rt._snapshot.disaster_halt is False
+
+
+# ---------- gap (f), incidente 2026-08-28: recusa de fechamento escala -----
+#
+# A corretora recusou ~24 vezes seguidas o fechamento (MG51, margem
+# esgotada) e nada disso apareceu no diario nem alertou ninguem -- so' uma
+# linha `[erro]` repetida no log bruto do processo.
+
+def test_live_recusa_de_fechamento_repetida_escala_para_freio_duro(tmp_path, pregao_aberto):
+    broker = _FakeMT5Broker()
+    rt, feed = _abre_posicao_scriptada(tmp_path, broker)
+
+    broker.recusa_fechamento = True
+    for i, hhmm in enumerate(["13:03", "13:04", "13:05", "13:06", "13:07"], start=1):
+        feed._barras.append(_bar(hhmm, 8.00, 8.00, 8.00, 8.00))  # bem abaixo do stop (9.00)
+        rt.run_once(now=_agora(f"{hhmm}:00"))
+        assert rt._snapshot.close_refusal_count == i, (i, rt._snapshot.close_refusal_count)
+
+    assert rt._snapshot.disaster_halt is True
+    assert rt.machine.position is not None, "a corretora nunca confirmou o fechamento"
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        eventos = [e["message"] for e in store.recent_events(conn, acc.id, limit=50)]
+    recusas = [m for m in eventos if m.startswith("RECUSA DE FECHAMENTO")]
+    assert len(recusas) == 5, eventos
+    assert any("FREIO DURO" in m for m in eventos), eventos
+    assert rt.status()["daytrade"]["recusas_fechamento_seguidas"] == 5
+
+
+def test_live_recusa_de_fechamento_isolada_nao_trava_e_zera_apos_sucesso(tmp_path, pregao_aberto):
+    """UMA recusa isolada nao aciona o freio duro, e some da contagem assim
+    que um fechamento subsequente da certo."""
+    broker = _FakeMT5Broker()
+    rt, feed = _abre_posicao_scriptada(tmp_path, broker)
+
+    broker.recusa_fechamento = True
+    feed._barras.append(_bar("13:03", 8.00, 8.00, 8.00, 8.00))
+    rt.run_once(now=_agora("13:03:00"))
+    assert rt._snapshot.close_refusal_count == 1
+    assert rt._snapshot.disaster_halt is False
+
+    broker.recusa_fechamento = False
+    feed._barras.append(_bar("13:04", 8.00, 8.00, 8.00, 8.00))
+    rt.run_once(now=_agora("13:04:00"))
+
+    assert rt.machine.position is None, "fechou com sucesso na 2a tentativa"
+    assert rt._snapshot.close_refusal_count == 0, "zerado apos fechamento bem-sucedido"
+
+
+# ---------- gaps fechados na auditoria adversarial de 2026-08-28 ------------
+#
+# Cada teste abaixo guarda UMA lacuna que a auditoria confirmou -- todas do
+# tipo "o dinheiro some sem ninguem perceber", nenhuma especifica de uma
+# estrategia: elas moram em `live/` e valem para qualquer robo que rode ali.
+
+def test_protecao_atomica_viaja_no_proprio_request_da_ordem(tmp_path, pregao_aberto):
+    """O caminho ATOMICO: o stop e o alvo que a estrategia declarou na
+    `EnterLimit` chegam a corretora AMARRADOS na propria ordem-limite, nao
+    num segundo request depois do fill. Enquanto era um segundo request,
+    existia uma janela com a posicao viva e NUA -- segundos no caso bom,
+    HORAS quando o processo morria dentro dela (incidente 2026-08-28)."""
+    broker = _FakeMT5Broker()
+    script = {
+        0: [EnterLimit(side="long", limit_price=10.00, initial_stop=9.00,
+                       initial_target=11.00, quantity=1, reason="teste")],
+    }
+    rt, feed = _runtime_live_scripted(tmp_path, broker, script)
+    rt.run_once(now=_agora("13:00:00"))
+    feed._barras.append(_bar("13:01", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:01:00"))
+
+    assert broker.pendentes_enviadas, "a ordem tem de ir para a corretora"
+    enviada = broker.pendentes_enviadas[-1]
+    assert enviada.stop_price == pytest.approx(9.00)
+    assert enviada.target_price == pytest.approx(11.00)
+
+
+def test_alvo_NAO_e_atomico_quando_a_saida_e_fatiada(tmp_path, pregao_aberto):
+    """Com `exit_split_unit` a maquina posiciona ordens-limite REAIS de
+    fechamento, uma por fatia. Um TP da corretora no mesmo nivel fecharia a
+    posicao INTEIRA junto com a fatia -- e em conta NETTING a soma passa do
+    tamanho da posicao e ABRE o lado contrario. O stop continua indo."""
+    broker = _FakeMT5Broker()
+    script = {
+        0: [EnterLimit(side="long", limit_price=10.00, initial_stop=9.00,
+                       initial_target=11.00, quantity=2, exit_split_unit=1,
+                       exit_ttl_bars=3, reason="teste")],
+    }
+    rt, feed = _runtime_live_scripted(tmp_path, broker, script)
+    rt.run_once(now=_agora("13:00:00"))
+    feed._barras.append(_bar("13:01", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:01:00"))
+
+    enviada = broker.pendentes_enviadas[-1]
+    assert enviada.stop_price == pytest.approx(9.00), "o stop vai sempre"
+    assert enviada.target_price is None, "o alvo fica com a maquina, nao com a corretora"
+
+
+def test_warm_start_NAO_manda_ordem_que_a_maquina_recusou_vigiar(tmp_path, pregao_aberto):
+    """`resume_session` RECUSA plantar a ordem do warm start quando ja ha
+    posicao aberta (plantar por cima a deixaria orfa). O runtime mandava a
+    ordem REAL para a corretora assim mesmo -- uma entrada extra, sobre uma
+    posicao que ja existe, que a maquina explicitamente nao vigia."""
+    broker = _FakeMT5Broker()
+    rt, feed = _abre_posicao_scriptada(tmp_path, broker)
+    enviadas_antes = len(broker.pendentes_enviadas)
+
+    # Forca um novo `_start_session` com a posicao ja aberta e restaurada --
+    # e' o restart no meio do pregao com posicao viva.
+    rt._calibrated_for = None
+    feed._barras.append(_bar("13:03", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:03:00"))
+
+    assert len(broker.pendentes_enviadas) == enviadas_antes, (
+        "nenhuma ordem nova pode sair enquanto a maquina se recusa a vigiar uma")
+
+
+def test_freio_duro_cancela_ordem_parada_mesmo_SEM_posicao(tmp_path, pregao_aberto):
+    """O freio duro saia na primeira linha quando nao havia posicao -- e
+    deixava intacta a ordem-limite PARADA no book. O robo entrava em "nao
+    abro mais nada" com uma ordem que abre sozinha, numa conta que ele mesmo
+    acabou de declarar em risco de ruina, e ja cego (freio tripado = nao
+    consome barra, nao redecide)."""
+    broker = _FakeMT5Broker()
+    script = {
+        0: [EnterLimit(side="long", limit_price=10.00, initial_stop=9.00,
+                       initial_target=11.00, quantity=1, reason="teste")],
+    }
+    rt, feed = _runtime_live_scripted(tmp_path, broker, script)
+    rt.run_once(now=_agora("13:00:00"))
+    feed._barras.append(_bar("13:01", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:01:00"))
+    assert broker.pendentes_enviadas, "ordem parada no book"
+    assert rt.machine.position is None, "sem posicao -- so' a ordem"
+
+    broker.risco = {"equity": -298.60, "margin_free": -298.60, "balance": -298.60}
+    feed._barras.append(_bar("13:02", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:02:00"))
+
+    assert rt._snapshot.disaster_halt is True
+    assert broker.canceladas, "o freio duro tem de tirar a ordem do book"
+
+
+def test_exposicao_maior_na_corretora_do_que_na_maquina_trava_e_avisa(tmp_path, pregao_aberto):
+    """A forma exata do incidente 2026-08-28: a maquina achava que tinha UM
+    contrato e a corretora tinha DOIS (duas entradas independentes
+    consolidadas pela conta NETTING). Ninguem comparava os dois numeros."""
+    broker = _FakeMT5Broker()
+    rt, feed = _abre_posicao_scriptada(tmp_path, broker, quantity=1)
+
+    broker.posicao = {"side": "long", "price": 10.00, "quantity": 2, "ticket": 1,
+                      "sl": 9.00, "tp": 11.00}
+    feed._barras.append(_bar("13:03", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:03:00"))
+
+    assert rt._snapshot.disaster_halt is True
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        eventos = [e["message"] for e in store.recent_events(conn, acc.id, limit=50)]
+    assert any("EXPOSICAO DIVERGENTE" in m for m in eventos), eventos
+
+
+def test_falha_de_LEITURA_da_posicao_nunca_vira_posicao_fechada(tmp_path, pregao_aberto):
+    """`open_position` devolvia `None` tanto para "nao ha posicao" quanto
+    para "nao consegui perguntar". No caminho de fechamento isso registrava
+    uma saida INVENTADA para uma posicao que continuava aberta -- e deixava a
+    maquina sem posicao, o que desarma o freio duro."""
+    from live.intraday_execution import BrokerExecutionError
+
+    broker = _FakeMT5Broker()
+    rt, feed = _abre_posicao_scriptada(tmp_path, broker)
+
+    broker.leitura_falha = True
+    feed._barras.append(_bar("13:03", 8.00, 8.00, 8.00, 8.00))  # rompe o stop
+    with pytest.raises(BrokerExecutionError, match="nao consegui LER"):
+        rt.run_once(now=_agora("13:03:00"))
+
+    assert rt.machine.position is not None, "a posicao NAO pode sumir por falha de leitura"
+
+
+def test_fechamento_nunca_manda_mais_do_que_a_corretora_reporta(tmp_path, pregao_aberto):
+    """A maquina so' decrementa a quantidade DEPOIS que `exit_market` volta
+    com sucesso. Num fechamento que preencheu pela metade, a tentativa
+    seguinte mandava o tamanho INTEIRO contra a posicao que sobrou -- e em
+    conta NETTING uma ordem maior que a posicao nao "fecha demais", ela
+    INVERTE o lado."""
+    broker = _FakeMT5Broker()
+    rt, feed = _abre_posicao_scriptada(tmp_path, broker, quantity=2)
+
+    # A corretora encolheu a posicao (fechamento parcial fora do controle da
+    # maquina, ou fatia que preencheu), mas a maquina ainda acha que tem 2.
+    broker.posicao = {"side": "long", "price": 10.00, "quantity": 1, "ticket": 1,
+                      "sl": 9.00, "tp": 11.00}
+    feed._barras.append(_bar("13:03", 8.00, 8.00, 8.00, 8.00))  # rompe o stop
+    rt.run_once(now=_agora("13:03:00"))
+
+    a_mercado = [o for o in broker.ordens_a_mercado]
+    assert a_mercado, "tem de tentar fechar"
+    assert a_mercado[-1].quantity == 1, (
+        "o fechamento e' capado pelo que a corretora reporta, nunca pelo total antigo")
+
+
+
+# ---------- 2026-08-28, 2a rodada: os CRITICOS que ficaram da auditoria -----
+#
+# A 1a rodada fechou 13 lacunas e eu reportei "sobraram ~10 de severidade
+# menor". Estava errado: das que sobraram, TRES eram CRITICO. Estes testes
+# travam as tres.
+
+
+def test_ordem_que_a_maquina_nao_vigia_e_cancelada_no_comeco_da_sessao(
+    tmp_path, pregao_aberto,
+):
+    """A corretora tem uma ordem-limite deste robo que ESTE processo nunca
+    soube que existia -- e ela morre.
+
+    E' a janela entre `place_limit` (a ordem sai de verdade) e o `_persist`
+    do fim do passo (o ticket vira linha duravel). Processo morto ali e o
+    restart redecide do zero, sem saber do ticket: duas ordens vivas no
+    mesmo nivel, "2 contratos numa conta de 1" pelo lado da entrada.
+
+    Nenhum arquivo escrito "mais cedo" conserta isso de verdade -- a
+    corretora ja sabe. Basta perguntar, e e' o que passou a ser feito no
+    topo de `_start_session`."""
+    broker = _FakeMT5Broker()
+    # O processo anterior mandou a ordem e morreu antes de persistir: o
+    # snapshot deste processo nasce SEM `pending_entry_refs`, mas a corretora
+    # tem o ticket pendurado.
+    broker.pendentes_na_corretora = [
+        {"ticket": "77701", "side": "long", "quantity": 1, "price": 10.00,
+         "symbol": SYMBOL},
+    ]
+    rt, feed = _runtime_live_scripted(tmp_path, broker, {})
+    assert not rt._snapshot.pending_entry_refs, "premissa: este processo nao conhece o ticket"
+
+    rt.run_once(now=_agora("13:00:00"))
+
+    assert [o.broker_ref for o in broker.canceladas] == ["77701"], (
+        "ordem de entrada que ninguem vigia tem de morrer -- ela preenche sozinha"
+    )
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        eventos = [e["message"] for e in store.recent_events(conn, acc.id, limit=50)]
+    assert any("ORDEM ORFA" in m for m in eventos), eventos
+
+
+def test_reconciliacao_nao_toca_na_ordem_que_a_maquina_esta_vigiando(
+    tmp_path, pregao_aberto,
+):
+    """O contrapeso do teste acima: a ordem que a maquina ESTA vigiando
+    continua viva. Um cancelamento cego aqui deixaria o robo incapaz de
+    entrar -- ele armaria e a reconciliacao derrubaria, todo passo."""
+    broker = _FakeMT5Broker()
+    script = {
+        0: [EnterLimit(side="long", limit_price=10.00, initial_stop=9.00,
+                       initial_target=11.00, quantity=1, reason="teste")],
+    }
+    rt, feed = _runtime_live_scripted(tmp_path, broker, script)
+    rt.run_once(now=_agora("13:00:00"))
+    feed._barras.append(_bar("13:01", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:01:00"))
+    ticket = broker.pendentes_enviadas[0].broker_ref
+    assert rt.machine.resting_limit is not None, "premissa: a maquina vigia a ordem"
+
+    # A corretora agora RESPONDE, e responde com o ticket que a maquina vigia.
+    broker.pendentes_na_corretora = [
+        {"ticket": ticket, "side": "long", "quantity": 1, "price": 10.00,
+         "symbol": SYMBOL},
+    ]
+    feed._barras.append(_bar("13:02", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:02:00"))
+
+    assert not broker.canceladas, "a ordem vigiada nao pode ser cancelada"
+
+
+def test_entrada_e_recusada_quando_a_margem_da_CONTA_nao_cobre(tmp_path, pregao_aberto):
+    """O teto de contratos e' calculado sobre `initial_capital + realized_pnl`
+    -- numeros locais a UM processo. Isso e' cego para os OUTROS slots (mesma
+    conta MT5, mesma margem fisica) e para a perda ainda ABERTA.
+
+    `margin_free` nao e' cego para nenhum dos dois: ele ja desconta tudo. O
+    portao passou a perguntar a' corretora antes de mandar."""
+    broker = _FakeMT5Broker()
+    broker.margem_por_contrato = 150.0          # WDO, margem de tabela
+    broker.risco = {"equity": 300.0, "margin_free": 150.0, "balance": 300.0}
+    script = {
+        0: [EnterLimit(side="long", limit_price=10.00, initial_stop=9.00,
+                       initial_target=11.00, quantity=1, reason="teste")],
+    }
+    rt, feed = _runtime_live_scripted(tmp_path, broker, script)
+    rt.run_once(now=_agora("13:00:00"))
+    feed._barras.append(_bar("13:01", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:01:00"))
+
+    # R$150 livres, ordem exige R$150, o projeto pede 2x de folga -> recusa.
+    # E' EXATAMENTE o 2o contrato do incidente: com fator 1.0 ele passaria.
+    assert not broker.pendentes_enviadas, "a ordem nao pode ir para o book"
+    assert rt.machine.resting_limit is None, (
+        "a maquina nao pode ficar vigiando um fill que nunca vai acontecer"
+    )
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        eventos = [e["message"] for e in store.recent_events(conn, acc.id, limit=50)]
+    assert any("margem livre da conta" in m for m in eventos), eventos
+
+
+def test_entrada_passa_quando_a_conta_tem_a_folga_pedida(tmp_path, pregao_aberto):
+    """Contrapeso: com folga suficiente o portao nao atrapalha nada."""
+    broker = _FakeMT5Broker()
+    broker.margem_por_contrato = 150.0
+    broker.risco = {"equity": 900.0, "margin_free": 400.0, "balance": 900.0}
+    script = {
+        0: [EnterLimit(side="long", limit_price=10.00, initial_stop=9.00,
+                       initial_target=11.00, quantity=1, reason="teste")],
+    }
+    rt, feed = _runtime_live_scripted(tmp_path, broker, script)
+    rt.run_once(now=_agora("13:00:00"))
+    feed._barras.append(_bar("13:01", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:01:00"))
+
+    assert len(broker.pendentes_enviadas) == 1
+    assert broker.margens_perguntadas == [("long", 1, 10.00)]
+
+
+def test_margem_desconhecida_nunca_bloqueia(tmp_path, pregao_aberto):
+    """'Nao sei' nao e' motivo de freio -- mesma politica do resto do
+    arquivo. Um terminal que nao responde a `order_calc_margin` nao pode
+    deixar o robo inerte em silencio; quem nao consegue ler a conta ja vai
+    falhar no envio, com erro mais especifico."""
+    broker = _FakeMT5Broker()
+    broker.margem_por_contrato = None           # a corretora nao respondeu
+    broker.risco = {"equity": 1.0, "margin_free": 0.5, "balance": 1.0}
+    script = {
+        0: [EnterLimit(side="long", limit_price=10.00, initial_stop=9.00,
+                       initial_target=11.00, quantity=1, reason="teste")],
+    }
+    rt, feed = _runtime_live_scripted(tmp_path, broker, script)
+    rt.run_once(now=_agora("13:00:00"))
+    feed._barras.append(_bar("13:01", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:01:00"))
+
+    assert len(broker.pendentes_enviadas) == 1
+
+
+def test_freio_de_perda_dispara_com_a_posicao_ainda_ABERTA(tmp_path, pregao_aberto):
+    """O unico freio que existia era `equity <= 0` -- patrimonio ja negativo.
+    Entre "esta indo mal" e "morreu" nao havia nada.
+
+    No incidente real a perda inteira (-R$295) ficou NAO REALIZADA por uma
+    hora, com a corretora recusando o fechamento: nenhum stop de sessao (que
+    olha so' P&L fechado) teria visto um centavo dela. Este freio marca a
+    mercado, entao dispara com a posicao de pe -- o unico momento em que
+    disparar ainda serve pra alguma coisa."""
+    broker = _FakeMT5Broker()
+    rt, feed = _abre_posicao_scriptada(tmp_path, broker, stop=1.00, target=11.00,
+                                       quantity=10)
+    rt.perda_maxima_dia_brl = 30.0
+    assert rt.machine.position is not None
+    # Equity/margem SAUDAVEIS: quem tem de disparar e' o teto de perda, nao
+    # o teste de ruina -- senao o teste provaria a coisa errada.
+    broker.risco = {"equity": 5000.0, "margin_free": 5000.0, "balance": 5000.0}
+
+    # 10 acoes compradas a 10,00 valendo 6,00 = -R$40 marcados a mercado.
+    broker.ultimo_preco = 6.00
+    feed._barras.append(_bar("13:03", 6.00, 6.00, 6.00, 6.00))
+    rt.run_once(now=_agora("13:03:00"))
+
+    assert rt._snapshot.disaster_halt is True
+    assert "perda de R$" in (rt._snapshot.disaster_reason or "")
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        eventos = [e["message"] for e in store.recent_events(conn, acc.id, limit=50)]
+    assert any("FREIO DE PERDA" in m for m in eventos), eventos
+
+
+def test_freio_de_perda_nao_dispara_dentro_do_teto(tmp_path, pregao_aberto):
+    """Contrapeso: uma perda normal, dentro do teto, nao pode travar o
+    pregao. Um freio que dispara cedo demais e' tao ruim quanto um que nao
+    dispara -- ele so' seria desligado."""
+    broker = _FakeMT5Broker()
+    rt, feed = _abre_posicao_scriptada(tmp_path, broker, stop=1.00, target=11.00,
+                                       quantity=10)
+    rt.perda_maxima_dia_brl = 30.0
+    broker.risco = {"equity": 5000.0, "margin_free": 5000.0, "balance": 5000.0}
+
+    broker.ultimo_preco = 9.00   # -R$10, dentro do teto de R$30
+    feed._barras.append(_bar("13:03", 9.00, 9.00, 9.00, 9.00))
+    rt.run_once(now=_agora("13:03:00"))
+
+    assert rt._snapshot.disaster_halt is False
+
+
+def test_perda_sem_cotacao_com_posicao_aberta_e_nao_sei_nao_zero(tmp_path, pregao_aberto):
+    """Sem preco para marcar a posicao aberta, a perda e' DESCONHECIDA --
+    nunca "nao esta perdendo". Devolver 0.0 aqui faria o freio dormir
+    exatamente quando o terminal esta instavel."""
+    broker = _FakeMT5Broker()
+    rt, _feed = _abre_posicao_scriptada(tmp_path, broker, quantity=1)
+    broker.ultimo_preco = None
+
+    assert rt._perda_do_pregao_brl() is None
+
+
+def test_teto_de_perda_default_e_fracao_do_capital_do_slot(tmp_path, pregao_aberto):
+    """O default e' decisao de projeto, nao medicao -- mas tem de ser
+    derivado do capital do slot, nunca um numero fixo que ignora o tamanho
+    da conta."""
+    from live.intraday_runtime import FRACAO_PERDA_MAXIMA_DIA
+
+    broker = _FakeMT5Broker()
+    rt, _feed = _runtime_live_scripted(tmp_path, broker, {})
+    assert rt.perda_maxima_dia_brl == pytest.approx(
+        FRACAO_PERDA_MAXIMA_DIA * rt.initial_capital)
+
+
+def test_leitura_de_risco_que_falha_SEMPRE_acaba_freando(tmp_path, pregao_aberto):
+    """"Nao sei" isolado nunca freia -- essa e' a politica do arquivo. Mas
+    "nao sei" CONTINUADO significa operar sem enxergar o risco da conta por
+    tempo ilimitado, apostando que quem nao le equity tambem nao consegue
+    mandar ordem. Nada no codigo garante essa aposta."""
+    from live.intraday_runtime import MAX_LEITURAS_DE_RISCO_FALHAS
+
+    broker = _FakeMT5Broker()
+    broker.risco = None                     # o terminal nao responde, nunca
+    rt, feed = _runtime_live_scripted(tmp_path, broker, {})
+    rt.run_once(now=_agora("13:00:00"))
+    assert rt._snapshot.disaster_halt is False, "uma falha isolada nao freia"
+
+    for i in range(MAX_LEITURAS_DE_RISCO_FALHAS + 2):
+        feed._barras.append(_bar(f"13:{10 + i:02d}", 10.00, 10.00, 10.00, 10.00))
+        rt.run_once(now=_agora(f"13:{10 + i:02d}:00"))
+
+    assert rt._snapshot.disaster_halt is True
+    assert "leituras seguidas" in (rt._snapshot.disaster_reason or "")
+
+
+def test_uma_leitura_boa_zera_o_contador_de_falhas(tmp_path, pregao_aberto):
+    """Falha transitoria nao pode acumular pra sempre -- senao um terminal
+    que pisca a cada meia hora acabaria freando um pregao inteiro sadio."""
+    from live.intraday_runtime import MAX_LEITURAS_DE_RISCO_FALHAS
+
+    broker = _FakeMT5Broker()
+    broker.risco = None
+    rt, feed = _runtime_live_scripted(tmp_path, broker, {})
+    for i in range(MAX_LEITURAS_DE_RISCO_FALHAS - 1):
+        feed._barras.append(_bar(f"13:{10 + i:02d}", 10.00, 10.00, 10.00, 10.00))
+        rt.run_once(now=_agora(f"13:{10 + i:02d}:00"))
+    assert rt._risco_ilegivel_seguidas == MAX_LEITURAS_DE_RISCO_FALHAS - 1
+
+    broker.risco = {"equity": 500.0, "margin_free": 500.0, "balance": 500.0}
+    feed._barras.append(_bar("13:59", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:59:00"))
+
+    assert rt._risco_ilegivel_seguidas == 0
+    assert rt._snapshot.disaster_halt is False
+
+
+def test_cadencia_de_ordens_tem_teto_por_minuto(tmp_path, pregao_aberto):
+    """Nenhum contador de envio existia: o unico teto de repeticao era o de
+    RECUSAS DE FECHAMENTO. Um laco do lado da ENTRADA martelava a corretora
+    indefinidamente sem nada perceber -- o mesmo padrao que o incidente
+    exibiu do lado do fechamento (~24 tentativas em minutos)."""
+    from live.intraday_runtime import MAX_ENVIOS_POR_MINUTO
+
+    broker = _FakeMT5Broker()
+    rt, _feed = _runtime_live_scripted(tmp_path, broker, {})
+    ts = _agora("13:00:00")
+    for _ in range(MAX_ENVIOS_POR_MINUTO):
+        assert rt._check_cadencia_de_ordens(ts) is None
+    assert rt._check_cadencia_de_ordens(ts) is not None, "o teto tem de morder"
+
+
+def test_janela_de_cadencia_e_ROLANTE_nao_contador_de_sessao(tmp_path, pregao_aberto):
+    """Um teto por PREGAO ou e' alto demais pra pegar o laco, ou baixo
+    demais e mata operacao legitima num dia movimentado. Passados 60s, a
+    janela esvazia."""
+    from live.intraday_runtime import MAX_ENVIOS_POR_MINUTO
+
+    broker = _FakeMT5Broker()
+    rt, _feed = _runtime_live_scripted(tmp_path, broker, {})
+    for _ in range(MAX_ENVIOS_POR_MINUTO):
+        rt._check_cadencia_de_ordens(_agora("13:00:00"))
+    assert rt._check_cadencia_de_ordens(_agora("13:00:30")) is not None
+
+    assert rt._check_cadencia_de_ordens(_agora("13:01:30")) is None, (
+        "passado um minuto, a janela esvaziou"
+    )
+
+
+def test_capital_do_slot_e_relido_do_ledger_a_cada_pregao(tmp_path, pregao_aberto):
+    """`initial_capital` era lido UMA vez, na construcao do runtime, e nunca
+    mais -- mas o processo `loop` roda continuo e o ledger e' editavel no
+    painel. O dono podia sacar metade e o robo seguir dimensionando lote e
+    teto de contratos contra o numero antigo ate alguem reiniciar."""
+    broker = _FakeMT5Broker()
+    rt, feed = _runtime_live_scripted(tmp_path, broker, {})
+    rt.run_once(now=_agora("13:00:00"))
+    assert rt.initial_capital == pytest.approx(100.0)
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        acc.cash = 40.0                      # o dono sacou e corrigiu o ledger
+        store.save_account(conn, acc)
+
+    rt._calibrated_for = None                # proximo pregao / recalibracao
+    feed._barras.append(_bar("13:05", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:05:00"))
+
+    assert rt.initial_capital == pytest.approx(40.0)
+    assert rt.config.initial_capital == pytest.approx(40.0)
+    assert rt.machine.config.initial_capital == pytest.approx(40.0), (
+        "quem dimensiona barra a barra e' a config da MAQUINA, nao a do runtime"
+    )
+
+
+def test_teto_de_perda_acompanha_o_capital_quando_e_o_default(tmp_path, pregao_aberto):
+    """Se o teto veio da fracao default, ele segue o capital. Um numero que
+    o dono fixou no construtor NAO pode ser sobrescrito por um saque."""
+    from live.intraday_runtime import FRACAO_PERDA_MAXIMA_DIA
+
+    broker = _FakeMT5Broker()
+    rt, feed = _runtime_live_scripted(tmp_path, broker, {})
+    rt.run_once(now=_agora("13:00:00"))
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        acc.cash = 40.0
+        store.save_account(conn, acc)
+    rt._calibrated_for = None
+    feed._barras.append(_bar("13:05", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:05:00"))
+
+    assert rt.perda_maxima_dia_brl == pytest.approx(FRACAO_PERDA_MAXIMA_DIA * 40.0)
+
+
+def test_teto_de_perda_fixado_pelo_dono_nao_e_sobrescrito(tmp_path, pregao_aberto):
+    broker = _FakeMT5Broker()
+    strat = _ScriptedDaytrade(SYMBOL, {})
+    feed = _ScriptedBarFeed([], [])
+    rt = IntradayLiveRuntime(
+        slot=SLOT, strategy=strat, config=_config(), bar_feed=feed, broker=broker,
+        db_path=tmp_path / "live_intraday.sqlite", execution_mode="live",
+        initial_capital=100.0, perda_maxima_dia_brl=7.0,
+    )
+    rt.ensure_account()
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        acc.cash = 40.0
+        store.save_account(conn, acc)
+    rt.run_once(now=_agora("13:00:00"))
+
+    assert rt.initial_capital == pytest.approx(40.0), "o capital acompanha o ledger"
+    assert rt.perda_maxima_dia_brl == pytest.approx(7.0), "o teto do dono, nao"
+
+
+def test_acao_nao_suportada_pela_execucao_real_para_o_robo_uma_vez(tmp_path, pregao_aberto):
+    """Uma estrategia que emite `Enter` a mercado nao consegue operar em
+    execucao real (`_entrar_a_mercado` levanta `NotImplementedError`) -- e
+    isso NAO e' transitorio: a barra seguinte levanta de novo.
+
+    Antes, a excecao subia sem captura: o journal fazia ROLLBACK, a marca de
+    barra nunca avancava, e o supervisor reprocessava a MESMA barra a cada
+    ~5s pelo pregao inteiro. Muito log, nenhuma informacao, e nada no painel
+    dizendo por que o robo nao opera. A `CopaWin` -- TOP-2 do podio,
+    selecionavel no painel -- tem `entrada_maker=False` como DEFAULT.
+
+    Agnostico de estrategia: a captura e' da acao nao suportada, nao de um
+    nome de robo."""
+    broker = _FakeMT5Broker()
+    script = {
+        0: [Enter(side="long", quantity=1, initial_stop=9.00,
+                  initial_target=11.00, reason="a mercado")],
+    }
+    rt, feed = _runtime_live_scripted(tmp_path, broker, script)
+    rt.run_once(now=_agora("13:00:00"))
+
+    # `Enter` vira `machine.pending` na barra em que a estrategia decide e
+    # so' e' EXECUTADO na seguinte (anti-look-ahead: decide em close[t],
+    # executa em open[t+1]) -- por isso duas barras.
+    feed._barras.append(_bar("13:01", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:01:00"))
+    feed._barras.append(_bar("13:02", 10.00, 10.00, 10.00, 10.00))
+    passos = rt.run_once(now=_agora("13:02:00"))
+
+    assert any(p.action == "daytrade_robo_incompativel" for p in passos), passos
+    assert rt._snapshot.disaster_halt is True
+    assert not broker.ordens_a_mercado, "nada pode ter ido para a corretora"
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        eventos = [e["message"] for e in store.recent_events(conn, acc.id, limit=50)]
+    assert any("ROBO INCOMPATIVEL" in m for m in eventos), eventos
+
+    # A marca de barra AVANCOU: o passo seguinte nao reprocessa a mesma barra.
+    assert rt._snapshot.last_bar_ts is not None

@@ -275,3 +275,52 @@ def test_pernas_maker_conta_a_entrada_parada():
     maker afrouxaria justamente o desenho mais exposto a fila."""
     assert CopaWin(teto_contratos=12, entrada_maker=False).pernas_maker == 1
     assert CopaWin(teto_contratos=12, entrada_maker=True).pernas_maker == 2
+
+
+# ---------- realocacao dinamica por CAPITAL (2026-08-27, aditiva/opt-in) ----
+# `margin_per_contract_brl=None` (default) tem que continuar byte-a-byte
+# identico ao comportamento de antes desta rodada -- nenhum teste acima foi
+# alterado, e os quatro abaixo cobrem especificamente o modo novo.
+
+def test_sem_margin_per_contract_brl_comportamento_identico_ao_de_antes():
+    """Regressao: nao passar os parametros novos (ou passa-los no default)
+    tem que dar o MESMO resultado de antes -- `quantidade_por_entrada` nunca
+    olha `_cash_atual_brl` neste modo, mesmo que o motor chame
+    `on_capital_update` com um caixa que sozinho sustentaria menos contratos."""
+    robo = CopaWin(teto_contratos=12, fracao_entrada=0.5)
+    assert robo.quantidade_por_entrada == 6
+    robo.on_capital_update(1.0)   # caixa minusculo -- nao pode afetar nada aqui
+    assert robo.quantidade_por_entrada == 6
+
+
+def test_capital_baixo_encolhe_o_teto_efetivo_ate_1_contrato():
+    """Com `margin_per_contract_brl` setado, um caixa que so' sustenta uma
+    fracao de contrato ainda produz PELO MENOS 1 (piso), nunca 0."""
+    robo = CopaWin(teto_contratos=15, fracao_entrada=1.0, margin_per_contract_brl=100.0)
+    robo.on_capital_update(200.0)   # R$200 / (R$100 x buffer 2.0) = 1 contrato
+    assert robo.quantidade_por_entrada == 1
+
+
+def test_capital_alto_nunca_ultrapassa_o_teto_oficial_da_competicao():
+    """O caixa real pode sustentar MUITO mais do que `teto_contratos` --
+    a formula e' `min(teto_contratos, contracts_from_capital(...))`, entao a
+    entrada nunca pode violar o teto oficial da competicao."""
+    robo = CopaWin(teto_contratos=15, fracao_entrada=1.0, margin_per_contract_brl=100.0)
+    robo.on_capital_update(1_000_000.0)   # caixa sustentaria centenas de contratos
+    assert robo.quantidade_por_entrada == 15
+
+    # caixa intermediario: fica ABAIXO do teto oficial, nunca acima.
+    # 1000 / (100 x 2.0) = 5 contratos SEM reserva, mas `quantidade_por_
+    # entrada` usa `contracts_from_capital_com_reserva` desde 2026-08-28
+    # (incidente real, ver `strategy.daytrade.base.RESERVA_CAIXA_SEGURANCA`)
+    # -- buffer efetivo 2.0 x 1.25 = 2.5, entao 1000 / (100 x 2.5) = 4 contratos.
+    robo.on_capital_update(1_000.0)
+    assert robo.quantidade_por_entrada == 4
+
+
+def test_on_capital_update_nunca_chamado_ainda_produz_pelo_menos_1_contrato():
+    """`_cash_atual_brl` comeca em 0.0 (estado inicial, antes de qualquer
+    `on_capital_update`) -- mesmo assim `quantidade_por_entrada` nunca
+    devolve 0, mesmo espirito do piso de `Gremah._lotes_por_realocacao`."""
+    robo = CopaWin(teto_contratos=15, fracao_entrada=1.0, margin_per_contract_brl=100.0)
+    assert robo.quantidade_por_entrada == 1

@@ -241,9 +241,14 @@ def test_capital_alto_nunca_ultrapassa_o_hard_cap():
     # caixa intermediario: fica ABAIXO do hard cap, nunca acima.
     strat2 = WdoGridReloadMaker(tick_size=0.5, level_spacing_ticks=1, profit_ticks=1, stop_ticks=16,
                                  margin_per_contract_brl=150.0, hard_cap_contratos=5)
-    strat2.on_capital_update(900.0)   # 900 / (150 x 2.0) = 3 contratos
+    # 900 / (150 x 2.0) = 3 contratos SEM reserva, mas `_quantidade_da_entrada`
+    # usa `contracts_from_capital_com_reserva` desde 2026-08-28 (incidente
+    # real, ver a docstring do modulo e `strategy.daytrade.base.RESERVA_
+    # CAIXA_SEGURANCA`) -- buffer efetivo 2.0 x 1.25 = 2.5, entao
+    # 900 / (150 x 2.5) = 2.4 -> 2 contratos.
+    strat2.on_capital_update(900.0)
     ordem2 = _primeira_ordem(strat2)
-    assert ordem2.quantity == 3
+    assert ordem2.quantity == 2
 
 
 def test_on_capital_update_nunca_chamado_ainda_produz_pelo_menos_1_contrato():

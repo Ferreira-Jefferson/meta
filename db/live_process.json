@@ -6,7 +6,7 @@
       "started_at": null,
       "config": {
         "mode": "mt5",
-        "capital": 38.83,
+        "capital": 55.55,
         "strategy": "gremah_tick",
         "slot": "dt-gremah_tick-pmam3-shadow",
         "execution_mode": "shadow",
@@ -20,7 +20,7 @@
       "started_at": null,
       "config": {
         "mode": "mt5",
-        "capital": 36.91,
+        "capital": 30.0,
         "strategy": "gremah",
         "slot": "dt-gremah-pmam3-shadow",
         "execution_mode": "shadow",
@@ -41,6 +41,54 @@
         "notify_min_level": "warn",
         "mt5_shares_per_lot": 1.0,
         "mt5_fractional_map": null
+      }
+    },
+    "dt-gremah-pmam3-live": {
+      "pid": null,
+      "started_at": null,
+      "config": {
+        "mode": "mt5",
+        "capital": 30.0,
+        "strategy": "gremah",
+        "slot": "dt-gremah-pmam3-live",
+        "execution_mode": "live",
+        "notify_min_level": "warn",
+        "mt5_shares_per_lot": 1.0,
+        "mt5_fractional_map": null
+      }
+    },
+    "dt-wdo_grid_reload_maker-wdo@-live": {
+      "pid": null,
+      "started_at": null,
+      "config": {
+        "mode": "mt5",
+        "capital": 300.0,
+        "strategy": "wdo_grid_reload_maker",
+        "slot": "dt-wdo_grid_reload_maker-wdo@-live",
+        "execution_mode": "live",
+        "notify_min_level": "warn",
+        "mt5_shares_per_lot": 1.0,
+        "mt5_fractional_map": null,
+        "mt5_symbol_map": {
+          "WDO@": "WDOQ27"
+        }
+      }
+    },
+    "dt-wdo_grid_reload_maker-wdo@-shadow": {
+      "pid": 20128,
+      "started_at": "2026-08-28T17:16:12+00:00",
+      "config": {
+        "mode": "mt5",
+        "capital": 331.5,
+        "strategy": "wdo_grid_reload_maker",
+        "slot": "dt-wdo_grid_reload_maker-wdo@-shadow",
+        "execution_mode": "shadow",
+        "notify_min_level": "warn",
+        "mt5_shares_per_lot": 1.0,
+        "mt5_fractional_map": null,
+        "mt5_symbol_map": {
+          "WDO@": "WDOU26"
+        }
       }
     }
   }

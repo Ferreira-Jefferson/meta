@@ -95,11 +95,11 @@ def _build_intraday_runtime(slot: Slot, capital: float, execution_mode: str, rob
     Não conecta em nada: o feed nunca é lido por `status()` — o painel
     só reporta o fuso em uso, não busca barra. Também não passa `clock_feed`:
     conferir o relógio do servidor exige ler tick, e uma página de status não
-    pode disparar I/O na corretora. Custo do perfil vem de `PROFILES` com tick
+    pode disparar I/O na corretora. Custo do perfil vem de `profile_for` com tick
     0.01 nominal, porque `status()` não calcula P&L de trade nenhum; quem
     calcula é o processo do robô, que lê o tick real do terminal (ver
     `scripts/run_live.py::build_intraday`)."""
-    from backtest.intraday.profiles import PROFILES, config_for
+    from backtest.intraday.profiles import config_for, profile_for
     from live.broker_mt5 import MT5Broker  # import tardio: nao conecta ao construir
     from live.intraday_feed import feed_for
     from live.intraday_runtime import IntradayLiveRuntime
@@ -111,7 +111,7 @@ def _build_intraday_runtime(slot: Slot, capital: float, execution_mode: str, rob
             "sem saber qual robo ela opera"
         )
     robo = get_daytrade_robot(robot, symbol=slot.symbol or None)
-    profile = PROFILES[robo.symbol]
+    profile = profile_for(robo.symbol)
     return IntradayLiveRuntime(
         slot=slot,
         strategy=robo,

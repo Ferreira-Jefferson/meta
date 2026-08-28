@@ -1156,6 +1156,144 @@ def test_teto_libera_de_novo_quando_a_posicao_fecha():
     assert m.open_contracts == 0
 
 
+# ---------- teto de contratos por CAPITAL (2026-08-28, incidente REAL) -----
+# `wdo_grid_reload_maker` (WDO@, capital real R$300) zerou a conta ao vivo:
+# duas entradas INDEPENDENTES do grid (mesmo magic, 5s de diferenca) abriram
+# 2 contratos simultaneos numa conta NETTING que so' tinha margem para 1. O
+# UNICO teto agregado que a config real carregava era `max_open_contracts=5`
+# (o numero REGULATORIO da Copa BTG) -- sem nenhuma relacao com o caixa real.
+# `IntradayBacktestConfig.margin_per_contract_brl` fecha esse buraco: um teto
+# recalculado a CADA checagem contra `initial_capital + realized_pnl`, com a
+# reserva de `strategy.daytrade.base.RESERVA_CAIXA_SEGURANCA` ja aplicada
+# (`contracts_from_capital_com_reserva`). Ver tambem
+# `tests/test_daytrade_base.py::test_reserva_reproduz_exatamente_o_
+# incidente_wdo_r300` para o numero cru da formula.
+
+def test_sem_margin_per_contract_brl_o_teto_por_capital_nao_existe():
+    """`None` (default) tem de ser indistinguivel do motor antes desta
+    feature -- caixa minusculo nao bloqueia NADA sem o campo setado (so'
+    `max_open_contracts`, se algum, continua valendo)."""
+    strat = _Scripted({0: [Enter(side="long", quantity=500, reason="grande")]})
+    m = IntradaySessionMachine(strat, _config(initial_capital=1.0))
+    m.begin_session(pd.Timestamp("2026-01-05").date())
+    m.on_closed_bar(_bar(0, 10.0, 10.0, 10.0, 10.0))
+    eventos = m.on_closed_bar(_bar(1, 10.0, 10.0, 10.0, 10.0))
+    assert [type(e) for e in eventos] == [PositionOpened]
+    assert m.open_contracts == 500
+    assert m.ordens_recusadas_por_capital == 0
+
+
+def test_reproduz_o_incidente_segundo_filho_independente_e_recusado_por_capital():
+    """Reproducao direta do incidente: uma ordem-limite dividida em 2 filhos
+    de 1 contrato cada (`EnterLimit.split_quantities`, o mesmo mecanismo de
+    'posicoes independentes por lote' que abriu os 2 deals reais) contra um
+    caixa que so' sustenta 1 contrato COM a reserva (R$400, margem R$150,
+    buffer 2.0 x reserva 1.25 = 375/contrato -> 1 contrato). O PRIMEIRO filho
+    abre posicao; o SEGUNDO e' RECUSADO por capital -- nunca vira uma segunda
+    posicao real, ao contrario do que aconteceu ao vivo em 2026-08-28."""
+    ordem = EnterLimit(side="long", limit_price=9.80, initial_stop=9.00,
+                       initial_target=99.0, quantity=2, split_quantities=(1, 1),
+                       reason="grid_dividido")
+    strat = _Scripted({0: [ordem]})
+    m = IntradaySessionMachine(strat, _config(
+        initial_capital=400.0, margin_per_contract_brl=150.0,
+        limit_fill_capped_by_volume=True,
+    ))
+    m.begin_session(pd.Timestamp("2026-01-05").date())
+    m.on_closed_bar(_bar_vol(0, 10.0, 10.0, 10.0, 10.0, volume=1_000.0))
+    eventos = m.on_closed_bar(_bar_vol(1, 10.0, 10.0, 9.50, 9.90, volume=1_000.0))
+
+    abertas = [e for e in eventos if isinstance(e, PositionOpened)]
+    recusas = [e for e in eventos if isinstance(e, OrderRejected)]
+    assert len(abertas) == 1 and len(recusas) == 1
+    assert recusas[0].reason == "capital_insuficiente"
+    assert recusas[0].order_kind == "limit"
+    assert recusas[0].cap == 1
+    assert m.open_contracts == 1  # NUNCA 2 -- exatamente o que faltou no incidente real
+    assert m.ordens_recusadas_por_capital == 1
+    assert m.ordens_recusadas_por_teto == 0  # causa diferente, contador diferente
+
+    # o filho recusado nao volta a ser tentado na barra seguinte (mesmo
+    # comportamento do teto estatico, ver `test_filho_de_ordem_dividida_que_
+    # estoura_o_teto_e_recusado_e_descartado`).
+    eventos2 = m.on_closed_bar(_bar_vol(2, 9.90, 10.0, 9.50, 9.90, volume=1_000.0))
+    assert not [e for e in eventos2 if isinstance(e, OrderRejected)]
+    assert m.ordens_recusadas_por_capital == 1
+
+
+def test_entrada_a_mercado_acima_do_capital_e_recusada_por_capital():
+    """Mesma garantia do teste acima, pelo caminho de `Enter` a mercado
+    (`_entrar_a_mercado`) em vez de `EnterLimit` dividida -- o teto por
+    capital vale para QUALQUER caminho de abertura, nao so' o do grid."""
+    strat = _Scripted({0: [Enter(side="long", quantity=3, reason="grande_demais")]})
+    m = IntradaySessionMachine(strat, _config(initial_capital=400.0, margin_per_contract_brl=150.0))
+    m.begin_session(pd.Timestamp("2026-01-05").date())
+    m.on_closed_bar(_bar(0, 10.0, 10.0, 10.0, 10.0))
+    eventos = m.on_closed_bar(_bar(1, 10.0, 10.0, 10.0, 10.0))
+
+    recusas = [e for e in eventos if isinstance(e, OrderRejected)]
+    assert len(recusas) == 1
+    assert recusas[0].reason == "capital_insuficiente"
+    assert recusas[0].quantity == 3 and recusas[0].cap == 1
+    assert m.open_contracts == 0
+    assert m.ordens_recusadas_por_capital == 1
+
+
+def test_capital_e_teto_estatico_juntos_usa_o_menor_dos_dois():
+    """`max_open_contracts` (regulatorio, ex.: 5 no WDO@) e `margin_per_
+    contract_brl` (caixa real) podem coexistir -- o efetivo e' sempre o
+    MENOR dos dois, nunca so' um. Aqui o teto por capital (1, caixa R$400)
+    e' o mais apertado; num caixa gigante o teto ESTATICO (regulatorio)
+    voltaria a ser o mais apertado (ja coberto por `test_config_for_teto_
+    por_capital_nunca_passa_do_teto_oficial_do_perfil` no nivel de
+    `config_for`)."""
+    strat = _Scripted({0: [Enter(side="long", quantity=2, reason="entra")]})
+    m = IntradaySessionMachine(strat, _config(
+        initial_capital=400.0, margin_per_contract_brl=150.0, max_open_contracts=5,
+    ))
+    m.begin_session(pd.Timestamp("2026-01-05").date())
+    m.on_closed_bar(_bar(0, 10.0, 10.0, 10.0, 10.0))
+    eventos = m.on_closed_bar(_bar(1, 10.0, 10.0, 10.0, 10.0))
+
+    recusas = [e for e in eventos if isinstance(e, OrderRejected)]
+    assert len(recusas) == 1
+    assert recusas[0].reason == "capital_insuficiente"  # o teto de 5 nunca chega a amarrar
+    assert recusas[0].cap == 1
+
+
+def test_cap_por_capital_e_recalculado_a_cada_checagem_nao_e_uma_foto():
+    """Diferente da abordagem estatica anterior (`config_for(cash_brl=...,
+    margin_per_contract_brl=...)`, uma foto tirada 1x), o teto por capital do
+    MOTOR reage ao `realized_pnl` -- um lucro fechado que aumenta o caixa
+    libera espaco para MAIS contratos na proxima checagem, dentro da MESMA
+    run, sem precisar reconstruir a config."""
+    strat = _Scripted({
+        0: [Enter(side="long", quantity=1, reason="entra_1")],
+        2: [Exit(reason="realiza_lucro")],
+        4: [Enter(side="long", quantity=2, reason="entra_2_maior")],
+    })
+    # R$400 sustenta 1 contrato (com reserva); apos realizar um lucro grande
+    # o caixa cresce o bastante para sustentar 2.
+    m = IntradaySessionMachine(strat, _config(initial_capital=400.0, margin_per_contract_brl=150.0))
+    m.begin_session(pd.Timestamp("2026-01-05").date())
+    m.on_closed_bar(_bar(0, 10.0, 10.0, 10.0, 10.0))
+    m.on_closed_bar(_bar(1, 10.0, 10.0, 10.0, 10.0))       # abre 1 contrato @ 10.0
+    assert m.open_contracts == 1
+    m.on_closed_bar(_bar(2, 10.0, 10.0, 10.0, 10.0))
+    m.on_closed_bar(_bar(3, 1_000.0, 1_000.0, 1_000.0, 1_000.0))  # fecha com lucro enorme @ 1000.0
+    assert m.open_contracts == 0
+    # lucro de (1000-10) x 1 contrato = 990 -- caixa novo (400+990=1390) sustenta
+    # 3 contratos com a reserva (1390 / (150 x 2.5) = 3.7 -> 3), bem alem do
+    # que os R$400 originais sustentavam (1).
+    assert m.realized_pnl > 350.0  # 350 e' o minimo para o 2o contrato virar possivel
+
+    m.on_closed_bar(_bar(4, 10.0, 10.0, 10.0, 10.0))
+    eventos = m.on_closed_bar(_bar(5, 10.0, 10.0, 10.0, 10.0))  # pede 2 contratos agora
+    assert [type(e) for e in eventos] == [PositionOpened]
+    assert m.open_contracts == 2  # o caixa novo sustenta -- nao ficou preso no numero antigo
+    assert m.ordens_recusadas_por_capital == 0
+
+
 # ---------- modelo de fila (Q_frente) no preenchimento ---------------------
 # `IntradayBacktestConfig.queue_ahead_qty` (2026-08-27, Fase A do modelo de
 # fila -- ver a docstring do campo em `machine.py`). Cobre as quatro

@@ -187,6 +187,61 @@ def test_multiplas_entradas_e_saidas_na_mesma_sessao_geram_trades_independentes(
     assert all(t.exit_reason == IntradayExitReason.SIGNAL for t in result.trades)
 
 
+def test_sinal_oposto_com_posicao_aberta_reverte_a_posicao():
+    """2026-08-28, pedido do dono: um `Enter` para o lado CONTRARIO enquanto
+    ha posicao aberta deixa de ser descartado em silencio -- fecha a posicao
+    atual e abre a nova, no MESMO open desta barra."""
+    bars = _mk_bars("2026-01-05", [
+        (100, 101, 99, 100),  # 0: decide Enter long
+        (100, 101, 99, 100),  # 1: executa long no open=100; decide Enter short (oposto)
+        (90, 91, 89, 90),     # 2: reversao executa no open=90 -- fecha long, abre short
+        (85, 86, 84, 85),     # 3
+        (85, 86, 84, 85),     # 4: ultima barra -> flatten forcado fecha o short
+    ])
+    strat = _StubIntradayStrategy({
+        bars.index[0]: [Enter(side="long")],
+        bars.index[1]: [Enter(side="short")],
+    })
+    result = run_intraday_backtest(bars, strat, _config())
+
+    assert len(result.trades) == 2
+    long_trade, short_trade = result.trades
+    assert long_trade.side == "long"
+    assert long_trade.entry_price == pytest.approx(100.0)
+    assert long_trade.exit_price == pytest.approx(90.0)  # fechou no OPEN da barra da reversao
+    assert long_trade.exit_reason == IntradayExitReason.SIGNAL
+    assert short_trade.side == "short"
+    assert short_trade.entry_price == pytest.approx(90.0)  # abriu no MESMO open, sem esperar 1 barra
+    assert short_trade.exit_reason == IntradayExitReason.FORCED_FLATTEN
+    assert short_trade.exit_price == pytest.approx(85.0)
+
+
+def test_sinal_mesmo_lado_com_posicao_aberta_nao_faz_nada():
+    """Mesmo pedido: um `Enter` para o MESMO lado com posicao ja aberta
+    continua sendo um no-op -- nao ha o que trocar. Mesmos precos/formato do
+    teste `test_entrada_executa_na_abertura_da_proxima_barra`, so' com um
+    Enter repetido no meio, que nao deve mudar nada no resultado."""
+    bars = _mk_bars("2026-01-05", [
+        (100, 101, 99, 100),
+        (105, 106, 104, 105),
+        (110, 111, 109, 110),
+        (112, 113, 111, 112),
+        (112, 113, 111, 112),
+    ])
+    strat = _StubIntradayStrategy({
+        bars.index[0]: [Enter(side="long")],
+        bars.index[1]: [Enter(side="long")],  # mesmo lado, posicao ja aberta -- no-op
+        bars.index[2]: [Exit()],
+    })
+    result = run_intraday_backtest(bars, strat, _config())
+
+    assert len(result.trades) == 1
+    trade = result.trades[0]
+    assert trade.entry_price == pytest.approx(105.0)  # nao reabriu por causa do sinal repetido
+    assert trade.exit_price == pytest.approx(112.0)  # Exit decidido na barra 2, executa no open da 3
+    assert trade.exit_reason == IntradayExitReason.SIGNAL
+
+
 def test_flatten_forcado_nao_carrega_posicao_para_a_proxima_sessao():
     bars_a = _mk_bars("2026-01-05", [(100, 101, 99, 100)] * 3)
     bars_b = _mk_bars("2026-01-06", [(200, 201, 199, 200)] * 3)
@@ -535,6 +590,63 @@ def test_enforce_capital_minimo_nao_pula_sessao_resumida():
     assert result.sessoes_puladas_por_capital == []
 
 
+# ---------- capital_minimo_so_na_entrada (2026-08-28) ----------------------
+# Reproduz no backtest a regra que `live.intraday_runtime.
+# IntradayLiveRuntime._check_capital` ja aplica ao vivo desde 2026-08-24: o
+# piso de 2x (`capital_minimo_brl`) so vale para a sessao em que o robo
+# CONSEGUE comecar a operar; dali em diante, cada sessao seguinte so precisa
+# cobrir 1x o lote do dia. Default `False` preserva o comportamento antigo
+# (2x toda sessao, ver o bloco de testes acima).
+
+def test_capital_minimo_so_na_entrada_deixa_1x_bastar_depois_de_iniciar():
+    # dia 1: preco 100 -> piso de ENTRADA (2x) = 100*100*2 = 20.000, caixa
+    # (15.000) nao cobre -- pula, robo ainda nao comecou.
+    # dia 2: preco 70 -> piso de entrada (2x) = 14.000, caixa cobre -- roda
+    # (robo "inicia" aqui).
+    # dia 3: preco 140 -> 1x o lote = 14.000 (cabe nos 15.000), mas 2x
+    # seria 28.000 (nao cabe) -- so' nao pula porque o robo ja iniciou.
+    bars_d1 = _mk_bars("2026-01-05", [(100, 101, 99, 100)])
+    bars_d2 = _mk_bars("2026-01-06", [(70, 71, 69, 70)])
+    bars_d3 = _mk_bars("2026-01-07", [(140, 141, 139, 140)])
+    bars = pd.concat([bars_d1, bars_d2, bars_d3])
+    strat = _StubIntradayStrategy({})
+    config = _config(initial_capital=15_000.0, default_quantity=100,
+                      enforce_capital_minimo=True, capital_minimo_so_na_entrada=True)
+    result = run_intraday_backtest(bars, strat, config)
+
+    assert result.sessoes_puladas_por_capital == [bars_d1.index[0]]
+
+
+def test_capital_minimo_so_na_entrada_desligado_continua_exigindo_2x_sempre():
+    """Mesmo cenario do teste acima, so' que com o default (`False`) -- o
+    dia 3 tambem pula, porque o piso de 2x nunca deixa de valer."""
+    bars_d1 = _mk_bars("2026-01-05", [(100, 101, 99, 100)])
+    bars_d2 = _mk_bars("2026-01-06", [(70, 71, 69, 70)])
+    bars_d3 = _mk_bars("2026-01-07", [(140, 141, 139, 140)])
+    bars = pd.concat([bars_d1, bars_d2, bars_d3])
+    strat = _StubIntradayStrategy({})
+    config = _config(initial_capital=15_000.0, default_quantity=100,
+                      enforce_capital_minimo=True)
+    assert config.capital_minimo_so_na_entrada is False
+    result = run_intraday_backtest(bars, strat, config)
+
+    assert result.sessoes_puladas_por_capital == [bars_d1.index[0], bars_d3.index[0]]
+
+
+def test_capital_minimo_so_na_entrada_sessao_resumida_ja_conta_como_iniciada():
+    """Sessao RESUMIDA (warm start) implica robo ja de pe -- a 2a sessao do
+    `bars` (a 1a ja calibrada por fora) so precisa de 1x, nao 2x."""
+    bars_d1 = _mk_bars("2026-01-05", [(70, 71, 69, 70)])   # resumida: gate pulado de qualquer jeito
+    bars_d2 = _mk_bars("2026-01-06", [(140, 141, 139, 140)])  # 1x=14.000 cabe, 2x=28.000 nao
+    bars = pd.concat([bars_d1, bars_d2])
+    strat = _StubIntradayStrategy({})
+    config = _config(initial_capital=15_000.0, default_quantity=100,
+                      enforce_capital_minimo=True, capital_minimo_so_na_entrada=True)
+    result = run_intraday_backtest(bars, strat, config, resume_same_session=True)
+
+    assert result.sessoes_puladas_por_capital == []
+
+
 def test_patrimonio_positivo_nunca_marca_wiped_out():
     bars = _mk_bars("2026-01-05", [
         (100, 101, 99, 100),
@@ -546,3 +658,37 @@ def test_patrimonio_positivo_nunca_marca_wiped_out():
 
     assert result.wiped_out_at is None
     assert len(result.equity_curve) == len(bars)
+
+
+# ---------- teto de contratos por CAPITAL, fim a fim (2026-08-28, incidente
+# REAL) -- ver `tests/test_intraday_machine.py` para os testes unitarios da
+# maquina; aqui so' confirma que `IntradayBacktestResult.ordens_recusadas_
+# por_capital` sai corretamente de uma run COMPLETA de `run_intraday_
+# backtest` (agrupamento de sessao, `bar_from_row`, tudo incluso), nao so' de
+# `IntradaySessionMachine` isolada.
+
+def test_ordens_recusadas_por_capital_aparece_no_resultado_do_backtest():
+    """Reproduz o incidente (WDO@ R$300 -- aqui com numeros sinteticos R$400/
+    R$150, mesma proporcao): uma ordem-limite dividida em 2 filhos
+    independentes de 1 contrato cada (o mesmo mecanismo que abriu os 2 deals
+    reais), caixa que so' sustenta 1 contrato COM a reserva de seguranca. O
+    primeiro filho abre; o segundo e' recusado por capital -- nunca vira uma
+    segunda posicao real."""
+    bars = _mk_bars("2026-01-05", [
+        (10.0, 10.0, 10.0, 10.0),
+        (10.0, 10.0, 9.5, 9.9),
+        (9.9, 10.0, 9.5, 9.9),
+        (9.9, 10.0, 9.5, 9.9),
+        (9.9, 10.0, 9.5, 9.9),
+    ])
+    bars["tick_volume"] = 1_000  # volume real suficiente para os DOIS filhos, se o teto deixasse
+    ordem = EnterLimit(side="long", limit_price=9.80, initial_stop=9.00, initial_target=99.0,
+                       quantity=2, split_quantities=(1, 1), reason="grid_dividido")
+    strat = _StubIntradayStrategy({bars.index[0]: [ordem]})
+    config = _config(initial_capital=400.0, margin_per_contract_brl=150.0,
+                      limit_fill_capped_by_volume=True)
+    result = run_intraday_backtest(bars, strat, config)
+
+    assert result.ordens_aceitas == 1
+    assert result.ordens_recusadas_por_capital == 1
+    assert result.ordens_recusadas_por_teto == 0  # causa diferente, contador diferente

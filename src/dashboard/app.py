@@ -698,9 +698,8 @@ def _novo_robo_ctx(conn) -> dict:
     """
     from core.config import slot_by_id
     from dashboard import slots as slots_mod
-    from dashboard.robot_view import _ultimo_preco
+    from dashboard.robot_view import _ultimo_preco, capital_minimo_para
     from journal import live_store
-    from strategy.daytrade.base import capital_minimo_brl
     from strategy.daytrade.registry import list_daytrade_robots, symbols_for_robot
 
     slots_por_robo_ativo: dict[tuple[str, str], dict[str, object]] = {}
@@ -733,7 +732,7 @@ def _novo_robo_ctx(conn) -> dict:
         ativos = []
         for symbol in symbols_for_robot(info.key):
             preco, data = _ultimo_preco(symbol)
-            minimo = capital_minimo_brl(preco) if preco else None
+            minimo = capital_minimo_para(info.is_futuro, symbol, preco)
             modos = slots_por_robo_ativo.get((info.key, symbol), {})
             modos_usados = sorted(modos)
             algum_slot = next(iter(modos.values()), None)
@@ -1272,6 +1271,19 @@ async def operacao_iniciar(request: Request, slot_id: str):
         # (`MT5Broker._send`), nunca reencaminhada ao mercado fracionário.
         mt5_fractional_map = live_control.detect_fractional_symbol_map(slot.id, strategy_key)
 
+    mt5_symbol_map = None
+    if erro is None and slot.is_intraday:
+        # Espelho de `mt5_fractional_map` acima, mas pro caso oposto: só o
+        # day trade opera futuro (WIN@/WDO@), e o `"@"` contínuo cadastrado
+        # no terminal normalmente só dá cotação — o servidor recusa ordem
+        # nele (achado ao vivo em 2026-08-28: "Trade disabled" ao mandar
+        # ordem em WDO@). `detect_futures_symbol_map()` acha sozinho, a cada
+        # clique, o contrato REAL com vencimento em aberto (maior volume do
+        # dia) — mesma filosofia de nunca bloquear o início por falha de
+        # detecção (terminal fechado etc.): sem mapa, degrada pro sintoma de
+        # hoje (ordem recusada), não impede o robô de tentar operar ação.
+        mt5_symbol_map = live_control.detect_futures_symbol_map(slot.id, strategy_key)
+
     if erro is None and nunca_comecou and conta is not None:
         # A conta já existia só como linha de caixa (criada por
         # `operacao_caixa`, sem robô): grava o robô e o capital escolhidos
@@ -1302,6 +1314,7 @@ async def operacao_iniciar(request: Request, slot_id: str):
                 notify_min_level=form.get("notify_min_level") or "warn",
                 mt5_shares_per_lot=mt5_shares_per_lot,
                 mt5_fractional_map=mt5_fractional_map,
+                mt5_symbol_map=mt5_symbol_map,
             )
             # Correção pós-code-review (item 7): `live_control.start()` faz
             # `time.sleep(_STARTUP_GRACE_SECONDS)` de forma SÍNCRONA (prova

@@ -111,7 +111,38 @@ comeca em 0.0) -- enquanto o hook nunca foi chamado (replay de
 from_capital(0.0, ...)` devolve 0, e o `max(1, ...)` aplicado no ponto de
 uso garante pelo menos 1 contrato mesmo assim (mesmo espirito do piso ja
 existente em `Gremah._lotes_por_realocacao`).
-"""
+
+## Incidente REAL de 2026-08-28 -- teto agregado passou a morar no MOTOR
+
+Este robo (WDO@, capital real R$300, primeira operacao ao vivo) ZEROU a
+conta: saldo final -R$298,60, equity NEGATIVA. Forense confirmado no MT5:
+dois deals de ABERTURA (`475209192` 11:58:59, `475209197` 11:59:04, mesmo
+magic, volume 1 cada) -- duas entradas INDEPENDENTES, consolidadas pela
+conta NETTING numa posicao de -2 contratos. Com 2 contratos a margem
+exigida dobrou, a margem livre ficou negativa, e a corretora recusou ate a
+ordem de FECHAMENTO (`[MG51] Para abrir novas posicoes`) -- a conta ficou
+presa numa posicao perdedora sem conseguir sair.
+
+A causa NAO estava neste arquivo -- `_next_side_to_arm`/`state.pending_side`
+ja impediam esta estrategia de pedir uma segunda entrada enquanto a primeira
+ainda estivesse pendente ou aberta. A causa era a config REAL ao vivo
+carregar `max_open_contracts=5` (o teto REGULATORIO da Copa BTG, sem
+nenhuma relacao com o caixa real de R$300) como UNICO teto agregado do
+motor -- duas entradas independentes (de QUALQUER origem: bug de execucao,
+race, retomada de processo) passavam por ele sem problema.
+
+O fechamento (2026-08-28): `backtest.intraday.machine.IntradaySessionMachine`
+ganhou um teto DINAMICO por CAPITAL (`IntradayBacktestConfig.margin_per_
+contract_brl`/`margin_buffer`), recalculado a cada barra contra o caixa DE
+VERDADE, com uma reserva de seguranca adicional (`strategy.daytrade.base.
+RESERVA_CAIXA_SEGURANCA`) -- e `backtest.intraday.profiles.config_for` liga
+isso por PADRAO para todo perfil de futuro com margem conhecida, o mesmo
+caminho que `scripts/run_live.py::build_intraday` usa para montar a config
+real. `_quantidade_da_entrada` abaixo tambem passou a usar
+`contracts_from_capital_com_reserva` (em vez da versao pura) no modo
+dinamico opt-in, para o que este robo PEDE nunca ficar mais otimista do que
+o motor de fato deixa abrir -- mas quem tem a palavra final sobre recusar
+uma entrada por capital insuficiente e' sempre o MOTOR, nao esta classe."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -127,7 +158,7 @@ from strategy.daytrade.base import (
     IntradayAction,
     IntradayOpenPosition,
     IntradayStrategy,
-    contracts_from_capital,
+    contracts_from_capital_com_reserva,
     no_tick,
 )
 
@@ -261,6 +292,7 @@ class WdoGridReloadMaker(IntradayStrategy):
 
     def __init__(
         self,
+        symbol: str = "WDO@",
         tick_size: float = WDO_TICK_SIZE,
         level_spacing_ticks: int = 1,   # "x1"
         profit_ticks: int = 1,          # "T1"
@@ -296,6 +328,7 @@ class WdoGridReloadMaker(IntradayStrategy):
         `contracts_from_capital` (ex.: o teto oficial do perfil, 5 no
         WDO@) -- sem ele a quantidade cresce sem limite conforme o caixa
         sobe. So' importa quando `margin_per_contract_brl` esta setado."""
+        self.symbol = symbol
         self.tick_size = tick_size
         self.level_spacing_ticks = level_spacing_ticks
         self.profit_ticks = profit_ticks
@@ -334,10 +367,23 @@ class WdoGridReloadMaker(IntradayStrategy):
         (mesmo espirito de `Gremah._lotes_por_realocacao`: caixa
         genuinamente insuficiente ou ainda DESCONHECIDO -- `_cash_atual_brl`
         comeca em 0.0 -- nao pode virar uma entrada de zero contrato, que
-        nao e' "menor", e' nenhuma)."""
+        nao e' "menor", e' nenhuma).
+
+        `contracts_from_capital_com_reserva` (nao a versao pura) desde
+        2026-08-28 -- MESMA reserva de seguranca que o motor aplica no teto
+        agregado (`backtest.intraday.machine.IntradaySessionMachine.
+        _cap_capital_atual`), para o que esta estrategia PEDE nunca ficar
+        mais otimista que o que o motor de fato deixa ABRIR (ver
+        `strategy.daytrade.base.RESERVA_CAIXA_SEGURANCA`). O piso de 1
+        continua por CIMA da reserva -- uma entrada calculada em 0 contratos
+        (caixa insuficiente COM a reserva) ainda vira 1 aqui; e' o motor,
+        nao a estrategia, quem tem a palavra final sobre recusar essa
+        entrada por capital (`OrderRejected(reason="capital_insuficiente")`)
+        -- ver a nota no proprio motor sobre porque a recusa mora la, nao
+        aqui."""
         if self.margin_per_contract_brl is None:
             return self.quantity
-        return max(1, contracts_from_capital(
+        return max(1, contracts_from_capital_com_reserva(
             self._cash_atual_brl, self.margin_per_contract_brl, self.margin_buffer,
             hard_cap=self.hard_cap_contratos,
         ))

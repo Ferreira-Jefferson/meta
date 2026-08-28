@@ -823,6 +823,9 @@ class Gremah(IntradayStrategy):
     param_hidden = (
         "symbol", "profit_pct", "stop_multiplier", "quantity",
         "alvo_por_volatilidade", "alvo_vol_mult", "stop_vol_mult",
+        # propriedade do INSTRUMENTO (lote da B3), nao escolha do robo -- e'
+        # 100 em toda acao, que e' o unico caso da tabela de producao hoje.
+        "shares_per_lot",
     )
     # O valor cru é o relógio do terminal MT5 (UTC), e é ele que `on_bar`
     # compara. A ficha mostra "14:00 UTC" como valor e "11:00 Brasília" ao
@@ -960,9 +963,19 @@ class Gremah(IntradayStrategy):
         capacidade_min_eventos: int = CAPACIDADE_MIN_EVENTOS_PADRAO,
         filtro_minutos_desde_abertura_min: float | None = FILTRO_MINUTOS_DESDE_ABERTURA_MIN_PADRAO,
         filtro_volume_toque_max: float | None = FILTRO_VOLUME_TOQUE_MAX_PADRAO,
+        shares_per_lot: int = LOTE_PADRAO_B3,
     ):
         self.symbol = symbol
         self.tick_size = tick_size
+        # LOTE do instrumento, em unidades. `LOTE_PADRAO_B3` (100) e' o default
+        # e vale para toda ACAO -- os 10 simbolos calibrados desta classe nao
+        # mudam de comportamento por causa deste parametro. Existe porque ETF
+        # e BDR da B3 negociam em lote de 1 UNIDADE (o proprio terminal declara
+        # isso: `symbol_info.volume_min` = 100 em PMAM3 e 1 em BOVA11/BITH11/
+        # QETH11), e assumir 100 num ETF de R$93 exigiria R$18.600 de caixa
+        # onde a corretora aceita R$186 -- capital inventado, exatamente o que
+        # `capital_minimo_brl` existe para impedir.
+        self.shares_per_lot = int(shares_per_lot)
         # Capturado ANTES do lookup abaixo, que preenche os dois: quem passou
         # `profit_pct=`/`stop_multiplier=` escolheu geometria PERCENTUAL de
         # proposito, e `_GEOMETRIA_TICKS_BY_SYMBOL` nao pode atropelar isso
@@ -1302,21 +1315,21 @@ class Gremah(IntradayStrategy):
         inteira) para limitar o CAIXA que a formula enxerga -- caixa acima
         da capacidade fica inerte, nao vira posicao maior. `None` (sem
         sessao anterior medida ainda) = usa o caixa cru, sem teto."""
-        custo_do_lote = anchor * LOTE_PADRAO_B3
+        custo_do_lote = anchor * self.shares_per_lot
         passo = self.realocacao_limiar_caixa * custo_do_lote
 
         eventos = self._janela_volume.volumes_por_evento(ts)
         if len(eventos) >= self.capacidade_min_eventos:
-            max_lotes_dia = max(1, int(median(eventos) * self.capacidade_negocio_mult) // LOTE_PADRAO_B3)
+            max_lotes_dia = max(1, int(median(eventos) * self.capacidade_negocio_mult) // self.shares_per_lot)
         else:
             media_volume_min = self._janela_volume.media_por_minuto(ts)
             teto_acoes = media_volume_min * self.realocacao_teto_pct_volume_minuto
-            max_lotes_dia = max(1, int(teto_acoes) // LOTE_PADRAO_B3)
+            max_lotes_dia = max(1, int(teto_acoes) // self.shares_per_lot)
 
         caixa = self._cash_atual_brl
         tipico_estavel = self._janela_negocio_tipico.tipico_mediano()
         if tipico_estavel is not None:
-            teto_estavel_lotes = max(1, int(tipico_estavel * self.capacidade_negocio_mult) // LOTE_PADRAO_B3)
+            teto_estavel_lotes = max(1, int(tipico_estavel * self.capacidade_negocio_mult) // self.shares_per_lot)
             capacidade_brl = self.capacidade_fracao * (teto_estavel_lotes - 1) * passo
             caixa = min(caixa, capacidade_brl)
 
@@ -1337,8 +1350,8 @@ class Gremah(IntradayStrategy):
         eventos = self._janela_volume.volumes_por_evento(ts)
         if not eventos:
             return None
-        tipico_lotes = max(1, int(median(eventos)) // LOTE_PADRAO_B3)
-        total_lotes = quantidade_total // LOTE_PADRAO_B3
+        tipico_lotes = max(1, int(median(eventos)) // self.shares_per_lot)
+        total_lotes = quantidade_total // self.shares_per_lot
         if tipico_lotes >= total_lotes:
             return None
         n_pecas = min(self.dividir_max_pecas, math.ceil(total_lotes / tipico_lotes))
@@ -1347,7 +1360,7 @@ class Gremah(IntradayStrategy):
         # cada, em vez de empilhar tudo na ultima -- pecas parecidas entre
         # si, nenhuma desproporcionalmente maior que o tipico.
         lotes_por_peca = [base + (1 if i < resto else 0) for i in range(n_pecas)]
-        return tuple(l * LOTE_PADRAO_B3 for l in lotes_por_peca if l > 0)
+        return tuple(l * self.shares_per_lot for l in lotes_por_peca if l > 0)
 
     def _fatia_saida(self, ts: pd.Timestamp) -> int:
         """Tamanho de UMA fatia de saida (`EnterLimit.exit_split_unit`) --
@@ -1363,11 +1376,12 @@ class Gremah(IntradayStrategy):
         fracionario) enquanto a janela ainda nao tem evento nenhum."""
         eventos = self._janela_volume.volumes_por_evento(ts)
         if not eventos:
-            return LOTE_PADRAO_B3
-        return max(LOTE_PADRAO_B3, int(median(eventos)) // LOTE_PADRAO_B3 * LOTE_PADRAO_B3)
+            return self.shares_per_lot
+        return max(self.shares_per_lot,
+                   int(median(eventos)) // self.shares_per_lot * self.shares_per_lot)
 
     def _build_entry(self, side: str, anchor: float, spacing_ticks: int, profit_ticks: int, stop_ticks: int | None, ts: pd.Timestamp) -> EnterLimit:
-        self.quantity = self._lotes_por_realocacao(anchor, ts) * LOTE_PADRAO_B3
+        self.quantity = self._lotes_por_realocacao(anchor, ts) * self.shares_per_lot
         split = self._dividir_pecas(self.quantity, ts) if self.dividir_entrada else None
         spacing_off = spacing_ticks * self.tick_size
         level_price = round(anchor - spacing_off, 2) if side == "long" else round(anchor + spacing_off, 2)
@@ -1448,7 +1462,8 @@ class Gremah(IntradayStrategy):
 
         if not state.session_stop_armed:
             state.session_stop_armed = True
-            state.session_stop_brl_hoje = capital_minimo_brl(bar.open) * self.session_stop_pct_capital
+            state.session_stop_brl_hoje = (capital_minimo_brl(bar.open, self.shares_per_lot)
+                                           * self.session_stop_pct_capital)
 
         if is_fixed_phase and state.open_price is None:
             state.open_price = bar.open
