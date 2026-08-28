@@ -110,6 +110,10 @@ def diario(tmp_path, monkeypatch):
     db = tmp_path / "live_teardown.sqlite"
     monkeypatch.setattr(live_store.live_journal.__wrapped__, "__defaults__", (db,))
     monkeypatch.setattr(live_control, "_STATE_PATH", tmp_path / "live_process.json")
+    # `client.get("/operacao")` (usado pelos testes de criação/restauro
+    # abaixo) renderiza a seção de credenciais também (`credential_status()`
+    # lê `db/live_secrets.json`) — isolado pelo mesmo motivo do `_STATE_PATH`.
+    monkeypatch.setattr(live_control, "_SECRETS_PATH", tmp_path / "live_secrets.json")
     return db
 
 

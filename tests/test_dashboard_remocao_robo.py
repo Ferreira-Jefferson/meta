@@ -44,6 +44,9 @@ def isolated_journal(tmp_path, monkeypatch):
     monkeypatch.setattr(intraday_runtime, "LIVE_DB_PATH", db_path)
     # nenhum teste daqui pode tocar o `db/live_process.json` da máquina
     monkeypatch.setattr(live_control, "_STATE_PATH", tmp_path / "live_process.json")
+    # nem `db/live_secrets.json` (lido por `credential_status()` em toda
+    # renderização de `/operacao`)
+    monkeypatch.setattr(live_control, "_SECRETS_PATH", tmp_path / "live_secrets.json")
     return db_path
 
 

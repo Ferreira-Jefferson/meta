@@ -52,13 +52,34 @@ def isolated_journal(tmp_path, monkeypatch):
     Sem isto, qualquer rota que monte o painel de um slot de day trade
     (`/operacao`, `/operacao/dt-.../fragment`) grava uma conta fantasma no
     `db/live.sqlite` REAL -- ja aconteceu. O `conftest.py` tem uma trava
-    autouse que falha o teste que sujar, caso este patch se perca de novo."""
+    autouse que falha o teste que sujar, caso este patch se perca de novo.
+
+    `dashboard.live_control._STATE_PATH` entra pelo MESMO motivo (achado em
+    auditoria, 2026-08-28): `GET /operacao` chama `live_control.status_all()`,
+    que le -- e pode REESCREVER, no ramo de autocorrecao de PID morto --
+    `db/live_process.json` de verdade quando este patch falta. Sem isolar,
+    dois testes (`test_operacao_mostra_os_cartoes_na_ordem_pedida` e o
+    equivalente em `test_dashboard_daytrade_robot.py`) piscavam conforme
+    robos reais do dono estivessem rodando ou nao na maquina -- flakiness
+    dependente de ambiente, a pior especie (ver `AGENTS.md` /
+    `LICOES_DE_PRODUCAO.md`). Isolado aqui, na fixture usada por
+    praticamente todo teste deste arquivo que chama `client`, em vez de em
+    cada teste (o padrao ja usado em `test_dashboard_processos.py`,
+    `test_live_arquivo_robo.py`, `test_dashboard_remocao_robo.py` e
+    `test_live_teardown.py`)."""
     from live import intraday_runtime
 
     db_path = tmp_path / "live_journal.sqlite"
     monkeypatch.setattr(live_store.live_journal.__wrapped__, "__defaults__", (db_path,))
     monkeypatch.setattr(live_runtime, "DB_PATH", db_path)
     monkeypatch.setattr(intraday_runtime, "LIVE_DB_PATH", db_path)
+    monkeypatch.setattr(live_control, "_STATE_PATH", tmp_path / "live_process.json")
+    # `credential_status()`/`load_credentials()` leem `db/live_secrets.json`
+    # em CADA render de `/operacao` (secao "Acesso e credenciais") -- sem
+    # isolar, os testes que nao mockam `credential_status` diretamente leriam
+    # as credenciais REAIS salvas na maquina (nenhuma asserção depende do
+    # valor hoje, mas ficaria dependente de ambiente por acidente).
+    monkeypatch.setattr(live_control, "_SECRETS_PATH", tmp_path / "live_secrets.json")
     return db_path
 
 

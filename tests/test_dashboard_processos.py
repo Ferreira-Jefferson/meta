@@ -40,10 +40,16 @@ SEM_CARTAO = daytrade_slot("gremah_tick", "CSAN3", "live")
 @pytest.fixture
 def diario(tmp_path, monkeypatch):
     """Banco e arquivo de estado isolados — a tela lê os DOIS (o banco para
-    saber quem tem cartão, o arquivo para saber quem o painel rastreia)."""
+    saber quem tem cartão, o arquivo para saber quem o painel rastreia).
+
+    `_SECRETS_PATH` entra junto: `client.get("/operacao")` renderiza a
+    página inteira, inclusive a seção de credenciais (`credential_status()`
+    lê `db/live_secrets.json`) — sem isolar, o teste dependeria do que está
+    salvo de verdade na máquina."""
     db = tmp_path / "live_processos.sqlite"
     monkeypatch.setattr(live_store.live_journal.__wrapped__, "__defaults__", (db,))
     monkeypatch.setattr(live_control, "_STATE_PATH", tmp_path / "live_process.json")
+    monkeypatch.setattr(live_control, "_SECRETS_PATH", tmp_path / "live_secrets.json")
     return db
 
 

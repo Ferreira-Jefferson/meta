@@ -42,7 +42,16 @@ def isolated_journal(tmp_path, monkeypatch):
     `from core.config import LIVE_DB_PATH` (bind estático no módulo), não
     lido dinamicamente a cada chamada como `live.runtime.DB_PATH` — sem isto,
     `IntradayLiveRuntime.status()` (chamado por `get_status("daytrade")`)
-    tocaria o `db/live.sqlite` REAL."""
+    tocaria o `db/live.sqlite` REAL.
+
+    `dashboard.live_control._STATE_PATH` entra pelo mesmo motivo (achado em
+    auditoria, 2026-08-28): `GET /operacao` chama `live_control.status_all()`,
+    que lê -- e pode REESCREVER, no ramo de autocorreção de PID morto --
+    `db/live_process.json` de verdade quando este patch falta. Sem isolar,
+    `test_ativo_ja_usado_aparece_marcado_so_pro_mesmo_robo` (e qualquer outro
+    teste deste arquivo que use `client`) piscava conforme robôs reais do
+    dono estivessem rodando ou não na máquina -- ver `test_dashboard_app.py::
+    isolated_journal` para o par exato que quebrava."""
     from live import intraday_runtime
     from live import runtime as live_runtime
 
@@ -50,6 +59,11 @@ def isolated_journal(tmp_path, monkeypatch):
     monkeypatch.setattr(live_store.live_journal.__wrapped__, "__defaults__", (db_path,))
     monkeypatch.setattr(live_runtime, "DB_PATH", db_path)
     monkeypatch.setattr(intraday_runtime, "LIVE_DB_PATH", db_path)
+    monkeypatch.setattr(live_control, "_STATE_PATH", tmp_path / "live_process.json")
+    # Mesmo motivo de `test_dashboard_app.py::isolated_journal`: sem isto,
+    # `credential_status()` leria `db/live_secrets.json` REAL a cada render
+    # de `/operacao`.
+    monkeypatch.setattr(live_control, "_SECRETS_PATH", tmp_path / "live_secrets.json")
     return db_path
 
 

@@ -55,6 +55,10 @@ def diario(tmp_path, monkeypatch):
     monkeypatch.setattr(live_runtime, "DB_PATH", db)
     monkeypatch.setattr(intraday_runtime, "LIVE_DB_PATH", db)
     monkeypatch.setattr(live_control, "_STATE_PATH", tmp_path / "live_process.json")
+    # `client.get("/operacao")` renderiza a seção de credenciais também
+    # (`credential_status()` lê `db/live_secrets.json`) — isolado pelo mesmo
+    # motivo do `_STATE_PATH` acima.
+    monkeypatch.setattr(live_control, "_SECRETS_PATH", tmp_path / "live_secrets.json")
     return db
 
 
