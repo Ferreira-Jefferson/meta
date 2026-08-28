@@ -73,6 +73,16 @@ from strategy.daytrade.lab.wdo_grid_reload_maker import WdoGridReloadMaker
 # medição sobre o dado disponível, não por validação em dinheiro real. Ver
 # `WdoGridReloadMaker.plain_summary`.
 #
+# 2026-08-28, decisão do dono: o default de `stop_ticks` da classe mudou de
+# 16 para 4 (varredura completa profit_ticks/stop_ticks 1..20, ver a
+# memória `wdof1-grid-1a20-encerrada-2026-08-28`) — T1 S4 domina T1 S16 em
+# todas as métricas no IS. A confirmação OOS citada acima (R$148,89/pregão,
+# 89% de retenção) descreve especificamente T1 S16, NÃO o default atual:
+# T1 S4 nunca foi medido fora da amostra. O robô segue TOP-1 (a ressalva de
+# preenchimento passivo acima continua valendo igual para os dois), mas a
+# validação OOS que sustentou a promoção original não cobre a config em
+# produção agora.
+#
 # 2026-08-22, decisão do dono (ordem original, agora TOP-3/TOP-4): entre
 # `gremah_tick` e `gremah`, tick a tick não tem a ambiguidade "stop e alvo
 # na mesma barra" que o M1 resolve por chute pessimista — um negócio tem um
