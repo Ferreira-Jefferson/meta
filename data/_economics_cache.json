@@ -1,0 +1,38 @@
+{
+  "BMGB4": {
+    "trade_tick_value": 0.01,
+    "trade_tick_size": 0.01
+  },
+  "CSAN3": {
+    "trade_tick_value": 0.01,
+    "trade_tick_size": 0.01
+  },
+  "DASA3": {
+    "trade_tick_value": 0.01,
+    "trade_tick_size": 0.01
+  },
+  "GRND3": {
+    "trade_tick_value": 0.01,
+    "trade_tick_size": 0.01
+  },
+  "KLBN3": {
+    "trade_tick_value": 0.01,
+    "trade_tick_size": 0.01
+  },
+  "KLBN4": {
+    "trade_tick_value": 0.01,
+    "trade_tick_size": 0.01
+  },
+  "LPSB3": {
+    "trade_tick_value": 0.01,
+    "trade_tick_size": 0.01
+  },
+  "PCAR3": {
+    "trade_tick_value": 0.01,
+    "trade_tick_size": 0.01
+  },
+  "PMAM3": {
+    "trade_tick_value": 0.01,
+    "trade_tick_size": 0.01
+  }
+}

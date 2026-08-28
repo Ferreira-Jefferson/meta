@@ -102,6 +102,21 @@ do repo, senão comparar duas rodadas vira trabalho de leitura. O módulo
 explica as duas decisões que fogem do óbvio (`lucro/DD` no lugar do Calmar
 anualizado, e capital NOCIONAL apagando as colunas que dependem de saldo).
 
+**Capital inicial nunca é um número digitado a mão.** Todo backtest/sweep de
+ação usa `capital_minimo_brl(preco_de_referencia)` (via `config_for(...,
+preco_atual=preco_ref)`) — o mínimo REAL pra operar aquele ativo naquele
+preço, nunca um valor de teste arbitrário tipo "R$50.000 pra não zerar".
+Motivo (2026-08-27, correção do dono): um capital genérico decide sozinho
+quantos lotes cabem e se o portão de capital deixa a sessão operar —
+mudar o capital pode mudar qual geometria "vence" a comparação, então usar
+um número que não é o real produz uma resposta que não generaliza pra
+produção. `enforce_capital_minimo` fica no default do perfil (ligado pra
+ação) pelo mesmo motivo: desligar o portão mede geometria isolada do caixa,
+que é outra pergunta, não a de "isto bate a produção de verdade". A tabela
+de saída sempre mostra o capital inicial usado (é `capital final − líquido
+R$`, ou informe a coluna direto) — nunca deixar implícito no código do
+script.
+
 ## O que NÃO fazer
 
 - Não adicionar dependência sem justificativa (peso do projeto importa).
