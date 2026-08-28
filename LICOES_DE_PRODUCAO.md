@@ -1,0 +1,806 @@
+# Lições de produção — o que já custou, e a regra que sobrou
+
+Este arquivo existe por um motivo específico: **portar a estratégia para outra
+linguagem/plataforma não porta o aprendizado.** O código vai embora; os modos de
+falha ficam. Cada item aqui é um erro que já aconteceu neste projeto, o número
+que ele custou, e o invariante que impede a repetição — escrito de forma que
+sobreviva à troca de Python/MT5 por qualquer outra coisa.
+
+**Como ler.** Cada item tem a mesma forma: o que aconteceu → **a regra**. Onde a
+regra depende da plataforma, ela vira uma **pergunta a fazer à plataforma nova**
+antes da primeira ordem real. Não copie o mecanismo; responda a pergunta.
+
+**O que NÃO está aqui.** Hipóteses de estratégia refutadas (isso é resultado de
+pesquisa, não lição de engenharia) e detalhes de API do MT5 que não generalizam.
+O que está aqui é o que continua verdadeiro em qualquer corretora, qualquer
+linguagem, qualquer book.
+
+Um aviso sobre a origem destes itens: quase todos foram descobertos **depois** de
+já estarem em produção, e vários só apareceram porque alguém foi procurar. A
+lista não é a garantia de que o próximo sistema estará certo. É o piso.
+
+---
+
+## Parte 0 — O incidente que ancora quase tudo
+
+2026-08-28, primeiro dia em que um robô de futuro conseguiu de fato mandar
+ordem: **conta zerada, saldo final −R$298,60, patrimônio NEGATIVO.**
+
+A reconstrução, número a número, a partir do extrato do terminal:
+
+| Hora | Negócio |
+|---|---|
+| 11:58:53 | compra 1 @ 5204,00, fecha @ 5203,50 — −R$5,00 |
+| 11:58:59 | vende 1 @ 5203,50 |
+| 11:59:04 | vende **mais 1** @ 5204,00 → vendido em 2 |
+| 12:59:46 | compra 2 @ **5218,50** → **−R$295,00** |
+
+Cinco falhas encadeadas, todas independentes, todas presentes ao mesmo tempo:
+
+1. **Abriu 2 contratos numa conta dimensionada para 1.** As duas entradas saíram
+   com 5 segundos de diferença — um passo do laço. O teto de capital era
+   aplicado por ordem, nunca contra a exposição agregada, então cada uma passou
+   sozinha.
+2. **Ficou preso: tentou fechar ~24 vezes e a corretora recusou todas.** A ordem
+   de fechamento não levava o identificador da posição, então o motor de risco da
+   corretora a tratou como abertura nova — e com a margem esgotada, recusou.
+   A mensagem de erro dizia literalmente *"Para abrir novas posições"* numa ordem
+   de FECHAR.
+3. **A posição ficou sem stop nem alvo registrados na corretora por uma hora**,
+   atravessando 3 reinícios do processo. O stop era lógica no laço, não ordem
+   registrada. Processo morto = posição nua.
+4. **A detecção de contrato escolheu um símbolo sem book** (critério "maior
+   volume" lendo o volume do ÚLTIMO TICK, ruidoso).
+5. **Nenhum freio.** O único existente disparava em patrimônio ≤ 0 — quando já
+   não há o que salvar.
+
+Duas coisas ficaram **provadas**, não deduzidas: as duas entradas saíram com 5
+segundos de diferença, e **o robô nunca fechou nada** — quem encerrou às 12:59:46
+foi um stop anexado à mão. Sem aquela intervenção, a posição continuaria.
+
+> **A regra que resume o incidente inteiro:** o robô era TOP-1 do pódio, com 89%
+> de retenção fora da amostra, e zerou a conta no primeiro dia — **por execução,
+> não por sinal.** Backtest positivo não é evidência sobre execução. São duas
+> perguntas diferentes e só uma delas tinha sido feita.
+
+---
+
+## Parte 1 — Execução: as que custam dinheiro no mesmo dia
+
+### 1.1 Fechar e abrir são operações diferentes para o risco da corretora
+
+A ordem de fechamento não levava o identificador da posição. Sem ele, o motor de
+risco não sabe que a ordem ABATE exposição existente e a trata como abertura
+nova. Com margem esgotada, recusa — exatamente quando fechar é mais necessário.
+
+> **Regra:** toda ordem de fechamento identifica explicitamente o que está
+> fechando. **Pergunte à plataforma nova:** existe uma primitiva de "fechar
+> posição" distinta de "enviar ordem no sentido contrário"? Se existir, use-a
+> sempre. Se não existir, descubra como a corretora distingue as duas coisas
+> antes de precisar disso com margem no limite.
+
+### 1.2 Proteção tem de morar na CORRETORA, não no laço do processo
+
+Stop que depende do processo estar vivo não é stop — é intenção. O processo
+morreu 3 vezes e a posição atravessou tudo nua.
+
+A correção não foi "reenviar o stop mais rápido". Foi mandar stop e alvo **no
+mesmo request que registra a ordem de entrada**, para a corretora amarrar a
+proteção no instante do preenchimento: zero janela, nenhum processo no meio. O
+reenvio periódico continua existindo, mas rebaixado a **rede** — repõe proteção
+que sumiu, acompanha stop que a estratégia moveu, cobre posição herdada de
+reinício.
+
+> **Regra:** a proteção sai junto com a ordem, atomicamente, ou não é proteção.
+> **Pergunte à plataforma nova:** dá para enviar stop e alvo no mesmo comando da
+> entrada? Se sim, é o caminho padrão, não uma otimização. Se não, qual é a menor
+> janela possível — e ela é aceitável para o tamanho da sua posição?
+
+### 1.3 Recusar a entrada é melhor que abrir posição nua
+
+Se a corretora recusar a ordem porque não gostou do stop/alvo embutido, a entrada
+simplesmente não acontece. Perder uma entrada é barato. Abrir sem proteção não.
+
+### 1.4 Em conta consolidada, ordem maior que a posição INVERTE — não "fecha demais"
+
+O fechamento parcial foi o caso: a máquina só descontava a quantidade depois do
+sucesso, então uma tentativa seguinte mandava o total antigo contra o que sobrou.
+Numa conta que consolida posição por símbolo (netting), o excedente não é
+rejeitado — vira posição nova no lado oposto, sem stop, sem alvo, sem ninguém
+saber.
+
+> **Regra:** toda ordem de fechamento é limitada por `min(o que eu acho que
+> tenho, o que a corretora diz que eu tenho)`. **Pergunte à plataforma nova:** a
+> conta é netting ou hedging? A resposta muda o que "ordem grande demais"
+> significa — e num caso o erro é silencioso.
+
+### 1.5 "Cancelei" só vale se a corretora confirmou
+
+O bug mais caro do projeto, e o mais invisível. A função de cancelamento marcava
+a ordem como CANCELADA nos **dois** ramos — sucesso e falha — com a justificativa
+de "não virar tentativa infinita". Como CANCELADA é estado terminal e todo o
+rastreamento de ordem órfã filtrava por "não terminal", o efeito real era que
+**nenhuma ordem órfã era rastreada. Nunca.** Um mecanismo inteiro, com testes
+verdes, que não funcionava.
+
+Consequência mais grave: a rotina de "remover robô" dava a corretora por limpa e
+apagava a conta **com ordem viva no book** — que depois preenche sozinha, sem
+robô, sem stop e sem painel.
+
+> **Regra:** só marque terminal o que a contraparte confirmou. "Não consegui
+> perguntar" é tratado como VIVO, sempre. Um estado terminal errado não é um
+> retry perdido — é um mecanismo de segurança inteiro desligado em silêncio.
+
+### 1.6 Falha de CONSULTA nunca vira "não aconteceu"
+
+A leitura de posição devolvia o mesmo valor para "perguntei e não há posição" e
+"não consegui perguntar". Um terminal fora do ar virava conta zerada: o sistema
+registrava uma saída **inventada** no diário e a máquina ficava sem posição — o
+que, de quebra, desarmava o freio de emergência (ele só agia sobre posições que a
+máquina conhecia).
+
+> **Regra:** toda consulta ao mundo externo tem TRÊS respostas: sim, não, e **não
+> sei**. Achatar as duas últimas numa só é como este sistema inventa fatos. "Não
+> sei" nunca autoriza uma ação e nunca fecha um registro.
+
+### 1.7 Pergunte à corretora o que existe, mesmo quando você acha que não há nada
+
+Nenhuma rotina consultava a exposição real a menos que a máquina **já
+acreditasse** ter alguma coisa. Posição que a máquina perdeu de vista — reinício
+que não reidratou, preenchimento que chegou depois do processo morrer — ficava
+estruturalmente invisível.
+
+É a forma exata do incidente: a máquina achava 1 contrato, a corretora tinha 2, e
+ninguém comparava os dois números.
+
+> **Regra:** a cada passo, compare a exposição que você acha que tem com a que a
+> corretora reporta. Divergência é alarme alto e trava a abertura de ordem nova.
+> **Não feche automaticamente:** fechar às cegas uma exposição cuja origem
+> ninguém entendeu troca um problema conhecido por um desconhecido — e nesta
+> conta já houve fechamento recusado 24 vezes seguidas.
+
+### 1.8 Ordem que ninguém está vigiando tem de morrer
+
+A ordem real sai no meio do passo; o registro dela só vira linha durável no fim.
+Processo morto nessa janela e o reinício não sabe do ticket, redecide do zero e
+manda uma **segunda** ordem no mesmo nível. É o "2 contratos numa conta de 1"
+pelo lado da entrada.
+
+Nenhum arquivo escrito "mais cedo" resolve isso de verdade. Quem sabe é a
+corretora.
+
+> **Regra:** **a corretora é a única memória durável de uma ordem enviada.** No
+> início de cada sessão e depois de qualquer buraco, pergunte quais ordens suas
+> estão vivas, adote as que você não conhecia, e cancele toda que a máquina não
+> está vigiando.
+
+### 1.9 O freio tem de enxergar a ordem parada, não só a posição aberta
+
+O freio de emergência saía na primeira linha quando não havia posição — e deixava
+intacta a ordem-limite parada no book. Resultado: robô em "não abro mais nada"
+com uma ordem que abre sozinha, e já cego (freio acionado = não consome mais
+dados, não redecide).
+
+> **Regra:** "estou zerado" inclui ordem pendente. Uma ordem viva é exposição
+> futura contratada.
+
+### 1.10 Zerar proteção por omissão
+
+Ao atualizar stop e alvo, mandar zero no campo do alvo não significa "deixa como
+está" — significa **remover**. Uma estratégia sem alvo apagava a proteção
+existente a cada reforço.
+
+> **Regra:** ao atualizar proteção, o lado sem pedido PRESERVA o que já está
+> registrado, e o stop nunca afrouxa contra o que já existe. Descubra qual é a
+> semântica de "campo vazio" na sua plataforma antes de escrever a rotina.
+
+### 1.11 O nível recalculado contra o preço vivo foge do preço
+
+A rotina que afastava o stop da distância mínima exigida pela corretora
+recalculava contra o preço **do instante da chamada**. E a chamada acontecia a
+cada barra, porque a comparação era "o que pedi" contra "o que está registrado" —
+que diferem legitimamente pela distância mínima. Resultado: conforme o preço se
+aproximava do stop, o stop **fugia dele**.
+
+> **Regra:** guarde o par (pedido, registrado) e só reenvie quando algo de fato
+> mudou. Um nível de proteção é uma decisão da estratégia, não uma função do
+> preço corrente.
+
+### 1.12 Alarme por processo silencia todas as posições seguintes
+
+O aviso de "não consegui proteger" era um booleano do processo. Uma falha
+silenciava o alerta de TODAS as posições posteriores.
+
+> **Regra:** deduplicação de alerta é por objeto (posição, ticket), nunca por
+> processo.
+
+### 1.13 Recusa repetida tem de escalar
+
+As ~24 recusas de fechamento nunca escalaram além de linha de log repetida por
+minutos. Ninguém viu.
+
+> **Regra:** N recusas seguidas da mesma operação mudam o comportamento, não só o
+> log. E há um teto de envios por janela de tempo: operação normal decide no
+> máximo uma entrada por barra — qualquer coisa muito acima disso é laço, não
+> operação.
+
+---
+
+## Parte 2 — Estado, reinício e duplicidade
+
+### 2.1 O que sobrevive ao reinício tem de ser decidido de propósito
+
+Duas categorias, tratadas de forma oposta:
+
+- **Decisão** (qual ordem armar, em que nível): NÃO se restaura. O robô redecide
+  do zero com o dado real, senão herda uma decisão velha contra preços que já
+  passaram.
+- **Fato** (ticket enviado, posição aberta, P&L da sessão, freio acionado): tem
+  de sobreviver, senão o processo novo opera achando que o dia começou agora.
+
+O acumulado da sessão sobrevivendo importa mais do que parece: o stop agregado do
+dia lê esse número, e zerá-lo num reinício **dá ao robô uma folga de risco que
+ele não tem**.
+
+### 2.2 Reinício assimétrico: entrada reconcilia, saída falha alto
+
+Ordem de ENTRADA órfã é risco baixo (nenhuma posição está exposta esperando por
+ela) — dá para cancelar sozinho pelo identificador. Ordem de SAÍDA órfã é risco
+alto: há posição exposta, e rearmar por cima pode duplicar a venda ou inverter a
+posição. Ali o sistema **falha alto** e exige conferência humana.
+
+> **Regra:** a política de reconciliação segue o risco, não a simetria do código.
+
+### 2.3 Reinício não pode mandar ordem que a máquina recusou vigiar
+
+A rotina de recalibração recusava plantar a ordem quando já havia posição aberta
+— e o ambiente mandava a ordem real para a corretora assim mesmo. Uma entrada
+extra, sobre posição existente, que ninguém contabilizava.
+
+> **Regra:** quem envia confere que quem decide de fato adotou a decisão. Não
+> presuma pelo tipo do objeto.
+
+### 2.4 Dois processos no mesmo slot é pior do que parece
+
+Já aconteceu: **6 supervisores vivos para 3 slots**, inclusive no slot que
+operava dinheiro real, enquanto o painel mostrava "parado" nos três. Dois
+processos compartilham o mesmo identificador de robô, então cada um enxerga a
+ordem e a posição do outro **como suas**. Nenhum detector de "atividade estranha"
+acusa nada, porque o identificador bate. E cada um passa no próprio teto de
+capital, sozinho.
+
+A guarda contra isso existia só no botão do painel. A linha de comando e o
+serviço do sistema passavam livres.
+
+> **Regra:** exclusividade por slot é imposta pelo SISTEMA OPERACIONAL, no ponto
+> onde o processo sobe — não pela interface. **Prefira uma trava que morre com o
+> processo** (lock de arquivo/mutex) a um arquivo com PID: o arquivo exige
+> verificar se aquele PID ainda vive, e essa verificação falha de forma ambígua.
+> Trava do SO não deixa lixo.
+
+Corolário barato: **cartão dizendo "parado" não é evidência de que não há robô
+operando.** Confira o SO antes de explicar qualquer comportamento ao vivo.
+
+### 2.5 A transação do diário não é atômica com o efeito externo
+
+Todo o passo roda dentro de uma transação. Qualquer exceção posterior a um envio
+real desfaz o registro daquele envio junto — o dinheiro já se moveu e o diário
+finge que não.
+
+> **Regra:** confirmação de efeito externo (ticket recebido, preenchimento
+> confirmado) vira registro durável **antes** de continuar processando o resto do
+> lote. Se a plataforma nova não permitir isso, a reconciliação contra a
+> corretora (1.8) é a rede — mas é rede, não solução.
+
+---
+
+## Parte 3 — Dimensionamento e capital
+
+### 3.1 Capital inicial nunca é um número redondo de conveniência
+
+Todo teste começa do caixa mínimo REAL para operar o instrumento, nunca de "R$50
+mil para não zerar". Um capital genérico muda silenciosamente quantos lotes cabem
+e se o portão de capital deixa a sessão operar — o que inverte qual geometria
+"ganha".
+
+### 3.2 O teto tem de valer sobre a exposição AGREGADA
+
+O teto era aplicado por ordem. Duas entradas independentes passaram, cada uma
+sozinha, contra uma conta que comportava uma. Um desenho de posições
+independentes é **incompatível** com portão por entrada.
+
+### 3.3 O único número que enxerga a conta inteira é a margem livre da corretora
+
+Todo teto calculado a partir de "capital inicial + lucro realizado" é cego para
+duas coisas ao mesmo tempo:
+
+1. **Os outros robôs.** Se rodam na mesma conta, dividem a mesma margem física.
+   Dois slots com R$400 digitados em cada comprometem margem contra uma conta que
+   tem R$400 no total — e cada um passa no próprio teto.
+2. **A perda ainda ABERTA.** O lucro realizado só anda quando a posição fecha.
+   Uma posição sangrando deixa o teto otimista exatamente sob stress.
+
+> **Regra:** pergunte à corretora a margem exigida pela ordem e compare com a
+> margem livre da CONTA, antes de cada envio. É o único número que já desconta o
+> que todo mundo (inclusive você, na mão) tem aberto.
+
+**E o fator de folga é o que decide.** No incidente, depois do 1º contrato a
+margem livre era ~R$150 e o 2º exigia R$150. Com folga de 1x o envio passa e a
+conta zera igual. **Um portão que só impede o impossível não é portão — ele tem
+de impedir o último passo que ainda cabia.**
+
+### 3.4 Reserva de caixa: o mínimo documentado nunca foi suficiente
+
+Depois do incidente, o dimensionamento passou a reservar 20% do caixa fora da
+conta de quantos contratos cabem. Consequência imediata e desconfortável: os
+robôs ficaram **inertes** no capital mínimo "de tabela".
+
+Isso é informação, não bug: na medição anterior os dois já zeravam sozinhos. A
+reserva só tornou visível no backtest o que antes só aparecia no extrato.
+
+### 3.5 Quem mata é o TAMANHO DO STOP contra o capital, não o número de contratos
+
+Cinco candidatos positivos com capital nocional folgado, rerodados com o capital
+real: **3 zeraram a conta**. Nenhuma foi derrubada por atrito de fila — todas
+rodaram com preenchimento otimista. O motivo é puro dimensionamento: o stop, em
+reais, era próximo ou maior que o capital inicial inteiro (um deles: 27% do
+capital por perda). **O teto de contratos nunca foi o gargalo** — zero recusas por
+capital nas três quebras.
+
+> **Regra:** o portão de admissão não é "o sinal é positivo?", é "uma sequência
+> de stops cabe no capital?". Rode com o capital real antes de chamar qualquer
+> coisa de candidato viável.
+
+### 3.6 O capital do robô tem de ser relido, não congelado na inicialização
+
+O processo roda contínuo por dias. O caixa era lido uma vez, na construção. O dono
+podia sacar metade e corrigir o número na interface, e quem dimensiona barra a
+barra continuava usando o valor antigo, mais alto.
+
+### 3.7 Um portão que libera o que a camada seguinte recusa é pior que portão nenhum
+
+O portão de entrada liberava com R$300 enquanto o dimensionamento real exigia
+R$375. O robô subia, aparecia operando no painel, e tinha **toda** ordem recusada
+em silêncio, para sempre.
+
+> **Regra:** os limites de todas as camadas são o mesmo número, derivado do mesmo
+> lugar. Se divergirem, a camada de cima mente.
+
+### 3.8 Parâmetro de segurança opcional é parâmetro desligado
+
+A margem por contrato era um campo opcional. Ausente, o teto por caixa ficava
+desligado e sobrava só o limite **regulatório** da competição — sem nenhuma
+relação com o dinheiro do dono. Era exatamente esse o estado do robô no dia em
+que zerou a conta.
+
+> **Regra:** parâmetro de segurança é obrigatório e falha ruidosamente quando
+> falta. Um default silencioso reproduz o incidente num instrumento novo, sem
+> nenhum erro no caminho.
+
+---
+
+## Parte 4 — Preenchimento: onde o backtest e o book divergem
+
+Esta é a parte que mais custou tempo e a que menos se percebe olhando o resultado.
+
+### 4.1 Toque no preço não é preenchimento
+
+O motor preenchia ordem-limite no primeiro toque, no preço exato, sem fila. Mas o
+preço ter negociado no seu nível significa que alguém negociou ali —
+provavelmente com quem estava **na frente** da fila.
+
+Medição no real: **12 ordens enviadas, ZERO preenchimentos**, contra 7 trades do
+gêmeo em simulação, no mesmo ativo, no mesmo dia, nos mesmos preços.
+
+Modelado depois: a estratégia morre entre 20x e 200x o volume mediano por negócio
+à frente da ordem. **A fila real observada era ~7.300x.** Ou seja, de 4x a 36x
+além do ponto de morte.
+
+E o modo de falha que o modelo produz é exatamente o observado: não é sangria, é
+**parada de preenchimento**. O robô real não perde dinheiro; ele não negocia.
+
+> **Regra:** um backtest de estratégia passiva (maker) sem modelo de fila é
+> otimista por construção. **Pergunte à plataforma nova:** o simulador dela
+> modela posição na fila? Se não modelar, o número dela responde uma pergunta
+> diferente da que você está fazendo.
+
+### 4.2 Rearmar a ordem devolve você ao fim da fila
+
+O rearme por tempo cancelava e reenviava a ordem a cada 30 minutos parada. Em
+ativo de centavos o nível recalculado dá **no mesmo preço** — 9 de 11
+substituições foram de R$0,1300 para R$0,1300. Cada substituição devolvia a ordem
+ao fim da fila, exatamente quando a espera começaria a valer.
+
+> **Regra:** rearme que recalcula lado, nível e tamanho IDÊNTICOS não deve
+> reenviar nada — mantenha o ticket. E qualquer comparação de parâmetro que mude
+> a **frequência de rearme** não é confiável com fila desligada.
+
+### 4.3 Trocar limite por mercado troca um modo de falha por outro
+
+Teste real: ordem a mercado resolve a fila, sempre entra. E cobra por isso
+**deslize no mesmo intervalo que a estratégia tenta capturar** — dois deslizes de
+1 tick em menos de 100ms, R$1,00 de prejuízo real num teste que deveria ser
+neutro. Com alvo de 1 tick, não sobra margem nenhuma para absorver isso.
+
+### 4.4 Divida em fatias do tamanho do piso do mercado
+
+Dividir a ordem em fatias de 1 lote funciona (o menor negócio real observado já é
+1 lote). Dividir em **percentual do volume** não funciona — o pedaço fica maior
+que o negócio típico de novo.
+
+### 4.5 Meça o edge em TICKS, não em reais
+
+Medido em 18 pares (robô, ativo): edge médio de **0,458 tick por trade**, com
+**18 de 18 abaixo de 1 tick**. Cruzar o spread para garantir execução custa ≥1
+tick. O edge inteiro do TOP-1 era menor que 1 tick de derrapagem nos trades que
+batiam stop.
+
+> **Regra:** antes de promover qualquer ativo, meça o edge por trade em ticks. Em
+> reais, o número esconde se você está tentando capturar menos do que a menor
+> unidade que o mercado sabe mover.
+
+### 4.6 O piso de 1 tick pode estar decidindo o seu alvo
+
+A geometria usava `max(1, round(preço × percentual / tick))`. Nos preços
+correntes, o alvo nominal valia 0,04 a 0,87 tick em **9 de 10 ativos**. Ou seja:
+o percentual calibrado não era o que decidia o alvo — **o piso decidia**. A
+família inteira operava no piso, não na calibração, e ninguém tinha medido isso.
+
+Pior: alvo, espaçamento e stop saíam todos do MESMO parâmetro, então subir o alvo
+para tirá-lo do piso **arrastava o stop junto**. A grade percentual nunca testou
+"alvo maior com o stop onde está" — só testou "tudo maior junto". Isso é
+resultado sobre a ESCALA da geometria, não sobre a FORMA dela.
+
+> **Regra:** parâmetros de geometria são independentes, e você mede o que a
+> produção de fato ARMOU, não o que a configuração diz.
+
+### 4.7 O gêmeo em simulação não é estimativa do real
+
+Antes de comparar simulado com real, olhe o volume que preencheu no nível na
+simulação. Um único negócio de 100 ações bastando para dar a ordem por
+preenchida é evidência fraquíssima de que a fila teria chegado.
+
+---
+
+## Parte 5 — Dados, relógio e instrumento
+
+### 5.1 Fuso errado desliga proteção em silêncio
+
+O feed tratava a hora do servidor como UTC quando ela vinha em horário local.
+Toda cotação parecia ter **10.800 segundos** de idade, e o sistema suprimia todo
+stop por dado velho. O mecanismo existia e estava correto — só nunca chegava a
+rodar.
+
+A primeira correção foi pior que o problema: autocalibração pela idade do tick
+mais novo, que é **ambígua por construção** (um tick de 1h atrás num papel
+ilíquido e um servidor 1h fora do fuso produzem o mesmo número). Ela adotou +4h
+onde o certo era +3h.
+
+> **Regra:** fuso é DECLARADO e depois CONFERIDO contra referência líquida.
+> Nunca inferido de dado ruidoso. A conferência **impede operar** quando acusa, e
+> nunca reescreve o valor sozinha.
+
+### 5.2 O horário do pregão pode não ser fixo — e varia por instrumento
+
+O pregão à vista da B3 desloca 1 hora com o horário de verão **dos EUA**;
+o futuro NÃO desloca. O código tinha um horário fixo, que era só o regime de
+inverno americano — cortando ~36% das sessões uma hora antes do fechamento real.
+Corrigir isso mudou o resultado fora da amostra de R$621 para R$679.
+
+> **Regra:** horário de sessão é regra POR INSTRUMENTO, medida contra o dado
+> real, nunca uma constante única.
+
+### 5.3 Janela de consulta estreita pode devolver dado incompleto sem erro
+
+O terminal devolvia negócios incompletos ou zero para janelas estreitas dentro do
+pregão do dia — 75 de 139 negócios reais numa janela de 4,5h; **zero** em janelas
+de até 2,5h. Sem levantar exceção nenhuma. O robô rodou o pregão inteiro, ~800
+linhas de log, através de 5 reinícios, **sem nunca ver uma barra** — parecia "sem
+sinal", era feed cego.
+
+> **Regra:** quando um robô fica muito tempo sem sinal, confirme que o feed está
+> recebendo dado ANTES de suspeitar da lógica. E prefira pedir janela larga e
+> filtrar localmente a confiar que a fonte trata janela estreita corretamente.
+
+### 5.4 Símbolo de cotação não é símbolo de negociação
+
+O contrato contínuo existe para dar cotação e histórico; o servidor recusa ordem
+nele. O contrato que negocia tem código de vencimento explícito. A ordem foi
+recusada ao vivo com "Trade disabled" — e o preço usado para montá-la estava
+certo, o que torna o erro mais difícil de enxergar.
+
+> **Regra:** detecte o contrato negociável a cada início (o corrente é sempre o
+> mais líquido — não precisa de calendário fixo), e nunca deixe a rolagem virar
+> tarefa manual mensal.
+
+### 5.5 O preço do ativo pode sair da faixa em que ele foi calibrado
+
+O papel que o TOP-1 operava com dinheiro real caiu de **R$4,53 para R$0,13 dentro
+da própria janela de backtest**. O tick passou de 0,22% para **7,7%** do preço —
+um fator de 35x. O lucro médio por trade que julgava o robô era a média de dois
+jogos diferentes somados. Hoje, ida e volta custa ~15% só de spread.
+
+> **Regra:** nunca julgue por média agregada sem quebrar por regime de preço.
+> Antes de manter dinheiro real num ativo, confira se o preço de hoje ainda está
+> na faixa em que ele foi calibrado.
+
+### 5.6 Um ativo pode simplesmente não ter mercado
+
+Um dos ativos "calibrados" imprimia preço em **18 dos ~500 minutos** do pregão
+(os outros: 217 a 427). E, por ser caro, exigia 22x o caixa dos demais. Era
+negativo em todas as 48 células de geometria — não porque a calibração estivesse
+errada, mas porque não havia mercado. Com 1 e 4 trades no histórico inteiro, não
+havia amostra para dizer nada.
+
+> **Regra:** barras por pregão é o portão de admissão de ativo mais direto e mais
+> barato que existe. Aplique antes de calibrar, não depois.
+
+---
+
+## Parte 6 — Método: os erros que custam meses, não reais
+
+Estes não quebram a conta no mesmo dia. Eles fazem você acreditar em algo por
+semanas.
+
+### 6.1 Dois pisos censuram todo backtest, e invalidam comparação
+
+Descobertos depois de invalidarem três rodadas inteiras:
+
+- **Portão de capital = catraca de ruína.** Ele compara o caixa CORRENTE, não o
+  inicial. O robô perde, cai abaixo do mínimo, e dali em diante **todo** pregão é
+  pulado — nunca volta, porque sem operar não recupera caixa. Medido: numa
+  varredura de 130 ações, **mediana de 95,1% das sessões puladas**. Numa
+  comparação de políticas de lado, uma pulou 1,6% e outra 96,5% — a comparação
+  mediu quem tinha caixa sobrando, não qual sinal era melhor.
+- **Zeramento interrompe a série.** Toda variante que quebra reporta ~menos o
+  capital inicial e para ali. Três políticas OPOSTAS ficaram dentro de R$2,50
+  entre si porque as três zeraram. A região ruim de qualquer superfície fica
+  ACHATADA num patamar constante — e aí qualquer célula sobrevivente vira pico
+  artificial, destruindo o diagnóstico de platô-vs-pico.
+
+> **Regra:** para comparar qualquer coisa com qualquer coisa, desarme os dois
+> pisos (capital folgado, portão desligado, tamanho travado) e **confirme no
+> resultado** que nenhuma sessão foi pulada e ninguém zerou. Depois rode o
+> cenário com portão LIGADO como medição SEPARADA — ele responde "aguenta meu
+> capital?", não "tem edge?", e as duas perguntas importam.
+
+### 6.2 Capital não é parâmetro neutro
+
+Mais caixa = mais lotes por entrada. Variantes com P&L diferente acumulam caixa
+diferente e passam a operar TAMANHOS diferentes — misturando o efeito que se quer
+medir com dimensionamento. Não adianta só "subir o capital para fugir dos pisos".
+
+### 6.3 Concentração: poucas trades sustentando o resultado inteiro
+
+O campeão tinha **26 trades em 16 anos**. As 5 maiores somavam mais de 100% do
+lucro (as outras 21 se cancelavam). A maior isolada era **53,7% de todo o lucro**
+— e nem era saída de estratégia, era marcação a mercado no último dia de dados.
+Metade do "retorno de 16 anos" dependia de onde a janela terminava.
+
+> **Regra:** cheque concentração antes de aceitar qualquer métrica de retorno.
+
+### 6.4 Sobreviver a 110 hipóteses contra o mesmo histórico é o cenário onde
+overfitting é mais provável, não menos
+
+Toda avaliação usava as MESMAS janelas fixas repetidamente. Isso é data snooping
+clássico, e o fato de muitas hipóteses terem sido "refutadas honestamente" não
+protege — protege a hipótese individual, não a escolha do vencedor.
+
+Quando o walk-forward finalmente rodou: CAGR de 36% no histórico completo virou
+**17,1% / −4,2% / 18,3%** às cegas. Uma das janelas **perdeu dinheiro**, com
+drawdown de −78,6%.
+
+E: **tunar parâmetro no in-sample piorou.** O melhor combo do IS caiu para a
+posição mediana 55 de 108 no OOS, e perdeu para os defaults do repositório em 4
+de 6 comparações.
+
+### 6.5 Um portão pode ser artefato do conjunto que o escolheu
+
+"Zero janelas negativas" era o portão de aprovação. No holdout de 48 janelas
+virou 8/48 e 3/48. E o ranking entre os dois robôs **inverteu**: a preferência
+tinha sido ruído.
+
+O que sobreviveu não foi o nível de retorno (que caiu junto com o índice), foi o
+**excesso sobre o índice** — ~+4,6 p.p., estável.
+
+### 6.6 Olhar o out-of-sample uma vez já queima o recurso
+
+Uma varredura diagnóstica de ~12.500 células gastou a janela cega de 18 famílias
+de uma vez. Foi decisão consciente, com a linha já encerrada — mas é
+irreversível.
+
+> **Regra:** se alguém propuser "confirmar no OOS", a primeira pergunta é se ele
+> já foi lido. Confirmação exige dado NOVO ou um corte congelado declarado antes
+> de olhar.
+
+E o escopo da disciplina: IS/OOS existe para impedir que a **escolha** de
+parâmetro espie o trecho reservado. Ler o placar de uma estratégia já fixada não
+tem esse risco — ali a base toda pode ser usada.
+
+### 6.7 Número sem dispersão não é resultado
+
+Uma medição quase virou conclusão comparando UM valor real contra distribuições
+sintéticas cujo espalhamento cobria uma faixa 11x maior que a diferença alegada.
+
+> **Regra:** todo número-manchete sai com média entre sementes, intervalo, desvio
+> e n. Ponto estimado sem incerteza não é resultado.
+>
+> **Sinal de alerta barato:** se um efeito deveria ser simétrico por construção
+> (sem deriva, comprado e vendido têm a mesma esperança) e os dois lados vêm bem
+> diferentes, a diferença está medindo ruído.
+
+### 6.8 Calibração nula é obrigatória em teste múltiplo
+
+Rode o screen inteiro sobre série sintética sem estrutura e conte quantas células
+passam os mesmos filtros. Se o sintético entrega o mesmo tanto, o resultado real
+é o que ruído produz.
+
+E o nulo tem de ser construído certo: ao inverter o sinal do P&L diário, inverta
+só o **bruto** e mantenha o custo sempre negativo. Inverter o líquido faz a série
+sintética **ganhar** a corretagem em vez de pagá-la, e todo resultado real parece
+ficar abaixo do ruído. Medido: o real saiu do percentil 35,4 (nulo errado) para
+54,9 (nulo correto).
+
+> **Corolário prático:** guarde sempre bruto e número de round-trips SEPARADOS no
+> arquivo de resultado. Sem isso o nulo correto não é construível depois.
+
+### 6.9 Correlação de ordenação não é evidência de edge
+
+A família mais morta do projeto (0 de 560 células positivas) teve a **maior**
+correlação de posto entre in-sample e out-of-sample. Motivo: quem perde de forma
+previsível se ordena igual nas duas janelas. Perder consistentemente produz
+correlação alta.
+
+> **Regra:** a estatística que responde é a **mediana da grade** (a célula típica
+> ganha ou perde?) mais o teste de metade dentro da própria janela.
+
+### 6.10 A convenção de direção pode inverter o sinal do resultado
+
+Mesma célula, mesmo dado: **−102,22 pontos por pregão** medindo direção
+fechamento-a-fechamento, **+133,38** medindo pela cor do candle. 235 pontos de
+diferença, sinal oposto. A divergência cresce com a agregação.
+
+> **Regra:** declare a convenção canônica e reporte qualquer resultado positivo
+> nas duas antes de chamá-lo de resultado. Célula que só é positiva numa das duas
+> não é achado, é escolha de convenção.
+
+### 6.11 Mesmo período para todos, sempre
+
+Comparar um ativo com 3 anos de base contra outros com 9 meses mistura "este
+ativo é melhor" com "este ativo pegou um período melhor" — inseparável depois de
+rodado. Calcule a interseção real das bases e use a janela comum para todos.
+
+Vale por extensão para qualquer parâmetro que não seja o que está sendo
+deliberadamente testado: capital, custo, quantidade.
+
+### 6.12 Anualizar janela curta amplifica em vez de estimar
+
+Um retorno de 3x numa janela de 67 dias vira "39.805% ao ano". Em janela abaixo
+de um ano, reporte o retorno **do período**.
+
+### 6.13 Um viés escondido pode não ser neutro entre as variantes
+
+O motor nunca remunerou caixa parado. O viés caiu inteiro sobre as variantes
+DEFENSIVAS, que por definição seguram mais caixa — **6 de 11 variantes mudaram de
+veredito** depois da correção, e a conclusão registrada ("todo filtro defensivo é
+refutado") era falsa.
+
+> **Regra:** ao achar um viés, pergunte sobre quem ele cai. Viés uniforme
+> desloca o nível; viés correlacionado com a variante **inverte rankings**.
+
+### 6.14 Custo de execução: teste a sensibilidade, não só o cenário base
+
+A estratégia era robusta a taxa percentual e morria com R$0,30 fixos por ordem em
+7 de 9 ativos. Taxa fixa força concentração: com capital pequeno, diversificar
+foi catastrófico (1 posição: +1.268%; 3 posições: −80%, com 48 de 48 janelas
+negativas).
+
+> **Regra:** concentração e dependência de sorte podem ser a MESMA restrição.
+> Nesse regime, todo mecanismo que reduz a cauda de risco corta exatamente a
+> cauda que sustenta o resultado.
+
+---
+
+## Parte 7 — Disciplina de trabalho
+
+### 7.1 Ao corrigir um bug, varra todas as instâncias do padrão
+
+O mesmo defeito de cancelamento existia em 5 pontos; o lado da saída escapou da
+primeira varredura porque a busca procurou o método direto e não os chamadores de
+cada método de cancelamento.
+
+> **Regra:** depois de achar a causa raiz, pergunte "que outros lugares leem o
+> mesmo campo / fazem a mesma coisa da mesma forma errada?" e corrija todos antes
+> de declarar terminado.
+
+### 7.2 Verifique contra a instância viva, não contra a documentação
+
+Um texto de tela escrito a partir de docstrings **inverteu uma regra de saída** e
+citou um número que não existia como parâmetro. Comentário e docstring descrevem
+o que alguém pretendia; a instância descreve o que roda.
+
+Este arquivo não é exceção: se um item aqui contradiz o código, o código ganha.
+
+### 7.3 Suíte vermelha treina a ignorar suíte vermelha
+
+Três testes ficaram vermelhos por dias porque tinham ficado para trás de uma
+mudança de comportamento — não eram bugs. Enquanto estavam vermelhos, ninguém
+olhava os outros.
+
+E o inverso: rodar a suíte com robôs operando gera falha e erro **falsos** (os
+testes leem o estado real da operação). Saber distinguir o ruído ambiental da
+regressão é parte da disciplina, não um detalhe.
+
+### 7.4 Validação contra ambiente real usa dry-run
+
+Ao testar um caso contra o terminal real, uma chamada de envio foi usada no lugar
+da de verificação — a ordem só não executou porque o pregão estava fechado.
+
+> **Regra:** validação contra ambiente real usa a primitiva de simulação
+> (`order_check` e equivalentes) SEMPRE, a menos que o teste seja
+> deliberadamente um envio real.
+
+### 7.5 Pergunte antes de escrever a "regra oficial" a partir de inferência
+
+Uma reconstrução de regra de negócio feita por evidência indireta (código +
+memórias antigas) saiu quase toda errada.
+
+### 7.6 Agentes adversariais geram as perguntas que você não fez
+
+Os 27 defeitos desta lista não apareceram sozinhos. Apareceram quando quatro
+revisões independentes, com lentes disjuntas e instruídas a **não confiar em
+docstring**, foram soltas sobre o mesmo código.
+
+E a primeira rodada fechou 13 e declarou o resto "de severidade menor" — releitura
+mostrou que 3 dos que sobraram eram CRÍTICOS. **Antes de declarar uma auditoria
+fechada, releia a lista inteira — e grave a lista em disco.**
+
+---
+
+## Parte 8 — Perguntas a responder antes da primeira ordem real na plataforma nova
+
+Nenhuma destas é opcional. Cada uma corresponde a um item acima que já custou
+dinheiro ou meses.
+
+**Sobre a ordem**
+1. Dá para enviar stop e alvo no MESMO comando da entrada? (1.2)
+2. Existe primitiva de "fechar posição" distinta de "ordem no sentido oposto"? (1.1)
+3. O que acontece quando a ordem de fechamento é maior que a posição — rejeita ou inverte? (1.4)
+4. Como a plataforma reporta um cancelamento que falhou? Dá para distinguir de sucesso? (1.5)
+5. Ao atualizar proteção, campo vazio significa "manter" ou "remover"? (1.10)
+
+**Sobre o estado**
+6. Dá para listar as ordens vivas do meu robô ao iniciar? (1.8)
+7. A leitura de posição distingue "não há" de "não consegui perguntar"? (1.6)
+8. O que sobrevive a um reinício da plataforma, e o que eu preciso persistir por fora? (2.1)
+9. Como impedir duas instâncias do mesmo robô? A plataforma impede? (2.4)
+
+**Sobre o dinheiro**
+10. Dá para consultar a margem exigida por uma ordem e a margem livre da conta? (3.3)
+11. A conta é netting ou hedging? (1.4)
+12. Existe algum limite de perda diária imposto pela plataforma, ou preciso construí-lo? (Parte 0, falha 5)
+
+**Sobre a medida**
+13. O simulador modela posição na fila? Se não, o que ele está respondendo? (4.1)
+14. O horário de sessão que ele usa é fixo ou segue o instrumento? (5.2)
+15. Qual é o edge da estratégia **em ticks** neste instrumento? (4.5)
+16. Uma sequência de stops cabe no capital real? (3.5)
+
+---
+
+## O resumo, se sobrar só um parágrafo
+
+**Backtest positivo é evidência sobre o sinal e sobre nada mais.** Toda a
+diferença entre o número do backtest e o extrato da corretora mora em quatro
+lugares: a fila (sua ordem não preenche só porque o preço tocou), o
+dimensionamento (o stop cabe no capital?), o estado (o que acontece quando o
+processo morre no pior instante?) e a proteção (ela existe na corretora ou só no
+seu laço?). O robô que zerou a conta era TOP-1 do pódio, com 89% de retenção fora
+da amostra, e morreu no primeiro dia sem nunca ter errado um sinal.
+
+---
+
+*Fonte deste arquivo: incidente de 2026-08-28 e a auditoria adversarial que o
+seguiu (27 lacunas, 26 fechadas), mais o registro acumulado do projeto. Quando um
+item aqui contradisser o código, o código ganha — e este arquivo está
+desatualizado.*

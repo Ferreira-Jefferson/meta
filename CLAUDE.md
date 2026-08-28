@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Repo-wide rules for all IAs live in `AGENTS.md` (layer boundaries, `journal` schema policy, anti-look-ahead, frontend aesthetic, parallel-test contract, standard backtest table). Read it first — this file only adds Claude-specific operational context on top.
 
+`LICOES_DE_PRODUCAO.md` is the second thing to read before touching execution, sizing, or measurement method. It is the register of errors that already cost real money — the 2026-08-28 incident that zeroed the account, plus the accumulated record — each with the invariant that survived it. Written to be portable across language/platform, so it says *what must be true*, not *which API to call.
+
 ## Two products in one repo
 
 The codebase is a **B3 trading robot** with two independent execution paths that share the same `strategy/` and `journal/`:

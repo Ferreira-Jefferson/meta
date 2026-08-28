@@ -2,6 +2,13 @@
 
 Este projeto é um **robô de trade B3** organizado em **arquitetura feature-first**. Toda IA (Claude, Copilot, Cursor, agentes autônomos) deve seguir estas regras ao editar código.
 
+> **Antes de mexer em execução, dimensionamento ou método de medição, leia
+> [`LICOES_DE_PRODUCAO.md`](LICOES_DE_PRODUCAO.md).** É o registro dos erros que
+> já custaram dinheiro real (incluindo o incidente de 2026-08-28, que zerou a
+> conta) e do invariante que sobrou de cada um. Foi escrito para sobreviver à
+> troca de linguagem/plataforma — as regras de lá valem em qualquer corretora, e
+> várias delas contradizem o que "parece razoável" à primeira vista.
+
 ## Camadas
 
 Três níveis, e a direção das dependências é sempre para baixo:
