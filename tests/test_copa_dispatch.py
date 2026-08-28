@@ -84,14 +84,16 @@ def test_parametro_inexistente_levanta_em_vez_de_ser_ignorado():
         Copa(symbol="WIN@", teto_contratos=12, parametro_que_nao_existe=1)
 
 
-# ---------- a familia fica FORA do podio de day trade -----------------------
+# ---------- copa_win no podio de day trade, copa_wdo nunca existiu ----------
 
-def test_copa_nao_entra_no_registry_de_day_trade():
-    """Outro instrumento, outra metrica: um robo de mini-futuro medido em R$
-    liquido com capital NOCIONAL nao e' comparavel a um robo de acao medido em
-    retorno sobre caixa real. Misturar os dois no mesmo podio seria a
-    comparacao desonesta que este projeto evita."""
+def test_copa_win_entra_copa_wdo_nao():
+    """`copa_win` foi promovido a TOP-2 do podio em 2026-08-28 (ver
+    `strategy/daytrade/registry.py`), apos recalibracao confirmada em OOS --
+    a ordem DECLARADA do podio nao exige metrica comparavel entre
+    instrumentos, e' escolha do dono. `copa_wdo` nunca teve estrategia propria
+    registrada (zerou a conta sob capital real e foi removida em 2026-08-27,
+    ver `strategy/daytrade/lab/copa.py`), entao continua fora."""
     from strategy.daytrade.registry import list_daytrade_robots
 
     chaves = {r.key for r in list_daytrade_robots()}
-    assert "copa_win" not in chaves and "copa_wdo" not in chaves
+    assert "copa_win" in chaves and "copa_wdo" not in chaves

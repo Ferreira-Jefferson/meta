@@ -46,6 +46,33 @@ de preco cruzar a sessao.
 `teto_contratos` e' obrigatorio no construtor e TODO tamanho e' fracao dele
 (`_qtd`). Os numeros de 2025 (WIN 15) podem mudar antes de 14/09/2026; um
 literal aqui viraria um robo que so' sabe operar as regras do ano passado.
+
+## Realocacao dinamica por CAPITAL (2026-08-27, ADITIVA e OPT-IN)
+
+`teto_contratos` continua sendo o teto OFICIAL da competicao -- ele NUNCA
+muda de significado. O que passou a existir e' um segundo teto, o que o
+CAIXA REAL do dono sustenta agora (`contracts_from_capital`, `strategy.
+daytrade.base`), e a entrada usa o MENOR dos dois. Por default
+(`margin_per_contract_brl=None`) este segundo teto nao existe e o
+comportamento e' byte-a-byte o de antes: so' quem passa `margin_per_
+contract_brl` explicito ativa a realocacao (mesma convencao aditiva de
+`config_for`/`contracts_from_capital`).
+
+Por que nao reaproveitar `teto_contratos` para isto: ele e' o teto da
+COMPETICAO (pode ser MAIOR do que o capital atual sustenta -- o robo
+comeca com R$200 e o teto oficial e' 15 contratos), enquanto o teto por
+capital so' pode ENCOLHER a entrada, nunca cresce-la acima do que a
+competicao permite. Um caixa que crescesse o suficiente para sustentar
+mais contratos do que `teto_contratos` nao deve fazer o robo violar o
+regulamento -- e' por isso que a formula e' `min(teto_contratos,
+contracts_from_capital(...))`, nunca so' o segundo termo.
+
+`on_capital_update` segue o MESMO padrao ja usado por `Gremah`
+(`_cash_atual_brl`, atualizado pelo motor logo antes de cada `on_bar`,
+comeca em 0.0): enquanto o motor nunca chamou o hook (replay de
+`warm_start_calibration`, ou a primeira barra do backtest), o robo nao
+"sabe" quanto caixa tem -- e o piso de 1 contrato ja existente
+(`max(1, round(...))`) cobre esse caso sem precisar de um segundo estado.
 """
 from __future__ import annotations
 
@@ -54,6 +81,7 @@ from collections import deque
 import pandas as pd
 
 from strategy.daytrade.base import (
+    MARGIN_BUFFER_FUTUROS,
     AdjustStop,
     Bar,
     Enter,
@@ -61,6 +89,7 @@ from strategy.daytrade.base import (
     IntradayAction,
     IntradayOpenPosition,
     IntradayStrategy,
+    contracts_from_capital,
     no_tick,
 )
 
@@ -110,6 +139,8 @@ class CopaWin(IntradayStrategy):
         entrada_maker: bool = False,
         entrada_ttl_barras: int = 5,
         perda_max_dia_pontos: float | None = None,
+        margin_per_contract_brl: float | None = None,
+        margin_buffer: float = MARGIN_BUFFER_FUTUROS,
     ):
         """`teto_contratos`: teto de contratos SIMULTANEOS da competicao.
         Obrigatorio e sem default -- e' o unico limitador de tamanho num
@@ -162,7 +193,21 @@ class CopaWin(IntradayStrategy):
         `perda_max_dia_pontos`: perda-limite do pregao, em pontos por
         contrato do teto (`pontos x point_value x teto`). `None` (default)
         desliga: a funcao objetivo e' lucro total, e um freio diario e' uma
-        hipotese a MEDIR na varredura, nao uma premissa."""
+        hipotese a MEDIR na varredura, nao uma premissa.
+
+        `margin_per_contract_brl`: ATIVA a realocacao dinamica por capital
+        (ver a secao do modulo). `None` (default) -- comportamento IDENTICO
+        ao de antes desta rodada: `quantidade_por_entrada` so' olha
+        `teto_contratos x fracao_entrada`, nunca o caixa. Setado, o teto
+        efetivo de contratos passa a ser `min(teto_contratos,
+        contracts_from_capital(caixa_atual, margin_per_contract_brl,
+        margin_buffer))` -- o caixa real NUNCA deixa a entrada ultrapassar o
+        teto oficial da competicao, so' pode encolhe-la abaixo dele.
+
+        `margin_buffer`: multiplicador de seguranca sobre a margem por
+        contrato, mesmo parametro/mesmo default de `contracts_from_capital`
+        (`MARGIN_BUFFER_FUTUROS=2.0`) -- so' importa quando
+        `margin_per_contract_brl` esta setado."""
         if teto_contratos < 1:
             raise ValueError(
                 f"copa_win: `teto_contratos` tem de ser >= 1, veio {teto_contratos!r}. "
@@ -184,9 +229,20 @@ class CopaWin(IntradayStrategy):
         self.entrada_maker = bool(entrada_maker)
         self.entrada_ttl_barras = int(entrada_ttl_barras)
         self.perda_max_dia_pontos = perda_max_dia_pontos
+        self.margin_per_contract_brl = (
+            None if margin_per_contract_brl is None else float(margin_per_contract_brl)
+        )
+        self.margin_buffer = float(margin_buffer)
         # A entrada parada e' a SEGUNDA perna maker (a primeira e' o alvo) --
         # ver o comentario do atributo de classe.
         self.pernas_maker = 2 if self.entrada_maker else 1
+
+        # Atualizado por `on_capital_update`, chamado pelo motor logo antes
+        # de cada `on_bar` -- 0.0 so' antes da primeira barra real (warm
+        # start via replay nunca chama `on_capital_update`; mesmo padrao de
+        # `Gremah._cash_atual_brl`). So' importa quando
+        # `margin_per_contract_brl` esta setado.
+        self._cash_atual_brl = 0.0
 
         self._faixa: deque[Bar] = deque(maxlen=self.janela_rompimento)
         self._barras_hoje = 0
@@ -201,9 +257,29 @@ class CopaWin(IntradayStrategy):
 
     @property
     def quantidade_por_entrada(self) -> int:
-        """`max(1, round(teto x fracao))` -- piso de 1 contrato porque uma
-        entrada de zero contratos nao e' "menor", e' nenhuma."""
-        return max(1, round(self.teto_contratos * self.fracao_entrada))
+        """`max(1, round(teto_efetivo x fracao))` -- piso de 1 contrato
+        porque uma entrada de zero contratos nao e' "menor", e' nenhuma.
+
+        `teto_efetivo` e' `teto_contratos` (comportamento de sempre) quando
+        `margin_per_contract_brl` e' `None`. Setado, vira `min(teto_
+        contratos, contracts_from_capital(caixa_atual, margin_per_
+        contract_brl, margin_buffer))` -- o caixa real do robo so' pode
+        ENCOLHER a entrada abaixo do teto oficial da competicao, nunca
+        cresce-la acima dele (ver a secao do modulo)."""
+        teto_efetivo = self.teto_contratos
+        if self.margin_per_contract_brl is not None:
+            teto_por_caixa = contracts_from_capital(
+                self._cash_atual_brl, self.margin_per_contract_brl, self.margin_buffer,
+            )
+            teto_efetivo = min(self.teto_contratos, teto_por_caixa)
+        return max(1, round(teto_efetivo * self.fracao_entrada))
+
+    def on_capital_update(self, cash_brl: float) -> None:
+        """Guarda o caixa acumulado (`config.initial_capital + machine.
+        realized_pnl`, ver `IntradayStrategy.on_capital_update`) para
+        `quantidade_por_entrada` usar na proxima entrada -- so' tem efeito
+        quando `margin_per_contract_brl` esta setado."""
+        self._cash_atual_brl = cash_brl
 
     @property
     def perda_max_dia_brl(self) -> float | None:

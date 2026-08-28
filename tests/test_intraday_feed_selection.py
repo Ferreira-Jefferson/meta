@@ -17,6 +17,7 @@ from live.intraday_feed import feed_for
 from live.tick_feed import MT5TickFeed
 from strategy.daytrade.lab.gremah import Gremah
 from strategy.daytrade.lab.gremah_tick import GremahTick
+from strategy.daytrade.lab.wdo_grid_reload_maker import WdoGridReloadMaker
 from strategy.daytrade.registry import list_daytrade_robots, symbols_for_robot
 
 
@@ -27,6 +28,18 @@ def test_gremah_tick_recebe_feed_de_negocio_a_negocio():
 
     assert isinstance(feed, MT5TickFeed)
     assert feed.symbol == "PMAM3"
+
+
+def test_wdo_grid_reload_maker_recebe_feed_de_negocio_a_negocio():
+    """REGRESSAO: `feed_kind` desta classe era "m1" (herdado de quando o
+    modulo so' tinha a checagem de sanidade em M1) e foi corrigido para
+    "tick" em 2026-08-27 -- o numero validado (R$148,89/pregao, 89% de
+    retencao OOS) e' o de leitura tick; rodar em M1 reproduziria o numero
+    inflado pelo artefato de `_exit_fill_price`, nao o validado."""
+    feed = feed_for(WdoGridReloadMaker())
+
+    assert isinstance(feed, MT5TickFeed)
+    assert feed.symbol == "WDO@"
 
 
 def test_gremah_recebe_feed_de_barra_m1():
@@ -65,15 +78,24 @@ def test_os_dois_montadores_de_runtime_usam_a_mesma_fabrica():
 
 # ---------- o podio declarado ----------------------------------------------
 
-def test_gremah_tick_e_o_top1_e_gremah_o_top2():
-    """Decisao do dono, 2026-08-22. A ordem do registry E' o podio — ver o
-    comentario sobre `_ROBOTS` em `strategy/daytrade/registry.py` para por que
-    ela e' declarada e nao calculada."""
+def test_podio_declarado_2026_08_28():
+    """Decisao do dono, 2026-08-27: `wdo_grid_reload_maker` promovido a
+    TOP-1 (unico candidato de day trade com confirmacao OOS que sustenta --
+    89% de retencao IS->OOS, 30/30 blocos de 4 pregoes positivos).
+
+    Decisao do dono, 2026-08-28: `copa_win` entra como TOP-2 apos
+    recalibracao de `alvo_vol`/`stop_vol` confirmada em OOS (o par (19,12)
+    MELHOROU fora da amostra, R$54,86 -> R$61,80/pregao) -- `gremah_tick` e
+    `gremah` descem um degrau cada. Ver o comentario sobre `_ROBOTS` em
+    `strategy/daytrade/registry.py`."""
     robos = list_daytrade_robots()
 
-    assert [r.key for r in robos] == ["gremah_tick", "gremah"]
-    assert [r.rank for r in robos] == [1, 2]
-    assert [r.feed_kind for r in robos] == ["tick", "m1"]
+    assert [r.key for r in robos] == [
+        "wdo_grid_reload_maker", "copa_win", "gremah_tick", "gremah",
+    ]
+    assert [r.rank for r in robos] == [1, 2, 3, 4]
+    assert [r.feed_kind for r in robos] == ["tick", "m1", "tick", "m1"]
+    assert [r.is_futuro for r in robos] == [True, True, False, False]
 
 
 def test_o_painel_so_oferece_ativo_medido_em_tick():

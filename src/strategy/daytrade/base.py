@@ -22,6 +22,7 @@ instrumento incomparaveis.
 """
 from __future__ import annotations
 
+import math
 from abc import ABC, abstractmethod
 from collections import deque
 from dataclasses import dataclass, field
@@ -445,6 +446,17 @@ class IntradayStrategy(ABC):
     # tempo de parede em vez de herdar os numeros da `gremah`.
     feed_kind: Literal["m1", "tick"] = "m1"
 
+    # `True` só para um robô de FUTURO (WIN@/WDO@) -- o painel usa isto para
+    # decidir se "quanto opera, e o que custa" é lote de ação (preço x 100,
+    # `capital_minimo_brl`) ou margem por contrato (`profile_for(symbol).
+    # margin_per_contract_brl x MARGIN_BUFFER_FUTUROS`), e se o alvo/stop se
+    # mostram em % do preço ou em ticks (ver `dashboard/robot_view.py::
+    # _asset`). Campo explícito em vez de inferir do símbolo terminar em "@"
+    # -- mesmo argumento já usado para `SymbolProfile.is_futures`
+    # (`backtest/intraday/profiles.py`): duas finalidades diferentes não
+    # devem compartilhar um jeito só de serem lidas.
+    is_futuro: bool = False
+
     def initialize(self, bars: pd.DataFrame) -> None:
         """Pre-calcula indicadores sobre TODO o historico do backtest.
         Chamado uma vez antes do loop de sessoes. Default vazio — robos sem
@@ -637,3 +649,108 @@ def capital_minimo_brl(preco_atual: float, shares_per_lot: int = LOTE_PADRAO_B3)
     ridiculamente desigual conforme o preco (PMAM3 R$14 -> R$50, 3,6x; CSAN3
     R$364 -> R$400, 1,1x)."""
     return preco_atual * shares_per_lot * CAPITAL_MINIMO_EM_LOTES
+
+
+# ---------- escalonamento por CAPITAL em FUTURO (2026-08-26) ---------------
+# Equivalente de `capital_minimo_brl`/`CAPITAL_MINIMO_EM_LOTES` para um robo
+# de FUTURO (WIN@/WDO@): o limitador de tamanho deixa de ser caixa-por-lote
+# (acao) e passa a ser MARGEM-por-contrato (a corretora reserva margem, nao
+# o preco cheio do contrato). Objetivo novo do dono (2026-08-26): comecar
+# operando 1 contrato (o que ele consegue hoje) e o robo escalar SOZINHO
+# para mais contratos conforme o caixa/margem disponivel permitir -- mesma
+# ideia de `IntradaySessionMachine.positions` (posicoes independentes, cada
+# uma com seu proprio stop/alvo), so' que aqui calculamos o TETO quantos
+# contratos cabem, nao o agrupamento em si (isso a maquina ja faz).
+
+#: Multiplicador de seguranca sobre a margem exigida por contrato -- o
+#: EQUIVALENTE, em futuro, do `CAPITAL_MINIMO_EM_LOTES` de acao (2x o custo
+#: de 1 lote). NAO e' o mesmo numero por acidente: escolhido para reusar o
+#: mesmo fator do precedente ja validado pelo dono, nao porque a logica por
+#: tras seja identica -- ela E' diferente, e vale registrar o porque:
+#:
+#: * Em ACAO, `CAPITAL_MINIMO_EM_LOTES=2.0` cobre o preco CHEIO de 1 lote
+#:   (nao ha alavancagem: caixa parado = 1x o lote, e o dobro da folga para
+#:   o robo trocar de lado sem faltar caixa). A margem de futuro JA e' uma
+#:   FRACAO alavancada do valor do contrato -- ela mesma e' o "compromisso"
+#:   que a corretora exige, nao o valor cheio. Isso puxaria o fator para
+#:   BAIXO (a margem em si ja embute uma folga de risco calculada pela
+#:   bolsa para cobrir a oscilacao esperada de 1 dia).
+#: * Mas ao vivo o robo pode ter VARIAS posicoes independentes abertas ao
+#:   mesmo tempo (o proprio objetivo desta funcao -- escalar sozinho), e uma
+#:   corretora pode cobrar CHAMADA DE MARGEM intraday se o caixa livre cair
+#:   abaixo do exigido enquanto uma posicao esta perdendo -- isso puxaria o
+#:   fator para CIMA (menos alavancagem de fato usada do que a margem
+#:   minima permitiria, para nao ficar exposto a uma chamada de margem no
+#:   meio do pregao, que forcaria liquidacao exatamente no pior momento).
+#:
+#: Sem numero real de margem/chamada de margem medido no MT5 ainda (ver
+#: `contracts_from_capital`), as duas pressões nao tem como ser pesadas uma
+#: contra a outra com dado -- inventar um fator novo sem medicao seria tao
+#: arbitrario quanto manter o antigo. Decisao: MANTER 2.0, o mesmo fator ja
+#: aprovado pelo dono para acao, tratado como o PONTO DE PARTIDA seguro (nao
+#: como se a derivacao fosse a mesma) ate existir dado real de margem via
+#: MT5 (`order_calc_margin`/`symbol_info_margin`, hoje NAO consultado neste
+#: repo -- grep confirmado em `market_data_intraday/` e `live/broker_mt5.py`,
+#: 2026-08-26) para calibrar o fator certo por simbolo. Quem calibrar um
+#: robo especifico com dado real de chamada de margem pode passar `buffer=`
+#: diferente para `contracts_from_capital` -- este e' so' o default.
+MARGIN_BUFFER_FUTUROS = 2.0
+
+
+def contracts_from_capital(
+    cash_brl: float,
+    margin_per_contract_brl: float,
+    buffer: float = MARGIN_BUFFER_FUTUROS,
+    hard_cap: int | None = None,
+) -> int:
+    """Quantos CONTRATOS independentes (1 contrato cada, ver
+    `IntradaySessionMachine.positions`) o caixa atual sustenta, em FUTURO.
+
+    Formula: `floor(cash_brl / (margin_per_contract_brl * buffer))`,
+    truncado (nunca contrato fracionario) e nunca negativo. `buffer` existe
+    pelo MESMO motivo de `CAPITAL_MINIMO_EM_LOTES` em `capital_minimo_brl`
+    -- ver a nota longa em `MARGIN_BUFFER_FUTUROS` para o porque do fator
+    escolhido nao ser uma copia cega do caso de acao.
+
+    Funcao PURA e' de proposito: nao consulta MT5, nao sabe o simbolo, nao
+    sabe quantos contratos ja estao abertos (isso e' papel de
+    `IntradayBacktestConfig.max_open_contracts` + `IntradaySessionMachine`,
+    ja implementados -- esta funcao so calcula o TETO, nunca o
+    agrupamento). `margin_per_contract_brl` e' parametro OBRIGATORIO --
+    nunca uma constante interna: a fonte real de margem por simbolo
+    (equivalente a `order_calc_margin`/`symbol_info_margin` do MT5) e'
+    TRABALHO FUTURO, ainda nao coberto neste repo (confirmado por grep,
+    2026-08-26); ate la, quem chama tem de ler o numero de algum lugar
+    (terminal, planilha, o que for) e passar explicito -- mesmo padrao que
+    `trade_tick_value`/`trade_tick_size` ja usam em `config_for`, nunca
+    inventados aqui dentro.
+
+    `hard_cap`: teto adicional, aplicado DEPOIS do calculo por capital (ex.:
+    o teto OFICIAL de um instrumento/regulamento, ou um limite de risco do
+    dono) -- o resultado e' sempre o MENOR dos dois, nunca so' um ou so' o
+    outro. `None` (default) = sem teto adicional, so' o capital limita.
+
+    Casos de borda: `cash_brl` que nao cobre nem 1 contrato (com o buffer)
+    devolve `0` (nao um erro -- e' o robo esperando ter caixa, exatamente
+    como `enforce_capital_minimo` recusa o pregao em vez de operar
+    parcialmente). `margin_per_contract_brl<=0` ou `buffer<=0` levanta
+    `ValueError` -- um numero nao-positivo ali e' erro de quem chamou (dado
+    de margem invalido), nunca "sem teto"."""
+    if margin_per_contract_brl <= 0:
+        raise ValueError(
+            f"margin_per_contract_brl tem que ser positivo, recebeu {margin_per_contract_brl!r}"
+        )
+    if buffer <= 0:
+        raise ValueError(f"buffer tem que ser positivo, recebeu {buffer!r}")
+    if cash_brl <= 0:
+        contratos = 0
+    else:
+        custo_por_contrato = margin_per_contract_brl * buffer
+        # `+1e-9`: tolerancia de ponto flutuante -- `cash_brl` exatamente
+        # igual a N x custo_por_contrato nao pode truncar para N-1 so' por
+        # erro de representacao binaria (ex.: 1000.0 / 500.0 == 1.9999999999998).
+        contratos = int(math.floor(cash_brl / custo_por_contrato + 1e-9))
+        contratos = max(0, contratos)
+    if hard_cap is not None:
+        contratos = min(contratos, max(0, int(hard_cap)))
+    return contratos
