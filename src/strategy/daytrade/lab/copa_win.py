@@ -75,6 +75,7 @@ class CopaWin(IntradayStrategy):
     name = "copa_win"
     version = "0.1"
     symbol = "WIN@"
+    is_futuro = True
     # A saida por alvo e' ordem PARADA no nivel (maker, sem slippage); a
     # entrada e' a mercado de proposito -- nao existe ordem-limite que compre
     # um rompimento PARA CIMA (uma compra parada acima do preco viraria
