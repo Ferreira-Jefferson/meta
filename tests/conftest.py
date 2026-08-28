@@ -20,6 +20,39 @@ def _assinatura(caminho: Path):
 
 _DB_ROOT = Path(__file__).resolve().parents[1] / "db"
 
+
+@pytest.fixture(autouse=True)
+def _travas_de_slot_isoladas(tmp_path_factory, monkeypatch):
+    """Nenhum teste pega trava de slot na pasta REAL (`db/locks/`).
+
+    `scripts/run_live.py::cmd_loop` abre `lock_slot(slot.id)` — a trava de
+    SO que impede dois processos no mesmo slot. Os testes de CLI chamam
+    `cmd_loop` de verdade, com `slot="swing"`, então sem isto eles pegam
+    `db/locks/swing.lock`: o MESMO arquivo que o robô de produção usa.
+    Duas consequências, as duas observadas:
+
+    1. Dois workers do xdist rodando dois testes de `cmd_loop` ao mesmo
+       tempo disputam o arquivo único e um leva `SlotEmUso` — falha
+       intermitente que passa quando rodada sozinha (foi assim que
+       apareceu, em 1 de 3 rodadas da suíte).
+    2. Pior que a falha do teste: enquanto a suíte segura `swing.lock`, um
+       robô REAL tentando subir naquele slot é recusado. A suíte não pode
+       ter poder de veto sobre a operação.
+
+    Isolar por prevenção, não por detecção: o guard abaixo
+    (`_banco_ao_vivo_intocado`) falha DEPOIS que o teste sujou, e aqui dá
+    para simplesmente tornar a pasta real inalcançável de dentro do
+    processo de teste. Detecção continuaria fraca de qualquer forma —
+    tomar uma trava já existente não muda mtime nem tamanho do arquivo,
+    então o caso pior (teste segurando a trava do robô de verdade) passaria
+    despercebido por uma assinatura de arquivo.
+
+    `tests/test_slot_lock.py` não é afetado: todo teste de lá já passa
+    `lock_dir=tmp_path` explícito, inclusive o subprocesso."""
+    from live import slot_lock
+
+    monkeypatch.setattr(slot_lock, "LOCK_DIR", tmp_path_factory.mktemp("locks"))
+
 # Caminho -> dica de qual patch falta, para a mensagem de falha apontar
 # direto pro que esquecer causa (em vez de só dizer "algo vazou").
 _CAMINHOS_REAIS_PROIBIDOS = {
