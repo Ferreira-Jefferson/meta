@@ -1072,13 +1072,75 @@ class IntradaySessionMachine:
         (`config.session_end_time`) e' avaliado de qualquer forma.
 
         Barra de pregao anterior (`is_previous_session_bar`) e' DESCARTADA
-        sem nenhum efeito -- nem decisao, nem preenchimento, nem flatten."""
-        cfg = self.config
+        sem nenhum efeito -- nem decisao, nem preenchimento, nem flatten.
+
+        Garantia de EVENTOS PARCIAIS (auditoria adversarial 2026-08-28,
+        risco residual do MEDIO 7 -- ver `IntradayLiveRuntime._checkpoint`
+        do lado da operacao real): dentro de UMA UNICA chamada, um efeito
+        colateral REAL ja pode ter sido confirmado na corretora antes de um
+        efeito POSTERIOR levantar excecao. Caso concreto (real, nao
+        hipotetico -- `gremah`/`gremah_tick` com `dividir_entrada=True`
+        declaram `split_quantities` E `exit_split_unit` na MESMA
+        `EnterLimit`): passo (1) resolve uma fatia de SAIDA dividida
+        (`_resolve_live_split_exit`) que fecha a posicao SO' PARCIALMENTE
+        -- dinheiro ja moveu de verdade na corretora, mas como a posicao
+        nao fechou por INTEIRO, `_cancelar_resting_orfa` nao dispara e
+        `resting_limit` continua vigiando o(s) filho(s) restantes da MESMA
+        entrada dividida. Mais adiante NESTA MESMA barra, a checagem
+        desses filhos (`_resolve_limit_fills` -> `execution.limit_fill`)
+        levanta `BrokerExecutionError` (`FALHA_ALTO` -- terminal caiu no
+        meio da consulta). Sem isto, a excecao subindo apagava tambem o
+        `PositionClosed` da fatia JA CONFIRMADA, porque uma funcao que
+        levanta nunca chega ao `return`.
+
+        Qualquer excecao levantada por `_on_closed_bar_core` (nao so'
+        `BrokerExecutionError` -- `EntradaAMercadoNaoSuportada` corre o
+        MESMO risco, ver a docstring dela: um `Exit` real confirmado no
+        passo (3) seguido de um `Enter` a mercado sem suporte na MESMA
+        barra) sai daqui com `.partial_events` anexado -- os eventos que
+        esta chamada ja tinha acumulado ate o ponto da falha, na ORDEM em
+        que aconteceram. `machine.py` nao journaliza nada sozinho (regra
+        1/2 do AGENTS.md, sem I/O nem conexao de banco aqui) -- so' garante
+        que o chamador (`live/intraday_runtime.py::_consume`) tenha como
+        recuperar o que ja e' fato consumado na corretora antes de deixar
+        a excecao subir.
+
+        `events` e' passado por REFERENCIA para `_on_closed_bar_core`
+        (nunca reatribuido la dentro, so' `.append`/`.extend` -- o mesmo
+        padrao que o corpo ja usava antes desta extracao) -- e' o que
+        permite ler o que foi acumulado mesmo quando a excecao interrompe
+        o processamento no meio, sem duplicar o corpo inteiro dentro de um
+        try/except (a alternativa de reindentar o corpo INTEIRO dentro de
+        um try foi descartada por ser a mesma logica com muito mais
+        superficie para divergir por engano numa edicao futura; um
+        gerador (`yield` a cada evento) foi descartada tambem -- mudaria o
+        contrato publico de `on_closed_bar` para todo chamador existente,
+        inclusive o backtest, que nunca teve motivo para consumir eventos
+        incrementalmente)."""
         ts = bar.ts
         events: list[MachineEvent] = []
 
         if self.is_previous_session_bar(ts):
             return events
+
+        try:
+            self._on_closed_bar_core(bar, is_last_bar, events)
+        except Exception as erro:
+            erro.partial_events = list(events)
+            raise
+        return events
+
+    def _on_closed_bar_core(self, bar: Bar, is_last_bar: bool, events: list[MachineEvent]) -> None:
+        """O corpo de `on_closed_bar` -- extraido (2026-08-28) so' para
+        `events` poder ser um PARAMETRO mutado por referencia em vez de uma
+        variavel local, o que permite ao chamador (`on_closed_bar`) ler o
+        que ja foi acumulado mesmo quando uma excecao interrompe o
+        processamento no meio desta funcao (ver a docstring de
+        `on_closed_bar`). Nenhuma linha aqui reatribui `events` -- sempre
+        `.append`/`.extend` -- e' o invariante que faz a extracao
+        funcionar sem copiar nada."""
+        cfg = self.config
+        ts = bar.ts
 
         # (1) stop/target automatico tem prioridade sobre qualquer acao filada.
         # Itera sobre uma COPIA (`list(...)`) porque fechar uma posicao
@@ -1392,8 +1454,6 @@ class IntradaySessionMachine:
         for pos in self.positions:
             pos.bars_held += 1
 
-        return events
-
     def _reancoragem_no_mesmo_nivel(self, nova: EnterLimit, default_quantity: int) -> bool:
         """`nova` pede exatamente a ordem que JA esta parada -- mesmo lado,
         mesmo nivel, mesmas fatias?
@@ -1455,18 +1515,35 @@ class IntradaySessionMachine:
         buraco deixaria uma posicao real orfa. Achatar no preco mais recente
         e' a leitura honesta das duas coisas. No backtest nao existe buraco: a
         ultima barra da sessao ja dispara o flatten dentro de
-        `on_closed_bar`."""
+        `on_closed_bar`.
+
+        Mesma garantia de EVENTOS PARCIAIS que `on_closed_bar` (ver a
+        docstring dela) -- `.partial_events` na excecao, se uma subir DEPOIS
+        de algum `eventos.append` ja ter acontecido. Hoje isto NUNCA ocorre
+        de verdade aqui: execucao real nunca tem mais de 1 elemento em
+        `self.positions` (ver a docstring da classe), entao o laco abaixo
+        fecha NO MAXIMO uma posicao, e `_close_position` so' muta estado
+        (inclusive o `append` em `eventos`) DEPOIS do `exec_market` confirmar
+        -- se ele levantar, nada foi acumulado ainda para perder. Fica
+        aqui mesmo assim por CONSISTENCIA com `on_closed_bar` e defesa em
+        profundidade: se o invariante de 1 posicao mudar um dia (ex.:
+        piramide em execucao real), este metodo ja' esta' protegido sem
+        precisar lembrar de voltar aqui."""
         eventos: list[MachineEvent] = []
-        if self.positions:
-            if self.execution is not None and any(p.exit_resting_qty > 0 for p in self.positions):
-                self.execution.cancel_exit_limit(ts, reason="flatten")
-            for pos in list(self.positions):
-                pos.exit_resting_qty = 0
-                pos.resting_exit_bars_waited = 0
-                eventos.append(self._close_position(pos, ts, price, IntradayExitReason.FORCED_FLATTEN))
-        if self.resting_limit is not None:
-            eventos.append(LimitCancelled(order=self.resting_limit, ts=ts, reason="flatten"))
-            self.resting_limit = None
+        try:
+            if self.positions:
+                if self.execution is not None and any(p.exit_resting_qty > 0 for p in self.positions):
+                    self.execution.cancel_exit_limit(ts, reason="flatten")
+                for pos in list(self.positions):
+                    pos.exit_resting_qty = 0
+                    pos.resting_exit_bars_waited = 0
+                    eventos.append(self._close_position(pos, ts, price, IntradayExitReason.FORCED_FLATTEN))
+            if self.resting_limit is not None:
+                eventos.append(LimitCancelled(order=self.resting_limit, ts=ts, reason="flatten"))
+                self.resting_limit = None
+        except Exception as erro:
+            erro.partial_events = list(eventos)
+            raise
         self._resting_children_qty = []
         self.resting_limit_bars_waited = 0
         self._queue_ahead_remaining = 0.0

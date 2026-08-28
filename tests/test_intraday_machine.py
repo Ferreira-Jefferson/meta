@@ -1446,3 +1446,162 @@ def test_rearme_que_muda_de_nivel_reseta_a_fila():
     assert len(abertas) == 1
     assert abertas[0].quantity == 300
     assert abertas[0].price == pytest.approx(9.70)
+
+
+# ---------- eventos parciais numa excecao (risco residual do MEDIO 7,  -----
+# ---------- auditoria adversarial 2026-08-28)                          -----
+#
+# `IntradayLiveRuntime._consume` (MEDIO 7) ja checkpointa entre BARRAS de um
+# mesmo lote. O que sobrava: dentro de UMA UNICA chamada de `on_closed_bar`,
+# um efeito colateral REAL confirmado no passo (1) pode ser seguido, na
+# MESMA barra, por outro passo que levanta excecao -- e uma funcao que
+# levanta nunca chega ao `return`, entao o evento ja confirmado desaparecia
+# de quem chamou. Estes testes exercitam `IntradaySessionMachine` sozinha,
+# sem banco/journal nenhum -- so' o contrato `on_closed_bar` -> `.
+# partial_events` numa excecao.
+
+class _FakeExecucaoReal:
+    """Fake minimo do 'execution' real (`live/intraday_execution.py::
+    MT5IntradayExecution`) -- so' os metodos que `on_closed_bar` chama,
+    cada um scriptado para reproduzir o cenario exato: uma fatia de SAIDA
+    dividida confirma (dinheiro ja moveu) e, na MESMA barra, a consulta do
+    filho de ENTRADA que falta levanta `BrokerExecutionError`."""
+
+    def __init__(self):
+        self.limit_fill_calls = 0
+        self.exit_fill_calls = 0
+        self.place_exit_limit_calls = 0
+        self.cancel_exit_limit_calls = 0
+        self.exit_market_calls = 0
+        # respostas em ORDEM, uma por chamada de `limit_fill` -- um dict
+        # `{"price", "quantity"}`, `None` (sem novidade), ou a string
+        # `"RAISE"` (terminal caiu no meio da consulta).
+        self.limit_fill_script: list = []
+        # resposta UNICA de `exit_fill` -- so' um teste chama mais de uma vez.
+        self.exit_fill_resposta: dict | None = None
+
+    def limit_fill(self, order, bar):
+        from live.intraday_execution import BrokerExecutionError
+
+        self.limit_fill_calls += 1
+        resposta = self.limit_fill_script[self.limit_fill_calls - 1]
+        if resposta == "RAISE":
+            raise BrokerExecutionError("terminal caiu no meio do lote (simulado no teste)")
+        return resposta
+
+    def exit_fill(self, side, bar):
+        self.exit_fill_calls += 1
+        return self.exit_fill_resposta
+
+    def place_exit_limit(self, **kwargs):
+        self.place_exit_limit_calls += 1
+
+    def cancel_exit_limit(self, ts, reason):
+        self.cancel_exit_limit_calls += 1
+        return None
+
+    def exit_market(self, position, ts, reason):
+        self.exit_market_calls += 1
+        raise AssertionError("nao deveria mandar fechamento a mercado neste teste")
+
+
+def test_falha_alto_no_filho_de_entrada_nao_apaga_fechamento_parcial_ja_confirmado():
+    """O cenario real (nao hipotetico -- `gremah`/`gremah_tick` com
+    `dividir_entrada=True` declaram `split_quantities` E `exit_split_unit`
+    na MESMA `EnterLimit`): uma entrada dividida em 3 filhos tem 2
+    preenchidos e 1 pendente (`resting_limit` continua vigiando). A posicao
+    (2 acoes) tambem tem saida dividida -- o alvo arma uma fatia (1 acao)
+    numa barra, e na SEGUINTE essa fatia CONFIRMA (dinheiro ja moveu), mas
+    so' PARCIALMENTE: a posicao continua aberta, entao `_cancelar_resting_
+    orfa` NAO dispara e `resting_limit` continua vigiando o filho que falta.
+    Na MESMA barra, a checagem desse filho levanta `FALHA_ALTO`. O fix
+    garante que o `PositionClosed` da fatia sobrevive em `.partial_events`
+    da excecao."""
+    exec_fake = _FakeExecucaoReal()
+    strat = _Scripted({0: [EnterLimit(side="long", limit_price=10.00,
+                                      initial_stop=9.00, initial_target=11.00,
+                                      quantity=3, split_quantities=(1, 1, 1),
+                                      exit_split_unit=1, exit_ttl_bars=5,
+                                      reason="teste_residual_medio7")]})
+    m = IntradaySessionMachine(strat, _config(), execution=exec_fake)
+    m.begin_session(pd.Timestamp("2026-01-05").date())
+
+    m.on_closed_bar(_bar(0, 10.00, 10.00, 10.00, 10.00))  # decide -- EnterLimit armada
+
+    exec_fake.limit_fill_script = [
+        {"price": 10.00, "quantity": 2},  # bar1: 2 dos 3 filhos preenchem
+        None,                              # bar2: nada novo do lado da entrada
+        "RAISE",                           # bar3: terminal cai
+    ]
+    ev1 = m.on_closed_bar(_bar(1, 10.00, 10.00, 10.00, 10.00))
+    assert [e for e in ev1 if isinstance(e, PositionOpened)]
+    assert m.position is not None and m.position.quantity == 2
+    assert m._resting_children_qty == [1]  # o 3o filho continua pendente
+
+    # toca o alvo (11.00) -- arma a fatia de saida (1 acao) na corretora.
+    ev2 = m.on_closed_bar(_bar(2, 10.50, 11.50, 10.40, 11.00))
+    assert ev2 == []
+    assert m.position.exit_resting_qty == 1
+    assert exec_fake.place_exit_limit_calls == 1
+
+    # a fatia confirma (dinheiro ja moveu) -- E na MESMA barra a checagem do
+    # filho de entrada que falta levanta FALHA_ALTO.
+    exec_fake.exit_fill_resposta = {"price": 11.00, "quantity": 1}
+    from live.intraday_execution import BrokerExecutionError
+
+    with pytest.raises(BrokerExecutionError) as exc:
+        m.on_closed_bar(_bar(3, 11.00, 11.20, 10.90, 11.00))
+
+    assert exec_fake.exit_market_calls == 0, "saida dividida ja preenchida nao manda ordem a mercado"
+
+    parciais = getattr(exc.value, "partial_events", None)
+    assert parciais is not None and len(parciais) == 1, (
+        "a fatia JA CONFIRMADA na corretora nao pode desaparecer so' porque "
+        "a checagem de um filho POSTERIOR, na MESMA barra, levantou excecao"
+    )
+    fechado = parciais[0]
+    assert isinstance(fechado, PositionClosed)
+    assert fechado.trade.quantity == 1
+    assert fechado.trade.exit_reason == IntradayExitReason.TARGET
+
+    # a mutacao REAL sobrevive na maquina mesmo com a excecao subindo -- a
+    # fatia fechou de verdade, so' o JOURNAL e' que dependia do fix (ver
+    # `IntradayLiveRuntime._aplica_eventos_parciais_antes_de_falhar`).
+    assert m.position is not None and m.position.quantity == 1
+    assert m.resting_limit is not None, "o filho que falta continua vigiado"
+
+
+def test_sem_o_fix_a_excecao_nao_carrega_eventos_parciais():
+    """Contraprova, no espirito do padrao usado no MEDIO 7 original: simula
+    o comportamento PRE-fix chamando `_on_closed_bar_core` diretamente (sem
+    passar pelo `try/except` de `on_closed_bar`) -- a excecao sobe do MESMO
+    jeito, mas sem `.partial_events`, provando que o atributo vem do
+    wrapper, nao de `BrokerExecutionError` em si."""
+    exec_fake = _FakeExecucaoReal()
+    strat = _Scripted({0: [EnterLimit(side="long", limit_price=10.00,
+                                      initial_stop=9.00, initial_target=11.00,
+                                      quantity=3, split_quantities=(1, 1, 1),
+                                      exit_split_unit=1, exit_ttl_bars=5,
+                                      reason="teste_residual_medio7_sem_fix")]})
+    m = IntradaySessionMachine(strat, _config(), execution=exec_fake)
+    m.begin_session(pd.Timestamp("2026-01-05").date())
+    m.on_closed_bar(_bar(0, 10.00, 10.00, 10.00, 10.00))
+
+    exec_fake.limit_fill_script = [{"price": 10.00, "quantity": 2}, None, "RAISE"]
+    m.on_closed_bar(_bar(1, 10.00, 10.00, 10.00, 10.00))
+    m.on_closed_bar(_bar(2, 10.50, 11.50, 10.40, 11.00))
+    exec_fake.exit_fill_resposta = {"price": 11.00, "quantity": 1}
+
+    from live.intraday_execution import BrokerExecutionError
+
+    eventos_sem_fix: list = []
+    with pytest.raises(BrokerExecutionError) as exc:
+        m._on_closed_bar_core(_bar(3, 11.00, 11.20, 10.90, 11.00), False, eventos_sem_fix)
+
+    # a mutacao real ainda acontece (a fatia fechou de verdade, `eventos_
+    # sem_fix` foi mutado por referencia) -- mas SEM o wrapper de
+    # `on_closed_bar`, a excecao que sobe nao carrega `.partial_events`
+    # nenhum: e' exatamente o estado ANTES desta correcao, quando o
+    # chamador (`_consume`) nao tinha como recuperar o evento confirmado.
+    assert len(eventos_sem_fix) == 1
+    assert getattr(exc.value, "partial_events", None) is None

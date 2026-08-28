@@ -4106,4 +4106,192 @@ def test_falha_alto_sem_acao_real_antes_nao_deixa_rastro_nenhum(tmp_path, pregao
 
     assert n_ordens_depois == n_ordens_antes, "nada novo -- nada de real aconteceu neste passo"
     assert n_eventos_depois == n_eventos_antes, "nem o log deste passo sobrevive -- nada a proteger"
+
+
+# ---------- risco residual do MEDIO 7, auditoria adversarial 2026-08-28 ----
+#
+# Os 3 testes acima cobrem o gap ENTRE barras do mesmo lote. O que sobrava
+# (reportado pelo agente que fechou o MEDIO 7): dentro de UMA UNICA chamada
+# de `on_closed_bar`, um fechamento REAL confirmado no passo (1) pode ser
+# seguido, na MESMA barra, por uma tentativa de resolver o filho restante de
+# uma entrada dividida que levanta `FALHA_ALTO` -- cenario que so' existe
+# quando a MESMA `EnterLimit` declara `split_quantities` (entrada dividida)
+# E `exit_split_unit` (saida dividida) simultaneamente, exatamente o que
+# `gremah`/`gremah_tick` fazem em producao com `dividir_entrada=True`. Ver
+# `IntradaySessionMachine.on_closed_bar`/`_on_closed_bar_core` e
+# `IntradayLiveRuntime._aplica_eventos_parciais_antes_de_falhar`.
+
+def test_falha_alto_no_filho_de_entrada_nao_apaga_fatia_de_saida_ja_confirmada_na_mesma_barra(
+    tmp_path, pregao_aberto,
+):
+    """O cenario exato do risco residual: uma entrada dividida em 3 filhos
+    (`split_quantities=(1, 1, 1)`) tem 2 preenchidos e 1 ainda pendente --
+    `resting_limit` continua vigiando esse filho. A posicao (2 acoes) TAMBEM
+    tem saida dividida (`exit_split_unit=1`): o alvo arma uma fatia de 1
+    numa barra, e na barra SEGUINTE essa fatia CONFIRMA (a posicao encolhe
+    de 2 para 1 na corretora -- dinheiro ja moveu) -- mas como so' fechou
+    PARCIALMENTE, a posicao continua aberta e `resting_limit` NAO e'
+    orfanizado. Na MESMA barra, a checagem do filho de entrada que falta
+    "cai" (`FALHA_ALTO`). Sem o fix, a excecao subindo apagava tambem a
+    fatia JA CONFIRMADA."""
+    from live.intraday_execution import BrokerExecutionError
+
+    class _BrokerFatiaConfirmaDepoisFalha(_FakeMT5Broker):
+        """1a leitura de posicao dentro do passo sob exame CONFIRMA a fatia
+        de saida (posicao ja encolhida -- dinheiro ja moveu); a leitura
+        SEGUINTE (checagem do filho de entrada que falta) "cai" -- simula o
+        terminal ficando indisponivel no MEIO da barra, entre as duas
+        consultas. Mesmo padrao de `_BrokerLeituraFalhaAPartirDe` (ver o
+        teste do MEDIO 7 original acima), so' que aqui as DUAS leituras
+        acontecem dentro da MESMA chamada de `on_closed_bar`, nao em barras
+        diferentes."""
+
+        def __init__(self):
+            super().__init__()
+            self.leituras = 0
+            self.falha_a_partir_de = None
+
+        def position_state(self, ticker):
+            self.leituras += 1
+            if self.falha_a_partir_de is not None and self.leituras >= self.falha_a_partir_de:
+                return {"ok": False, "position": None,
+                        "note": "terminal caiu no meio da barra (simulado no teste)"}
+            return super().position_state(ticker)
+
+    broker = _BrokerFatiaConfirmaDepoisFalha()
+    script = {
+        0: [EnterLimit(side="long", limit_price=10.00, initial_stop=9.00,
+                       initial_target=11.00, quantity=3, split_quantities=(1, 1, 1),
+                       exit_split_unit=1, exit_ttl_bars=5, reason="teste_medio7_residual")],
+    }
+    rt, feed = _runtime_live_scripted(tmp_path, broker, script)
+    rt.run_once(now=_agora("13:00:00"))  # calibracao, feed ainda vazio
+
+    feed._barras.append(_bar("13:01", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:01:00"))  # decide -- 3 filhos reais de entrada enviados
+    assert len(broker.pendentes_enviadas) == 3
+
+    # 2 dos 3 filhos preenchem de verdade -- 1 continua pendente.
+    broker.posicao = {"side": "long", "price": 10.00, "quantity": 2, "ticket": 1}
+    feed._barras.append(_bar("13:02", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:02:00"))
+    assert rt.machine.position is not None and rt.machine.position.quantity == 2
+    assert rt.machine.resting_limit is not None, "o 3o filho continua vigiado"
+
+    # o preco toca o alvo (11.00): arma a 1a fatia de saida (1 acao) como
+    # ordem-limite REAL na corretora.
+    feed._barras.append(_bar("13:03", 10.50, 11.50, 10.40, 11.00))
+    rt.run_once(now=_agora("13:03:00"))
+    assert rt.machine.position.quantity == 2, "so' ARMOU -- nenhum fill confirmado ainda"
+    assert rt.machine.position.exit_resting_qty == 1
+
+    # a barra critica: a fatia de saida CONFIRMA (posicao encolhe de 2 para
+    # 1 na corretora) -- mas so' PARCIALMENTE, entao `resting_limit` (o
+    # filho de entrada que falta) nao e' orfanizado. A leitura SEGUINTE,
+    # dentro da MESMA barra, "cai".
+    broker.posicao = {"side": "long", "price": 10.00, "quantity": 1, "ticket": 1}
+    broker.leituras = 0
+    broker.falha_a_partir_de = 2  # 1a leitura (a fatia) confirma; a 2a (o filho) cai
+    feed._barras.append(_bar("13:04", 11.00, 11.20, 10.90, 11.00))
+
+    with pytest.raises(BrokerExecutionError):
+        rt.run_once(now=_agora("13:04:00"))
+
+    # em memoria, a maquina ja' sabe da fatia -- e' fato consumado na
+    # corretora, independente do journal.
+    assert rt.machine.position is not None, "so' 1 fatia fechou -- a posicao continua aberta"
+    assert rt.machine.position.quantity == 1
+    assert rt.machine.resting_limit is not None, "o filho que falta continua vigiado"
+
+    # o PONTO do teste: a fatia JA CONFIRMADA tem de ter sobrevivido no
+    # diario, apesar do rollback do resto do passo.
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        posicoes = conn.execute(
+            "SELECT * FROM live_positions WHERE account_id = ?", (acc.id,)
+        ).fetchall()
+        ordens_saida = conn.execute(
+            "SELECT * FROM live_orders WHERE account_id = ? AND side = 'sell' ORDER BY id",
+            (acc.id,),
+        ).fetchall()
+        snap = (acc.policy_state or {}).get("intraday") or {}
+
+    assert len(posicoes) == 1
+    assert posicoes[0]["quantity"] == pytest.approx(1.0), (
+        "a fatia fechada tem de ter sido debitada da posicao no diario"
+    )
+    assert len(ordens_saida) == 1, "a Order da fatia de saida confirmada nao pode desaparecer"
+    assert ordens_saida[0]["filled_qty"] == pytest.approx(1.0)
+    # o checkpoint tambem torna duravel o estado da MAQUINA (quantidade
+    # encolhida) -- o que um RESTART leria em `_restore`.
+    posicoes_maquina = snap.get("machine", {}).get("positions") or []
+    assert len(posicoes_maquina) == 1
+    assert posicoes_maquina[0]["quantity"] == pytest.approx(1.0)
+
+
+def test_falha_alto_no_filho_de_entrada_sem_fatia_confirmada_antes_nao_deixa_rastro_extra(
+    tmp_path, pregao_aberto,
+):
+    """Contrapeso: quando a leitura que falha e' a PRIMEIRA desta barra (nada
+    de real aconteceu ainda antes dela), `_aplica_eventos_parciais_antes_de_
+    falhar` nao inventa nenhum journal novo -- mesmo espirito de
+    `test_falha_alto_sem_acao_real_antes_nao_deixa_rastro_nenhum`, agora para
+    o caminho de entrada dividida."""
+    from live.intraday_execution import BrokerExecutionError
+
+    class _BrokerFalhaImediata(_FakeMT5Broker):
+        def __init__(self):
+            super().__init__()
+            self.leituras = 0
+            self.falha_a_partir_de = None
+
+        def position_state(self, ticker):
+            self.leituras += 1
+            if self.falha_a_partir_de is not None and self.leituras >= self.falha_a_partir_de:
+                return {"ok": False, "position": None,
+                        "note": "terminal caiu (simulado no teste)"}
+            return super().position_state(ticker)
+
+    broker = _BrokerFalhaImediata()
+    script = {
+        0: [EnterLimit(side="long", limit_price=10.00, initial_stop=9.00,
+                       initial_target=11.00, quantity=2, split_quantities=(1, 1),
+                       reason="teste_medio7_residual_sem_fatia")],
+    }
+    rt, feed = _runtime_live_scripted(tmp_path, broker, script)
+    rt.run_once(now=_agora("13:00:00"))
+
+    feed._barras.append(_bar("13:01", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:01:00"))
+    assert len(broker.pendentes_enviadas) == 2
+
+    # so' 1 dos 2 filhos preenche -- o outro continua pendente.
+    broker.posicao = {"side": "long", "price": 10.00, "quantity": 1, "ticket": 1}
+    feed._barras.append(_bar("13:02", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:02:00"))
+    assert rt.machine.position is not None and rt.machine.position.quantity == 1
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        n_ordens_antes = conn.execute(
+            "SELECT COUNT(*) AS n FROM live_orders WHERE account_id = ?", (acc.id,)
+        ).fetchone()["n"]
+
+    # sem posicao de saida dividida nesta entrada -- o passo (1) desta barra
+    # nao toca em nada real (stop/alvo nao tocam), entao a UNICA leitura da
+    # barra e' a do filho de entrada, que falha na PRIMEIRA tentativa.
+    broker.leituras = 0
+    broker.falha_a_partir_de = 1
+    feed._barras.append(_bar("13:03", 10.00, 10.00, 10.00, 10.00))
+
+    with pytest.raises(BrokerExecutionError):
+        rt.run_once(now=_agora("13:03:00"))
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        n_ordens_depois = conn.execute(
+            "SELECT COUNT(*) AS n FROM live_orders WHERE account_id = ?", (acc.id,)
+        ).fetchone()["n"]
+    assert n_ordens_depois == n_ordens_antes, "nada novo -- nada de real aconteceu neste passo"
+    assert rt.machine.position is not None and rt.machine.position.quantity == 1
     assert rt.machine.position is not None, "a posicao continua aberta -- corretora recusou a leitura"

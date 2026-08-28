@@ -2345,6 +2345,13 @@ class IntradayLiveRuntime:
         try:
             eventos = self.machine.force_flatten(ultima.ts, ultima.close)
         except BrokerExecutionError as erro:
+            # MEDIO 7 (risco residual, defesa em profundidade -- ver a
+            # docstring de `force_flatten`: hoje `eventos` nunca chega
+            # parcialmente preenchido aqui, porque execucao real nunca tem
+            # mais de 1 posicao. Fica pelo MESMO motivo do `_checkpoint`
+            # logo abaixo: se o invariante mudar um dia, este caminho ja
+            # esta protegido sem precisar lembrar de voltar aqui).
+            self._aplica_eventos_parciais_antes_de_falhar(conn, account, erro, ultima)
             if erro.kind != BrokerExecutionError.FECHAMENTO_RECUSADO:
                 raise
             self._registra_falha_de_fechamento(conn, account, session, erro)
@@ -2403,6 +2410,57 @@ class IntradayLiveRuntime:
                  else bar.high >= order.limit_price)
         if tocou:
             self._volume_no_nivel += bar.volume
+
+    def _aplica_eventos_parciais_antes_de_falhar(
+        self, conn, account: AccountState, erro: Exception, bar: Bar,
+    ) -> tuple[int, int]:
+        """Journaliza (e torna DURAVEL, `_checkpoint`) o que `on_closed_bar`/
+        `force_flatten` ja tinham acumulado em `events` ANTES de levantar
+        `erro` -- ver `.partial_events` na docstring nova de
+        `IntradaySessionMachine.on_closed_bar`/`force_flatten`.
+
+        Risco residual do MEDIO 7 (auditoria adversarial 2026-08-28): dentro
+        de UMA UNICA chamada de `on_closed_bar`, um fechamento REAL
+        confirmado (passo 1 -- ex.: uma fatia de `_resolve_live_split_exit`
+        que fecha a posicao so' PARCIALMENTE, sem orfanizar `resting_limit`
+        porque a posicao continua aberta -- e' o caso real: `gremah`/
+        `gremah_tick` com `dividir_entrada=True` declaram `split_quantities`
+        E `exit_split_unit` na MESMA `EnterLimit`) pode ser seguido, na
+        MESMA barra, por uma tentativa de resolver o(s) filho(s) restantes
+        de uma entrada dividida que levanta `FALHA_ALTO` -- ou por
+        `EntradaAMercadoNaoSuportada` no passo (3), depois de um `Exit`
+        real ja confirmado no mesmo passo. Sem isto, a excecao subindo
+        apagava o evento JA CONFIRMADO na corretora junto com o resto,
+        porque `on_closed_bar` so' devolve `events` no `return` normal --
+        uma excecao pula direto para quem chamou, sem passar por la.
+
+        NUNCA mexe em `last_bar_ts`: esta barra continua NAO confirmada por
+        inteiro (e' por isso que a excecao segue subindo logo depois, no
+        caso `FALHA_ALTO`/`EntradaAMercadoNaoSuportada`) -- o proximo passo
+        tem de reprocessa-la do zero. Isso e' seguro porque `self.machine`
+        (o MESMO objeto em memoria, nunca reconstruido entre passos) ja
+        reflete a mutacao real que aconteceu -- posicao encolhida,
+        `exit_resting_qty` zerada -- e uma nova tentativa so' vai
+        RE-CONSULTAR a corretora a partir desse estado, nunca repetir a
+        fatia que ja preencheu (mesmo design de retry que ja existia antes
+        desta correcao: `MT5IntradayExecution.limit_fill`/`exit_fill` sao
+        consultas de DELTA contra o que a corretora reporta agora, nao
+        replay de uma decisao velha).
+
+        Devolve `(abertas, fechadas)` -- mesma contagem que o loop principal
+        de `_consume` usa para o `detalhe` do `StepReport`, para quem chama
+        poder somar os eventos parciais aos da barra em curso."""
+        parciais = list(getattr(erro, "partial_events", None) or [])
+        abertas = fechadas = 0
+        for evento in parciais:
+            if isinstance(evento, PositionOpened):
+                abertas += 1
+            elif isinstance(evento, PositionClosed):
+                fechadas += 1
+            self._apply(conn, account, evento, bar)
+        if parciais:
+            self._checkpoint(conn, account)
+        return abertas, fechadas
 
     def _consume(self, conn, account: AccountState, session: date, barras: list[Bar]) -> StepReport:
         """Alimenta as barras na maquina, EM ORDEM, e journaliza os eventos.
@@ -2477,11 +2535,20 @@ class IntradayLiveRuntime:
             try:
                 eventos = self.machine.on_closed_bar(bar)
             except BrokerExecutionError as erro:
+                # MEDIO 7 (risco residual): aplica AGORA o que esta MESMA
+                # chamada de `on_closed_bar` ja tinha confirmado de verdade
+                # antes de levantar -- ver `_aplica_eventos_parciais_antes_
+                # de_falhar`. Para `FALHA_ALTO` (kind != FECHAMENTO_RECUSADO,
+                # abaixo), isto tem de acontecer ANTES do `raise`: depois
+                # dele nunca mais se chega aqui.
+                p_abertas, p_fechadas = self._aplica_eventos_parciais_antes_de_falhar(
+                    conn, account, erro, bar)
                 if erro.kind != BrokerExecutionError.FECHAMENTO_RECUSADO:
                     raise
                 self._snapshot.last_bar_ts = bar.ts
                 self._registra_falha_de_fechamento(conn, account, session, erro)
-                detalhe = {"barras": len(barras), "entradas": abertas, "saidas": fechadas,
+                detalhe = {"barras": len(barras), "entradas": abertas + p_abertas,
+                          "saidas": fechadas + p_fechadas,
                           "modo": self.execution_mode, "erro": str(erro)}
                 if descartadas:
                     detalhe["descartadas"] = descartadas
@@ -2499,6 +2566,14 @@ class IntradayLiveRuntime:
                 #
                 # Agnostico de estrategia de proposito: qualquer robo que
                 # emita uma acao nao suportada para aqui do mesmo jeito.
+                #
+                # MEDIO 7 (risco residual): um `Exit` real ja confirmado no
+                # passo (3) da MESMA barra, antes de um `Enter` a mercado
+                # (reversao) sem suporte estourar esta excecao, nao pode
+                # desaparecer -- mesmo `_aplica_eventos_parciais_antes_de_
+                # falhar` de cima.
+                p_abertas, p_fechadas = self._aplica_eventos_parciais_antes_de_falhar(
+                    conn, account, erro, bar)
                 motivo = (
                     f"a estrategia pediu uma acao que a execucao real nao "
                     f"suporta: {erro}"
@@ -2512,8 +2587,8 @@ class IntradayLiveRuntime:
                           "precisa de entrada por ordem-limite (maker) para operar "
                           "com dinheiro de verdade.",
                           {"sessao": session.isoformat(), "erro": str(erro)})
-                detalhe = {"barras": len(barras), "entradas": abertas,
-                           "saidas": fechadas, "modo": self.execution_mode,
+                detalhe = {"barras": len(barras), "entradas": abertas + p_abertas,
+                           "saidas": fechadas + p_fechadas, "modo": self.execution_mode,
                            "erro": str(erro)}
                 return StepReport("daytrade_robo_incompativel", session, detail=detalhe)
             for evento in eventos:
