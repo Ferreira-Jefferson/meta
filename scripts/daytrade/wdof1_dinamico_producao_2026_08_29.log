@@ -1,0 +1,30 @@
+[wdof1_dinamico] WDO@, 12 niveis de capital (defaults de PRODUCAO, dinamico agora LIGADO), 12 processos
+
+  [1/12  56.1s] R$      375 -> trades=   10 liquido=R$       -33,40 final=R$      341,60 min=R$     341,60 qtds=[1] [ok]
+  [2/12  56.7s] R$      750 -> trades=   78 liquido=R$      -392,60 final=R$      357,40 min=R$     357,40 qtds=[1] [ok]
+  [3/12  56.8s] R$    3.000 -> trades= 1636 liquido=R$    -2.642,04 final=R$      357,96 min=R$     357,96 qtds=[1] [ok]
+  [4/12  56.8s] R$    1.500 -> trades= 1370 liquido=R$    -1.157,54 final=R$      342,46 min=R$     342,46 qtds=[1] [ok]
+  [5/12  57.2s] R$      500 -> trades=   34 liquido=R$      -153,70 final=R$      346,30 min=R$     343,31 qtds=[1] [ok]
+  [6/12  57.4s] R$    2.000 -> trades= 1465 liquido=R$    -1.667,55 final=R$      332,45 min=R$     332,45 qtds=[1] [ok]
+  [7/12  57.5s] R$    1.000 -> trades=  512 liquido=R$      -628,11 final=R$      371,89 min=R$     371,89 qtds=[1] [ok]
+  [8/12  57.6s] R$   10.000 -> trades= 7046 liquido=R$     2.671,80 final=R$   12.671,80 min=R$   6.274,30 qtds=[1] [ok]
+  [9/12  57.8s] R$   20.000 -> trades= 7046 liquido=R$     5.078,40 final=R$   25.078,40 min=R$  14.159,79 qtds=[1, 2, 3] [ok]
+  [10/12  57.9s] R$   30.000 -> trades= 7046 liquido=R$     9.396,08 final=R$   39.396,08 min=R$  20.434,09 qtds=[2, 3, 4, 5] [ok]
+  [11/12  58.1s] R$    5.000 -> trades= 7046 liquido=R$     2.671,80 final=R$    7.671,80 min=R$   1.274,30 qtds=[1] [ok]
+  [12/12  58.2s] R$   50.000 -> trades= 7046 liquido=R$    13.095,09 final=R$   63.095,09 min=R$  32.982,69 qtds=[4, 5] [ok]
+
+total: 61.6s
+
+=== WDO F1 dinamico (producao) -- capital x resultado, historico inteiro ===
+  R$      375: trades=   10 liquido=R$       -33,40 final=R$      341,60 min=R$     341,60 qtds=[1]
+  R$      500: trades=   34 liquido=R$      -153,70 final=R$      346,30 min=R$     343,31 qtds=[1]
+  R$      750: trades=   78 liquido=R$      -392,60 final=R$      357,40 min=R$     357,40 qtds=[1]
+  R$    1.000: trades=  512 liquido=R$      -628,11 final=R$      371,89 min=R$     371,89 qtds=[1]
+  R$    1.500: trades= 1370 liquido=R$    -1.157,54 final=R$      342,46 min=R$     342,46 qtds=[1]
+  R$    2.000: trades= 1465 liquido=R$    -1.667,55 final=R$      332,45 min=R$     332,45 qtds=[1]
+  R$    3.000: trades= 1636 liquido=R$    -2.642,04 final=R$      357,96 min=R$     357,96 qtds=[1]
+  R$    5.000: trades= 7046 liquido=R$     2.671,80 final=R$    7.671,80 min=R$   1.274,30 qtds=[1]
+  R$   10.000: trades= 7046 liquido=R$     2.671,80 final=R$   12.671,80 min=R$   6.274,30 qtds=[1]
+  R$   20.000: trades= 7046 liquido=R$     5.078,40 final=R$   25.078,40 min=R$  14.159,79 qtds=[1, 2, 3]
+  R$   30.000: trades= 7046 liquido=R$     9.396,08 final=R$   39.396,08 min=R$  20.434,09 qtds=[2, 3, 4, 5]
+  R$   50.000: trades= 7046 liquido=R$    13.095,09 final=R$   63.095,09 min=R$  32.982,69 qtds=[4, 5]

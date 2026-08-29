@@ -558,6 +558,111 @@ de eventualmente lucrar.
 > real este robô precisa"? Se for, falta rodar o histórico inteiro pra
 > descobrir a diferença antes que o mercado descubra por você.
 
+### 3.11 Piso de capital pode ser do DESENHO, não do parâmetro — varrer o parâmetro inteiro pra confirmar antes de tunar mais
+
+Pergunta direta do dono depois do item anterior: "se só tenho o capital
+mínimo inicial (R$375), do que me adianta saber que ele não trava a partir
+de R$5.000? Eu quero que a partir do capital mínimo ele já tenha lucros e
+lucros consistentes." Resposta que exigiu medir, não supor: varri **todo**
+o espaço de `stop_ticks` já mapeado por varreduras anteriores (1 a 20, o
+mesmo robô, `profit_ticks` e `level_spacing_ticks` fixos) contra 8 níveis de
+capital real (R$375 a R$5.000), rodando o histórico INTEIRO (177 pregões)
+pelo caminho de produção em cada uma das 88 combinações.
+
+**Resultado: as 11 configurações de `stop_ticks` fazem a MESMA coisa em
+R$375** — perdem um valor pequeno (de −R$3,40 a −R$93,40) nos primeiros dias
+e depois praticamente param de negociar (10 a 169 trades no total, contra
+milhares que a mesma config produz com capital adequado). Nenhuma lucra.
+Nenhuma lucra até R$1.000. O salto de atividade (de centenas para milhares
+de trades) só aparece entre R$3.000 e R$5.000, em TODA configuração
+testada — não é uma característica de um `stop_ticks` específico, é uma
+parede na mesma altura pra qualquer ponto do parâmetro.
+
+> **Regra:** quando o capital mínimo de sobrevivência (3.10) está muito
+> acima do capital que você de fato tem, a primeira pergunta não é "qual
+> configuração resolve" — é "o piso é do PARÂMETRO ou do DESENHO". Varrer o
+> espaço de parâmetro inteiro já mapeado contra o capital baixo responde
+> isso em uma tarde: se a parede aparece em TODO ponto testado (como aqui),
+> tunar mais parâmetro dentro da mesma família é tempo perdido — o problema
+> é estrutural (aqui: contrato indivisível de 1 unidade + gate de margem
+> tudo-ou-nada, que transforma qualquer sequência de perdas normal da
+> própria estratégia em bloqueio permanente quando o caixa começa exatamente
+> no piso, sem nenhuma folga). A saída correta é ou (a) acumular capital até
+> o piso de sobrevivência medido, ou (b) mudar de instrumento/mecanismo de
+> forma que o próprio piso caia — nunca insistir no mesmo parâmetro.
+> **Pergunte à plataforma nova:** o instrumento que você vai operar tem
+> unidade mínima indivisível (contrato, lote)? Se sim, o piso de capital
+> real não é "preço × unidade mínima" — é esse número MULTIPLICADO pela
+> folga necessária pra sobreviver à variância normal da estratégia sem
+> nunca tocar o piso (3.10) — e nenhum ajuste de parâmetro dentro da mesma
+> família de estratégia costuma mudar isso, porque o gate é do
+> **dimensionamento**, não do sinal.
+
+**Confirmado num SEGUNDO robô, mecanismo totalmente diferente (2026-08-29,
+mesma tarde):** rodando `CopaWin` (rompimento direcional com stop por
+volatilidade, não grid-maker) no piso real do WIN@ com reserva (R$250,
+`margin_per_contract_brl=100`, `risco_pct_por_trade=0.05` já em produção)
+no histórico salvo inteiro (182 pregões) — **2 trades em 182 pregões,
+líquido −R$123,00, e trava** (1.575 de 1.577 tentativas recusadas por
+capital). Mesma assinatura exata do item 3.10/3.11 na WDO F1: primeira
+perda no piso zero de folga tira o caixa de baixo do limiar de 1 contrato
+(margem × 2 × reserva) e nenhum trade mais abre pelo resto do histórico.
+Confirma que a parede não é do grid-maker especificamente — é de QUALQUER
+estratégia com dimensionamento dinâmico por caixa rodando exatamente no piso
+de margem, sem nenhuma folga acima dele. Instrumento com unidade
+FRACIONÁVEL (ação via execução fracionária, ver Parte 6) não tem esse
+piso-parede: o mesmo teste em `Gremah` (PMAM3, lote de 100 ações) deu
+**lucro em ambos os capitais testados** (R$30 → +R$15,69; R$1.000 →
++R$621,63, nunca zerou), com a ressalva de que R$30 só cobriu 8 dos 842
+pregões salvos (o preço da PMAM3 precisa estar MUITO baixo pra R$30 caber —
+ver `pmam3_colapso_de_preco_2026_08_26` — não é um piso estável, é uma
+coincidência de o papel estar em colapso de preço agora).
+
+**Piso exato do CopaWin, depois de uma varredura fina (R$250 a R$3.000):**
+trava até R$500 (21 trades, −R$386,90, final R$113,10) e sobrevive de forma
+limpa a partir de **R$750** (274 trades, +R$10.548,30, idêntico de R$750 a
+R$3.000). Múltiplo sobre o piso de tabela (R$250): **3x** — bem menor que o
+13,3x da WDO F1 (R$375→R$5.000). Confirma que o múltiplo em si também é do
+mecanismo/calibração de cada robô, não uma constante universal — vale medir
+caso a caso, nunca supor.
+
+### 3.12 O % de risco não atravessa de um robô pro outro — o tipo de stop muda o que o % vira em contratos
+
+Pedido do dono depois do item 3.11: já que o CopaWin escala contratos com o
+caixa e a WDO F1 não, ligar o MESMO mecanismo (`contracts_from_risk`, item
+3.9) na WDO F1 também, "prezando pelo controle de risco". Liguei copiando o
+valor já em produção no CopaWin (`risco_pct_por_trade=0.05`) — e o capital
+de R$5.000, que era o piso de sobrevivência LIMPO da WDO F1 (item 3.10/3.11,
+sempre 1 contrato fixo até então), **quase zerou**: líquido −R$4.753,12,
+equity mínima R$246,88, contra +R$2.671,80 que o dimensionamento estático
+sempre deu ali.
+
+Causa: o stop do CopaWin varia com a volatilidade do dia (`stop_vol x
+volatilidade`), então o mesmo % de caixa se traduz num número de contratos
+que muda dia a dia, amortecendo naturalmente dias de stop caro. O stop da
+WDO F1 é FIXO em ticks (16 x R$0,50 x R$10/ponto = **R$80 por contrato,
+sempre o mesmo número**) — 5% de R$5.000 já libera 2-3 contratos enquanto o
+caixa ainda está exatamente no ponto onde a variância normal da estratégia
+mais dói, amplificando a sequência de perdas em vez de esperar existir
+folga de verdade. Uma varredura de {1%, 2%, 3%, 5%} achou que **1%** é o
+único valor que nunca regride nenhum capital já medido (R$3.000/R$5.000
+saem idênticos ao estático de antes) e ainda ganha de verdade em capital
+alto (R$50.000: +R$13.095,09 contra os +R$2.671,80 fixos de sempre).
+
+> **Regra:** um teto por risco (%) não é uma constante universal — é
+> calibrado contra o MECANISMO do stop daquele robô específico. Copiar o
+> número de um robô com stop VARIÁVEL (por volatilidade) para um robô com
+> stop FIXO (em ticks/pontos) pode reproduzir o EXATO problema que o teto
+> por risco foi criado pra evitar (item 3.9), só que num capital diferente.
+> Todo `risco_pct_por_trade` novo precisa da mesma varredura de segurança
+> (múltiplos capitais, incluindo os que já eram limpos ANTES da mudança)
+> antes de ir pra produção — "o mecanismo já existe e funciona noutro robô"
+> não é evidência de que o NÚMERO funciona aqui.
+> **Pergunte à plataforma nova:** o stop desta estratégia é fixo ou varia
+> com a barra/dia? Se variar, um teto por % de risco se adapta sozinho; se
+> for fixo, o % precisa ser calibrado para o pior caso (capital mínimo de
+> sobrevivência, item 3.10), não emprestado de outro robô.
+
 ---
 
 ## Parte 4 — Preenchimento: onde o backtest e o book divergem
@@ -1016,12 +1121,20 @@ dinheiro ou meses.
 16. O capital mínimo que abre 1 posição foi testado rodando o histórico
     INTEIRO com esse capital, ou só calculado pela fórmula de margem? Os
     dois números costumam divergir por uma ordem de grandeza. (3.10)
+17. Se o capital de sobrevivência estiver acima do capital real disponível,
+    isso já foi confirmado como estrutural (parede em TODO ponto do
+    parâmetro já mapeado), ou ainda pode ser um parâmetro mal escolhido?
+    Varrer o espaço inteiro contra capital baixo responde em uma tarde. (3.11)
+18. O stop desta estratégia é fixo (ticks/pontos) ou varia com a
+    barra/dia (volatilidade)? Um teto por % de risco emprestado de outro
+    robô com o tipo OPOSTO de stop pode reproduzir o problema que ele foi
+    criado pra evitar, só que noutro capital. (3.12)
 
 **Sobre a medida**
-17. O simulador modela posição na fila? Se não, o que ele está respondendo? (4.1)
-18. O horário de sessão que ele usa é fixo ou segue o instrumento? (5.2)
-19. Qual é o edge da estratégia **em ticks** neste instrumento? (4.5)
-20. Uma sequência de stops cabe no capital real? Se o tamanho da posição
+19. O simulador modela posição na fila? Se não, o que ele está respondendo? (4.1)
+20. O horário de sessão que ele usa é fixo ou segue o instrumento? (5.2)
+21. Qual é o edge da estratégia **em ticks** neste instrumento? (4.5)
+22. Uma sequência de stops cabe no capital real? Se o tamanho da posição
     escala com o caixa, existe um teto de RISCO por trade separado do teto
     de MARGEM? (3.5, 3.9)
 

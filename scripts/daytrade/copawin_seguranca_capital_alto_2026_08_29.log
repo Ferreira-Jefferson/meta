@@ -1,0 +1,16 @@
+[copawin_seguranca] WIN@, 6 niveis, 6 processos
+
+  [1/6  48.5s] R$    20.000 -> trades= 274 liquido=R$    19.426,90 final=R$    39.426,90 min=R$    14.814,10 qtds=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] [ok]
+  [2/6  48.7s] R$    10.000 -> trades= 274 liquido=R$    13.780,30 final=R$    23.780,30 min=R$     8.386,10 qtds=[1, 2, 3, 4, 5, 6, 7, 8, 11] [ok]
+  [3/6  48.8s] R$    30.000 -> trades= 274 liquido=R$    38.453,60 final=R$    68.453,60 min=R$    22.175,30 qtds=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15] [ok]
+  [4/6  48.9s] R$     5.000 -> trades= 274 liquido=R$     9.564,30 final=R$    14.564,30 min=R$     4.545,90 qtds=[1, 2, 3, 4, 5, 7] [ok]
+  [5/6  48.9s] R$    50.000 -> trades= 274 liquido=R$    82.759,20 final=R$   132.759,20 min=R$    37.006,90 qtds=[2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] [ok]
+  [6/6  48.9s] R$   100.000 -> trades= 274 liquido=R$   127.781,20 final=R$   227.781,20 min=R$    82.850,70 qtds=[5, 7, 8, 9, 10, 11, 12, 13, 14, 15] [ok]
+
+=== resumo ===
+  R$     5.000: liquido=R$9.564,30 final=R$14.564,30 min=R$4.545,90
+  R$    10.000: liquido=R$13.780,30 final=R$23.780,30 min=R$8.386,10
+  R$    20.000: liquido=R$19.426,90 final=R$39.426,90 min=R$14.814,10
+  R$    30.000: liquido=R$38.453,60 final=R$68.453,60 min=R$22.175,30
+  R$    50.000: liquido=R$82.759,20 final=R$132.759,20 min=R$37.006,90
+  R$   100.000: liquido=R$127.781,20 final=R$227.781,20 min=R$82.850,70

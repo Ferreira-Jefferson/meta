@@ -1,0 +1,35 @@
+[wdof1_calib_risco] 24 combinacoes, 12 processos
+
+  [ 1/24  46.5s] risco= 1.0% R$    3.000 -> trades= 1636 liquido=R$    -2.642,04 final=R$      357,96 min=R$     357,96 qtds=[1] [ok]
+  [ 2/24  46.6s] risco= 1.0% R$   30.000 -> trades= 7046 liquido=R$     9.396,08 final=R$   39.396,08 min=R$  20.434,09 qtds=[2, 3, 4, 5] [ok]
+  [ 3/24  46.8s] risco= 2.0% R$    3.000 -> trades= 1636 liquido=R$    -2.642,04 final=R$      357,96 min=R$     357,96 qtds=[1] [ok]
+  [ 4/24  46.9s] risco= 1.0% R$   10.000 -> trades= 7046 liquido=R$     2.671,80 final=R$   12.671,80 min=R$   6.274,30 qtds=[1] [ok]
+  [ 5/24  47.0s] risco= 1.0% R$    5.000 -> trades= 7046 liquido=R$     2.671,80 final=R$    7.671,80 min=R$   1.274,30 qtds=[1] [ok]
+  [ 6/24  47.1s] risco= 1.0% R$   50.000 -> trades= 7046 liquido=R$    13.095,09 final=R$   63.095,09 min=R$  32.982,69 qtds=[4, 5] [ok]
+  [ 7/24  47.4s] risco= 1.0% R$   20.000 -> trades= 7046 liquido=R$     5.078,40 final=R$   25.078,40 min=R$  14.159,79 qtds=[1, 2, 3] [ok]
+  [ 8/24  47.3s] risco= 2.0% R$   50.000 -> trades= 7046 liquido=R$    13.359,00 final=R$   63.359,00 min=R$  31.371,50 qtds=[5] [ok]
+  [ 9/24  47.4s] risco= 2.0% R$   20.000 -> trades= 7046 liquido=R$    12.070,23 final=R$   32.070,23 min=R$   9.037,09 qtds=[2, 3, 4, 5] [ok]
+  [10/24  47.6s] risco= 2.0% R$   10.000 -> trades= 7046 liquido=R$     6.336,40 final=R$   16.336,40 min=R$   5.221,94 qtds=[1, 2, 3, 4] [ok]
+  [11/24  47.7s] risco= 2.0% R$    5.000 -> trades= 7046 liquido=R$     2.586,30 final=R$    7.586,30 min=R$   1.274,30 qtds=[1, 2] [ok]
+  [12/24  47.8s] risco= 2.0% R$   30.000 -> trades= 7046 liquido=R$    11.481,00 final=R$   41.481,00 min=R$  13.252,18 qtds=[3, 4, 5] [ok]
+  [13/24  47.2s] risco= 3.0% R$    3.000 -> trades= 1636 liquido=R$    -2.642,04 final=R$      357,96 min=R$     357,96 qtds=[1] [ok]
+  [14/24  47.1s] risco= 3.0% R$    5.000 -> trades= 7046 liquido=R$     5.597,82 final=R$   10.597,82 min=R$   1.274,30 qtds=[1, 2, 3, 4] [ok]
+  [15/24  46.3s] risco= 5.0% R$    5.000 -> trades= 2003 liquido=R$    -4.753,12 final=R$      246,88 min=R$     246,88 qtds=[1, 2, 3] [QUASE ZEROU]
+  [16/24  47.2s] risco= 3.0% R$   30.000 -> trades= 7046 liquido=R$    11.371,06 final=R$   41.371,06 min=R$  10.627,57 qtds=[4, 5] [ok]
+  [17/24  46.9s] risco= 5.0% R$    3.000 -> trades= 1634 liquido=R$    -2.633,04 final=R$      366,96 min=R$     334,34 qtds=[1, 2] [ok]
+  [18/24  47.5s] risco= 3.0% R$   20.000 -> trades= 7046 liquido=R$    10.593,48 final=R$   30.593,48 min=R$   6.053,83 qtds=[2, 3, 4, 5] [ok]
+  [19/24  47.3s] risco= 3.0% R$   50.000 -> trades= 7046 liquido=R$    13.359,00 final=R$   63.359,00 min=R$  31.371,50 qtds=[5] [ok]
+  [20/24  47.6s] risco= 3.0% R$   10.000 -> trades= 7046 liquido=R$     5.370,96 final=R$   15.370,96 min=R$   3.367,39 qtds=[1, 2, 3, 4, 5] [ok]
+  [21/24  47.2s] risco= 5.0% R$   10.000 -> trades= 7046 liquido=R$     5.741,67 final=R$   15.741,67 min=R$   1.186,49 qtds=[1, 2, 3, 4, 5] [ok]
+  [22/24  47.2s] risco= 5.0% R$   30.000 -> trades= 7046 liquido=R$    13.359,00 final=R$   43.359,00 min=R$  11.371,50 qtds=[5] [ok]
+  [23/24  47.4s] risco= 5.0% R$   20.000 -> trades= 7046 liquido=R$     9.520,79 final=R$   29.520,79 min=R$   3.061,85 qtds=[1, 2, 3, 4, 5] [ok]
+  [24/24  47.4s] risco= 5.0% R$   50.000 -> trades= 7046 liquido=R$    13.359,00 final=R$   63.359,00 min=R$  31.371,50 qtds=[5] [ok]
+
+total: 97.6s
+
+=== resumo: liquido por risco_pct x capital ===
+ risco_pct        R$3.000        R$5.000       R$10.000       R$20.000       R$30.000       R$50.000
+      1.0%      R$-2.642        R$2.672        R$2.672        R$5.078        R$9.396       R$13.095 
+      2.0%      R$-2.642        R$2.586        R$6.336       R$12.070       R$11.481       R$13.359 
+      3.0%      R$-2.642        R$5.598        R$5.371       R$10.593       R$11.371       R$13.359 
+      5.0%      R$-2.633       R$-4.753!       R$5.742        R$9.521       R$13.359       R$13.359 

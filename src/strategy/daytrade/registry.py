@@ -115,14 +115,53 @@ _ROBOTS: dict[str, type[IntradayStrategy]] = {
     Gremah.name: Gremah,
 }
 
-#: kwargs extras só para robôs cujo construtor exige parâmetro sem default
-#: (hoje só `copa_win`: `teto_contratos` é obrigatório de propósito, ver a
+#: kwargs extras pra robôs cujo construtor exige parâmetro sem default
+#: (`copa_win`: `teto_contratos` é obrigatório de propósito, ver a
 #: docstring de `CopaWin.__init__` — herdar um número em silêncio ali seria
-#: o mesmo erro que `Gremah` evita ao recusar símbolo sem calibração). Sem
-#: isto, `cls()` explodiria em `list_daytrade_robots`/`get_daytrade_robot`/
-#: `symbols_for_robot`. Os demais robôs não entram aqui porque seus próprios
-#: defaults de classe JÁ SÃO a calibração medida.
+#: o mesmo erro que `Gremah` evita ao recusar símbolo sem calibração) OU que
+#: precisam de dimensionamento dinâmico por caixa ligado explicitamente
+#: (`wdo_grid_reload_maker`, ver abaixo). `cls()` sem isto explodiria (copa_win)
+#: ou rodaria estático em 1 contrato pra sempre (wdo_grid_reload_maker) em
+#: `list_daytrade_robots`/`get_daytrade_robot`/`symbols_for_robot`.
 _KWARGS_PADRAO: dict[str, dict] = {
+    # 2026-08-29, pedido do dono depois de descobrir que o CopaWin já escala
+    # contratos com o caixa e a WDO F1 não ("wdo também tem que ser dinâmico,
+    # conforme o capital cresce é natural aumentar os contratos"):
+    # `WdoGridReloadMaker` SEMPRE pediu exatamente 1 contrato em produção
+    # (`default_quantity=1` do perfil de futuro, `margin_per_contract_brl`
+    # da estratégia nunca setado) — o modo dinâmico existe no construtor
+    # desde 2026-08-27 mas era OPT-IN, nunca ligado aqui. `margin_per_
+    # contract_brl=150.0` (margem real do WDO@) ativa a realocação por
+    # caixa; `hard_cap_contratos=5` replica o teto REGULATÓRIO do perfil
+    # (`profiles.py`, `max_open_contracts` do WDO@) — sem isto a estratégia
+    # pediria mais contratos do que o motor aceita e toda entrada acima do
+    # teto do motor seria recusada em silêncio (bug de setup já visto em
+    # `wdof1_teto_por_risco_2026_08_29.py`, nunca reproduzir em produção).
+    # `risco_pct_por_trade`/`point_value_brl=10.0` (item 3.9): mesmo
+    # mecanismo do `copa_win` abaixo, mas NÃO o mesmo NÚMERO — copiar 5% sem
+    # medir fez o capital R$5.000 (antes o piso limpo, ver item 3.11) quase
+    # zerar (líquido −R$4.753,12, equity mínima R$246,88) porque o stop
+    # desta estratégia é FIXO em R$ (16 ticks × R$0,50 × R$10/ponto = R$80/
+    # contrato, CONSTANTE, diferente do stop por volatilidade do CopaWin) —
+    # 5% de R$5.000 já libera 2-3 contratos enquanto o caixa ainda está
+    # perto do piso, amplificando a sequência de perdas normal antes de
+    # existir folga de verdade. Varredura de {1%, 2%, 3%, 5%} em
+    # `scripts/daytrade/wdof1_calibracao_risco_pct_2026_08_29.py` achou 1%
+    # como o único valor que NUNCA regride nenhum nível de capital já
+    # medido (R$3.000/R$5.000 saem IDÊNTICOS ao dimensionamento estático de
+    # antes) e ainda ganha de verdade em capital alto: R$50.000 fecha em
+    # +R$13.095,09 (dinâmico) contra +R$2.671,80 (o que o 1-contrato-fixo
+    # SEMPRE dava, em qualquer capital, antes desta mudança). 1% é a escolha
+    # mais conservadora testada — 2%/3% renderam mais em alguns níveis
+    # intermediários sem regredir nenhum dos testados, mas com margem de
+    # segurança menor; ver a memória `wdo-dinamico-producao-2026-08-29` se
+    # quiser reconsiderar depois de mais medição.
+    WdoGridReloadMaker.name: dict(
+        margin_per_contract_brl=150.0,
+        hard_cap_contratos=5,
+        risco_pct_por_trade=0.01,
+        point_value_brl=10.0,
+    ),
     CopaWin.name: dict(
         # `alvo_vol`/`stop_vol` e os demais campos abaixo são
         # `run_copa_score.CALIBRACAO_IS["WIN@"]` (recalibrado e confirmado em
