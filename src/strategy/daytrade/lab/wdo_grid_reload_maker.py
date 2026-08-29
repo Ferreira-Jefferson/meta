@@ -359,6 +359,17 @@ class WdoGridReloadMaker(IntradayStrategy):
         tem efeito quando `margin_per_contract_brl` esta setado."""
         self._cash_atual_brl = cash_brl
 
+    def on_order_rejected(self, ts: pd.Timestamp) -> None:
+        """Zera `pending_side` -- sem isto, uma `EnterLimit` recusada pelo
+        teto de capital (`backtest.intraday.machine`) trava este robo pelo
+        resto da sessao: `on_bar` (linha 476) so' rearma quando
+        `pending_side is None`, e o unico outro lugar que zera isto e' o
+        FILL confirmado (`if positions:`), que nunca acontece para uma ordem
+        recusada. Bug real, incidente WDO F1 2026-08-28 (`LICOES_DE_
+        PRODUCAO.md`, item 1.14): 20/20 recusas por capital amostradas
+        deixavam o robo mudo pelo resto do pregao antes deste hook existir."""
+        self._state.pending_side = None
+
     def _quantidade_da_entrada(self) -> int | None:
         """`self.quantity` intacto (pode ser `None`) por default -- o motor
         decide via `IntradayBacktestConfig.default_quantity`, exatamente

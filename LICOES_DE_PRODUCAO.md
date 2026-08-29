@@ -231,6 +231,62 @@ minutos. Ninguém viu.
 > máximo uma entrada por barra — qualquer coisa muito acima disso é laço, não
 > operação.
 
+### 1.14 Recusa de preenchimento sem aviso de volta trava a máquina de estados inteira — CORRIGIDO 2026-08-29
+
+Medido rodando a WDO F1 com caixa real (R$300 a R$3.000) nos 177 pregões
+completos de WDO@ disponíveis (2025-12-09 a 2026-08-28): 136 ordens recusadas
+por capital insuficiente no instante do preenchimento (teto dinâmico por caixa,
+a própria correção do incidente da Parte 0) — e nas 20 primeiras verificadas,
+**20 de 20** o robô nunca mais operou pelo resto daquele pregão, quase sempre
+recusado ainda nos primeiros minutos da sessão (~12:01 UTC). Causa: a
+estratégia marca "aguardando confirmação de preenchimento" ao enviar a ordem e
+só limpa essa marca quando vê posição aberta de volta. A recusa descarta a
+ordem inteira no motor sem passar por esse caminho — a estratégia nunca sabe
+que o pedido morreu, e o "aguardando" fica para sempre, mesmo que o caixa se
+recupere no minuto seguinte. Contaminou também a MEDIÇÃO: comparar o líquido
+"com caixa real" contra o líquido "com caixa nocional" estava comparando sinal
+contra sinal-mais-mudez, não sinal contra sizing.
+
+**Correção aplicada:** novo hook `IntradayStrategy.on_order_rejected(ts)`
+(default no-op), chamado pelo motor (`backtest/intraday/machine.py`) nos dois
+pontos onde uma ordem morre sem preencher — `Enter` a mercado recusado, e o
+ÚLTIMO filho de uma `EnterLimit` recusado sem nenhum filho aceito (uma ordem
+fatiada com pelo menos 1 filho aceito não dispara isto — `positions` deixa de
+estar vazia e o caminho normal já resolve). Implementado nos 3 robôs do pódio
+que guardam esse estado próprio fora de `positions` — `WdoGridReloadMaker`,
+`Gremah`, `GremahTick` — zerando `pending_side` (e equivalentes) no aviso.
+`CopaWin` não precisou: seu `_espera` já era um contador com TTL próprio,
+autocurativo por desenho. Suíte inteira (1.566 testes) verde depois da mudança.
+
+**Achado ao VERIFICAR a correção, mais importante que o fix em si:** rodar de
+novo os mesmos testes de caixa real (T1/S4 e T1/S16, R$300/R$375/R$3.000) deu
+os MESMOS números, trade a trade — o fix não mudou nenhum resultado histórico
+da WDO F1. Motivo: este robô nunca piramida e sempre pede 1 contrato
+(`motor_nao_piramida_2026_08_26`), então TODA recusa por capital dela é
+`cap_capital_atual() == 0` (caixa abaixo do piso de margem), nunca "cabe mas
+`open_contracts` já ocupa a vaga". E `cap_capital_atual` só muda quando um
+trade fecha e altera `realized_pnl` — que não pode acontecer sem caixa. É a
+mesma catraca de ruína da Parte 1.13/`dois_pisos_censuram_backtest_2026_08_26`,
+vista de outro ângulo: uma vez abaixo do piso, nem uma correção de bug tira o
+robô de lá. O estado "aguardando" agora fica CORRETO (deixa de mentir que uma
+ordem morta ainda existe), mas só passa a mudar resultado de verdade num robô
+que PODE ter `open_contracts` ocupando a vaga com caixa disponível — o caso de
+`Gremah`/`GremahTick` com entrada fatiada (`dividir_entrada`), onde uma posição
+existente fechar libera vaga para uma nova ordem AINDA no mesmo pregão.
+
+> **Regra:** toda decisão "aguardando confirmação" precisa de caminho de volta
+> para os DOIS desfechos — confirmado E recusado — não só o feliz. Um estado
+> que só uma trilha limpa é um estado que trava para sempre na outra. Mas medir
+> o EFEITO do conserto importa tanto quanto o conserto: um estado incorreto
+> pode ser genuinamente inofensivo se a causa-raiz da rejeição (aqui, caixa
+> abaixo do piso) já é irrecuperável por outro motivo — corrigir a mentira no
+> estado não é o mesmo que destravar o robô.
+> **Pergunte à plataforma nova:** o evento de rejeição de uma ordem chega de
+> volta pra quem decidiu, ou fica só no log do motor de execução? Se só fica no
+> motor, a estratégia precisa de outro sinal (timeout, checagem de vida) para
+> saber que aquele pedido morreu — do contrário qualquer rejeição isolada
+> aposenta o robô pelo resto do pregão, em silêncio.
+
 ---
 
 ## Parte 2 — Estado, reinício e duplicidade
@@ -859,17 +915,19 @@ dinheiro ou meses.
     resultado parcial de uma chamada que abortou no meio? Se não, nada de
     acumular efeito confirmado em variável local: cada um é emitido assim que
     confirma. (2.5)
+12. O evento de rejeição de uma ordem chega de volta pra quem decidiu, ou fica
+    só no log do motor de execução? (1.14)
 
 **Sobre o dinheiro**
-12. Dá para consultar a margem exigida por uma ordem e a margem livre da conta? (3.3)
-13. A conta é netting ou hedging? (1.4)
-14. Existe algum limite de perda diária imposto pela plataforma, ou preciso construí-lo? (Parte 0, falha 5)
+13. Dá para consultar a margem exigida por uma ordem e a margem livre da conta? (3.3)
+14. A conta é netting ou hedging? (1.4)
+15. Existe algum limite de perda diária imposto pela plataforma, ou preciso construí-lo? (Parte 0, falha 5)
 
 **Sobre a medida**
-15. O simulador modela posição na fila? Se não, o que ele está respondendo? (4.1)
-16. O horário de sessão que ele usa é fixo ou segue o instrumento? (5.2)
-17. Qual é o edge da estratégia **em ticks** neste instrumento? (4.5)
-18. Uma sequência de stops cabe no capital real? (3.5)
+16. O simulador modela posição na fila? Se não, o que ele está respondendo? (4.1)
+17. O horário de sessão que ele usa é fixo ou segue o instrumento? (5.2)
+18. Qual é o edge da estratégia **em ticks** neste instrumento? (4.5)
+19. Uma sequência de stops cabe no capital real? (3.5)
 
 ---
 

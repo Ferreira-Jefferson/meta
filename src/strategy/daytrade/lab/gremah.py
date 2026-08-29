@@ -1169,6 +1169,19 @@ class Gremah(IntradayStrategy):
     def on_capital_update(self, cash_brl: float) -> None:
         self._cash_atual_brl = cash_brl
 
+    def on_order_rejected(self, ts: pd.Timestamp) -> None:
+        """Zera `pending_side`/`pending_bars_waited` -- mesmo reset que o
+        FILL confirmado ja faz (`if positions:` em `on_bar`), so' que para
+        uma ordem que o motor recusou por teto em vez de preencher. Sem
+        isto o robo so' se recuperava por acidente, via a checagem de
+        "ordem parada obsoleta" (`stale_order`) achar o pending velho
+        depois de `rolling_reanchor_after_bars`/troca de fase -- rearme
+        atrasado sem necessidade, e nulo durante toda a fase FIXA. Achado
+        2026-08-29 (`LICOES_DE_PRODUCAO.md`, item 1.14), mesma causa raiz
+        confirmada em `WdoGridReloadMaker`."""
+        self._state.pending_side = None
+        self._state.pending_bars_waited = 0
+
     def seed_volume_window(self, previous_session_tail: list[Bar]) -> None:
         self._janela_volume.definir_cauda_anterior(previous_session_tail)
 

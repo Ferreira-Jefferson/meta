@@ -972,6 +972,10 @@ class IntradaySessionMachine:
         if not self._cabe_no_teto(pending.quantity or cfg.default_quantity):
             events.append(self._recusa_por_teto(
                 ts, pending.side, pending.quantity or cfg.default_quantity, "market"))
+            # Ordem morta, zero posicao resultante -- avisa o robo (ver a
+            # docstring de `IntradayStrategy.on_order_rejected`; achado
+            # 2026-08-29 no incidente WDO F1).
+            self.strategy.on_order_rejected(ts)
             return events
         entry_side: Literal["buy", "sell"] = "buy" if pending.side == "long" else "sell"
         entry_px = apply_intraday_slippage(bar.open, entry_side, cfg.costs)
@@ -1368,6 +1372,16 @@ class IntradaySessionMachine:
                         self.resting_limit = None
                         self.resting_limit_bars_waited = 0
                         self._queue_ahead_remaining = 0.0
+                        if not self.positions:
+                            # Todos os filhos tocaram e NENHUM abriu posicao
+                            # (todos recusados por teto) -- ordem morta, zero
+                            # fill. Se algum filho tivesse sido aceito,
+                            # `self.positions` nao estaria vazia aqui, e o
+                            # proprio `on_bar` do robo ja' saberia pelo
+                            # caminho normal (`if positions:`). Achado
+                            # 2026-08-29, incidente WDO F1 -- ver a docstring
+                            # de `IntradayStrategy.on_order_rejected`.
+                            self.strategy.on_order_rejected(ts)
                 else:
                     self.resting_limit_bars_waited += 1
                     if order.ttl_bars is not None and self.resting_limit_bars_waited >= order.ttl_bars:

@@ -477,6 +477,28 @@ class IntradayStrategy(ABC):
         `Gremah`, reload 2026-08-22) precisa disso; a maioria decide so' com
         o que ja recebe em `on_bar`."""
 
+    def on_order_rejected(self, ts: pd.Timestamp) -> None:
+        """Avisa o robo que a ULTIMA ordem que ele emitiu (`Enter` a
+        mercado, ou o ULTIMO filho de uma `EnterLimit` que ainda restava
+        esperando) morreu sem abrir posicao nenhuma -- recusada pelo motor
+        (`backtest.intraday.machine.IntradaySessionMachine._recusa_por_teto`,
+        hoje so' por teto de capital ou `max_open_contracts`), nunca por
+        preco nao ter tocado. Chamado SO' quando a ordem esta definitivamente
+        morta (nenhum filho restando mais) E nenhuma posicao resultou dela --
+        uma `EnterLimit` fatiada (`split_quantities`) com PELO MENOS um filho
+        aceito nao dispara isto, porque `positions` deixa de estar vazio e o
+        proprio `on_bar` ja' teria como saber.
+
+        Default no-op (2026-08-29, achado no incidente WDO F1 de
+        2026-08-28): um robo que guarda estado proprio de "ordem pendente"
+        (`pending_side`/equivalente, fora de `positions`) TEM que zerar esse
+        estado aqui, senao ele acha para sempre que uma ordem ainda esta
+        viva quando na verdade o motor ja' a descartou -- travando o robo
+        pelo resto da sessao (confirmado 20/20 amostras em
+        `WdoGridReloadMaker` antes deste hook existir). Um robo sem estado
+        de pendencia proprio (decide so' a partir de `positions` a cada
+        chamada) nao precisa sobrescrever isto."""
+
     def seed_volume_window(self, previous_session_tail: list[Bar]) -> None:
         """Alimenta o robo com o FINAL do pregao ANTERIOR, antes da
         primeira barra/tick de hoje — para um teto de posicao baseado em
