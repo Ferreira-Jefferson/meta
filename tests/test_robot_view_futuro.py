@@ -87,7 +87,7 @@ def test_daytrade_assets_de_futuro_marca_is_futuro_e_ticks():
     assert ativo.symbol == "WDO@"
     assert ativo.is_futuro is True
     assert ativo.profit_ticks == 1
-    assert ativo.stop_ticks == 4
+    assert ativo.stop_ticks == 16
     # margem-based, presente mesmo sem preço de minuto salvo. R$375 = margem
     # x buffer x reserva de caixa -- ver
     # `test_capital_minimo_para_futuro_usa_margem_do_perfil_nao_o_preco`.

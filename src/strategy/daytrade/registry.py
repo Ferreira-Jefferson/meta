@@ -77,11 +77,27 @@ from strategy.daytrade.lab.wdo_grid_reload_maker import WdoGridReloadMaker
 # 16 para 4 (varredura completa profit_ticks/stop_ticks 1..20, ver a
 # memória `wdof1-grid-1a20-encerrada-2026-08-28`) — T1 S4 domina T1 S16 em
 # todas as métricas no IS. A confirmação OOS citada acima (R$148,89/pregão,
-# 89% de retenção) descreve especificamente T1 S16, NÃO o default atual:
-# T1 S4 nunca foi medido fora da amostra. O robô segue TOP-1 (a ressalva de
-# preenchimento passivo acima continua valendo igual para os dois), mas a
-# validação OOS que sustentou a promoção original não cobre a config em
-# produção agora.
+# 89% de retenção) descreve especificamente T1 S16, NÃO o default de então:
+# T1 S4 nunca foi medido fora da amostra.
+#
+# 2026-08-29, REVERTIDO de volta para 16 (default da classe voltou a ser
+# `stop_ticks=16`): a ressalva acima se confirmou, e de forma mais grave do
+# que "não foi medido fora da amostra" — rodando o histórico salvo INTEIRO
+# (177 pregões) com CAIXA REAL (não nocional), T1 S4 nunca sobrevive ao
+# próprio histórico com capital realista: trava (cai abaixo do piso de
+# capital pra abrir 1 contrato — item 1.14/3.9 de `LICOES_DE_PRODUCAO.md` —
+# e NUNCA recupera dali em diante) em todo nível de capital testado até
+# R$20.000, e só sobrevive com R$30.000 — mesmo assim fechando em
+# +R$4.586,87 (quase só devolvendo o capital, líquido de R$-25.413,13 sobre
+# R$30.000). T1 S16 sobrevive com só R$5.000 e fecha estável em +R$2.671,80
+# a partir daí (idêntico de R$5.000 a R$30.000). Win rate no mesmo teste:
+# 65,7% (S4) contra 90,3% (S16) — S4 é estruturalmente pior (a razão
+# risco:retorno 1:4 exige >80% de acerto pra empatar; 65,7% fica abaixo
+# disso), não uma diferença de amostra. Ver `scripts/daytrade/wdof1_stress_
+# capital_real_historico_completo.py` e a memória `wdof1-stop-ticks-4-
+# producao-2026-08-28` (atualizada com a reversão). O robô segue TOP-1, e a
+# confirmação OOS original (R$148,89/pregão, 89% de retenção) volta a
+# descrever o default em produção.
 #
 # 2026-08-22, decisão do dono (ordem original, agora TOP-3/TOP-4): entre
 # `gremah_tick` e `gremah`, tick a tick não tem a ambiguidade "stop e alvo

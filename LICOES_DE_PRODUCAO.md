@@ -526,6 +526,38 @@ gatilho. Fica registrado aqui porque é o mesmo tipo de erro do resto deste
 item, só que na tentativa de conserto: proteção que não é recalculada
 contra o RISCO atual (só contra um marco do passado) não é proteção.
 
+### 3.10 Capital mínimo de TABELA abre 1 posição; capital mínimo de VERDADE sobrevive ao histórico inteiro
+
+Motivado por um resultado negativo (`WdoGridReloadMaker`, item anterior a
+este de 2026-08-29) que "não podia existir": rodando o histórico salvo
+INTEIRO (177 pregões de WDO@) com caixa real, a config em produção então
+(T1 S4) **nunca sobrevivia** em nenhum capital testado até R$20.000 — cada
+nível trava (cai abaixo do piso de margem pra abrir 1 contrato) em algum
+ponto e **nunca mais recupera dali em diante** (mesmo mecanismo do item
+1.14/3.9: sem trade, o caixa não muda, e sem caixa não há trade — catraca
+de mão única). Só sobreviveu com R$30.000, 80x o "mínimo de tabela"
+documentado (R$375 — margem × buffer × reserva, o bastante pra abrir 1
+contrato UMA VEZ). Trocando só o STOP (T1 S16, sem nenhuma outra mudança),
+o piso de sobrevivência caiu de R$30.000 para R$5.000 — uma diferença de
+6x que a fórmula de margem sozinha nunca revelaria, porque margem mede
+QUANTO CABE agora, não quanto a estratégia PERDE ao longo do tempo antes
+de eventualmente lucrar.
+
+> **Regra:** "capital mínimo" tem duas respostas diferentes e as duas
+> importam. A de MARGEM (`margem × buffer × reserva`) responde "cabe 1
+> posição?" — é rápida, analítica, e é o que a tabela documenta. A de
+> SOBREVIVÊNCIA responde "esse capital atravessa a variância normal da
+> estratégia no histórico inteiro sem cair no piso e travar pra sempre?" —
+> só sai rodando o backtest CONTÍNUO (nunca dia-a-dia reiniciado) com cada
+> nível de capital candidato, e é a única resposta que decide se o robô
+> ainda vai estar vivo daqui a 6 meses. Nunca aumentar capital real de um
+> robô usando só a fórmula de margem — ela sistematicamente SUBESTIMA o
+> mínimo verdadeiro, às vezes por uma ordem de grandeza.
+> **Pergunte à plataforma nova:** o capital que valida a abertura de uma
+> posição na plataforma é o mesmo número usado pra decidir "quanto capital
+> real este robô precisa"? Se for, falta rodar o histórico inteiro pra
+> descobrir a diferença antes que o mercado descubra por você.
+
 ---
 
 ## Parte 4 — Preenchimento: onde o backtest e o book divergem
@@ -981,12 +1013,15 @@ dinheiro ou meses.
 13. Dá para consultar a margem exigida por uma ordem e a margem livre da conta? (3.3)
 14. A conta é netting ou hedging? (1.4)
 15. Existe algum limite de perda diária imposto pela plataforma, ou preciso construí-lo? (Parte 0, falha 5)
+16. O capital mínimo que abre 1 posição foi testado rodando o histórico
+    INTEIRO com esse capital, ou só calculado pela fórmula de margem? Os
+    dois números costumam divergir por uma ordem de grandeza. (3.10)
 
 **Sobre a medida**
-16. O simulador modela posição na fila? Se não, o que ele está respondendo? (4.1)
-17. O horário de sessão que ele usa é fixo ou segue o instrumento? (5.2)
-18. Qual é o edge da estratégia **em ticks** neste instrumento? (4.5)
-19. Uma sequência de stops cabe no capital real? Se o tamanho da posição
+17. O simulador modela posição na fila? Se não, o que ele está respondendo? (4.1)
+18. O horário de sessão que ele usa é fixo ou segue o instrumento? (5.2)
+19. Qual é o edge da estratégia **em ticks** neste instrumento? (4.5)
+20. Uma sequência de stops cabe no capital real? Se o tamanho da posição
     escala com o caixa, existe um teto de RISCO por trade separado do teto
     de MARGEM? (3.5, 3.9)
 

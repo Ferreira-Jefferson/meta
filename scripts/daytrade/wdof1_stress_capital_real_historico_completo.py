@@ -18,13 +18,18 @@ a parte.
 reiniciasse o caixa a cada dia, nunca veria uma sequencia de perdas
 ATRAVESSAR dias, que e' exatamente como uma conta real funciona.
 
-3 niveis de capital testados, todos justificados (nenhum arbitrario):
+4 niveis de capital testados, todos justificados (nenhum arbitrario):
   - R$300  = minimo real da tabela do CLAUDE.md (margem WDO x2 lotes),
              o que a conta tinha no dia do incidente.
   - R$375  = limiar exato citado na mesma tabela pra abrir 1 contrato JA
              com a reserva de seguranca (R$300 fica inerte por design).
   - R$3.000 = capital com folga (varios contratos possiveis), pra separar
              "trava por caixa" de "trava por perda de verdade".
+  - R$5.000 = MEDIDO (2026-08-29, ver a nota de reversao no topo do modulo
+             `strategy/daytrade/lab/wdo_grid_reload_maker.py`) como o piso
+             real pra T1/S16 (o default de producao apos a reversao)
+             sobreviver ao historico INTEIRO sem travar -- abaixo disso
+             (inclusive os R$3.000 acima) ainda trava.
 
 Uso: `python scripts/daytrade/wdof1_stress_capital_real_historico_completo.py`
 """
@@ -45,7 +50,7 @@ from strategy.daytrade.registry import get_daytrade_robot  # noqa: E402
 
 SYMBOL = "WDO@"
 _ECONOMIA_WDO = (0.01, 0.001)
-NIVEIS_CAPITAL = [300.0, 375.0, 3_000.0]
+NIVEIS_CAPITAL = [300.0, 375.0, 3_000.0, 5_000.0]
 MIN_BARRAS_POR_PREGAO = 400
 
 

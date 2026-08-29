@@ -28,7 +28,27 @@ celulas, `scripts/daytrade/wdof1_grid_1a5_2026_08_28.py` e
 160,60 vs 92,46) -- ver a memoria `wdof1-grid-1a20-encerrada-2026-08-28`.
 RESSALVA que nao mudou com a troca: T1 S4 nunca foi medido no OOS. A
 confirmacao OOS citada acima (R$148,89/pregao etc.) descreve especifica-
-mente T1 S16, nao o default atual.
+mente T1 S16, nao o default de entao.
+
+2026-08-29, REVERTIDO de volta para 16: a ressalva acima se confirmou.
+Rodando o historico COMPLETO salvo (177 pregoes, 2025-12-09 a 2026-08-28)
+com CAIXA REAL (nao nocional) nos dois candidatos, T1 S4 nunca sobrevive ao
+proprio historico com capital realista -- trava (fica abaixo do piso de
+capital pra abrir 1 contrato, ver `LICOES_DE_PRODUCAO.md` item 1.14/3.9, e
+NUNCA recupera dai em diante) em TODO nivel testado ate R$20.000, e so'
+sobrevive com R$30.000 -- e mesmo assim fecha em +R$4.586,87 (líquido
+R$-25.413,13 sobre R$30.000, quase so' devolvendo o capital). T1 S16
+sobrevive o historico inteiro com so' R$5.000 e fecha estavel em
++R$2.671,80 líquido a partir dai (mesmo resultado de R$5.000 a R$30.000 --
+uma vez que o caixa nao aperta mais, o robo nao depende de mais capital).
+Win rate no mesmo teste: 65,7% (S4) contra 90,3% (S16) -- S4 e' uma
+configuracao estruturalmente pior (razao risco:retorno 1:4 exige >80% de
+acerto pra empatar; 65,7% fica abaixo disso), nao so' "medida numa amostra
+diferente". Ver `scripts/daytrade/wdof1_stress_capital_real_historico_
+completo.py` (achou o travamento) e a memoria `wdof1-stop-ticks-4-
+producao-2026-08-28` (atualizada com a reversao). A confirmacao OOS citada
+no paragrafo anterior (R$148,89/pregao, 89% de retencao) volta a descrever
+o default ATUAL.
 
 `tick_size` NAO tem default de instrumento nenhum
 embutido aqui (fica 0.5, o `price_tick_size` do WDO@ documentado em
@@ -235,7 +255,7 @@ class WdoGridReloadMaker(IntradayStrategy):
     tagline = (
         "Uma ordem parada 1 tick do preco de abertura, dos dois lados, no "
         "mini-dolar. Quando um lado toca, sai com alvo de 1 tick e stop de "
-        "4 -- e rearma no mesmo lugar. O lucro de cada ida e volta e' de "
+        "16 -- e rearma no mesmo lugar. O lucro de cada ida e volta e' de "
         "centavos; o numero medido depende de quanto disso e' fila real, "
         "nao so' de o sinal existir."
     )
@@ -243,8 +263,8 @@ class WdoGridReloadMaker(IntradayStrategy):
         "Assim que o pregao abre, o robo deixa uma ordem de compra parada 1 "
         "tick abaixo do preco de abertura e uma de venda 1 tick acima -- as "
         "duas ao mesmo tempo, sem escolher lado. Quando uma delas e' tocada, "
-        "ele sai com um alvo pequeno (1 tick de lucro) ou um stop menor "
-        "(4 ticks de perda) se o mercado virar contra. Fechada a posicao, "
+        "ele sai com um alvo pequeno (1 tick de lucro) ou um stop mais largo "
+        "(16 ticks de perda) se o mercado virar contra. Fechada a posicao, "
         "rearma no MESMO nivel -- nunca persegue o preco para um nivel mais "
         "distante que pode nunca ser tocado.",
         "E' um robo de EXECUCAO, nao de previsao de direcao: ele nao aposta "
@@ -254,13 +274,18 @@ class WdoGridReloadMaker(IntradayStrategy):
         "acoes) sobrevive mesmo quando prever direcao no futuro nao "
         "funciona (ver a linha da Copa BTG, encerrada por refutacao "
         "direcional em 2026-08-26).",
-        "2026-08-28: stop mudou de 16 para 4 ticks apos varredura completa "
-        "(1..20 x 1..20) mostrar T1 S4 dominando T1 S16 no IS -- liquido "
-        "R$11.563,00 (vs R$11.233,50), MaxDD R$72,00 (vs R$121,50), calmar "
-        "160,60 (vs 92,46), R$160,60/pregao em 72 pregoes. RESSALVA: esse "
-        "numero e' so' IS. Ao contrario do T1 S16 (que tinha confirmacao "
-        "OOS explicita -- R$148,89/pregao IS+OOS, 89% de retencao), T1 S4 "
-        "NUNCA foi medido fora da amostra.",
+        "2026-08-28: o stop foi trocado de 16 para 4 ticks apos varredura "
+        "completa (1..20 x 1..20) mostrar T1 S4 dominando T1 S16 no IS. "
+        "2026-08-29: REVERTIDO de volta para 16 -- a ressalva de entao se "
+        "confirmou. Rodando o historico completo salvo (177 pregoes) com "
+        "CAIXA REAL, T1 S4 nunca sobrevive ao proprio historico com capital "
+        "realista (trava e nunca recupera em todo nivel testado ate "
+        "R$20.000; so' sobrevive com R$30.000, e mesmo assim fecha quase so' "
+        "devolvendo o capital). T1 S16 sobrevive com so' R$5.000 e fecha "
+        "estavel em lucro a partir dai. Win rate no mesmo teste: 65,7% (S4) "
+        "contra 90,3% (S16) -- S4 e' estruturalmente pior (1:4 de risco:"
+        "retorno exige >80% de acerto pra empatar; 65,7% fica abaixo disso), "
+        "nao so' uma amostra diferente.",
         "Os dois (S16 e S4) dependem do mesmo ponto cego: o numero so' "
         "existe se a ordem parada for de fato preenchida no toque -- e "
         "isso NUNCA foi medido com dado de livro real. O motor de teste "
@@ -268,9 +293,10 @@ class WdoGridReloadMaker(IntradayStrategy):
         "quando o fluxo vem contra ela, o que o dado disponivel nao "
         "modela.",
         "Por isso ele entra no painel, mas o proximo passo antes de "
-        "qualquer capital maior nao e' mais backtest -- e' confirmar T1 S4 "
-        "no OOS e so' depois medir a taxa de preenchimento passivo com 1 "
-        "contrato ao vivo.",
+        "qualquer capital maior nao e' mais backtest -- e' medir a taxa de "
+        "preenchimento passivo com 1 contrato ao vivo (T1 S16 ja tem "
+        "confirmacao OOS de sinal -- R$148,89/pregao, 89% de retencao -- so' "
+        "falta a taxa de fila real).",
     )
     plain_example = (
         "O dolar abre a R$ 5.079,00 (WDO@, tick de R$0,50). O robo deixa "
@@ -278,17 +304,17 @@ class WdoGridReloadMaker(IntradayStrategy):
         "a R$ 5.079,50 (1 tick acima).",
         "O preco cai e toca R$ 5.078,50 -- a compra e' preenchida. Na hora, "
         "o robo pendura a venda de saida em R$ 5.079,00 (alvo de 1 tick de "
-        "lucro) e um stop a mercado em R$ 5.076,50 (4 ticks abaixo).",
+        "lucro) e um stop a mercado em R$ 5.071,00 (16 ticks abaixo).",
         "Se o preco sobe de volta a R$ 5.079,00 antes de cair mais, a venda "
         "de saida e' tocada: ganhou R$5,00 (1 tick x R$5,00 x 1 contrato), "
         "menos a tarifa. O robo rearma IMEDIATAMENTE as duas ordens no "
         "mesmo nivel de antes (R$ 5.078,50 / R$ 5.079,50) -- nao persegue "
         "o novo preco.",
-        "Se em vez disso o preco despenca 4 ticks sem voltar, o stop "
-        "dispara: perde R$20,00 (4 x R$5,00), quatro vezes o ganho de "
+        "Se em vez disso o preco despenca 16 ticks sem voltar, o stop "
+        "dispara: perde R$80,00 (16 x R$5,00), dezesseis vezes o ganho de "
         "um acerto. E' por isso que a taxa de acerto tem de ficar perto de "
-        "80% para o resultado ficar positivo -- uma unica perda apaga "
-        "cerca de quatro ganhos.",
+        "94% para o resultado ficar positivo -- uma unica perda apaga "
+        "cerca de dezesseis ganhos.",
     )
 
     def __init__(
@@ -297,7 +323,7 @@ class WdoGridReloadMaker(IntradayStrategy):
         tick_size: float = WDO_TICK_SIZE,
         level_spacing_ticks: int = 1,   # "x1"
         profit_ticks: int = 1,          # "T1"
-        stop_ticks: int | None = 4,     # "S4" -- ver nota 2026-08-28 no topo do modulo
+        stop_ticks: int | None = 16,    # "S16" -- ver nota 2026-08-29 no topo do modulo (S4 revertido)
         reanchor_mode: ReanchorMode = "rolling_last_price",
         max_trades_per_side: int = 200,
         session_stop_brl: float | None = None,
