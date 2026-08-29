@@ -856,3 +856,82 @@ def contracts_from_capital_com_reserva(
     return contracts_from_capital(
         cash_brl, margin_per_contract_brl, buffer=buffer * reserva, hard_cap=hard_cap,
     )
+
+
+# ---------- teto por RISCO por trade (2026-08-29, item 3.9) ----------------
+# `contracts_from_capital_com_reserva` (acima) limita ALAVANCAGEM/margem --
+# quantos contratos a CORRETORA deixa abrir sem chamada de margem. Medido no
+# `CopaWin` (WIN@, R$3.000 real, 182 pregoes salvos): isso NAO limita RISCO.
+# O caixa cresceu 43% num dia bom (R$3.000 -> R$4.290), o teto por margem
+# escalou a proxima entrada de 12 para 15 contratos, e o MESMO `stop_vol` de
+# sempre -- agora sobre 15 contratos em vez de 12 -- perdeu R$3.457,50 num
+# unico trade: a conta foi de R$3.000,00 a R$68,50 (-97,7%) sem nunca ficar
+# negativa, quase zerando com margem/reserva funcionando exatamente como
+# desenhadas. Os dois tetos so' coincidem por acidente no tamanho em que
+# foram medidos -- margem protege a CORRETORA (chamada de margem), nao o
+# DONO (ruina por sequencia de stops). Ver `LICOES_DE_PRODUCAO.md` item 3.9.
+#
+# Uma ideia INTERMEDIARIA foi testada e REFUTADA antes desta (2026-08-29,
+# `copawin_ratchet_skim_teste_2026_08_29.py`, memoria `copawin-ratchet-skim-
+# refutado-risco-pct-validado`): "separar" uma fatia do caixa a cada marco de
+# crescimento e parar de conta-la como caixa operacional. Nao funciona porque
+# a fatia separada e' so' contabil (nunca sai da MESMA posicao/MESMA conta) e
+# fica CONGELADA em reais -- quando o caixa recupera de uma perda, ela vira
+# uma fracao cada vez MENOR do caixa atual, e o tamanho da entrada reinfla
+# sem nenhum novo gatilho. Em alguns parametros testados isso deixou a conta
+# em EQUITY NEGATIVA, pior que nao fazer nada.
+def contracts_from_risk(
+    cash_brl: float,
+    risco_pct: float,
+    stop_reais_por_unidade: float,
+    hard_cap: int | None = None,
+) -> int:
+    """Quantos CONTRATOS (ou LOTES, a formula e' a mesma -- "unidade" e' o
+    que quem chama dimensiona: 1 contrato de futuro ou 1 lote de acao) o
+    caixa atual sustenta se o pior caso aceitavel (o STOP sendo tocado) nao
+    puder consumir mais que `risco_pct` do caixa.
+
+    Formula: `floor(cash_brl x risco_pct / stop_reais_por_unidade)`, truncado
+    e nunca negativo -- mesma forma/mesmos casos de borda de `contracts_from_
+    capital` (ver la' a nota sobre tolerancia de ponto flutuante). Ao
+    contrario daquela, este teto e' RECALCULADO a cada entrada com o `stop_
+    reais_por_unidade` DESSA entrada especifica (ex.: `stop_vol x volatilidade_
+    atual x point_value_brl` no `CopaWin`, que muda de entrada pra entrada) --
+    nunca com um valor ancorado num momento passado, que e' exatamente o
+    defeito que derrubou a ideia do ratchet-skim acima.
+
+    `stop_reais_por_unidade` e' parametro OBRIGATORIO, igual `margin_per_
+    contract_brl` em `contracts_from_capital`: nunca uma constante interna,
+    porque depende do STOP calibrado de cada robo (fixo em ticks, como
+    `WdoGridReloadMaker`, ou por volatilidade do dia, como `CopaWin`) -- quem
+    chama sempre sabe esse numero no instante da entrada, esta funcao nunca
+    recalcula stop nenhum.
+
+    `hard_cap`: mesma semantica de `contracts_from_capital` -- teto adicional
+    aplicado DEPOIS (ex.: `teto_contratos` regulatorio), resultado e' sempre
+    o MENOR dos dois. Combinar com `contracts_from_capital_com_reserva` (o
+    chamador tira o `min()` dos dois resultados) da' as DUAS protecoes ao
+    mesmo tempo -- margem/alavancagem E risco por trade -- nenhuma substitui
+    a outra: alavancagem alta com risco baixo ainda so' abre o que o risco
+    permite; risco alto com margem curta ainda so' abre o que a margem
+    permite.
+
+    Casos de borda: `cash_brl<=0` devolve `0` (nao erro -- caixa genuinamente
+    insuficiente, mesmo espirito de `contracts_from_capital`). `risco_pct<=0`
+    ou `stop_reais_por_unidade<=0` levanta `ValueError` -- um numero
+    nao-positivo ali e' erro de quem chamou, nunca "sem teto"."""
+    if risco_pct <= 0:
+        raise ValueError(f"contracts_from_risk: risco_pct tem que ser positivo, recebeu {risco_pct!r}")
+    if stop_reais_por_unidade <= 0:
+        raise ValueError(
+            f"contracts_from_risk: stop_reais_por_unidade tem que ser positivo, "
+            f"recebeu {stop_reais_por_unidade!r}"
+        )
+    if cash_brl <= 0:
+        unidades = 0
+    else:
+        unidades = int(math.floor(cash_brl * risco_pct / stop_reais_por_unidade + 1e-9))
+        unidades = max(0, unidades)
+    if hard_cap is not None:
+        unidades = min(unidades, max(0, int(hard_cap)))
+    return unidades

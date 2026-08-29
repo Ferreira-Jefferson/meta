@@ -467,7 +467,7 @@ que zerou a conta.
 > falta. Um default silencioso reproduz o incidente num instrumento novo, sem
 > nenhum erro no caminho.
 
-### 3.9 Buffer de margem protege a corretora, não o dono — dimensionamento dinâmico pode crescer o risco por trade junto com o capital
+### 3.9 Buffer de margem protege a corretora, não o dono — dimensionamento dinâmico pode crescer o risco por trade junto com o capital — CORRIGIDO 2026-08-29
 
 Medido rodando `CopaWin` (WIN@, TOP-2 do pódio) com caixa real R$3.000 no
 histórico salvo inteiro (182 pregões, 2025-12-01 a 2026-08-27, defaults de
@@ -500,6 +500,31 @@ desde o início.
 > estratégia tem algum teto que não seja margem/alavancagem? Se a resposta é
 > só "quantos contratos a corretora deixa abrir", ainda falta o teto que
 > protege o DONO, não a corretora.
+
+**Correção aplicada:** novo teto independente, `strategy.daytrade.base.
+contracts_from_risk` — `floor(caixa_atual × risco_% / stop_em_reais_por_
+contrato)`, recalculado a CADA entrada com o stop DESSA entrada (nunca
+ancorado num caixa antigo). A entrada usa o MENOR entre o teto oficial, o
+teto por margem e este novo teto por risco (nenhum substitui o outro).
+Adotado em `CopaWin` (`risco_pct_por_trade=0.05` no default de produção,
+`registry.py`) — PROVISÓRIO: testado 2%-10% no mesmo histórico (todos
+positivos, nenhum perto de zerar), mas sem varredura própria nem
+confirmação OOS ainda. Reverificado com o mesmo teste de caixa real
+(R$3.000, 182 pregões de WIN@): **274 trades, R$3.000,00 → R$12.498,00**,
+equity mínima R$2.545,90 — nunca chegou perto de zerar.
+
+Antes de chegar nessa correção, uma ideia intermediária (do dono) foi
+testada e REFUTADA: "separar" uma fatia do caixa a cada marco de
+crescimento (ex.: +60%) e parar de contá-la como caixa operacional. No
+parâmetro pedido nunca chegou a disparar nesta janela (o salto fatal foi só
++43% de crescimento); forçando o disparo mais cedo, a conta foi a **equity
+NEGATIVA** — pior que não fazer nada. Causa: a fatia "separada" é só
+contábil (nunca sai da mesma posição/mesma conta) e fica CONGELADA em
+reais — quando o caixa recupera de uma perda, ela vira uma fração cada vez
+menor do caixa atual, e o tamanho da entrada reinfla sem nenhum novo
+gatilho. Fica registrado aqui porque é o mesmo tipo de erro do resto deste
+item, só que na tentativa de conserto: proteção que não é recalculada
+contra o RISCO atual (só contra um marco do passado) não é proteção.
 
 ---
 

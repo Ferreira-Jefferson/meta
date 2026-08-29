@@ -134,6 +134,20 @@ _KWARGS_PADRAO: dict[str, dict] = {
         # contrato — o tamanho com que a calibração acima foi medida e
         # confirmada em OOS.
         margin_per_contract_brl=100.0,
+        # 2026-08-29, item 3.9 de LICOES_DE_PRODUCAO.md: o teto por CAPITAL
+        # acima limita ALAVANCAGEM, não RISCO — medido com R$3.000 reais nos
+        # 182 pregões salvos de WIN@, um dia bom escalou a entrada de 12 pra
+        # 15 contratos, e o MESMO stop de sempre (agora sobre mais contratos)
+        # perdeu R$3.457,50 num trade só: R$3.000,00 → R$68,50 (-97,7%), sem
+        # nunca ficar negativa, quase zerando com margem/reserva funcionando
+        # exatamente como desenhadas. `risco_pct_por_trade` é o SEGUNDO teto,
+        # independente — a entrada usa o MENOR entre os dois (ver a docstring
+        # de `CopaWin.__init__`). 5% É PROVISÓRIO: testado 2%-10% no mesmo
+        # histórico (todos terminaram positivos, nenhum chegou perto de
+        # zerar — ver `scripts/daytrade/copawin_dimensionamento_por_risco_
+        # 2026_08_29.py`), mas nenhum valor específico passou por uma
+        # varredura própria nem por confirmação OOS ainda.
+        risco_pct_por_trade=0.05,
     ),
 }
 

@@ -159,6 +159,7 @@ from strategy.daytrade.base import (
     IntradayOpenPosition,
     IntradayStrategy,
     contracts_from_capital_com_reserva,
+    contracts_from_risk,
     no_tick,
 )
 
@@ -304,12 +305,14 @@ class WdoGridReloadMaker(IntradayStrategy):
         margin_per_contract_brl: float | None = None,
         margin_buffer: float = MARGIN_BUFFER_FUTUROS,
         hard_cap_contratos: int | None = None,
+        risco_pct_por_trade: float | None = None,
+        point_value_brl: float | None = None,
     ):
         """Ver a docstring do modulo para a mecanica completa e para os
         parametros existentes acima (`tick_size`, `level_spacing_ticks`,
         `profit_ticks`, `stop_ticks`, `reanchor_mode`, `max_trades_per_side`,
-        `session_stop_brl`, `quantity`). So' os tres novos (2026-08-27) tem
-        prosa aqui.
+        `session_stop_brl`, `quantity`). So' os quatro novos (2026-08-27/29)
+        tem prosa aqui.
 
         `margin_per_contract_brl`: ATIVA a realocacao dinamica por capital
         (ver a secao do modulo). `None` (default) -- comportamento IDENTICO
@@ -327,7 +330,25 @@ class WdoGridReloadMaker(IntradayStrategy):
         `hard_cap_contratos`: teto SUPERIOR opcional sobre o resultado de
         `contracts_from_capital` (ex.: o teto oficial do perfil, 5 no
         WDO@) -- sem ele a quantidade cresce sem limite conforme o caixa
-        sobe. So' importa quando `margin_per_contract_brl` esta setado."""
+        sobe. So' importa quando `margin_per_contract_brl` esta setado.
+
+        `risco_pct_por_trade`/`point_value_brl` (2026-08-29, item 3.9 de
+        LICOES_DE_PRODUCAO.md -- achado no `CopaWin`, nao ainda medido AQUI
+        porque o modo dinamico deste robo e' OPT-IN e nao e' o default de
+        producao hoje): SEGUNDO teto, independente do teto por margem acima
+        -- a entrada usa o MENOR entre os dois (nenhum substitui o outro; ver
+        `strategy.daytrade.base.contracts_from_risk`). Como o stop deste robo
+        e' FIXO em ticks (`stop_ticks x tick_size`, nao por volatilidade do
+        dia como no `CopaWin`), o risco em reais por contrato e' CONSTANTE:
+        `stop_ticks x tick_size x point_value_brl`. Os dois precisam vir
+        JUNTOS (um sem o outro nao computa nada) -- `None`/`None` (default)
+        desliga, comportamento IDENTICO ao de antes."""
+        if (risco_pct_por_trade is None) != (point_value_brl is None):
+            raise ValueError(
+                "wdo_grid_reload_maker: passe `risco_pct_por_trade` e "
+                "`point_value_brl` JUNTOS (um sem o outro nao computa nada) "
+                "ou nenhum dos dois."
+            )
         self.symbol = symbol
         self.tick_size = tick_size
         self.level_spacing_ticks = level_spacing_ticks
@@ -342,6 +363,10 @@ class WdoGridReloadMaker(IntradayStrategy):
         )
         self.margin_buffer = float(margin_buffer)
         self.hard_cap_contratos = hard_cap_contratos
+        self.risco_pct_por_trade = (
+            None if risco_pct_por_trade is None else float(risco_pct_por_trade)
+        )
+        self.point_value_brl = None if point_value_brl is None else float(point_value_brl)
 
         self._state = _SessionState()
         # Atualizado por `on_capital_update`, chamado pelo motor logo antes
@@ -391,13 +416,27 @@ class WdoGridReloadMaker(IntradayStrategy):
         nao a estrategia, quem tem a palavra final sobre recusar essa
         entrada por capital (`OrderRejected(reason="capital_insuficiente")`)
         -- ver a nota no proprio motor sobre porque a recusa mora la, nao
-        aqui."""
+        aqui.
+
+        `risco_pct_por_trade`/`point_value_brl` (2026-08-29, item 3.9),
+        quando setados, aplicam um SEGUNDO teto por CIMA do de margem -- o
+        stop deste robo e' fixo em ticks, entao o risco em reais por
+        contrato tambem e': `stop_ticks x tick_size x point_value_brl`.
+        Nunca cresce a entrada, so' pode encolhe-la mais ainda."""
         if self.margin_per_contract_brl is None:
             return self.quantity
-        return max(1, contracts_from_capital_com_reserva(
+        teto = contracts_from_capital_com_reserva(
             self._cash_atual_brl, self.margin_per_contract_brl, self.margin_buffer,
             hard_cap=self.hard_cap_contratos,
-        ))
+        )
+        if self.risco_pct_por_trade is not None and self.stop_ticks is not None:
+            stop_reais_por_contrato = self.stop_ticks * self.tick_size * self.point_value_brl
+            if stop_reais_por_contrato > 0:
+                teto_por_risco = contracts_from_risk(
+                    self._cash_atual_brl, self.risco_pct_por_trade, stop_reais_por_contrato,
+                )
+                teto = min(teto, teto_por_risco)
+        return max(1, teto)
 
     def _level_price(self, side: str) -> float:
         offset = self.level_spacing_ticks * self.tick_size

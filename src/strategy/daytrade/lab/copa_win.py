@@ -73,6 +73,38 @@ comeca em 0.0): enquanto o motor nunca chamou o hook (replay de
 `warm_start_calibration`, ou a primeira barra do backtest), o robo nao
 "sabe" quanto caixa tem -- e o piso de 1 contrato ja existente
 (`max(1, round(...))`) cobre esse caso sem precisar de um segundo estado.
+
+## Teto por RISCO por trade (2026-08-29, ADITIVA -- item 3.9 de LICOES_DE_PRODUCAO.md)
+
+O teto por CAPITAL acima limita ALAVANCAGEM/margem, nao RISCO -- os dois so'
+coincidem por acidente no tamanho em que foram medidos. Medido com R$3.000
+reais nos 182 pregoes salvos de WIN@: um dia bom (12 contratos) cresceu o
+caixa 43%, o teto por margem escalou a proxima entrada pra 15 contratos, e o
+MESMO `stop_vol` de sempre -- agora sobre mais contratos -- perdeu
+R$3.457,50 num trade so': R$3.000,00 -> R$68,50 (-97,7%), sem nunca ficar
+negativa, quase zerando com margem/reserva funcionando exatamente como
+desenhadas (nenhuma ordem foi recusada por capital nesses 5 trades).
+
+`risco_pct_por_trade` (`strategy.daytrade.base.contracts_from_risk`) e' o
+SEGUNDO teto, independente do primeiro -- a entrada usa o MENOR entre
+`teto_contratos`, o teto por CAPITAL (se `margin_per_contract_brl` setado) e
+o teto por RISCO (se `risco_pct_por_trade` setado). Nenhum substitui o outro:
+alavancagem alta com risco baixo so' abre o que o risco permite; risco alto
+com margem curta so' abre o que a margem permite. Recalculado a CADA entrada
+com o `stop_vol x volatilidade_do_dia` DESSA entrada especifica (nunca
+ancorado num caixa de um momento passado -- ver a nota abaixo sobre por que
+isso importa).
+
+Uma alternativa foi testada e REFUTADA antes desta (2026-08-29,
+`scripts/daytrade/copawin_ratchet_skim_teste_2026_08_29.py`): "separar" uma
+fatia do caixa a cada marco de crescimento (ex.: +60%) e parar de conta-la
+como caixa operacional. Nao funciona -- a fatia e' so' contabil (nunca sai da
+MESMA posicao/MESMA conta) e fica CONGELADA em reais; quando o caixa recupera
+de uma perda, ela vira uma fracao cada vez MENOR do caixa atual, e o tamanho
+da entrada reinfla sem nenhum novo gatilho. Em parametros mais sensiveis
+testados isso deixou a conta em EQUITY NEGATIVA -- pior que nao fazer nada.
+
+`None` (default) desliga -- comportamento IDENTICO ao de antes desta secao.
 """
 from __future__ import annotations
 
@@ -90,6 +122,7 @@ from strategy.daytrade.base import (
     IntradayOpenPosition,
     IntradayStrategy,
     contracts_from_capital_com_reserva,
+    contracts_from_risk,
     no_tick,
 )
 
@@ -141,6 +174,7 @@ class CopaWin(IntradayStrategy):
         perda_max_dia_pontos: float | None = None,
         margin_per_contract_brl: float | None = None,
         margin_buffer: float = MARGIN_BUFFER_FUTUROS,
+        risco_pct_por_trade: float | None = None,
     ):
         """`teto_contratos`: teto de contratos SIMULTANEOS da competicao.
         Obrigatorio e sem default -- e' o unico limitador de tamanho num
@@ -207,7 +241,16 @@ class CopaWin(IntradayStrategy):
         `margin_buffer`: multiplicador de seguranca sobre a margem por
         contrato, mesmo parametro/mesmo default de `contracts_from_capital`
         (`MARGIN_BUFFER_FUTUROS=2.0`) -- so' importa quando
-        `margin_per_contract_brl` esta setado."""
+        `margin_per_contract_brl` esta setado.
+
+        `risco_pct_por_trade`: ATIVA o teto por RISCO (ver a secao do modulo,
+        `strategy.daytrade.base.contracts_from_risk`). `None` (default) --
+        desligado, comportamento IDENTICO ao de antes desta secao. Setado, o
+        teto efetivo de contratos vira `min(teto_efetivo_atual,
+        contracts_from_risk(caixa_atual, risco_pct_por_trade,
+        stop_vol x volatilidade_do_dia x point_value_brl))` -- so' pode
+        ENCOLHER a entrada, nunca cresce-la acima do que os outros tetos
+        permitem."""
         if teto_contratos < 1:
             raise ValueError(
                 f"copa_win: `teto_contratos` tem de ser >= 1, veio {teto_contratos!r}. "
@@ -233,6 +276,18 @@ class CopaWin(IntradayStrategy):
             None if margin_per_contract_brl is None else float(margin_per_contract_brl)
         )
         self.margin_buffer = float(margin_buffer)
+        if risco_pct_por_trade is not None and risco_pct_por_trade <= 0:
+            raise ValueError(
+                f"copa_win: `risco_pct_por_trade` tem que ser positivo ou `None`, "
+                f"veio {risco_pct_por_trade!r}."
+            )
+        self.risco_pct_por_trade = (
+            None if risco_pct_por_trade is None else float(risco_pct_por_trade)
+        )
+        # Atualizado por `_entrada` logo antes de pedir `quantidade_por_
+        # entrada` -- distancia do STOP desta entrada especifica, em pontos.
+        # So' importa quando `risco_pct_por_trade` esta setado.
+        self._ultimo_stop_dist_pontos: float | None = None
         # A entrada parada e' a SEGUNDA perna maker (a primeira e' o alvo) --
         # ver o comentario do atributo de classe.
         self.pernas_maker = 2 if self.entrada_maker else 1
@@ -274,20 +329,35 @@ class CopaWin(IntradayStrategy):
         SEGURANCA`. Consistencia entre "o que a estrategia pede" e "o que o
         motor deixa abrir" e' o ponto inteiro: pedir mais do que o motor vai
         aceitar so' produziria recusas (`OrderRejected(reason=
-        "capital_insuficiente")`) em vez de uma entrada menor e aceita."""
+        "capital_insuficiente")`) em vez de uma entrada menor e aceita.
+
+        `contracts_from_risk` (2026-08-29, item 3.9) aplica DEPOIS, se
+        `risco_pct_por_trade` estiver setado -- so' pode ENCOLHER `teto_
+        efetivo` mais ainda, nunca cresce-lo. Alavancagem (o teto acima) e
+        risco (este) medem coisas diferentes e nenhum substitui o outro; ver
+        a secao do modulo para o numero real que motivou isto (R$3.000 ->
+        R$68,50 num trade so', sem este segundo teto)."""
         teto_efetivo = self.teto_contratos
         if self.margin_per_contract_brl is not None:
             teto_por_caixa = contracts_from_capital_com_reserva(
                 self._cash_atual_brl, self.margin_per_contract_brl, self.margin_buffer,
             )
-            teto_efetivo = min(self.teto_contratos, teto_por_caixa)
+            teto_efetivo = min(teto_efetivo, teto_por_caixa)
+        if self.risco_pct_por_trade is not None and self._ultimo_stop_dist_pontos is not None:
+            stop_reais_por_contrato = self._ultimo_stop_dist_pontos * self.point_value_brl
+            if stop_reais_por_contrato > 0:
+                teto_por_risco = contracts_from_risk(
+                    self._cash_atual_brl, self.risco_pct_por_trade, stop_reais_por_contrato,
+                )
+                teto_efetivo = min(teto_efetivo, teto_por_risco)
         return max(1, round(teto_efetivo * self.fracao_entrada))
 
     def on_capital_update(self, cash_brl: float) -> None:
         """Guarda o caixa acumulado (`config.initial_capital + machine.
         realized_pnl`, ver `IntradayStrategy.on_capital_update`) para
         `quantidade_por_entrada` usar na proxima entrada -- so' tem efeito
-        quando `margin_per_contract_brl` esta setado."""
+        quando `margin_per_contract_brl` e/ou `risco_pct_por_trade` estao
+        setados."""
         self._cash_atual_brl = cash_brl
 
     @property
@@ -387,6 +457,10 @@ class CopaWin(IntradayStrategy):
         base = nivel_rompido if self.entrada_maker else preco
         alvo_dist = self.alvo_vol * vol
         stop_dist = self.stop_vol * vol
+        # Guardado ANTES de `quantidade_por_entrada` ser lida abaixo (dentro
+        # de `Enter(...)`/`EnterLimit(...)`) -- e' o teto por RISCO desta
+        # entrada especifica, ver `IntradayStrategy`/modulo.
+        self._ultimo_stop_dist_pontos = stop_dist
         if lado == "long":
             stop = no_tick(base - stop_dist, self.tick_size)
             alvo = no_tick(base + alvo_dist, self.tick_size)
