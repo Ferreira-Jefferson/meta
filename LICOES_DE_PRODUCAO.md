@@ -467,6 +467,40 @@ que zerou a conta.
 > falta. Um default silencioso reproduz o incidente num instrumento novo, sem
 > nenhum erro no caminho.
 
+### 3.9 Buffer de margem protege a corretora, não o dono — dimensionamento dinâmico pode crescer o risco por trade junto com o capital
+
+Medido rodando `CopaWin` (WIN@, TOP-2 do pódio) com caixa real R$3.000 no
+histórico salvo inteiro (182 pregões, 2025-12-01 a 2026-08-27, defaults de
+produção do `registry.py`, dimensionamento via `contracts_from_capital_
+com_reserva` — a versão SEGURA, adotada justamente por causa do incidente da
+Parte 0): **5 trades, equity caiu de R$3.000,00 para R$68,50 (−97,7%)**, sem
+nunca ficar negativa. Um único trade — 15 contratos, parado pelo `stop_vol`
+— perdeu R$3.457,50 sozinho. Causa: a entrada anterior tinha lucrado, o
+caixa cresceu (R$3.000 → R$4.290), e `quantidade_por_entrada` recalculou o
+teto por caixa PARA CIMA (12 → 15 contratos) antes da entrada seguinte — o
+mesmo `stop_vol` de sempre, agora sobre 15 contratos em vez de 12, é uma
+perda em reais 25% maior. `RESERVA_CAIXA_SEGURANCA`/`MARGIN_BUFFER_FUTUROS`
+fizeram exatamente o que foram desenhados pra fazer (nenhuma ordem foi
+recusada por margem insuficiente nesses 5 trades) — e mesmo assim a conta
+quase zerou, porque os dois calibram quantos contratos a MARGEM aguenta sem
+chamada, não quanto de EQUITY um stop pode consumir. É a mesma regra do item
+3.5 (stop contra capital, não contra número de contratos), medida aqui num
+mecanismo diferente: dimensionamento dinâmico que ESCALA o risco por trade
+para cima junto com o capital, em vez de um capital estático subdimensionado
+desde o início.
+
+> **Regra:** um teto de posição calibrado por MARGEM (ou por qualquer medida
+> de alavancagem) não é um teto de RISCO — os dois só coincidem por acidente
+> no tamanho em que foram medidos. Dimensionamento que cresce com o capital
+> precisa de um segundo teto, independente do primeiro, sobre quanto de
+> equity um único stop pode consumir (ex.: `contratos × stop_em_reais ≤ X%
+> do caixa atual`) — sem ele, um robô que vem GANHANDO fica proporcionalmente
+> mais exposto ao próximo stop, não menos.
+> **Pergunte à plataforma nova:** o dimensionamento por capital desta
+> estratégia tem algum teto que não seja margem/alavancagem? Se a resposta é
+> só "quantos contratos a corretora deixa abrir", ainda falta o teto que
+> protege o DONO, não a corretora.
+
 ---
 
 ## Parte 4 — Preenchimento: onde o backtest e o book divergem
@@ -927,7 +961,9 @@ dinheiro ou meses.
 16. O simulador modela posição na fila? Se não, o que ele está respondendo? (4.1)
 17. O horário de sessão que ele usa é fixo ou segue o instrumento? (5.2)
 18. Qual é o edge da estratégia **em ticks** neste instrumento? (4.5)
-19. Uma sequência de stops cabe no capital real? (3.5)
+19. Uma sequência de stops cabe no capital real? Se o tamanho da posição
+    escala com o caixa, existe um teto de RISCO por trade separado do teto
+    de MARGEM? (3.5, 3.9)
 
 ---
 
