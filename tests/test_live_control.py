@@ -951,6 +951,40 @@ def test_assert_slots_disjuntos_colisao_bloqueia_parar_com_ordem_pendente(isolat
     assert "aguarde" in err.motivo_bloqueio
 
 
+def test_assert_slots_disjuntos_junta_todas_as_colisoes_nao_so_a_primeira(
+    isolated, monkeypatch,
+):
+    """2026-08-31, achado numa conferência manual do dono, mesma classe do
+    bug de `_parar_processo_nao_rastreado` corrigido no mesmo dia: um `raise`
+    no primeiro achado do `for` escondia qualquer OUTRA colisão -- com 'b' E
+    'c' os dois em live no mesmo símbolo de 'a', o dono só descobria 'c' numa
+    segunda tentativa de "Iniciar", depois de já ter parado 'b'. Agora
+    `err.colisoes` traz as duas de uma vez (os atributos soltos, usados pelo
+    card e por quem só lê `err.slot_id`, continuam apontando pra primeira)."""
+    from core import config as core_config
+
+    tres = (
+        _slot(id="a", kind="intraday", robot_key="gremah", magic=1, label="A"),
+        _slot(id="b", kind="intraday", robot_key="gremah", magic=2, order=1, label="B"),
+        _slot(id="c", kind="intraday", robot_key="gremah", magic=3, order=2, label="C"),
+    )
+    monkeypatch.setattr(core_config, "SLOTS", tres)
+    monkeypatch.setattr(live_control, "_pid_alive", lambda pid: True)
+    for sid in ("b", "c"):
+        live_control._write_state(
+            sid, {"pid": 1, "started_at": "2026-08-24T00:00:00+00:00",
+                  "config": {"execution_mode": "live"}},
+        )
+
+    with pytest.raises(live_control.SlotSymbolCollisionError) as exc_info:
+        live_control._assert_slots_disjuntos(tres[0], "gremah", "live")
+
+    err = exc_info.value
+    assert {c["slot_id"] for c in err.colisoes} == {"b", "c"}
+    assert err.slot_id == "b"  # atributo solto continua apontando pra primeira
+    assert "C" in str(err)  # a segunda colisão aparece na mensagem tambem
+
+
 def test_catalogo_oficial_de_slots_e_disjunto(isolated):
     """O catálogo REAL do projeto tem de passar na própria checagem, com o
     robô DEFAULT de cada slot (nenhuma conta ainda existe no banco isolado

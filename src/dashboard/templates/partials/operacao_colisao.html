@@ -20,6 +20,13 @@
     nesta conta. Como a conta é NETTING, os dois em real ao mesmo tempo
     fundiriam as posições numa só, e os dois caixas passariam a mentir.
   </p>
+  {% if colisao.outras %}
+  <p class="ops-modal-hint">
+    Também colide com:
+    {% for outra in colisao.outras %}{{ outra.slot_label }} ({{ outra.symbols | join(", ") }}){% if not loop.last %}, {% endif %}{% endfor %}.
+    Pare {{ colisao.label }} primeiro e repita "Iniciar" para ver os próximos.
+  </p>
+  {% endif %}
   {% if colisao.pode_parar %}
   <form class="ops-modal-actions"
         hx-post="/operacao/{{ colisao.slot_id }}/parar" hx-target="#ops-body" hx-swap="outerHTML">

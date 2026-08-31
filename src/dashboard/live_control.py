@@ -724,13 +724,25 @@ class SlotSymbolCollisionError(RuntimeError):
     mensagem — `str(self)` continua a mesma frase de sempre, pros chamadores
     que só querem o texto (CLI, testes)."""
 
-    def __init__(self, message, *, slot_id, slot_label, symbols, pode_parar, motivo_bloqueio=None):
+    def __init__(self, message, *, slot_id, slot_label, symbols, pode_parar,
+                 motivo_bloqueio=None, colisoes=None):
         super().__init__(message)
         self.slot_id = slot_id
         self.slot_label = slot_label
         self.symbols = symbols
         self.pode_parar = pode_parar
         self.motivo_bloqueio = motivo_bloqueio
+        # Lista com a MESMA forma (`slot_id`/`slot_label`/`symbols`/
+        # `pode_parar`/`motivo_bloqueio`) de TODOS os slots colidentes, não só
+        # o primeiro (achado numa conferência manual do dono, 2026-08-31: o
+        # dono só descobria uma colisão por vez, uma tentativa de "Iniciar"
+        # por colisão). Os atributos acima continuam apontando pro primeiro
+        # -- preserva quem já lia `err.slot_id` etc. direto (CLI, testes,
+        # o botão "Parar" do card, que só derruba um por clique mesmo).
+        self.colisoes = colisoes if colisoes is not None else [{
+            "slot_id": slot_id, "slot_label": slot_label, "symbols": symbols,
+            "pode_parar": pode_parar, "motivo_bloqueio": motivo_bloqueio,
+        }]
 
 
 def _assert_slots_disjuntos(slot, robot_key: str, execution_mode: str = "live") -> None:
@@ -765,6 +777,15 @@ def _assert_slots_disjuntos(slot, robot_key: str, execution_mode: str = "live") 
     with live_store.live_journal() as conn:
         outros = [s for s in all_slots(conn) if s.id != slot.id]
         contas = {s.id: live_store.load_account(conn, s.id) for s in outros}
+    # Junta TODAS as colisões antes de levantar (achado numa conferência
+    # manual do dono, 2026-08-31, mesma classe do bug de
+    # `_parar_processo_nao_rastreado` corrigido no mesmo dia: um `raise` no
+    # primeiro achado do `for` escondia qualquer outra colisão -- o dono só
+    # descobria a segunda numa NOVA tentativa de "Iniciar", depois de já ter
+    # parado a primeira). A checagem de `magic` continua fail-fast: é erro de
+    # CATÁLOGO (dois slots com o mesmo `magic`), não uma lista de robôs
+    # concorrentes para o dono escolher entre -- não é a mesma pergunta.
+    colisoes: list[dict] = []
     for outro in outros:
         if outro.magic == slot.magic:
             raise RuntimeError(
@@ -799,18 +820,31 @@ def _assert_slots_disjuntos(slot, robot_key: str, execution_mode: str = "live") 
             if conta_outro else None
         )
         pode_parar = not tem_posicao and not pendentes
-        raise SlotSymbolCollisionError(
-            f"slots {slot.id!r} e {outro.id!r} negociam o(s) mesmo(s) símbolo(s) "
-            f"({', '.join(sorted(colisao))}) numa conta NETTING, os dois em modo "
-            "'live' — as posições se fundiriam numa só e os dois caixas "
-            "passariam a mentir. Pare um dos dois, ou rode em modo sombra.",
-            slot_id=outro.id, slot_label=outro.label, symbols=sorted(colisao),
-            pode_parar=pode_parar,
-            motivo_bloqueio=None if pode_parar else (
+        colisoes.append({
+            "slot_id": outro.id, "slot_label": outro.label,
+            "symbols": sorted(colisao), "pode_parar": pode_parar,
+            "motivo_bloqueio": None if pode_parar else (
                 "este robô tem ordens posicionadas ou abertas agora — aguarde a "
                 "conclusão para poder encerrar a operação."
             ),
-        )
+        })
+    if not colisoes:
+        return
+    primeira = colisoes[0]
+    outras = ", ".join(
+        f"{c['slot_label']} ({', '.join(c['symbols'])})" for c in colisoes[1:]
+    )
+    raise SlotSymbolCollisionError(
+        f"slots {slot.id!r} e {primeira['slot_id']!r} negociam o(s) mesmo(s) símbolo(s) "
+        f"({', '.join(primeira['symbols'])}) numa conta NETTING, os dois em modo "
+        "'live' — as posições se fundiriam numa só e os dois caixas "
+        "passariam a mentir. Pare um dos dois, ou rode em modo sombra."
+        + (f" Também colide com: {outras}." if outras else ""),
+        slot_id=primeira["slot_id"], slot_label=primeira["slot_label"],
+        symbols=primeira["symbols"], pode_parar=primeira["pode_parar"],
+        motivo_bloqueio=primeira["motivo_bloqueio"],
+        colisoes=colisoes,
+    )
 
 
 def available_cash(slot_id: str, execution_mode: str = "live") -> Optional[float]:

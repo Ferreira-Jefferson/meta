@@ -1342,6 +1342,11 @@ async def operacao_iniciar(request: Request, slot_id: str):
                 "slot_id": e.slot_id, "label": e.slot_label,
                 "symbols": e.symbols, "pode_parar": e.pode_parar,
                 "motivo_bloqueio": e.motivo_bloqueio,
+                # Demais slots colidentes (2026-08-31): o botão "Parar" só
+                # derruba um por clique mesmo, mas o dono vê os outros AGORA
+                # em vez de descobrir um de cada vez a cada nova tentativa de
+                # "Iniciar" -- ver `live_control.SlotSymbolCollisionError`.
+                "outras": e.colisoes[1:],
             }
         except (RuntimeError, ValueError) as e:
             erro = str(e)
