@@ -730,19 +730,25 @@ class IntradayLiveRuntime:
         return "Fator de prejuízo", round(prejuizo / lucro, 2) if lucro > 0 else None
 
     @staticmethod
-    def _ordens_por_lado(ordens_hoje: list[dict]) -> dict:
+    def _ordens_por_lado(ordens_hoje: list[dict], margin_per_contract_brl: float | None = None) -> dict:
         """Compra/venda e preenchida/cancelada de hoje, por lado -- fonte do
         card "Ordens posicionadas" (pedido do dono, 2026-08-24). `None` na
         taxa de preenchimento de um lado = nenhuma ordem daquele lado teve
         desfecho hoje ainda (só tem posta pendente, ou nenhuma ordem).
 
-        `valor_ordens_compra`/`valor_ordens_venda` somam o NOCIONAL
-        (quantidade x preço) das ordens ARMADAS de cada lado -- é o número
-        que o painel mostra como valor principal do card, com a CONTAGEM
-        (`ordens_compra`/`ordens_venda`) virando texto secundário (pedido do
-        dono, 2026-08-24: "deve aparecer os valores, e as quantidades
-        abaixo"). Mesma população da contagem (armadas, não preenchidas),
-        pra o número grande e o texto pequeno descreverem a mesma coisa.
+        `valor_ordens_compra`/`valor_ordens_venda` somam o valor comprometido
+        de cada ordem ARMADA -- MARGEM x quantidade quando
+        `margin_per_contract_brl` vem preenchido (futuro), quantidade x preço
+        quando não (ação; também o default nos testes que chamam este método
+        sem conta, mantendo o comportamento de sempre). Achado do dono
+        2026-08-31: preço de WIN@/WDO@ vem em PONTOS, não R$ -- sem a
+        ramificação, 1 contrato virava um nocional de ~R$180 mil no card. É o
+        número que o painel mostra como valor principal do card, com a
+        CONTAGEM (`ordens_compra`/`ordens_venda`) virando texto secundário
+        (pedido do dono, 2026-08-24: "deve aparecer os valores, e as
+        quantidades abaixo"). Mesma população da contagem (armadas, não
+        preenchidas), pra o número grande e o texto pequeno descreverem a
+        mesma coisa.
 
         Reancoragem da MESMA rodada (`numero_ordem` repetido, o "(substitui)"
         do diário -- ver a docstring de `_on_limit_placed`) NÃO conta como
@@ -771,7 +777,10 @@ class IntradayLiveRuntime:
             if o.get("quantity") is not None and o.get("price") is not None:
                 # Última reancoragem VENCE (mesma rodada, preço novo) -- não
                 # soma com a que ela substituiu.
-                valor_rodada[lado][chave] = o["quantity"] * o["price"]
+                valor_rodada[lado][chave] = (
+                    margin_per_contract_brl * o["quantity"] if margin_per_contract_brl is not None
+                    else o["quantity"] * o["price"]
+                )
 
         resultado = {
             "ordens_compra": contagem["long"]["armada"], "ordens_venda": contagem["short"]["armada"],
@@ -823,6 +832,16 @@ class IntradayLiveRuntime:
                 f"{self.broker.mode!r} — uma conta e um broker divergentes nunca "
                 "podem operar juntos."
             )
+        # `LivePosition.unit_value_brl` nao e' persistido (`journal/` nao pode
+        # saber o que e' futuro -- regra de camada, ver AGENTS.md): re-carimba
+        # aqui, a CADA carga, com o mesmo valor que `_on_opened` teria gravado.
+        # Sem isto, uma posicao de futuro sobrevivendo a um restart do
+        # processo (`live_positions` no banco, `unit_value_brl` sempre `None`
+        # ao voltar) reintroduz o bug de 2026-08-31 (preco em PONTOS lido como
+        # R$) so' pro painel, ate' a proxima entrada regravar a posicao.
+        margem = self.machine.config.margin_per_contract_brl
+        for pos in account.positions.values():
+            pos.unit_value_brl = margem
         return account
 
     # ---------- estado da sessao -------------------------------------------
@@ -2913,6 +2932,24 @@ class IntradayLiveRuntime:
         bruto = (evento.price - bar.low) if evento.side == "long" else (bar.high - evento.price)
         return round(bruto / tick_size, 3)
 
+    def _custo_posicao(self, price: float, quantity: int) -> float:
+        """Quanto comprometer/liberar em CAIXA ao abrir/fechar `quantity`
+        unidades a `price` -- mesma ramificacao MARGEM-vs-PRECO ja corrigida
+        em `_check_capital` (2026-08-28), agora tambem aqui.
+
+        `evento.price` de um futuro (WIN@/WDO@) vem em PONTOS do indice/dolar,
+        nao em reais por unidade -- `preco x quantidade` da' o valor NOCIONAL
+        cheio (~R$180.000 pra' 1 WIN@ a 180 mil pontos), nao o que a corretora
+        de fato reserva (~R$100 WIN@/R$150 WDO@, a MARGEM). Sem ramificar, um
+        robo de futuro debita/credita esse nocional inteiro do caixa numa
+        entrada so', explicando um caixa como "-R$180.455,00" com 1 contrato
+        aberto (achado do dono, 2026-08-31). `self.machine.config` e' a MESMA
+        config que a maquina usa pra' gatear quantos contratos cabem
+        (`_cabe_no_teto`/`_cap_capital_atual`), entao este numero nunca
+        diverge do que o proprio motor considera "margem por contrato"."""
+        margem = self.machine.config.margin_per_contract_brl
+        return margem * quantity if margem is not None else price * quantity
+
     def _on_opened(self, conn, account: AccountState, evento: PositionOpened) -> None:
         """Grava `Intent` + `Order` + `Fill` da ENTRADA e reflete a posicao em
         `live_positions` — para o painel mostrar a mesma coisa que o painel do
@@ -3006,9 +3043,11 @@ class IntradayLiveRuntime:
                                      price=evento.price, ts=evento.ts.to_pydatetime()))
         store.set_intent_status(conn, intent_id, IntentStatus.DONE)
 
+        custo = self._custo_posicao(evento.price, evento.quantity)
         pos = LivePosition(
             ticker=self.strategy.symbol, quantity=assinado, entry_date=evento.ts.date(),
-            entry_price=evento.price, capital_allocated=abs(evento.price * evento.quantity),
+            entry_price=evento.price, capital_allocated=abs(custo),
+            unit_value_brl=self.machine.config.margin_per_contract_brl,
             current_stop=evento.stop, max_price_seen=evento.price, min_price_seen=evento.price,
             bars_held=0, metadata={"side": evento.side, "target": evento.target,
                                    "penetration_ticks": penetration,
@@ -3024,7 +3063,8 @@ class IntradayLiveRuntime:
         # valor a mercado da posicao aberta. Espelha `live/runtime.py` (linha
         # `account.cash -= custo` no swing), que ja faz este debito na
         # entrada; aqui faltava. Devolvido em `_on_closed`/`_on_closed_partial`.
-        custo = evento.price * evento.quantity
+        # `custo` ja' e' MARGEM para futuro, preco cheio para acao -- ver
+        # `_custo_posicao`.
         if self.execution_mode == "shadow":
             account.cash_sombra -= custo
         else:
@@ -3084,7 +3124,8 @@ class IntradayLiveRuntime:
             ticker=self.strategy.symbol, quantity=assinado,
             entry_date=(existente.entry_date if existente is not None else evento.ts.date()),
             entry_price=pos_total.entry_price,
-            capital_allocated=abs(pos_total.entry_price * pos_total.quantity),
+            capital_allocated=abs(self._custo_posicao(pos_total.entry_price, pos_total.quantity)),
+            unit_value_brl=self.machine.config.margin_per_contract_brl,
             current_stop=pos_total.current_stop,
             max_price_seen=(existente.max_price_seen if existente is not None else pos_total.entry_price),
             min_price_seen=(existente.min_price_seen if existente is not None else pos_total.entry_price),
@@ -3098,7 +3139,7 @@ class IntradayLiveRuntime:
         # Mesmo debito de `_on_opened` (ver comentario la') -- so' desta
         # FATIA nova, nao da posicao inteira (a fatia anterior ja foi
         # debitada quando ela mesma preencheu).
-        custo = evento.price * evento.quantity
+        custo = self._custo_posicao(evento.price, evento.quantity)
         if self.execution_mode == "shadow":
             account.cash_sombra -= custo
         else:
@@ -3192,8 +3233,10 @@ class IntradayLiveRuntime:
         # (`trade.entry_price` ja e' o preco medio da posicao inteira, o
         # MESMO usado em `capital_allocated` -- multiplicado pela quantidade
         # que fecha AQUI, e' exatamente o que foi comprometido por ela) mais
-        # o resultado realizado.
-        liberado = trade.entry_price * trade.quantity
+        # o resultado realizado. `_custo_posicao` ja' ramifica margem/preco
+        # cheio -- tem de ser a MESMA formula usada para debitar, senao o
+        # caixa nao fecha (sobra ou falta capital "fantasma" a cada trade).
+        liberado = self._custo_posicao(trade.entry_price, trade.quantity)
         if self.execution_mode == "shadow":
             self._snapshot.shadow_pnl_brl += evento.pnl_brl
             account.cash_sombra += liberado + evento.pnl_brl
@@ -3264,7 +3307,8 @@ class IntradayLiveRuntime:
             ticker=self.strategy.symbol, quantity=assinado,
             entry_date=(existente.entry_date if existente is not None else pos_total.entry_ts.date()),
             entry_price=pos_total.entry_price,
-            capital_allocated=abs(pos_total.entry_price * pos_total.quantity),
+            capital_allocated=abs(self._custo_posicao(pos_total.entry_price, pos_total.quantity)),
+            unit_value_brl=self.machine.config.margin_per_contract_brl,
             current_stop=pos_total.current_stop,
             max_price_seen=(existente.max_price_seen if existente is not None else pos_total.entry_price),
             min_price_seen=(existente.min_price_seen if existente is not None else pos_total.entry_price),
@@ -3278,7 +3322,7 @@ class IntradayLiveRuntime:
         # Mesma devolucao de `_on_closed` (ver comentario la'), so' da FATIA
         # que fechou aqui -- o resto continua comprometido, a posicao segue
         # aberta com `pos_total.quantity` restante.
-        liberado = trade.entry_price * trade.quantity
+        liberado = self._custo_posicao(trade.entry_price, trade.quantity)
         if self.execution_mode == "shadow":
             self._snapshot.shadow_pnl_brl += evento.pnl_brl
             account.cash_sombra += liberado + evento.pnl_brl
@@ -3329,7 +3373,7 @@ class IntradayLiveRuntime:
             ordens_hoje = store.daytrade_order_events_on(conn, account.id, session.isoformat())
 
         resultado = self._resultado_dia_e_acumulado(saidas, session.isoformat(), account.initial_capital)
-        ordens_stats = self._ordens_por_lado(ordens_hoje)
+        ordens_stats = self._ordens_por_lado(ordens_hoje, self.machine.config.margin_per_contract_brl)
 
         # `self.machine.positions` (a LISTA), nunca o atalho `machine.position`:
         # em sombra cada lote preenchido virou uma posicao INDEPENDENTE desde
@@ -3417,10 +3461,15 @@ class IntradayLiveRuntime:
                 # abertas de cada lado -- número principal do card
                 # "Posições" do painel, com a CONTAGEM acima virando texto
                 # secundário (mesmo pedido de `_ordens_por_lado`, 2026-08-24).
+                # `_custo_posicao` ramifica margem/preço cheio (achado do
+                # dono, 2026-08-31): sem isto, 1 contrato de WIN@/WDO@ (preço
+                # em PONTOS, não R$) aparecia como um nocional de ~R$180 mil.
                 "valor_posicoes_compra": round(
-                    sum(p.entry_price * p.quantity for p in posicoes if p.side == "long"), 2),
+                    sum(self._custo_posicao(p.entry_price, p.quantity)
+                        for p in posicoes if p.side == "long"), 2),
                 "valor_posicoes_venda": round(
-                    sum(p.entry_price * p.quantity for p in posicoes if p.side == "short"), 2),
+                    sum(self._custo_posicao(p.entry_price, p.quantity)
+                        for p in posicoes if p.side == "short"), 2),
                 **resultado,
                 **ordens_stats,
                 # AGREGADO das posicoes abertas (era a posicao unica). `alvo`/

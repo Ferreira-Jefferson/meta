@@ -27,9 +27,11 @@ import pandas as pd
 import pytest
 
 from backtest.intraday.costs import IntradayCostModel
-from backtest.intraday.machine import IntradayBacktestConfig
+from backtest.intraday.machine import IntradayBacktestConfig, IntradayTrade
+from backtest.intraday.profiles import FUTURES_PROFILES
 from core.config import slot_by_id
-from core.live_models import OrderSide, OrderStatus, OrderType
+from core.live_models import AccountState, LivePosition, OrderSide, OrderStatus, OrderType
+from core.models import IntradayExitReason
 from journal import live_store as store
 from live import clock as live_clock
 from live import intraday_runtime as itr_mod
@@ -42,6 +44,12 @@ from strategy.daytrade.base import Bar, Enter, EnterLimit, IntradayStrategy
 # "daytrade".
 SYMBOL = "PMAM3"
 SLOT = slot_by_id("dt-gremah-pmam3-shadow")
+# Slot de FUTURO para os testes do bug de caixa corrigido 2026-08-31 (preco
+# de WIN@/WDO@ vem em PONTOS, nao em reais -- caixa/margem tem de usar
+# `margin_per_contract_brl`, nunca `preco * quantidade`). "gremah" aqui e'
+# so' o robo de teste (generico o bastante pra operar qualquer simbolo);
+# nao precisa ser o robo real de producao do WIN@ (`copa_win`).
+SLOT_WIN = slot_by_id("dt-gremah-win@-shadow")
 SESSION = date(2026, 8, 21)
 
 
@@ -115,7 +123,17 @@ def _config() -> IntradayBacktestConfig:
     )
 
 
+def _config_futuro(margin_per_contract_brl: float) -> IntradayBacktestConfig:
+    """`_config()` com margem de futuro ligada -- liga junto o teto por
+    capital (`_cap_capital_atual`, `backtest/intraday/machine.py`), entao
+    quem usa isto PRECISA passar `initial_capital=` bem acima da margem (ver
+    docstring de `_runtime`), senao a entrada e' recusada por teto antes de
+    virar caixa pra medir."""
+    return replace(_config(), margin_per_contract_brl=margin_per_contract_brl)
+
+
 def _runtime(tmp_path, barras, semente=None, execution_mode="shadow", feed=None,
+             symbol=SYMBOL, slot=None, config=None, initial_capital=100.0,
              **strat_kwargs):
     """`semente` default = a PRIMEIRA barra de `barras` (a abertura do pregao).
 
@@ -126,10 +144,17 @@ def _runtime(tmp_path, barras, semente=None, execution_mode="shadow", feed=None,
 
     `feed`: dublê de feed proprio, para quem precisa de um comportamento que
     `_ScriptedBarFeed` nao tem (ex.: barra que so' aparece na SEGUNDA
-    consulta ao terminal)."""
+    consulta ao terminal).
+
+    `symbol`/`slot`/`config`/`initial_capital`: default = mesmo cenario de
+    sempre (PMAM3, acao, sem margem). Os testes de FUTURO (WIN@/WDO@, bug de
+    caixa corrigido 2026-08-31) passam `config=` com `margin_per_contract_brl`
+    ligado -- e precisam de `initial_capital` bem acima do default, senao o
+    proprio teto por capital (`_cabe_no_teto`) recusa a entrada antes de
+    qualquer coisa virar caixa pra' medir."""
     from strategy.daytrade.lab.gremah import Gremah
 
-    kwargs = dict(symbol=SYMBOL, tick_size=0.01, profit_pct=0.01,
+    kwargs = dict(symbol=symbol, tick_size=0.01, profit_pct=0.01,
                   spacing_multiplier=2.0, stop_multiplier=20.0,
                   # Filtro de qualidade de entrada (2026-08-27) e' PADRAO
                   # `True` desde entao -- desligado aqui porque este roteiro
@@ -142,16 +167,17 @@ def _runtime(tmp_path, barras, semente=None, execution_mode="shadow", feed=None,
     kwargs.update(strat_kwargs)
     if feed is None:
         feed = _ScriptedBarFeed(barras, barras[:1] if semente is None else semente)
+    slot = slot or SLOT
     rt = IntradayLiveRuntime(
-        slot=SLOT, strategy=Gremah(**kwargs), config=_config(),
+        slot=slot, strategy=Gremah(**kwargs), config=config or _config(),
         bar_feed=feed, broker=_ExplodingBroker(),
         db_path=tmp_path / "live_intraday.sqlite",
-        execution_mode=execution_mode, initial_capital=100.0,
+        execution_mode=execution_mode, initial_capital=initial_capital,
     )
     rt.ensure_account()
     with store.live_journal(rt.db_path) as conn:
-        acc = store.load_account(conn, SLOT.id)
-        acc.cash = 100.0
+        acc = store.load_account(conn, slot.id)
+        acc.cash = initial_capital
         store.save_account(conn, acc)
     return rt, feed
 
@@ -1281,9 +1307,12 @@ def test_volume_no_nivel_conta_o_que_negociou_esperando_a_ordem(tmp_path, pregao
 
 def test_short_grava_quantidade_negativa_na_posicao(tmp_path, pregao_aberto):
     """Short foi verificado no terminal real (2026-08-21). `live_positions.
-    quantity` negativa faz a marcacao a mercado sair correta sem nenhuma
-    mudanca de schema: `market_value = price * quantity` fica negativo, que e'
-    exatamente o que uma posicao vendida vale.
+    quantity` negativa marca o LADO da posicao (usado por `metadata["side"]`
+    e pelo cartao "Posicoes abertas"), mas `market_value` e' sempre POSITIVO
+    -- e' capital comprometido, nao credito de venda a descoberto (ver
+    docstring de `LivePosition.market_value`, corrigido 2026-08-31: a versao
+    anterior devolvia negativo aqui e abria todo short com prejuizo fantasma
+    de 2x o custo em `equity()`, sem nenhum preco ter se mexido).
 
     `max_trades_per_side=1` (adicionado em 2026-08-28) e' o que forca o short
     a existir: o long fecha no ALVO, e desde 2026-08-26 o robo REPETE o lado
@@ -1311,7 +1340,62 @@ def test_short_grava_quantidade_negativa_na_posicao(tmp_path, pregao_aberto):
     assert pos is not None
     assert pos.quantity < 0
     assert pos.metadata["side"] == "short"
-    assert pos.market_value(10.00) < 0
+    assert pos.market_value(10.00) == pytest.approx(abs(pos.quantity) * 10.00)
+
+
+def test_market_value_de_short_e_positivo_igual_ao_de_long_mesmo_custo():
+    """`market_value` mede CAPITAL COMPROMETIDO (o mesmo `custo` que
+    `_custo_posicao`/`_on_opened` debitam do caixa), nunca credito de venda a
+    descoberto -- por isso e' o MESMO numero em long e em short, futuro ou
+    acao. Achado do dono 2026-08-31: antes da correcao, o short devolvia
+    negativo aqui (cartao "Posicoes abertas" mostrando R$ -100,00 para uma
+    posicao WIN@ recem-aberta, contra +R$100,00 no card "Posicoes · Short",
+    que ja usava `_custo_posicao` e sempre esteve certo)."""
+    long_futuro = LivePosition(
+        ticker="WIN@", quantity=1, entry_date=date(2026, 8, 31),
+        entry_price=180_015.0, capital_allocated=100.0, unit_value_brl=100.0,
+    )
+    short_futuro = LivePosition(
+        ticker="WIN@", quantity=-1, entry_date=date(2026, 8, 31),
+        entry_price=180_015.0, capital_allocated=100.0, unit_value_brl=100.0,
+    )
+    assert long_futuro.market_value(180_015.0) == pytest.approx(100.0)
+    assert short_futuro.market_value(180_015.0) == pytest.approx(100.0)
+
+    long_acao = LivePosition(
+        ticker="PMAM3", quantity=100, entry_date=date(2026, 8, 31),
+        entry_price=10.0, capital_allocated=1_000.0,
+    )
+    short_acao = LivePosition(
+        ticker="PMAM3", quantity=-100, entry_date=date(2026, 8, 31),
+        entry_price=10.0, capital_allocated=1_000.0,
+    )
+    assert long_acao.market_value(10.0) == pytest.approx(1_000.0)
+    assert short_acao.market_value(10.0) == pytest.approx(1_000.0)
+
+
+def test_abrir_short_nao_cria_prejuizo_fantasma_na_carteira():
+    """`equity() = caixa + invested()` nao pode mudar so' por ABRIR uma
+    posicao marcada na propria entrada (P&L nao realizado = 0, mesma
+    convencao de `status()`) -- e' o invariante que o comentario de
+    `_on_opened` promete: 'sem isto, equity() conta o mesmo dinheiro duas
+    vezes'. Reproduz o caixa ja debitado pelo custo (como `_on_opened` faz
+    em QUALQUER lado) e confirma que `invested()` devolve o custo de volta,
+    nao o custo com o sinal invertido -- que teria criado um prejuizo
+    fantasma de 2x o custo so' de abrir o short, sem nenhum preco se mexer."""
+    custo = 100.0
+    caixa_antes_de_abrir = 544.50
+    acc = AccountState(
+        name="dt-teste", mode="mt5", initial_capital=1_000.0,
+        cash=caixa_antes_de_abrir - custo,
+    )
+    acc.positions["WIN@"] = LivePosition(
+        ticker="WIN@", quantity=-1, entry_date=date(2026, 8, 31),
+        entry_price=180_015.0, capital_allocated=custo, unit_value_brl=custo,
+    )
+    marks = {"WIN@": 180_015.0}
+    assert acc.invested(marks) == pytest.approx(custo)
+    assert acc.equity(marks) == pytest.approx(caixa_antes_de_abrir)
 
 
 # ---------- despacho warm-start / frio (politica de 2026-08-21) -----------
@@ -2326,6 +2410,239 @@ def test_valor_posicoes_reflete_capital_alocado_da_posicao_aberta(tmp_path, preg
     esperado = full["posicoes"][0]["qtd"] * full["posicoes"][0]["entrada"]
     assert s["valor_posicoes_compra"] == pytest.approx(esperado)
     assert s["valor_posicoes_venda"] == 0.0
+
+
+# ---------- bug de caixa de FUTURO corrigido 2026-08-31 ---------------------
+# WIN@/WDO@ cotam em PONTOS, nao em reais -- o caixa ao vivo (abertura,
+# top-up, fechamento total/parcial, e os cards "Posicoes"/"Ordens" do
+# painel) debitava/creditava `preco * quantidade`, tratando o preco como se
+# fosse dinheiro. Achado do dono: WIN@ vendido a ~137.000 pontos aparecia
+# como -R$180.455,00 de caixa com 1 UNICO contrato aberto. `IntradayTrade.
+# pnl_brl` (o resultado fechado) sempre usou o `point_value_brl` certo e
+# nunca teve esse bug -- o que faltava era `_custo_posicao` (o que MOVE
+# caixa/margem na abertura e no fechamento) usar `margin_per_contract_brl`
+# em vez do preco. Exemplos abaixo conferidos com o dono antes de virar
+# teste (2026-08-31).
+
+@pytest.mark.parametrize("side,entrada,saida,esperado,rotulo", [
+    ("long", 137_000.0, 137_000.0, 0.0, "compra empate"),
+    ("long", 137_000.0, 136_500.0, -100.0, "compra prejuizo (caiu 500 pts)"),
+    ("long", 137_000.0, 137_500.0, 100.0, "compra lucro (subiu 500 pts)"),
+    ("short", 137_000.0, 137_000.0, 0.0, "venda empate"),
+    ("short", 137_000.0, 137_500.0, -100.0, "venda prejuizo (subiu 500 pts contra)"),
+    ("short", 137_000.0, 136_500.0, 100.0, "venda lucro (caiu 500 pts a favor)"),
+])
+def test_pnl_win_usa_valor_do_ponto_no_sinal_certo_por_lado(side, entrada, saida, esperado, rotulo):
+    """WIN@ = R$0,20/ponto (`FUTURES_PROFILES["WIN@"]`, confirmado em
+    `test_intraday_profiles.py::
+    test_override_de_tick_corrige_a_grade_de_preco_sem_mexer_no_valor_do_ponto`).
+    O sinal da VENDA e' so' indicativo visual (`entrada - saida`, em vez de
+    `saida - entrada` da compra) -- o R$ final e' sempre pela DIRECAO do
+    movimento, nunca confundido com o preco de entrada."""
+    trade = IntradayTrade(
+        symbol="WIN@", strategy_name="teste", strategy_version="1",
+        side=side, entry_ts=pd.Timestamp("2026-08-31 10:00", tz="UTC"),
+        entry_price=entrada, exit_ts=pd.Timestamp("2026-08-31 10:05", tz="UTC"),
+        exit_price=saida, quantity=1, exit_reason=IntradayExitReason.TARGET,
+        point_value_brl=0.20, capital_base=100.0,
+    )
+    assert trade.pnl_brl == pytest.approx(esperado), rotulo
+
+
+def test_pnl_wdo_usa_valor_do_ponto_de_dez_reais():
+    """WDO@ = R$10,00/ponto -- mesmo caso "venda lucro" da tabela conferida
+    com o dono, so' pra provar que a formula generaliza pro outro futuro."""
+    trade = IntradayTrade(
+        symbol="WDO@", strategy_name="teste", strategy_version="1",
+        side="short", entry_ts=pd.Timestamp("2026-08-31 10:00", tz="UTC"),
+        entry_price=5_450.0, exit_ts=pd.Timestamp("2026-08-31 10:05", tz="UTC"),
+        exit_price=5_440.0, quantity=1, exit_reason=IntradayExitReason.TARGET,
+        point_value_brl=10.0, capital_base=150.0,
+    )
+    assert trade.pnl_brl == pytest.approx(100.0)
+
+
+def test_custo_posicao_de_futuro_usa_a_margem_nao_o_preco_em_pontos(tmp_path):
+    """Caso EXATO do achado do dono: WIN@ a ~137.000 pontos nao pode
+    comprometer R$137.000 de caixa -- so' a margem por contrato."""
+    margem = FUTURES_PROFILES["WIN@"].margin_per_contract_brl
+    rt, _feed = _runtime(
+        tmp_path, barras=[], symbol="WIN@", slot=SLOT_WIN,
+        config=_config_futuro(margem), initial_capital=1_000.0,
+        # WIN@ nao tem calibracao de capacidade de caixa (so' acoes tem, ver
+        # `_CAPACIDADE_BY_SYMBOL` em `gremah.py`) -- override explicito
+        # necessario so' pra' construir a estrategia, sem efeito no que este
+        # teste mede.
+        capacidade_negocio_mult=1.0, capacidade_fracao=0.10,
+        # `shares_per_lot=1`: WIN@/WDO@ operam em CONTRATOS, nao em lotes de
+        # 100 acoes (`LOTE_PADRAO_B3`, o default de `Gremah` -- ver
+        # `scripts/daytrade/cripto_comum.py` pro mesmo ajuste em outro
+        # instrumento nao-lote-de-100). "gremah" so' serve de dublê de
+        # estrategia aqui; a granularidade certa e' o que importa.
+        shares_per_lot=1,
+    )
+    assert rt._custo_posicao(137_000.0, 1) == pytest.approx(margem)
+    assert rt._custo_posicao(137_000.0, 2) == pytest.approx(margem * 2)
+
+
+def test_custo_posicao_de_futuro_wdo_usa_a_margem_de_150(tmp_path):
+    margem = FUTURES_PROFILES["WDO@"].margin_per_contract_brl
+    rt, _feed = _runtime(
+        tmp_path, barras=[], symbol="WDO@", slot=slot_by_id("dt-gremah-wdo@-shadow"),
+        config=_config_futuro(margem), initial_capital=1_000.0,
+        capacidade_negocio_mult=1.0, capacidade_fracao=0.10,
+        # `shares_per_lot=1`: WIN@/WDO@ operam em CONTRATOS, nao em lotes de
+        # 100 acoes (`LOTE_PADRAO_B3`, o default de `Gremah` -- ver
+        # `scripts/daytrade/cripto_comum.py` pro mesmo ajuste em outro
+        # instrumento nao-lote-de-100). "gremah" so' serve de dublê de
+        # estrategia aqui; a granularidade certa e' o que importa.
+        shares_per_lot=1,
+    )
+    assert rt._custo_posicao(5_450.0, 1) == pytest.approx(margem)
+
+
+def test_custo_posicao_de_acao_continua_usando_preco_vezes_quantidade(tmp_path):
+    """Regressao inversa: sem margem configurada (toda ACAO, `_config()`
+    default), o fallback tem de continuar sendo o preco cheio -- e' o
+    caminho que todo o resto deste arquivo ja' depende."""
+    rt, _feed = _runtime(tmp_path, barras=[])
+    assert rt._custo_posicao(10.0, 100) == pytest.approx(1_000.0)
+
+
+def test_valor_posicoes_de_futuro_mostra_margem_nao_preco_em_pontos(tmp_path, pregao_aberto):
+    """Reproducao do achado do dono, 2026-08-31: WIN@ VENDIDO (short) a
+    137.000 pontos aparecia no painel como R$137.000,00 em vez de R$100,00
+    de margem. Mesma tecnica de injecao de estado de
+    `test_painel_conta_posicoes_independentes_sem_estourar`: escreve a
+    posicao direto em `policy_state` e le com um runtime de LEITURA novo --
+    e' assim que o painel (`dashboard/live_service.py`) sempre le, nunca
+    reusando o processo do robo."""
+    margem = FUTURES_PROFILES["WIN@"].margin_per_contract_brl
+    config = _config_futuro(margem)
+    semente = [_bar("13:00", 137_000.0, 137_000.0, 137_000.0, 137_000.0)]
+    rt, _feed = _runtime(
+        tmp_path, barras=[], semente=semente, symbol="WIN@", slot=SLOT_WIN,
+        config=config, initial_capital=1_000.0, fixed_anchor_until=time(14, 0),
+        capacidade_negocio_mult=1.0, capacidade_fracao=0.10,
+        # `shares_per_lot=1`: WIN@/WDO@ operam em CONTRATOS, nao em lotes de
+        # 100 acoes (`LOTE_PADRAO_B3`, o default de `Gremah` -- ver
+        # `scripts/daytrade/cripto_comum.py` pro mesmo ajuste em outro
+        # instrumento nao-lote-de-100). "gremah" so' serve de dublê de
+        # estrategia aqui; a granularidade certa e' o que importa.
+        shares_per_lot=1,
+    )
+    rt.run_once(now=_agora("13:01:00"))
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT_WIN.id)
+        estado = dict(acc.policy_state)
+        estado["intraday"]["machine"]["positions"] = [
+            {"side": "short", "entry_ts": "2026-08-31T13:02:00+00:00",
+             "entry_price": 137_000.0, "quantity": 1, "current_stop": 138_000.0,
+             "current_target": 136_000.0, "bars_held": 1, "metadata": {}},
+        ]
+        acc.policy_state = estado
+        store.save_account(conn, acc)
+
+    painel, _f = _runtime(
+        tmp_path, barras=[], semente=semente, symbol="WIN@", slot=SLOT_WIN,
+        config=config, initial_capital=1_000.0, fixed_anchor_until=time(14, 0),
+        capacidade_negocio_mult=1.0, capacidade_fracao=0.10,
+        # `shares_per_lot=1`: WIN@/WDO@ operam em CONTRATOS, nao em lotes de
+        # 100 acoes (`LOTE_PADRAO_B3`, o default de `Gremah` -- ver
+        # `scripts/daytrade/cripto_comum.py` pro mesmo ajuste em outro
+        # instrumento nao-lote-de-100). "gremah" so' serve de dublê de
+        # estrategia aqui; a granularidade certa e' o que importa.
+        shares_per_lot=1,
+    )
+    dt = painel.status()["daytrade"]
+
+    assert dt["posicoes_venda"] == 1
+    assert dt["valor_posicoes_venda"] == pytest.approx(margem)      # R$100,00
+    assert dt["valor_posicoes_venda"] != pytest.approx(137_000.0)   # o bug antigo
+    assert dt["valor_posicoes_compra"] == 0.0
+
+
+def test_caixa_de_futuro_bloqueia_margem_na_abertura_nao_o_preco(tmp_path, pregao_aberto):
+    """Mesmo roteiro de barras de
+    `test_valor_posicoes_reflete_capital_alocado_da_posicao_aberta` (preco
+    de teste ~10,00 -- nao precisa parecer WIN@ de verdade pra provar isto,
+    o unico ingrediente novo aqui e' `margin_per_contract_brl` na config).
+    Com margem ligada, abrir a posicao debita a MARGEM do caixa sombra,
+    nunca `preco * quantidade`."""
+    margem = 100.0
+    barras = [
+        _bar("13:00", 10.00, 10.00, 10.00, 10.00),
+        _bar("13:01", 10.00, 10.00, 9.79, 9.85),
+    ]
+    rt, _feed = _runtime(
+        tmp_path, barras, symbol="WIN@", slot=SLOT_WIN,
+        config=_config_futuro(margem), initial_capital=1_000.0,
+        capacidade_negocio_mult=1.0, capacidade_fracao=0.10,
+        # `shares_per_lot=1`: WIN@/WDO@ operam em CONTRATOS, nao em lotes de
+        # 100 acoes (`LOTE_PADRAO_B3`, o default de `Gremah` -- ver
+        # `scripts/daytrade/cripto_comum.py` pro mesmo ajuste em outro
+        # instrumento nao-lote-de-100). "gremah" so' serve de dublê de
+        # estrategia aqui; a granularidade certa e' o que importa.
+        shares_per_lot=1,
+    )
+    rt.run_once(now=_agora("13:02:00"))
+
+    full = rt.status()
+    qtd = full["posicoes"][0]["qtd"]
+    assert qtd > 0
+    assert full["daytrade"]["valor_posicoes_compra"] == pytest.approx(margem * qtd)
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT_WIN.id)
+    # o bug antigo debitaria preco*quantidade (~9,80 x qtd) -- caixa quase
+    # intacto, nao a margem de verdade.
+    assert acc.cash_sombra == pytest.approx(1_000.0 - margem * qtd)
+
+
+def test_caixa_de_futuro_libera_margem_mais_pnl_ao_fechar(tmp_path, pregao_aberto):
+    """Roteiro de `test_status_traz_ganhos_perdas_cagr_dd_e_acerto_por_lado_
+    de_ponta_a_ponta` (2 rodadas fechadas, +10 cada) com margem de futuro
+    ligada: cada fechamento tem de devolver a MARGEM que a abertura reteve,
+    mais o pnl -- nunca `preco * quantidade` mais pnl, que sobraria ou
+    faltaria caixa fantasma a cada trade (ver o comentario em `_on_closed`
+    sobre `liberado` ter de usar a MESMA formula do debito)."""
+    margem = 100.0
+    barras = [
+        _bar("13:00", 10.00, 10.00, 10.00, 10.00),
+        _bar("13:01", 10.00, 10.00, 9.79, 9.85),
+        _bar("13:02", 9.85, 9.91, 9.85, 9.90),
+        _bar("13:03", 9.90, 9.90, 9.79, 9.85),
+        _bar("13:04", 9.85, 9.91, 9.85, 9.90),
+        _bar("13:05", 9.90, 9.90, 9.90, 9.90),
+    ]
+    rt, _feed = _runtime(
+        tmp_path, barras, symbol="WIN@", slot=SLOT_WIN,
+        config=_config_futuro(margem), initial_capital=1_000.0,
+        capacidade_negocio_mult=1.0, capacidade_fracao=0.10,
+        # `shares_per_lot=1`: WIN@/WDO@ operam em CONTRATOS, nao em lotes de
+        # 100 acoes (`LOTE_PADRAO_B3`, o default de `Gremah` -- ver
+        # `scripts/daytrade/cripto_comum.py` pro mesmo ajuste em outro
+        # instrumento nao-lote-de-100). "gremah" so' serve de dublê de
+        # estrategia aqui; a granularidade certa e' o que importa.
+        shares_per_lot=1,
+    )
+    rt.run_once(now=_agora("13:07:00"))
+
+    s = rt.status()["daytrade"]
+    # Nao trava o QUANTO (`shares_per_lot=1` muda a quantidade que `Gremah`
+    # escolhe sozinha vs. o teste de acao que empresta este roteiro) -- so' a
+    # PROPRIEDADE que interessa aqui: o roteiro so' tem rodadas vencedoras, e
+    # a margem tem de voltar INTEIRA em cada uma, sobrando so' o pnl.
+    liquido = s["ganhos_dia"] - s["perdas_dia"]
+    assert liquido > 0
+    assert s["posicoes_compra"] == 0  # so' a ordem #03 ficou POSICIONADA, sem preencher
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT_WIN.id)
+    # a margem sempre volta inteira -- so' o pnl fica. O bug antigo deixaria
+    # sobra/falta de caixa fantasma aqui (preco != margem a cada abre/fecha).
+    assert acc.cash_sombra == pytest.approx(1_000.0 + liquido)
 
 
 def test_retorno_usa_initial_capital_fixo_ignora_correcoes_manuais_de_caixa(tmp_path, pregao_aberto):

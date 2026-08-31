@@ -821,6 +821,85 @@ havia amostra para dizer nada.
 > **Regra:** barras por pregão é o portão de admissão de ativo mais direto e mais
 > barato que existe. Aplique antes de calibrar, não depois.
 
+### 5.7 Preço de futuro vem em PONTOS, não em reais — CORRIGIDO 2026-08-31
+
+Achado no painel: a conta sombra do robô WIN@ (COPA_WIN) mostrava caixa de
+**-R$180.455,00** com 1 único contrato (venda) aberto, e o card de posição
+mostrava **R$180.705,00** de valor para essa mesma unidade. `evento.price`
+de um futuro de índice/dólar é a COTAÇÃO em pontos (~180.000 no Ibovespa),
+não reais por unidade — a contabilidade ao vivo (abertura/fechamento de
+posição, cards do painel) fazia `preço × quantidade` para debitar/creditar
+caixa, fórmula certa só para AÇÃO (onde não há alavancagem e o preço já é
+R$/unidade). O multiplicador certo (MARGEM por contrato: R$100 WIN@/R$150
+WDO@) já existia — mas só dentro do motor de backtest, usado para calcular
+P&L de trade FECHADO, nunca ligado à contabilidade de caixa nem ao valor
+exibido de posição/ordem em ABERTO: um caminho de código inteiramente
+separado, que não consultava a config do motor.
+
+O bug não depende de lado (compra/venda) nem de qual futuro — só não
+aparecia nas outras contas porque abertura e fechamento usavam a MESMA
+fórmula errada simetricamente: um round-trip completo (abre + fecha) se
+CANCELA sozinho (debita o nocional errado, credita de volta o MESMO
+nocional errado mais o P&L, que esse já vinha certo). Só uma posição ainda
+ABERTA no momento da correção expõe o excesso: fechar com a fórmula nova
+devolve apenas a margem certa, nunca desfaz o nocional errado que a
+abertura tirou — sem reconciliar o dado já gravado, o caixa fica torto
+para sempre. A reconciliação pontual foi feita com o robô PARADO (comparar-
+e-trocar condicionado ao valor exato observado), nunca com o processo que
+escreve a mesma conta ainda rodando — o painel e o robô são processos
+SEPARADOS lendo a mesma conta, e uma correção automática "na leitura"
+correria o risco de ser aplicada em dobro por cada um.
+
+> **Regra:** todo valor que sai da corretora/feed em UNIDADE PRÓPRIA do
+> instrumento (pontos de índice, pontos de dólar, ticks) exige um
+> multiplicador explícito para virar reais — nunca assuma "preço × 1" só
+> porque funcionou para ação. E o cálculo de custo/débito de caixa tem de
+> usar o MESMO multiplicador que o cálculo de P&L já usa, lido da MESMA
+> fonte — dois caminhos de código calculando "quanto isso vale em reais" de
+> formas diferentes é o padrão que produz esse tipo de bug silencioso.
+> **Pergunte à plataforma nova:** o preço que a API devolve para um
+> derivativo é cotação (precisa de multiplicador) ou já vem em reais por
+> unidade? Existe UM lugar só de onde todo código lê esse multiplicador, ou
+> cada tela/função tem sua própria cópia da fórmula?
+
+### 5.8 Quantidade com sinal marca o LADO, não o valor do ativo — CORRIGIDO 2026-08-31
+
+Achado no painel: 1 contrato WIN@ vendido (short) aparecia como **+R$100,00**
+no card "Posições · Short" e como **-R$100,00** na linha equivalente da
+tabela "Posições abertas" — o MESMO contrato, dois números com sinais
+opostos. `LivePosition.quantity` já vinha negativa para short desde
+2026-08-21 (marca o lado, e isso está certo — o card com sinal na tela usa
+essa convenção). O bug estava em `LivePosition.market_value()`, que
+multiplicava essa quantidade COM sinal pelo valor por unidade
+(`unit_value_brl * quantity`), assumindo implicitamente um modelo de venda a
+descoberto (vende primeiro, recebe caixa, a posição fica negativa como
+passivo). Não é o modelo que o robô ao vivo usa: `_on_opened` debita o MESMO
+`custo` positivo do caixa em QUALQUER lado — comprado ou vendido, é capital
+COMPROMETIDO (margem de futuro, preço cheio de ação), nunca um crédito. Com
+`market_value` invertendo o sinal só no short, `equity() = caixa +
+investido` levava um prejuízo FANTASMA de 2× o custo assim que a posição
+abria — uma vez no débito do caixa (certo), outra na inversão de sinal do
+"ativo" que deveria compensar esse débito (errado) — sem nenhum preço ter se
+mexido e sem nenhuma perda real. Existia havia dez dias sem ninguém notar
+porque os números vigiados de perto (caixa, ganhos/perdas do dia) usam um
+caminho de código DIFERENTE (`_custo_posicao`, sempre positivo) que nunca
+teve esse bug; só "Carteira"/"Patrimônio" e a tabela de posições liam
+`market_value`.
+
+> **Regra:** o sinal da quantidade serve para identificar o LADO da posição
+> (metadado, rótulo "compra"/"venda" na tela) — nunca para inverter o sinal
+> de um valor que representa capital comprometido. Se abrir E fechar uma
+> posição sem nenhum movimento de preço tem de deixar o patrimônio
+> INALTERADO (a única afirmação que vale para compra e venda ao mesmo
+> tempo), teste exatamente isso: `equity()` antes de abrir == `equity()`
+> logo depois de abrir, com a posição marcada no próprio preço de entrada.
+> **Pergunte à plataforma nova:** abrir uma posição vendida credita caixa
+> (modelo "vende primeiro") ou debita margem/garantia (modelo "compromete
+> capital", igual à compra)? A fórmula de valor-a-mercado da posição tem de
+> ser a INVERSA exata de qual dos dois débitos/créditos a abertura realmente
+> fez — não uma convenção genérica de "venda é negativo" copiada de outro
+> instrumento.
+
 ---
 
 ## Parte 6 — Método: os erros que custam meses, não reais
@@ -1129,14 +1208,23 @@ dinheiro ou meses.
     barra/dia (volatilidade)? Um teto por % de risco emprestado de outro
     robô com o tipo OPOSTO de stop pode reproduzir o problema que ele foi
     criado pra evitar, só que noutro capital. (3.12)
+19. Abrir uma posição vendida credita caixa (venda a descoberto) ou debita
+    margem/garantia (compromete capital, igual à compra)? O valor-a-mercado
+    da posição na tela tem de inverter exatamente o débito/crédito real da
+    abertura — não uma convenção genérica de "venda é negativo". (5.8)
 
 **Sobre a medida**
-19. O simulador modela posição na fila? Se não, o que ele está respondendo? (4.1)
-20. O horário de sessão que ele usa é fixo ou segue o instrumento? (5.2)
-21. Qual é o edge da estratégia **em ticks** neste instrumento? (4.5)
-22. Uma sequência de stops cabe no capital real? Se o tamanho da posição
+20. O simulador modela posição na fila? Se não, o que ele está respondendo? (4.1)
+21. O horário de sessão que ele usa é fixo ou segue o instrumento? (5.2)
+22. Qual é o edge da estratégia **em ticks** neste instrumento? (4.5)
+23. Uma sequência de stops cabe no capital real? Se o tamanho da posição
     escala com o caixa, existe um teto de RISCO por trade separado do teto
     de MARGEM? (3.5, 3.9)
+24. O preço que a API devolve para este instrumento já é reais por unidade,
+    ou é cotação (pontos de índice, pontos de dólar, ticks) que exige um
+    multiplicador para virar dinheiro? Se exige, o débito/crédito de caixa
+    lê esse multiplicador do MESMO lugar que o cálculo de P&L, ou é uma
+    segunda cópia da fórmula? (5.7)
 
 ---
 

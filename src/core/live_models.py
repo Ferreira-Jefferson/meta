@@ -324,9 +324,35 @@ class LivePosition:
     kind: str = "main"                  # 'main' | 'satellite'
     metadata: dict = field(default_factory=dict)
     id: Optional[int] = None
+    # R$ comprometido por UNIDADE de `quantity` -- MARGEM por contrato para
+    # futuro (WIN@/WDO@), `None` para ação (onde `market_value` usa o preço
+    # cheio, que e' o custo real de comprar o lote sem alavancagem). `entry_price`
+    # de um futuro vem em PONTOS do indice/dolar, nao em reais: sem este campo,
+    # `market_value`/`AccountState.invested()` multiplicava pontos x contratos
+    # e devolvia um "valor investido" de centenas de milhares de reais para 1
+    # contrato (achado do dono, 2026-08-31). Setado por `live.intraday_runtime`
+    # (unico lugar que sabe qual símbolo e' futuro) na criação da posição --
+    # `core/` nao pode importar `backtest.intraday.profiles` para descobrir
+    # isso sozinho (regra de camada, ver AGENTS.md).
+    unit_value_brl: Optional[float] = None
 
     def market_value(self, price: float) -> float:
-        return float(price) * self.quantity
+        """Quanto desta posicao conta como ATIVO em `AccountState.invested()`.
+
+        SEMPRE positivo, em long ou short: `quantity` negativa (short, ver
+        `IntradayLiveRuntime._on_opened`) so' marca o LADO, nao o sinal do
+        valor. `_custo_posicao`/`_on_opened` debitam `custo` positivo do
+        caixa em QUALQUER lado -- e' capital comprometido (margem de futuro,
+        preco cheio de acao), nunca credito por venda a descoberto. Se
+        `market_value` usasse a quantidade com sinal, um short abriria
+        `equity() = caixa + invested()` com prejuizo fantasma de 2x o custo
+        (uma vez no debito do caixa, outra na inversao de sinal aqui) sem
+        nenhum preco ter se mexido -- achado do dono, 2026-08-31, no cartao
+        "Posicoes abertas" mostrando valor NEGATIVO para uma posicao short
+        recem-aberta, sem perda nenhuma realizada."""
+        if self.unit_value_brl is not None:
+            return self.unit_value_brl * abs(self.quantity)
+        return float(price) * abs(self.quantity)
 
 
 @dataclass

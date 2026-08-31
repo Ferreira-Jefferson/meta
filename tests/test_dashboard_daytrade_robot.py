@@ -12,13 +12,16 @@ CONTA numa conta já existente — nunca do form nesse segundo caso.
 from __future__ import annotations
 
 import re
+from datetime import date
 
 import pytest
 from fastapi.testclient import TestClient
 
+from core.live_models import LivePosition
 from dashboard import app as dashboard_app
 from dashboard import live_control, live_service
 from journal import live_store
+from live import clock as live_clock
 
 # Slot de day trade DINAMICO desde 2026-08-22: o id carrega robo+ativo+modo
 # (`dt-<robo>-<ativo>-<modo>`, modo fixo no id desde 2026-08-24) e o painel
@@ -30,6 +33,9 @@ DAYTRADE = "dt-gremah-pmam3-shadow"
 # cartões/contas/processos independentes -- ver alguns testes abaixo que
 # exercitam justamente essa coexistência.
 DAYTRADE_LIVE = "dt-gremah-pmam3-live"
+# Slot de FUTURO (bug de caixa corrigido 2026-08-31 -- WIN@ cota em PONTOS,
+# nao em reais) com o mesmo nome de robo+ativo do achado REAL do dono.
+DAYTRADE_WIN = "dt-copa_win-win@-shadow"
 
 
 @pytest.fixture
@@ -74,12 +80,13 @@ def client():
 
 def _create_daytrade_account(
     db_path, capital: float = 100.0, investment_robot: str = "gremah", name: str = DAYTRADE,
+    symbol: str = SYMBOL,
 ) -> int:
     with live_store.live_journal(db_path) as conn:
         acc = live_store.ensure_account(
             conn, name=name, mode="mt5",
             initial_capital=capital, investment_robot=investment_robot,
-            withdrawal_robot="", symbol=SYMBOL,
+            withdrawal_robot="", symbol=symbol,
         )
         return acc.id
 
@@ -751,6 +758,138 @@ def test_fragmento_daytrade_caixa_carteira_patrimonio_mostram_so_o_saldo_do_modo
     # PRINCIPAL do card -- aparecer na sub-linha "aportado" e' esperado.
     assert '<span class="v num">R$ 20,00</span>' not in html
     assert "data-cash-live" not in html
+
+
+# ---------- bug de caixa/apresentação de FUTURO corrigido 2026-08-31 -------
+# WIN@ cota em PONTOS, não em reais -- o card "Posições" e o caixa
+# mostravam o preço tratado como se fosse dinheiro (achado do dono:
+# -R$180.455,00 de caixa com 1 único contrato WIN@ vendido aberto). Estes
+# testes passam pelo `/operacao/<slot>/fragment` DE VERDADE -- é o
+# `_build_intraday_runtime` de produção (`dashboard/live_service.py`) quem
+# resolve `copa_win`/WIN@ e aplica a margem real via
+# `config_for(profile_for("WIN@"), ...)`, o mesmo caminho que serviu o
+# painel do dono no achado original.
+
+def test_fragmento_daytrade_futuro_mostra_margem_na_posicao_nao_preco_em_pontos(
+    isolated_journal, client,
+):
+    """Reprodução do achado: WIN@ VENDIDO (short) a ~137.000 pontos tem de
+    aparecer no card "Posições · Short" como R$100,00 (a margem por
+    contrato, `FUTURES_PROFILES["WIN@"].margin_per_contract_brl`), nunca
+    como R$137.000,00 (o preço tratado como caixa). Injeta a posição direto
+    em `policy_state` -- mesma técnica de
+    `test_intraday_live_runtime.py::
+    test_valor_posicoes_de_futuro_mostra_margem_nao_preco_em_pontos`."""
+    _create_daytrade_account(
+        isolated_journal, capital=1_000.0, investment_robot="copa_win",
+        name=DAYTRADE_WIN, symbol="WIN@",
+    )
+    with live_store.live_journal(isolated_journal) as conn:
+        acc = live_store.load_account(conn, DAYTRADE_WIN)
+        acc.policy_state = {
+            "intraday": {
+                "session": live_clock.intraday_session().isoformat(),
+                "machine": {
+                    "positions": [
+                        {"side": "short", "entry_ts": "2026-08-31T13:00:00+00:00",
+                         "entry_price": 137_000.0, "quantity": 1,
+                         "current_stop": 138_000.0, "current_target": 136_000.0,
+                         "bars_held": 1, "metadata": {}},
+                    ],
+                },
+            },
+        }
+        live_store.save_account(conn, acc)
+
+    html = client.get(f"/operacao/{DAYTRADE_WIN}/fragment").text
+
+    assert "R$ 100,00" in html            # a margem (WIN@)
+    assert "R$ 137.000,00" not in html    # o bug antigo: preço tratado como caixa
+
+
+# ---------- bug de sinal em `market_value` para SHORT corrigido 2026-08-31 -
+# `LivePosition.quantity` negativa (short) alimentava `market_value` com o
+# proprio sinal, entao a linha do short na tabela "Posições abertas"
+# mostrava um VALOR negativo (ex.: "R$ -100,00" pra uma margem de R$100,00
+# comprometida) enquanto o card "Posições · Short" -- que usa
+# `_custo_posicao`, um caminho DIFERENTE -- ja mostrava +R$100,00 pro MESMO
+# contrato. Achado do dono, 2026-08-31 (screenshot: tabela com "-100,00" ao
+# lado do card com "100,00"). Ver `core.live_models.LivePosition.
+# market_value` e `test_intraday_live_runtime.py::
+# test_abrir_short_nao_cria_prejuizo_fantasma_na_carteira`.
+
+def test_fragmento_daytrade_tabela_de_posicoes_mostra_valor_positivo_no_short(
+    isolated_journal, client,
+):
+    """Mesma posição WIN@ vendida do teste acima, mas pela via de
+    `live_positions` (não `policy_state`) -- é o que preenche a linha da
+    tabela "Posições abertas" (`p.valor` em `operacao_slot_live.html`)."""
+    acc_id = _create_daytrade_account(
+        isolated_journal, capital=1_000.0, investment_robot="copa_win",
+        name=DAYTRADE_WIN, symbol="WIN@",
+    )
+    with live_store.live_journal(isolated_journal) as conn:
+        live_store.upsert_position(conn, acc_id, LivePosition(
+            ticker="WIN@", quantity=-1, entry_date=date(2026, 8, 31),
+            entry_price=137_000.0, capital_allocated=100.0,
+            current_stop=138_000.0,
+        ))
+
+    html = client.get(f"/operacao/{DAYTRADE_WIN}/fragment").text
+
+    assert "R$ 100,00" in html
+    assert "R$ -100,00" not in html
+    assert "R$ 137.000,00" not in html
+
+
+def test_fragmento_daytrade_resultado_do_dia_fica_verde_no_lucro_e_vermelho_no_prejuizo(
+    isolated_journal, client,
+):
+    """`resultado_dia = ganhos_dia - perdas_dia` pinta a etiqueta "Resultado"
+    do cabeçalho de verde (`ops-badge safe`) quando positivo e vermelho
+    (`ops-badge trough`) quando negativo (`operacao_slot_live.html`) -- trava
+    a APRESENTAÇÃO (cor/sinal), não só a conta em si (essa já é coberta por
+    `test_intraday_live_runtime.py::
+    test_resultado_dia_e_acumulado_separa_hoje_do_historico`)."""
+    hoje = live_clock.intraday_session().isoformat()
+
+    acc_id = _create_daytrade_account(
+        isolated_journal, capital=1_000.0, investment_robot="copa_win",
+        name=DAYTRADE_WIN, symbol="WIN@",
+    )
+    with live_store.live_journal(isolated_journal) as conn:
+        live_store.log_event(
+            conn, acc_id, "info", "daytrade", "saida lucro",
+            {"numero_ordem": 1, "side": "short", "exit_reason": "target",
+             "pnl_brl": 100.0, "sessao": hoje},
+        )
+
+    html = client.get(f"/operacao/{DAYTRADE_WIN}/fragment").text
+    assert 'ops-badge safe' in html
+    assert 'ops-badge trough' not in html
+    assert "R$ 100,00" in html  # Resultado do dia (etiqueta) e Ganhos do dia (card)
+
+
+def test_fragmento_daytrade_resultado_do_dia_fica_vermelho_no_prejuizo(
+    isolated_journal, client,
+):
+    hoje = live_clock.intraday_session().isoformat()
+
+    acc_id = _create_daytrade_account(
+        isolated_journal, capital=1_000.0, investment_robot="copa_win",
+        name=DAYTRADE_WIN, symbol="WIN@",
+    )
+    with live_store.live_journal(isolated_journal) as conn:
+        live_store.log_event(
+            conn, acc_id, "info", "daytrade", "saida prejuizo",
+            {"numero_ordem": 1, "side": "short", "exit_reason": "stop",
+             "pnl_brl": -80.0, "sessao": hoje},
+        )
+
+    html = client.get(f"/operacao/{DAYTRADE_WIN}/fragment").text
+    assert 'ops-badge trough' in html
+    assert 'ops-badge safe' not in html
+    assert "R$ 80,00" in html  # Resultado do dia (etiqueta, -80) e Perdas do dia (card)
 
 
 # ---------- reordenar robôs de day trade (arrastar no painel) ---------------
