@@ -426,6 +426,32 @@ def test_start_mata_orfao_do_slot_antes_de_subir_novo_processo(isolated, monkeyp
     assert state["pid"] == 99999
 
 
+def test_start_mata_todos_os_orfaos_do_slot_nao_so_o_primeiro(isolated, monkeypatch):
+    """2026-08-31, achado numa conferencia manual do dono: `_parar_processo_
+    nao_rastreado` parava no PRIMEIRO orfao do slot (`return True` dentro do
+    `for`) -- com dois orfaos vivos ao mesmo tempo para o MESMO slot (pode
+    acontecer apos mais de um restart do dashboard sem o painel notar), o
+    segundo escapava da varredura e `start()` ainda subia um TERCEIRO
+    processo por cima dos dois. Este teste prova que a varredura agora mata
+    TODOS os orfaos do slot antes do `Popen` novo, nao so' o primeiro."""
+    _seed_cash(isolated["db"], DAYTRADE, 100.0)
+    linha_orfa = (
+        r'"C:\...\python.exe" "C:\...\run_live.py" --mode mt5 --capital 40.86 '
+        f'--strategy gremah --slot {DAYTRADE} --execution-mode shadow loop --seconds 5'
+    )
+    monkeypatch.setattr(live_control, "_processos_do_sistema",
+                        lambda: [(11111, 22222, linha_orfa), (33333, 44444, linha_orfa)])
+    mortos = []
+    monkeypatch.setattr(live_control, "_matar_arvore", lambda pid: mortos.append(pid))
+    monkeypatch.setattr(live_control.subprocess, "Popen",
+                        _fake_popen(poll_value=None, captured_argv=[]))
+
+    state = live_control.start(_cfg(slot=DAYTRADE, strategy="gremah"))
+
+    assert mortos == [11111, 33333]
+    assert state["pid"] == 99999
+
+
 def test_start_sem_orfao_nao_mata_nada(isolated, monkeypatch):
     """Caso comum (nenhum orfao no sistema): a varredura nao pode matar nada
     nem impedir a subida normal."""

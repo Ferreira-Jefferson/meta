@@ -1383,8 +1383,15 @@ def _matar_arvore(pid: int) -> None:
 
 
 def _parar_processo_nao_rastreado(slot: str) -> bool:
-    """Mata um supervisor deste slot que o arquivo de estado não conhece.
-    `False` se não havia nenhum (o caso normal de "já estava parado").
+    """Mata TODOS os supervisores deste slot que o arquivo de estado não
+    conhece. `False` se não havia nenhum (o caso normal de "já estava
+    parado").
+
+    Percorre a lista inteira em vez de parar no primeiro achado (bug
+    encontrado numa conferência manual do dono, 2026-08-31: um `return True`
+    antecipado deixava um SEGUNDO órfão do mesmo slot escapar da varredura
+    sempre que mais de um estivesse vivo ao mesmo tempo — exatamente o
+    cenário que esta função existe para fechar).
 
     Indeterminação vira `False`, e não exceção: quem chama é o botão "Parar",
     e derrubar a tela com erro porque a varredura engasgou seria pior que
@@ -1393,13 +1400,14 @@ def _parar_processo_nao_rastreado(slot: str) -> bool:
         processos = listar_processos()
     except _TasklistUnavailable:
         return False
+    matou = False
     for processo in processos:
         if processo.slot == slot:
             _matar_arvore(processo.pid)
             for filho in processo.filhos:
                 _matar_arvore(filho)
-            return True
-    return False
+            matou = True
+    return matou
 
 
 def encerrar_processo(pid: int) -> ProcessoRobo:
