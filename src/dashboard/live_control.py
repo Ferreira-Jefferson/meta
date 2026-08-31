@@ -343,13 +343,30 @@ def _pids_alive(pids) -> set[int]:
     return vivos
 
 
-def status(slot: str) -> Optional[dict]:
-    """Estado do processo supervisor DESTE slot, ou `None` se não está rodando.
+def status(slot: str, reconciliar: bool = False) -> Optional[dict]:
+    """Estado do processo supervisor DESTE slot, ou `None` se não está
+    rodando (nem, com `reconciliar=True`, adotável — ver abaixo).
 
     Autocorrige: se o arquivo aponta para um PID que já morreu (processo
     caiu, servidor reiniciou sem o serviço) sem ter passado por `stop()`,
     marca como parado em vez de dizer que está rodando quando não está —
     mas preserva a `config`, para `last_config()` continuar funcionando.
+
+    `reconciliar=True` (achado 2026-08-31: reinício do dashboard deixa o
+    `Popen` órfão vivo enquanto `db/live_process.json` fica sem o PID novo —
+    os 7 slots de day trade, incluindo o robô REAL, ficaram "parados" no
+    painel com o processo de pé por trás) pergunta ao SO
+    (`_reconciliar_orfao`), antes de desistir, se existe mesmo assim
+    exatamente um `run_live.py` deste slot rodando — e se sim, readota o PID
+    em vez de deixar o cartão "parado para sempre".
+
+    Default `False` DE PROPÓSITO: a varredura custa ~3s (`Get-CimInstance`
+    enumera a máquina inteira, ver `_processos_do_sistema`), e este módulo
+    tem um contrato antigo de que a CARGA da página `/operacao` nunca varre
+    (`test_a_pagina_nao_varre_o_sistema_ao_carregar`) — só o POLL periódico
+    de cada cartão (`app.operacao_fragment`) pode pagar esse custo. Chamar
+    com `reconciliar=True` de um caminho de carga de página quebraria esse
+    contrato.
 
     Se o `tasklist` não responder (`_TasklistUnavailable`), a vivacidade é
     INDETERMINADA agora — devolve o estado gravado tal como está, sem
@@ -357,18 +374,18 @@ def status(slot: str) -> Optional[dict]:
     `_pids_alive` para o incidente que motivou isto."""
     state = _read_state(slot)
     if state is None or state.get("pid") is None:
-        return None
+        return _reconciliar_orfao(slot) if reconciliar else None
     try:
         alive = _pid_alive(state["pid"])
     except _TasklistUnavailable:
         return state
     if not alive:
         _write_state(slot, {**state, "pid": None, "started_at": None})
-        return None
+        return _reconciliar_orfao(slot) if reconciliar else None
     return state
 
 
-def status_all(slot_ids=None) -> dict[str, Optional[dict]]:
+def status_all(slot_ids=None, reconciliar: bool = False) -> dict[str, Optional[dict]]:
     """`{slot_id: estado ou None}` para os slots pedidos (default: todos os que
     existem hoje, incluindo os de day trade criados pelo dono).
 
@@ -386,7 +403,14 @@ def status_all(slot_ids=None) -> dict[str, Optional[dict]]:
     (confirmados vivos por fora, via Get-Process) continuando a rodar —
     achado ao vivo 2026-08-24, PMAM3 e PMAM3-tick caindo juntos no painel no
     mesmo poll. Ver a docstring de `_pids_alive`.
-    """
+
+    `reconciliar=True` (default `False`, mesmo motivo de `status()`: NENHUM
+    caminho de carga de página pode pagar `Get-CimInstance` -- ver
+    `test_a_pagina_nao_varre_o_sistema_ao_carregar`) reconcilia os slots que
+    sobraram sem PID (arquivo nunca teve, ou acabou de perder um que já
+    morreu) numa ÚNICA varredura extra para o lote inteiro -- não uma por
+    slot, mesmo espírito de `_pids_alive` (uma chamada de sistema para N
+    slots, não N chamadas): achado 2026-08-31, ver docstring de `status()`."""
     if slot_ids is None:
         from dashboard.slots import all_slots
 
@@ -399,15 +423,28 @@ def status_all(slot_ids=None) -> dict[str, Optional[dict]]:
     except _TasklistUnavailable:
         return estados
     resultado: dict[str, Optional[dict]] = {}
+    pendentes: list[str] = []
     for sid, est in estados.items():
         if est is None or est.get("pid") is None:
-            resultado[sid] = None
+            pendentes.append(sid)
             continue
         if est["pid"] not in vivos:
             _write_state(sid, {**est, "pid": None, "started_at": None})
-            resultado[sid] = None
+            pendentes.append(sid)
             continue
         resultado[sid] = est
+    if pendentes and reconciliar:
+        try:
+            processos = listar_processos()
+        except _TasklistUnavailable:
+            processos = None
+        for sid in pendentes:
+            resultado[sid] = (
+                _reconciliar_do_inventario(sid, processos) if processos is not None else None
+            )
+    elif pendentes:
+        for sid in pendentes:
+            resultado[sid] = None
     return resultado
 
 
@@ -1095,6 +1132,11 @@ class ProcessoRobo:
     execution_mode: Optional[str]
     rastreado: bool
     filhos: tuple[int, ...] = ()
+    # Linha de comando crua -- usada só por `_config_from_commandline` para
+    # readotar um processo cujo slot sumiu de `db/live_process.json` (ver
+    # `_reconciliar_do_inventario`). Vazia por default para não quebrar quem
+    # já constrói `ProcessoRobo` sem ela (testes existentes).
+    linha_de_comando: str = ""
 
     @property
     def rotulo(self) -> str:
@@ -1112,6 +1154,90 @@ def _argumento(linha: str, flag: str) -> Optional[str]:
         if parte.startswith(f"{alvo}="):
             return parte.split("=", 1)[1]
     return None
+
+
+def _config_from_commandline(processo: "ProcessoRobo") -> Optional[dict]:
+    """Reconstroi um dict no formato de `asdict(ProcessConfig(...))` a partir
+    da PROPRIA linha de comando do processo vivo -- usado quando o slot sumiu
+    inteiro de `db/live_process.json` (achado 2026-08-31: reinicios do
+    dashboard deixam o `Popen` orfao vivo e o arquivo de estado, gravado por
+    um processo-pai que ja nao existe mais, sem nenhuma linha para o slot).
+
+    So os campos SIMPLES (sem espaco/aspas no valor) sao recuperaveis assim;
+    `mt5_symbol_map`/`mt5_fractional_map` ficam de fora de proposito -- sao
+    autodetectados de novo a cada `start()` (ver docstring de `ProcessConfig`),
+    entao o processo JA RODANDO nao depende deles estarem aqui; so o
+    formulario de retomada os pediria de novo, e vai redetectar sozinho.
+
+    `None` se a linha nao tiver os campos minimos -- quem chama nao adota no
+    escuro."""
+    linha = processo.linha_de_comando
+    strategy = _argumento(linha, "strategy")
+    mode = _argumento(linha, "mode")
+    capital = _argumento(linha, "capital")
+    if not strategy or not mode or not capital:
+        return None
+    mt5_shares = _argumento(linha, "mt5-shares-per-lot")
+    return {
+        "mode": mode,
+        "capital": float(capital),
+        "strategy": strategy,
+        "slot": processo.slot,
+        "execution_mode": processo.execution_mode or "shadow",
+        "notify_min_level": _argumento(linha, "notify-min-level") or "warn",
+        "mt5_shares_per_lot": float(mt5_shares) if mt5_shares else None,
+        "mt5_fractional_map": None,
+        "mt5_symbol_map": None,
+    }
+
+
+def _reconciliar_do_inventario(slot: str, processos: list["ProcessoRobo"]) -> Optional[dict]:
+    """Quando `db/live_process.json` nao sabe de nenhum PID vivo para `slot`,
+    pergunta ao INVENTARIO JA VARRIDO (`listar_processos()`, feito por quem
+    chama -- nunca varre de novo aqui, ver `status_all()`) se existe mesmo
+    assim, um `run_live.py --slot <slot>` de pe. Se sim, readota o PID em vez
+    de deixar o cartao dizer "parado" para um robo que continua operando --
+    e' a mesma classe de bug documentada na memoria do projeto
+    (`supervisores_duplicados_painel_cego`, 2026-08-26; reincidiu em
+    31/08/2026, desta vez nos 7 slots de day trade de uma vez, incluindo o
+    robo REAL `dt-gremah-pmam3-live`).
+
+    NUNCA decide entre dois candidatos: mais de um processo vivo pro mesmo
+    slot e' sinal de incidente (duas instancias escrevendo a mesma conta), nao
+    divergencia de painel -- nao adota nenhum, deixa "parado" (visivel,
+    seguro) ate a tela "Processos de Robo" resolver na mao.
+
+    Prefere a `config` que JA estava salva (preservada por `status()` ao
+    zerar so' `pid`/`started_at`) a reconstruir da linha de comando -- so cai
+    para `_config_from_commandline` quando o slot sumiu por inteiro do
+    arquivo. `started_at` vira o momento da ADOCAO, nao o do `Popen` real
+    (nao ha como saber sem consultar `CreationDate` do processo, e o unico
+    uso deste campo e' exibir "rodando ha..." -- ver `app.hora_br`)."""
+    candidatos = [p for p in processos if p.slot == slot]
+    if len(candidatos) != 1:
+        return None
+    candidato = candidatos[0]
+    config = (_read_state(slot) or {}).get("config") or _config_from_commandline(candidato)
+    if config is None:
+        return None
+    state = {
+        "pid": candidato.pid,
+        "started_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "config": config,
+    }
+    _write_state(slot, state)
+    return state
+
+
+def _reconciliar_orfao(slot: str) -> Optional[dict]:
+    """Igual a `_reconciliar_do_inventario`, mas varre agora (`listar_
+    processos()`) -- usada por `status()` (chamado slot a slot pelo poll de
+    cada cartao) quando nao ha um inventario ja pronto pra reusar."""
+    try:
+        processos = listar_processos()
+    except _TasklistUnavailable:
+        return None
+    return _reconciliar_do_inventario(slot, processos)
 
 
 def _powershell() -> str:
@@ -1230,6 +1356,7 @@ def listar_processos() -> list[ProcessoRobo]:
             execution_mode=_argumento(linha, "execution-mode"),
             rastreado=pid in rastreados,
             filhos=tuple(sorted(filhos_de.get(pid, ()))),
+            linha_de_comando=linha,
         ))
     return sorted(processos, key=lambda p: (p.slot or "", p.pid))
 

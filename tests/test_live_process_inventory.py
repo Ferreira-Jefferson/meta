@@ -172,3 +172,113 @@ def test_varredura_indeterminada_nao_derruba_o_botao_parar(estado, monkeypatch):
 
     monkeypatch.setattr(live_control, "_processos_do_sistema", explode)
     assert live_control.stop("dt-gremah-pmam3-live") is False
+
+
+# ---------- reconciliação: cartão "parado" com processo vivo (2026-08-31) --
+#
+# Achado ao vivo: reinício do dashboard (uvicorn --reload, ou um `dev.bat`
+# reiniciado) deixa o `Popen` órfão vivo enquanto `db/live_process.json` fica
+# sem o PID novo -- os 7 slots de day trade da máquina, incluindo o robô REAL
+# (`dt-gremah-pmam3-live`), ficaram "parados" no painel com o processo de pé
+# por trás. `status(..., reconciliar=True)`/`status_all(..., reconciliar=True)`
+# agora readotam em vez de desistir -- ver `_reconciliar_do_inventario`/
+# `_reconciliar_orfao`. `reconciliar` é OPT-IN (default `False`) porque a
+# varredura custa ~3s e a carga da página `/operacao` tem contrato de nunca
+# pagar esse custo (`test_a_pagina_nao_varre_o_sistema_ao_carregar`) -- só o
+# poll periódico do cartão (`app.operacao_fragment`) liga a reconciliação.
+
+def test_status_sem_reconciliar_nao_varre_e_continua_parado(estado, monkeypatch):
+    """O default tem de se comportar EXATAMENTE como antes desta mudança --
+    é o caminho que a carga de `/operacao` usa."""
+    monkeypatch.setattr(live_control, "_processos_do_sistema",
+                        lambda: pytest.fail("reconciliar=False não pode varrer"))
+    live_control._write_state("dt-gremah-pmam3-live", {
+        "pid": None, "started_at": None,
+        "config": {"slot": "dt-gremah-pmam3-live", "strategy": "gremah"},
+    })
+
+    assert live_control.status("dt-gremah-pmam3-live") is None
+    assert live_control.status_all(["dt-gremah-pmam3-live"])["dt-gremah-pmam3-live"] is None
+
+
+def test_status_readota_processo_orfao_preservando_a_config_existente(estado, monkeypatch):
+    """Caso mais comum: o arquivo perdeu só o `pid` (config sobrevive, é o
+    que `status_all()` já preservava antes) -- reconciliação usa a config
+    JÁ SALVA, nunca reconstrói à toa quando não precisa."""
+    linha = _LINHA.format(slot="dt-gremah-pmam3-live", modo="live")
+    _varredura(monkeypatch, [(18816, 1, linha)])
+    live_control._write_state("dt-gremah-pmam3-live", {
+        "pid": None, "started_at": None,
+        "config": {"slot": "dt-gremah-pmam3-live", "strategy": "gremah"},
+    })
+
+    estado_lido = live_control.status("dt-gremah-pmam3-live", reconciliar=True)
+
+    assert estado_lido is not None
+    assert estado_lido["pid"] == 18816
+    assert estado_lido["config"]["strategy"] == "gremah"
+    assert live_control._read_state("dt-gremah-pmam3-live")["pid"] == 18816
+
+
+def test_status_readota_reconstruindo_config_da_linha_de_comando(estado, monkeypatch):
+    """Caso mais severo, também real em 31/08/2026: o slot sumiu POR INTEIRO
+    do arquivo (4 dos 7 ficaram assim), não só o `pid` -- a config vem da
+    PRÓPRIA linha de comando do processo vivo."""
+    linha = ("C:\\meta\\.venv\\Scripts\\python.exe C:\\meta\\scripts\\run_live.py "
+             "--mode mt5 --capital 800.07 --strategy gremah_tick "
+             "--slot dt-gremah_tick-klbn3-shadow --execution-mode shadow "
+             "--notify-min-level warn --mt5-shares-per-lot 1.0 loop --seconds 5")
+    _varredura(monkeypatch, [(21200, 1, linha)])
+
+    estado_lido = live_control.status("dt-gremah_tick-klbn3-shadow", reconciliar=True)
+
+    assert estado_lido["pid"] == 21200
+    assert estado_lido["config"] == {
+        "mode": "mt5", "capital": 800.07, "strategy": "gremah_tick",
+        "slot": "dt-gremah_tick-klbn3-shadow", "execution_mode": "shadow",
+        "notify_min_level": "warn", "mt5_shares_per_lot": 1.0,
+        "mt5_fractional_map": None, "mt5_symbol_map": None,
+    }
+
+
+def test_status_nao_adota_quando_dois_processos_reivindicam_o_mesmo_slot(estado, monkeypatch):
+    """Dois processos vivos pro mesmo slot é sinal de INCIDENTE (duas
+    instâncias escrevendo a mesma conta -- ver a memória
+    `supervisores_duplicados_painel_cego`), não divergência de painel: nunca
+    escolhe um dos dois sozinho, deixa "parado" até resolução manual."""
+    linha = _LINHA.format(slot="dt-gremah-pmam3-live", modo="live")
+    _varredura(monkeypatch, [(111, 1, linha), (222, 1, linha)])
+
+    assert live_control.status("dt-gremah-pmam3-live", reconciliar=True) is None
+    assert live_control._read_state("dt-gremah-pmam3-live") is None
+
+
+def test_status_sem_candidato_nenhum_continua_parado(estado, monkeypatch):
+    _varredura(monkeypatch, [])
+    assert live_control.status("dt-gremah-pmam3-live", reconciliar=True) is None
+
+
+def test_status_all_reconcilia_o_lote_inteiro_com_uma_unica_varredura(estado, monkeypatch):
+    """Mesmo espírito de `_pids_alive`: uma varredura pro LOTE de slots
+    pendentes, nunca uma por slot -- `status_all()` é chamado pela tela que
+    lista todos os robôs de uma vez."""
+    chamadas: list[int] = []
+
+    def _varre():
+        chamadas.append(1)
+        return [
+            (111, 1, _LINHA.format(slot="dt-a-shadow", modo="shadow")),
+            (222, 1, _LINHA.format(slot="dt-b-shadow", modo="shadow")),
+        ]
+
+    monkeypatch.setattr(live_control, "_processos_do_sistema", _varre)
+    live_control._write_state("dt-a-shadow",
+                               {"pid": None, "started_at": None, "config": {"slot": "dt-a-shadow"}})
+    live_control._write_state("dt-b-shadow",
+                               {"pid": None, "started_at": None, "config": {"slot": "dt-b-shadow"}})
+
+    resultado = live_control.status_all(["dt-a-shadow", "dt-b-shadow"], reconciliar=True)
+
+    assert resultado["dt-a-shadow"]["pid"] == 111
+    assert resultado["dt-b-shadow"]["pid"] == 222
+    assert len(chamadas) == 1

@@ -530,7 +530,8 @@ OPS_EVENTOS_PAGINA_INICIAL = 30
 OPS_EVENTOS_PAGINA_SEGUINTE = 10
 
 
-def _slot_ctx(slot, posicoes_limit: int = OPS_PAGINA, eventos_full: bool = False) -> dict:
+def _slot_ctx(slot, posicoes_limit: int = OPS_PAGINA, eventos_full: bool = False,
+              reconciliar: bool = False) -> dict:
     """Tudo o que UM cartão de slot precisa: status da conta, processo,
     caixa do ledger manual e se o botão "Iniciar" pode estar habilitado.
 
@@ -594,7 +595,12 @@ def _slot_ctx(slot, posicoes_limit: int = OPS_PAGINA, eventos_full: bool = False
     # Swing nunca teve modo sombra; day trade sempre tem (fixo no slot).
     execution_mode = slot.execution_mode if slot.is_intraday else "live"
     caixa = live_control.available_cash(slot.id, execution_mode) or 0.0
-    proc = live_control.status(slot.id)
+    # `reconciliar=True` só no POLL periódico do cartão (`operacao_fragment`),
+    # nunca na carga da página (`_operacao_ctx` chama com o default `False`) --
+    # ver docstring de `live_control.status()`, achado 2026-08-31: cartão
+    # "parado" com o processo vivo por trás (reinício do dashboard perde o
+    # PID novo) só se autocorrige aqui, dentro do custo que o poll já paga.
+    proc = live_control.status(slot.id, reconciliar=reconciliar)
     # Robô que vai de fato rodar: o da conta já existente, ou o default
     # sugerido pra conta nova (o mesmo pré-selecionado no `<select>` do
     # template) — `min_cash_for` usa isso pra achar o piso de caixa DESTE
@@ -1035,7 +1041,8 @@ def operacao_fragment(request: Request, slot_id: str,
     # memória uma lista que o cartão nunca vai mostrar.
     bloco = _slot_ctx(slot,
                       posicoes_limit=max(OPS_PAGINA, min(int(posicoes), OPS_PAGINA_MAX)),
-                      eventos_full=bool(eventos_full))
+                      eventos_full=bool(eventos_full),
+                      reconciliar=True)
     ctx = {
         **bloco,
         "poll_seconds": _operacao_poll_seconds(),

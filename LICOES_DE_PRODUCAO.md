@@ -344,6 +344,28 @@ serviço do sistema passavam livres.
 Corolário barato: **cartão dizendo "parado" não é evidência de que não há robô
 operando.** Confira o SO antes de explicar qualquer comportamento ao vivo.
 
+**Recorreu em 31/08/2026, maior:** os mesmos sintomas, agora em **7 slots**
+(a contagem de robôs de day trade cresceu desde 26/08), de novo incluindo o
+robô REAL. Desta vez sem duplicação — 1 processo por slot, todos vivos — mas
+`db/live_process.json` com `pid: null` ou a linha inteira ausente para os 7,
+sobrevivendo a reinícios do próprio dashboard (`uvicorn --reload`) que
+deixam o `Popen` órfão de pé sem levar o registro do PID novo junto. O
+arquivo-com-PID continuou sendo a causa, exatamente como a Regra já previa.
+
+**O que foi feito agora é mitigação, não a correção que a Regra pede.**
+`dashboard.live_control.status()`/`status_all()` ganharam reconciliação
+opt-in (`reconciliar=True`): perguntam ao SO se existe, mesmo assim, um
+processo vivo deste slot e o readotam — nunca escolhendo entre dois
+candidatos (isso continua incidente, não divergência de painel, ver acima).
+Opt-in porque a varredura custa ~3s e a carga de `/operacao` tem contrato de
+nunca pagar esse custo — só o poll periódico do cartão (20s) liga a
+reconciliação, então o auto-reparo acontece dentro desse intervalo, não
+instantaneamente. Isso fecha o SINTOMA (painel mentindo, risco de um clique
+em "Iniciar" matar um robô real achando que ele estava parado) mas o arquivo
+com PID continua sendo a fonte da verdade — a Regra desta seção (trava do SO
+que morre com o processo) segue pendente. Pergunta 9 da Parte 8 continua sem
+resposta implementada nesta plataforma.
+
 ### 2.5 A transação do diário não é atômica com o efeito externo
 
 Todo o passo roda dentro de uma transação. Qualquer exceção posterior a um envio

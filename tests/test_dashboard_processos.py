@@ -225,3 +225,23 @@ def test_inventario_devolve_o_motivo_em_vez_de_levantar(monkeypatch):
     processos, erro = live_control.inventario_processos()
 
     assert processos == [] and "timeout" in erro
+
+
+# ---------- reconciliação: só o poll do cartão pode varrer (2026-08-31) ----
+
+def test_poll_do_cartao_readota_processo_orfao_vivo(diario, client, monkeypatch):
+    """O caso relatado pelo dono: dashboard reiniciado deixa o `Popen` órfão
+    vivo e o cartão diz "parado" para sempre. O poll periódico do cartão
+    (`operacao_fragment`, NUNCA a carga de `/operacao` -- ver
+    `test_a_pagina_nao_varre_o_sistema_ao_carregar`) é o único lugar que pode
+    pagar o custo da varredura e fechar o ciclo sozinho."""
+    _cria_cartao(COM_CARTAO)
+    linha = (f"C:\\meta\\.venv\\Scripts\\python.exe C:\\meta\\scripts\\run_live.py "
+             f"--mode mt5 --capital 30.0 --strategy {COM_CARTAO.robot_key} "
+             f"--slot {COM_CARTAO.id} --execution-mode shadow loop --seconds 5")
+    monkeypatch.setattr(live_control, "_processos_do_sistema", lambda: [(18816, 0, linha)])
+
+    html = client.get(f"/operacao/{COM_CARTAO.id}/fragment").text
+
+    assert "operando" in html
+    assert live_control._read_state(COM_CARTAO.id)["pid"] == 18816

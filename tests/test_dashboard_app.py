@@ -810,7 +810,7 @@ def test_controle_so_e_reemitido_quando_o_processo_muda_de_estado(
     navegador tem na tela, informado pelo `?rodando=` que o próprio nó põe na
     URL do poll."""
     _create_mt5_account(isolated_journal, capital=100.0, slot=DAYTRADE)
-    monkeypatch.setattr(live_control, "status", lambda sid: None)     # parado
+    monkeypatch.setattr(live_control, "status", lambda sid, reconciliar=False: None)     # parado
 
     # estado bate (parado, e a tela também acha que está parado): não mexe
     html = client.get(f"/operacao/{DAYTRADE}/fragment?rodando=0").text
@@ -819,7 +819,7 @@ def test_controle_so_e_reemitido_quando_o_processo_muda_de_estado(
 
     # o robô subiu por fora (CLI, ou o processo caiu e voltou): corrige
     monkeypatch.setattr(live_control, "status",
-                        lambda sid: {"pid": 1, "started_at": "2026-08-22T10:00:00"})
+                        lambda sid, reconciliar=False: {"pid": 1, "started_at": "2026-08-22T10:00:00"})
     html = client.get(f"/operacao/{DAYTRADE}/fragment?rodando=0").text
     assert f'id="ops-ctl-{DAYTRADE}"' in html
     assert 'hx-swap-oob="true"' in html
