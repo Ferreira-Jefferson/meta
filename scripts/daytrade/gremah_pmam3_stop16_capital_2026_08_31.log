@@ -1,0 +1,36 @@
+[gremah_stop16] PMAM3, T1/E1/S16 (producao usa S4 -- so' o stop muda aqui), 13 niveis de capital, 12 processos
+
+  [ 1/13  12.4s] R$       30 -> trades=   22 liquido=R$       15,69 final=R$       45,69 min=R$       30,00 pregoes_pulados= 834 dias_cobertos= 842 [lucra]
+  [ 2/13  13.8s] R$       50 -> trades=  165 liquido=R$      141,87 final=R$      191,87 min=R$       50,00 pregoes_pulados= 801 dias_cobertos= 842 [lucra]
+  [ 3/13  16.0s] R$      100 -> trades=  550 liquido=R$      476,24 final=R$      576,24 min=R$      100,00 pregoes_pulados= 720 dias_cobertos= 842 [lucra]
+  [ 4/13  19.9s] R$      200 -> trades= 1628 liquido=R$    1.079,43 final=R$    1.279,43 min=R$      158,83 pregoes_pulados= 440 dias_cobertos= 842 [lucra]
+  [ 5/13  22.2s] R$      500 -> trades= 2093 liquido=R$    1.097,50 final=R$    1.597,50 min=R$      452,23 pregoes_pulados= 237 dias_cobertos= 842 [lucra]
+  [ 6/13  22.9s] R$      375 -> trades= 2001 liquido=R$    1.123,56 final=R$    1.498,56 min=R$      356,08 pregoes_pulados= 300 dias_cobertos= 842 [lucra]
+  [ 7/13  23.1s] R$    2.000 -> trades= 2486 liquido=R$      857,32 final=R$    2.857,32 min=R$    1.718,79 pregoes_pulados=   0 dias_cobertos= 842 [lucra]
+  [ 8/13  23.4s] R$    5.000 -> trades= 2486 liquido=R$      857,32 final=R$    5.857,32 min=R$    4.718,79 pregoes_pulados=   0 dias_cobertos= 842 [lucra]
+  [ 9/13  23.8s] R$      750 -> trades= 2370 liquido=R$      980,04 final=R$    1.730,04 min=R$      595,66 pregoes_pulados=  61 dias_cobertos= 842 [lucra]
+  [10/13  24.1s] R$    1.000 -> trades= 2486 liquido=R$      855,78 final=R$    1.855,78 min=R$      718,79 pregoes_pulados=   0 dias_cobertos= 842 [lucra]
+  [11/13  24.2s] R$    3.000 -> trades= 2486 liquido=R$      857,32 final=R$    3.857,32 min=R$    2.718,79 pregoes_pulados=   0 dias_cobertos= 842 [lucra]
+  [12/13  24.3s] R$    1.500 -> trades= 2486 liquido=R$      857,32 final=R$    2.357,32 min=R$    1.218,79 pregoes_pulados=   0 dias_cobertos= 842 [lucra]
+  [13/13  15.1s] R$   10.000 -> trades= 2486 liquido=R$      857,32 final=R$   10.857,32 min=R$    9.718,79 pregoes_pulados=   0 dias_cobertos= 842 [lucra]
+
+total: 29.4s
+
+[gremah_stop16] CSV salvo em C:\Users\Jeffe\Documents\study\meta\scripts\daytrade\gremah_pmam3_stop16_capital_2026_08_31.csv
+
+=== PMAM3, T1/E1/S16 -- capital x resultado, historico inteiro ===
+  R$       30: trades=   22 liquido=R$       15,69 final=R$       45,69 min=R$       30,00 pregoes_pulados= 834
+  R$       50: trades=  165 liquido=R$      141,87 final=R$      191,87 min=R$       50,00 pregoes_pulados= 801
+  R$      100: trades=  550 liquido=R$      476,24 final=R$      576,24 min=R$      100,00 pregoes_pulados= 720
+  R$      200: trades= 1628 liquido=R$    1.079,43 final=R$    1.279,43 min=R$      158,83 pregoes_pulados= 440
+  R$      375: trades= 2001 liquido=R$    1.123,56 final=R$    1.498,56 min=R$      356,08 pregoes_pulados= 300
+  R$      500: trades= 2093 liquido=R$    1.097,50 final=R$    1.597,50 min=R$      452,23 pregoes_pulados= 237
+  R$      750: trades= 2370 liquido=R$      980,04 final=R$    1.730,04 min=R$      595,66 pregoes_pulados=  61
+  R$    1.000: trades= 2486 liquido=R$      855,78 final=R$    1.855,78 min=R$      718,79 pregoes_pulados=   0
+  R$    1.500: trades= 2486 liquido=R$      857,32 final=R$    2.357,32 min=R$    1.218,79 pregoes_pulados=   0
+  R$    2.000: trades= 2486 liquido=R$      857,32 final=R$    2.857,32 min=R$    1.718,79 pregoes_pulados=   0
+  R$    3.000: trades= 2486 liquido=R$      857,32 final=R$    3.857,32 min=R$    2.718,79 pregoes_pulados=   0
+  R$    5.000: trades= 2486 liquido=R$      857,32 final=R$    5.857,32 min=R$    4.718,79 pregoes_pulados=   0
+  R$   10.000: trades= 2486 liquido=R$      857,32 final=R$   10.857,32 min=R$    9.718,79 pregoes_pulados=   0
+
+*** menor capital testado que fecha positivo: R$30 (liquido=R$15,69, 22 trades) ***

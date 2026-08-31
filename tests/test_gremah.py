@@ -548,9 +548,9 @@ def test_geometria_em_ticks_por_simbolo_e_aplicada_sozinha():
     """PMAM3/M1 usa geometria em TICKS desde 2026-08-26 (IS + confirmacao OOS,
     ver o comentario de `_GEOMETRIA_TICKS_BY_SYMBOL`). Se alguem editar a
     tabela sem atualizar este teste, isto pega."""
-    assert _GEOMETRIA_TICKS_BY_SYMBOL["PMAM3"] == (1, 1, 4)
+    assert _GEOMETRIA_TICKS_BY_SYMBOL["PMAM3"] == (1, 1, 16)
     strat = Gremah(symbol="PMAM3")
-    assert (strat.profit_ticks, strat.spacing_ticks, strat.stop_ticks) == (1, 1, 4)
+    assert (strat.profit_ticks, strat.spacing_ticks, strat.stop_ticks) == (1, 1, 16)
 
 
 def test_geometria_em_ticks_da_bmgb4_vence_o_override_de_volatilidade():
@@ -572,9 +572,9 @@ def test_geometria_em_ticks_nao_muda_com_o_preco():
     R$0,14 dentro da janela de backtest, e no caminho percentual o stop dela
     encolhia de 29 ticks para 1 junto. Em ticks, nao encolhe."""
     strat = Gremah(symbol="PMAM3")
-    assert strat._session_ticks(0.14) == (1, 1, 4)
-    assert strat._session_ticks(0.55) == (1, 1, 4)
-    assert strat._session_ticks(4.53) == (1, 1, 4)
+    assert strat._session_ticks(0.14) == (1, 1, 16)
+    assert strat._session_ticks(0.55) == (1, 1, 16)
+    assert strat._session_ticks(4.53) == (1, 1, 16)
 
 
 def test_geometria_em_ticks_nao_sobrescreve_escolha_explicita():

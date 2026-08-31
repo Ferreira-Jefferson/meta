@@ -491,8 +491,12 @@ _VOLATILITY_OVERRIDE_BY_SYMBOL: dict[str, tuple[float, float]] = {
 # volatilidade acima: o override nunca sobrescreve escolha deliberada).
 _GEOMETRIA_TICKS_BY_SYMBOL: dict[str, tuple[int, int, int]] = {
     # rodada 1: IS R$ 624,04 x 559,45 (+11,5%); OOS R$ 182,82 x 144,01 (+26,9%),
-    # MaxDD OOS R$ 19,14 x 42,32.
-    "PMAM3": (1, 1, 4),
+    # MaxDD OOS R$ 19,14 x 42,32 -- vencedor do teste de MERITO (IS/OOS) era S4.
+    # 2026-08-31: stop alterado para 16 por decisao explicita do dono, contra a
+    # recomendacao do teste de merito acima (S4 vencia por margem pequena no IS
+    # congelado). Prioridade dele: o resultado medido no capital real ao longo
+    # de toda a serie, nao a metrica isolada de IS/OOS.
+    "PMAM3": (1, 1, 16),
     # rodada 2: IS R$ 960,71 x 586,70 (+63,7%); OOS R$ 535,63 x 50,75.
     # RESSALVA: boa parte do salto do OOS e' a calibracao antiga ter PULADO 37
     # dos 50 pregoes por caixa insuficiente enquanto esta pulou 1 -- o ganho e'
