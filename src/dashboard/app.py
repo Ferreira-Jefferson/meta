@@ -191,6 +191,7 @@ TEMPLATES.env.globals["static_v"] = _static_v
 MACRO_REFRESH_SECONDS  = 10 * 60          # 10 min: Selic + USD/BRL (fast, ~2s)
 MARKET_REFRESH_SECONDS = 60 * 60          # 1 h : OHLCV yfinance (~10s por ticker)
 CHAMPION_REFRESH_SECONDS = 6 * 60 * 60    # 6 h : rerroda o ranking automático de robôs
+WATCHDOG_INTERVAL_SECONDS = 60            # 1 min: detecta e recupera slot travado
 
 
 async def _wait_for_active_window() -> None:
@@ -250,12 +251,33 @@ async def _champion_refresh_loop() -> None:
         await asyncio.sleep(CHAMPION_REFRESH_SECONDS)
 
 
+async def _watchdog_loop() -> None:
+    """Detecta slot com PID vivo mas heartbeat travado (ver `live_control.
+    slots_travados`) e reinicia sozinho -- ver a docstring de
+    `live_control.verificar_e_recuperar_travamentos` para o achado que
+    motivou isto (7 supervisores de day trade travados por 21h+ em
+    02/09/2026, sem nenhum sinal além do PID continuar de pé).
+
+    Roda o tempo todo, sem esperar a janela ativa de pregão (diferente dos
+    três loops acima, que só fazem sentido dentro dela): um travamento
+    ocorrido de madrugada precisa estar corrigido ANTES da abertura, não
+    detectado só depois dela."""
+    await asyncio.sleep(30)
+    while True:
+        try:
+            await asyncio.to_thread(live_control.verificar_e_recuperar_travamentos)
+        except Exception as e:
+            print(f"[watchdog] erro: {e}")
+        await asyncio.sleep(WATCHDOG_INTERVAL_SECONDS)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     tasks = [
         asyncio.create_task(_macro_refresh_loop()),
         asyncio.create_task(_market_refresh_loop()),
         asyncio.create_task(_champion_refresh_loop()),
+        asyncio.create_task(_watchdog_loop()),
     ]
     try:
         yield

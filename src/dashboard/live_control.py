@@ -1489,3 +1489,234 @@ def inventario_processos() -> tuple[list[ProcessoRobo], Optional[str]]:
         return listar_processos(), None
     except _TasklistUnavailable as e:
         return [], str(e)
+
+
+# ---------- watchdog de travamento (heartbeat) --------------------------
+#
+# `status()`/`status_all()` respondem "o PID existe no SO?" -- isso nao prova
+# que o processo esta' PROGREDINDO. Achado ao vivo em 02/09/2026: os 7
+# supervisores de day trade travaram (CPU acumulada parada, PID de pe' o
+# tempo todo, `tasklist` os via' "rodando") por 21h+, um pregao inteiro
+# perdido em silencio -- inclusive `dt-gremah-pmam3-live`, dinheiro real.
+# Causa provavel: uma chamada do pacote `MetaTrader5` (IPC nativo, sem
+# timeout) bloqueada para sempre quando a rede cai NO MEIO dela.
+#
+# `scripts/run_live.py::_loop_travado` toca `db/live_process.<slot>.heartbeat`
+# (so' o mtime importa) a cada volta do laco, inclusive durante o sono fora
+# do horario de pregao (fatiado em pedacos de ate' 60s -- ver
+# `_HEARTBEAT_CHUNK_SECONDS` la'). Um heartbeat mais velho que o limiar, com
+# o PID ainda vivo, e' o sinal de travamento: nada mais no sistema hoje
+# diferencia isso de "operando normalmente".
+
+#: Margem sobre o intervalo de passo do slot antes de considerar travado.
+_HEARTBEAT_MARGIN = 6
+#: Piso absoluto, mesmo para o swing (passo de 60s -- 6x isso seria só 6min,
+#: perto demais de uma iteração real que só demorou um pouco mais).
+_HEARTBEAT_FLOOR_SECONDS = 180.0
+#: Quantas vezes o watchdog tenta reiniciar sozinho o MESMO slot dentro da
+#: janela de cooldown antes de desistir e só alertar -- um travamento que
+#: volta rápido demais depois de reiniciado é sintoma de problema estrutural
+#: (terminal fechado, credencial errada, disco cheio), não de rede
+#: instável, e reiniciar sem parar nesse caso só bate cabeça sozinho.
+_MAX_AUTO_RESTARTS = 3
+_COOLDOWN_WINDOW_SECONDS = 900.0
+
+#: `{slot_id: [timestamps unix dos restarts recentes]}` -- em memória,
+#: reseta com o dashboard (aceitável: um restart do próprio dashboard já é
+#: um ponto de corte natural para o cooldown, e persistir isto em disco só
+#: para sobreviver a um restart do dashboard não paga o custo).
+_restart_attempts: dict[str, list[float]] = {}
+
+
+def _heartbeat_path(slot_id: str) -> Path:
+    """MESMA fórmula de `scripts/run_live.py::_heartbeat_path` -- duplicada
+    de propósito (não importada) para não criar uma dependência de
+    `scripts/` sobre `dashboard/`; é uma convenção de path de 1 linha, o
+    mesmo raciocínio de `_log_path` já não ser compartilhada com o CLI."""
+    return _LOG_DIR / f"live_process.{slot_id}.heartbeat"
+
+
+def _hang_threshold_seconds(slot) -> float:
+    """Limiar de idade do heartbeat acima do qual o slot é considerado
+    travado. Os números de passo (5s intraday / 60s swing) são os MESMOS que
+    `start()` usa para montar `argv` (`loop --seconds ...`) -- não há um
+    terceiro lugar hoje que os declare como constante compartilhada."""
+    passo = 5.0 if slot.is_intraday else 60.0
+    return max(_HEARTBEAT_FLOOR_SECONDS, _HEARTBEAT_MARGIN * passo)
+
+
+def _heartbeat_age_seconds(slot_id: str) -> Optional[float]:
+    """Segundos desde o último toque do heartbeat deste slot, ou `None` se o
+    arquivo não existe -- o que é NORMAL logo após um `start()` (o processo
+    filho ainda não deu a primeira volta do laço) e não deve ser lido como
+    sinal de travamento."""
+    try:
+        return time.time() - _heartbeat_path(slot_id).stat().st_mtime
+    except OSError:
+        return None
+
+
+def slots_travados(reconciliar: bool = True) -> list[str]:
+    """Slots com PID vivo (`status_all`) mas heartbeat mais velho que
+    `_hang_threshold_seconds` -- o sinal de travamento. Um slot sem PID
+    (parado de propósito, ou nunca iniciado) nunca entra aqui: heartbeat
+    velho de um processo que já não existe não é travamento, é o esperado."""
+    from core.config import slot_by_id
+
+    estados = status_all(reconciliar=reconciliar)
+    travados = []
+    for sid, est in estados.items():
+        if est is None or est.get("pid") is None:
+            continue
+        idade = _heartbeat_age_seconds(sid)
+        if idade is None:
+            continue
+        if idade > _hang_threshold_seconds(slot_by_id(sid)):
+            travados.append(sid)
+    return travados
+
+
+def _registrar_tentativa(slot_id: str) -> bool:
+    """Registra AGORA como uma tentativa de restart deste slot e devolve
+    `True` se ainda está dentro do limite (`_MAX_AUTO_RESTARTS` na janela de
+    `_COOLDOWN_WINDOW_SECONDS`) -- `False` se o watchdog deve desistir de
+    reiniciar sozinho desta vez."""
+    agora = time.time()
+    tentativas = [t for t in _restart_attempts.get(slot_id, ())
+                  if agora - t < _COOLDOWN_WINDOW_SECONDS]
+    if len(tentativas) >= _MAX_AUTO_RESTARTS:
+        _restart_attempts[slot_id] = tentativas
+        return False
+    tentativas.append(agora)
+    _restart_attempts[slot_id] = tentativas
+    return True
+
+
+def reiniciar_travado(slot_id: str) -> dict:
+    """Mata o processo travado deste slot e sobe de novo, REDETECTANDO os
+    parâmetros do terminal (mesmo caminho que `dashboard/app.py::
+    operacao_iniciar` já faz para uma conta já existente) -- nunca reaproveita
+    `mt5_symbol_map`/`mt5_fractional_map` salvos em `db/live_process.json`
+    cegamente. Isso importa em especial para `mt5_symbol_map`: se o contrato
+    de futuro (WDO/WIN) rolou durante a janela em que o slot ficou travado, o
+    mapa salvo aponta pro contrato antigo e toda ordem seria recusada de novo
+    pelo servidor (mesmo sintoma do achado de 2026-08-28, "Trade disabled").
+
+    `capital` também é relido do ledger atual (`available_cash`), não do
+    `capital` salvo -- o dono pode ter ajustado o caixa do slot enquanto ele
+    estava travado.
+
+    Levanta se não houver PID registrado (nada a reiniciar) ou se a conta não
+    tiver `investment_robot` gravado (robô nunca escolhido -- não há como
+    redetectar sozinho, precisa de 'Iniciar' manual no painel). Deixa
+    qualquer outra falha de `start()` (piso de caixa, colisão de símbolo,
+    processo que morre logo após subir) subir tal como está -- já carregam
+    mensagem própria."""
+    from core.config import slot_by_id
+    from journal import live_store
+
+    slot = slot_by_id(slot_id)
+    estado = _read_state(slot_id)
+    if estado is None or estado.get("pid") is None:
+        raise RuntimeError(f"slot {slot_id!r} não está rodando -- nada a reiniciar.")
+    _matar_arvore(estado["pid"])
+    # `start()` recusa de cara se `status(slot)` ainda apontar um PID
+    # (mesmo guard de `stop()`) -- sem zerar aqui, o PID que acabou de ser
+    # morto continuaria "rodando" no arquivo de estado e `start()` abaixo
+    # se recusaria com "já está rodando".
+    _write_state(slot_id, {**estado, "pid": None, "started_at": None})
+
+    with live_store.live_journal() as conn:
+        conta = live_store.load_account(conn, slot_id)
+    if conta is None or not conta.investment_robot:
+        raise RuntimeError(
+            f"slot {slot_id!r} travado mas sem conta/robô gravado -- não dá "
+            "para redetectar sozinho, use 'Iniciar' manual no painel."
+        )
+
+    strategy_key = conta.investment_robot
+    execution_mode = slot.execution_mode if slot.is_intraday else "live"
+    capital = available_cash(slot_id, execution_mode) or 0.0
+    shares = detect_shares_per_lot(slot_id, strategy_key)
+    fractional = (detect_fractional_symbol_map(slot_id, strategy_key)
+                  if not slot.is_intraday else None)
+    symbol_map = (detect_futures_symbol_map(slot_id, strategy_key)
+                  if slot.is_intraday else None)
+
+    cfg = ProcessConfig(
+        mode="mt5", capital=capital, strategy=strategy_key, slot=slot_id,
+        execution_mode=execution_mode,
+        notify_min_level=(estado.get("config") or {}).get("notify_min_level", "warn"),
+        mt5_shares_per_lot=shares, mt5_fractional_map=fractional, mt5_symbol_map=symbol_map,
+    )
+    return start(cfg)
+
+
+def verificar_e_recuperar_travamentos() -> list[dict]:
+    """Orquestrador chamado periodicamente pelo laço de fundo do dashboard
+    (`app.py::_watchdog_loop`): detecta slots travados (`slots_travados`),
+    grava o achado em `live_events`, notifica pelo canal externo configurado
+    e tenta reiniciar sozinho -- respeitando o cooldown (`_registrar_
+    tentativa`), que desiste de tentar de novo depois de `_MAX_AUTO_RESTARTS`
+    numa janela curta e só alerta pedindo intervenção manual.
+
+    Devolve um relatório por slot travado (`slot`, `idade_heartbeat_s`,
+    `acao`: "reiniciado"/"falhou"/"cooldown", detalhe) -- usado só em teste e
+    log do próprio laço de fundo; o dashboard não expõe isto em rota alguma
+    hoje."""
+    from core.config import slot_by_id
+    from journal import live_store
+
+    relatorio: list[dict] = []
+    for slot_id in slots_travados():
+        slot = slot_by_id(slot_id)
+        idade = _heartbeat_age_seconds(slot_id) or 0.0
+        estado = _read_state(slot_id) or {}
+        notify_min_level = (estado.get("config") or {}).get("notify_min_level", "warn")
+        notifier = _load_cli()._build_notifier(notify_min_level)
+
+        with live_store.live_journal() as conn:
+            conta = live_store.load_account(conn, slot_id)
+            conta_id = conta.id if conta is not None else None
+            msg = (f"slot {slot.label!r} travado -- heartbeat parado há "
+                   f"{idade / 60:.1f}min com o processo ainda de pé (achado pelo "
+                   "watchdog).")
+            live_store.log_event(conn, conta_id, "error", "watchdog", msg,
+                                 {"slot": slot_id, "idade_heartbeat_s": idade})
+        notifier.notify("error", "watchdog", msg, {"slot": slot_id})
+
+        if not _registrar_tentativa(slot_id):
+            msg_desiste = (f"slot {slot.label!r} travou de novo rápido demais "
+                           f"({_MAX_AUTO_RESTARTS}x em {_COOLDOWN_WINDOW_SECONDS/60:.0f}min) "
+                           "-- watchdog desistiu de reiniciar sozinho, provável "
+                           "problema estrutural (terminal fechado, credencial "
+                           "errada). Precisa de intervenção manual.")
+            with live_store.live_journal() as conn:
+                live_store.log_event(conn, conta_id, "error", "watchdog", msg_desiste,
+                                     {"slot": slot_id})
+            notifier.notify("error", "watchdog", msg_desiste, {"slot": slot_id})
+            relatorio.append({"slot": slot_id, "idade_heartbeat_s": idade,
+                              "acao": "cooldown", "detalhe": msg_desiste})
+            continue
+
+        try:
+            novo_estado = reiniciar_travado(slot_id)
+        except Exception as e:  # noqa: BLE001 -- qualquer falha de restart é reportada, nunca propagada ao laço de fundo
+            msg_falha = f"slot {slot.label!r}: watchdog tentou reiniciar e falhou -- {e}"
+            with live_store.live_journal() as conn:
+                live_store.log_event(conn, conta_id, "error", "watchdog", msg_falha,
+                                     {"slot": slot_id})
+            notifier.notify("error", "watchdog", msg_falha, {"slot": slot_id})
+            relatorio.append({"slot": slot_id, "idade_heartbeat_s": idade,
+                              "acao": "falhou", "detalhe": str(e)})
+            continue
+
+        msg_ok = (f"slot {slot.label!r} reiniciado automaticamente pelo watchdog "
+                 f"(novo pid={novo_estado['pid']}).")
+        with live_store.live_journal() as conn:
+            live_store.log_event(conn, conta_id, "warn", "watchdog", msg_ok,
+                                 {"slot": slot_id, "pid": novo_estado["pid"]})
+        notifier.notify("warn", "watchdog", msg_ok, {"slot": slot_id})
+        relatorio.append({"slot": slot_id, "idade_heartbeat_s": idade,
+                          "acao": "reiniciado", "detalhe": msg_ok})
+    return relatorio

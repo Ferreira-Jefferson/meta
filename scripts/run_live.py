@@ -620,6 +620,43 @@ def cmd_loop(args) -> None:
         sys.exit(1)
 
 
+#: Caminho do heartbeat DESTE slot -- tocado (mtime) a cada volta do laço
+#: abaixo, inclusive durante o sono fora do horario de pregao (ver
+#: `_HEARTBEAT_CHUNK_SECONDS`). E' o unico jeito de quem esta' de FORA deste
+#: processo (o watchdog em `dashboard/live_control.py`) distinguir "vivo e
+#: andando" de "vivo e travado" -- um PID que existe no SO nao prova nada
+#: disso (achado ao vivo em 02/09/2026: os 7 supervisores de day trade
+#: ficaram travados por 21h+ com CPU acumulada parada, PID de pe' o tempo
+#: todo, `tasklist`/`Get-CimInstance` os via' "rodando" o tempo inteiro).
+#: Formula local (nao importa de `dashboard/`) de proposito: este script roda
+#: standalone via CLI/servico NSSM, sem depender do modulo do dashboard para
+#: uma convencao de path de 1 linha -- mesmo espirito de `_log_path` em
+#: `dashboard/live_control.py`, que tambem nao e' compartilhada para ca.
+def _heartbeat_path(slot_id: str) -> Path:
+    return Path(__file__).resolve().parents[1] / "db" / f"live_process.{slot_id}.heartbeat"
+
+
+def _touch_heartbeat(slot_id: str) -> None:
+    """Best-effort: um erro ao tocar o heartbeat (disco cheio, permissao) nao
+    pode derrubar o supervisor -- o pior caso e' o watchdog achar que este
+    slot travou quando na verdade so' o heartbeat que falhou, o que so' custa
+    um restart a mais, nunca um robo cego sem ninguem reiniciando."""
+    try:
+        _heartbeat_path(slot_id).touch()
+    except OSError:
+        pass
+
+
+#: Teto de quanto tempo o laco pode dormir de uma vez so' fora do horario de
+#: pregao. Antes disto era um `time.sleep(espera)` unico que podia passar de
+#: 12h (visto ao vivo: "proximo passo em 12.2h") -- o heartbeat ficava mudo
+#: o mesmo tanto de tempo que um travamento de verdade ficaria, e o watchdog
+#: nao tinha como distinguir os dois casos. Fatiar em pedacos de ate 60s e
+#: tocar o heartbeat entre cada um mantem o sinal "vivo" fresco mesmo
+#: dormindo de proposito a noite inteira ou o fim de semana inteiro.
+_HEARTBEAT_CHUNK_SECONDS = 60.0
+
+
 def _loop_travado(args, slot) -> None:
     """O laco do supervisor, ja com a exclusividade do slot garantida."""
     from live import clock
@@ -634,11 +671,22 @@ def _loop_travado(args, slot) -> None:
     else:
         _preparar_terminal(rt)
     while True:
+        # Tocado ANTES de qualquer coisa nesta volta -- inclusive antes do
+        # passo que pode travar (`rt.run_once()`, chamada MT5 sem timeout
+        # nativo). Se esta volta travar ali dentro, o heartbeat ja foi
+        # tocado no INICIO dela e nao e' tocado de novo: e' exatamente esse
+        # "parou de andar" que o watchdog externo mede.
+        _touch_heartbeat(slot.id)
         try:
             espera = clock.seconds_until_active_window()
             if espera > 0:
                 print(f"[fora do horario de pregao] proximo passo em {espera / 3600:.1f}h", flush=True)
-                time.sleep(espera)
+                restante = espera
+                while restante > 0:
+                    dorme = min(restante, _HEARTBEAT_CHUNK_SECONDS)
+                    time.sleep(dorme)
+                    restante -= dorme
+                    _touch_heartbeat(slot.id)
                 continue
             for passo in rt.run_once():
                 print(passo, flush=True)

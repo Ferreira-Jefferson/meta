@@ -14,6 +14,10 @@ db/live_secrets.json
 # trava do SO, que morre com o processo.
 db/locks/
 db/live_process.dt-*.log
+# Heartbeat do watchdog de travamento (scripts/run_live.py::_loop_travado) --
+# arquivo vazio, so' o mtime importa, tocado a cada volta do laco do
+# supervisor. Mesmo motivo do log acima: estado de RUNTIME desta maquina.
+db/live_process.*.heartbeat
 frag2.html
 .DS_Store
 Thumbs.db
