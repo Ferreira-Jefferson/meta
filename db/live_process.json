@@ -2,36 +2,38 @@
   "version": 2,
   "slots": {
     "dt-gremah_tick-pmam3-shadow": {
-      "pid": null,
-      "started_at": null,
+      "pid": 41888,
+      "started_at": "2026-09-02T18:15:25+00:00",
       "config": {
         "mode": "mt5",
-        "capital": 55.55,
+        "capital": 73.34,
         "strategy": "gremah_tick",
         "slot": "dt-gremah_tick-pmam3-shadow",
         "execution_mode": "shadow",
         "notify_min_level": "warn",
         "mt5_shares_per_lot": 1.0,
-        "mt5_fractional_map": null
+        "mt5_fractional_map": null,
+        "mt5_symbol_map": {}
       }
     },
     "dt-gremah-pmam3-shadow": {
-      "pid": null,
-      "started_at": null,
+      "pid": 29624,
+      "started_at": "2026-09-02T18:15:28+00:00",
       "config": {
         "mode": "mt5",
-        "capital": 30.0,
+        "capital": 34.92,
         "strategy": "gremah",
         "slot": "dt-gremah-pmam3-shadow",
         "execution_mode": "shadow",
         "notify_min_level": "warn",
         "mt5_shares_per_lot": 1.0,
-        "mt5_fractional_map": null
+        "mt5_fractional_map": null,
+        "mt5_symbol_map": {}
       }
     },
     "dt-gremah_tick-pmam3-live": {
-      "pid": null,
-      "started_at": null,
+      "pid": 6332,
+      "started_at": "2026-09-02T18:35:54+00:00",
       "config": {
         "mode": "mt5",
         "capital": 30.0,
@@ -40,7 +42,8 @@
         "execution_mode": "live",
         "notify_min_level": "warn",
         "mt5_shares_per_lot": 1.0,
-        "mt5_fractional_map": null
+        "mt5_fractional_map": null,
+        "mt5_symbol_map": {}
       }
     },
     "dt-gremah-pmam3-live": {
@@ -54,7 +57,8 @@
         "execution_mode": "live",
         "notify_min_level": "warn",
         "mt5_shares_per_lot": 1.0,
-        "mt5_fractional_map": null
+        "mt5_fractional_map": null,
+        "mt5_symbol_map": {}
       }
     },
     "dt-wdo_grid_reload_maker-wdo@-live": {
@@ -75,11 +79,11 @@
       }
     },
     "dt-wdo_grid_reload_maker-wdo@-shadow": {
-      "pid": null,
-      "started_at": null,
+      "pid": 22712,
+      "started_at": "2026-09-02T18:15:37+00:00",
       "config": {
         "mode": "mt5",
-        "capital": 331.5,
+        "capital": 597.5,
         "strategy": "wdo_grid_reload_maker",
         "slot": "dt-wdo_grid_reload_maker-wdo@-shadow",
         "execution_mode": "shadow",
@@ -87,7 +91,54 @@
         "mt5_shares_per_lot": 1.0,
         "mt5_fractional_map": null,
         "mt5_symbol_map": {
-          "WDO@": "WDOU26"
+          "WDO@": "WDOV26"
+        }
+      }
+    },
+    "dt-gremah-klbn3-shadow": {
+      "pid": 32120,
+      "started_at": "2026-09-02T18:15:40+00:00",
+      "config": {
+        "mode": "mt5",
+        "capital": 802.46,
+        "strategy": "gremah",
+        "slot": "dt-gremah-klbn3-shadow",
+        "execution_mode": "shadow",
+        "notify_min_level": "warn",
+        "mt5_shares_per_lot": 1.0,
+        "mt5_fractional_map": null,
+        "mt5_symbol_map": {}
+      }
+    },
+    "dt-gremah_tick-klbn3-shadow": {
+      "pid": null,
+      "started_at": null,
+      "config": {
+        "mode": "mt5",
+        "capital": 768.0,
+        "strategy": "gremah_tick",
+        "slot": "dt-gremah_tick-klbn3-shadow",
+        "execution_mode": "shadow",
+        "notify_min_level": "warn",
+        "mt5_shares_per_lot": 1.0,
+        "mt5_fractional_map": null,
+        "mt5_symbol_map": {}
+      }
+    },
+    "dt-copa_win-win@-shadow": {
+      "pid": 29420,
+      "started_at": "2026-09-02T18:15:45+00:00",
+      "config": {
+        "mode": "mt5",
+        "capital": 344.5,
+        "strategy": "copa_win",
+        "slot": "dt-copa_win-win@-shadow",
+        "execution_mode": "shadow",
+        "notify_min_level": "warn",
+        "mt5_shares_per_lot": 1.0,
+        "mt5_fractional_map": null,
+        "mt5_symbol_map": {
+          "WIN@": "WINV26"
         }
       }
     }
