@@ -404,6 +404,49 @@ dividida ao mesmo tempo, que é a configuração padrão dos robôs em produçã
 Vale a pena procurar a combinação equivalente na plataforma nova antes de assumir
 que o caso não existe.
 
+### 2.6 Reinício no meio do pregão não é só "que ordem/posição sobrevive" — é também "que JANELA de dado sobrevive"
+
+Confirmado ao vivo em 2026-08-31, `copa_win` no slot WIN@ (day trade, sombra): o
+processo reiniciou **5 vezes** durante o mesmo pregão (13:00:05, 15:02:46,
+15:02:55, 16:33:24, 19:31:42 UTC), e todo restart caiu no ramo FRIO
+(`on_session_start()`), que zera `_faixa`/`_barras_hoje`/`_entradas_hoje` — o
+robô esquece as barras já vistas do dia.
+
+Reproduzido byte a byte (replay de `on_bar` fora de produção): rodar a
+estratégia contínua desde a abertura real (12:03 UTC) dá sinal **LONG** às
+12:48 (nível rompido 179900). Rodar a partir de 12:59 — a primeira barra que o
+processo real de fato consumiu, por causa do restart das 13:00:05 — dá
+**SHORT** às 13:45 no nível 180705, stop 183500, alvo 176280: os MESMOS três
+números que `live_events` registrou como a ordem REAL enviada. O robô não
+teve um dia ruim — teve um dia **diferente** do que a calibração OOS mediu,
+porque a janela de rompimento de 10 barras nasceu de um ponto de partida que
+não é o do pregão.
+
+A causa: `IntradayLiveRuntime._needs_warm_start()` só devolve `True` quando a
+estratégia declara `fixed_anchor_until` — atributo que só `Gremah`/`GremahTick`
+têm. A máquina de repor estado por replay (`warm_start_calibration()` +
+`resume_session()`, que já funciona via `on_bar` genérico para QUALQUER
+estratégia) existe no código desde antes, mas o portão que decide chamá-la
+enxerga só duas das quatro estratégias do catálogo. As outras duas —
+incluindo o TOP-2 do pódio — cold-restart sempre, em silêncio, sem erro
+nenhum no caminho.
+
+> **Regra:** "o que sobrevive ao reinício" (2.1) tem uma TERCEIRA categoria
+> além de decisão/fato: **janela de indicador que depende do histórico
+> intra-sessão** (nível de rompimento, faixa do dia, o que for). Essa
+> categoria não se restaura como fato (não é "reabrir o ticket") nem se
+> redecide do zero como decisão (zero aqui não é neutro — é um pregão
+> diferente, com metade das barras faltando). Ela se REPÕE por replay das
+> barras reais já fechadas hoje. E o gatilho para repor não pode ser "esta
+> estratégia específica declarou um atributo" — vira orfão automático em
+> toda estratégia nova que ninguém lembrar de marcar. Um restart no meio do
+> pregão deveria tentar warm start por PADRÃO, não por opt-in nomeado.
+
+Correção não aplicada (decisão de arquitetura em `live/intraday_runtime.py`,
+fica para o dono decidir): trocar o gatilho de `_needs_warm_start()` de "tem
+`fixed_anchor_until`?" para algo que valha para qualquer estratégia com
+sessão em andamento.
+
 ---
 
 ## Parte 3 — Dimensionamento e capital
@@ -1247,6 +1290,11 @@ dinheiro ou meses.
     multiplicador para virar dinheiro? Se exige, o débito/crédito de caixa
     lê esse multiplicador do MESMO lugar que o cálculo de P&L, ou é uma
     segunda cópia da fórmula? (5.7)
+25. Um reinício no meio do pregão detecta e repõe (por replay) o estado de
+    JANELA/indicador intra-sessão de QUALQUER estratégia, ou só das que
+    alguém lembrou de marcar com um atributo especial? Um portão de warm
+    start por allowlist nomeada é um cold-restart silencioso pra toda
+    estratégia nova. (2.6)
 
 ---
 
