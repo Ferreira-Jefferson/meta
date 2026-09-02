@@ -1510,9 +1510,24 @@ def inventario_processos() -> tuple[list[ProcessoRobo], Optional[str]]:
 
 #: Margem sobre o intervalo de passo do slot antes de considerar travado.
 _HEARTBEAT_MARGIN = 6
-#: Piso absoluto, mesmo para o swing (passo de 60s -- 6x isso seria só 6min,
-#: perto demais de uma iteração real que só demorou um pouco mais).
-_HEARTBEAT_FLOOR_SECONDS = 180.0
+#: Piso absoluto, mesmo para o swing (passo de 60s -- 6x isso seria só 6min).
+#:
+#: Era 180s (3min) na primeira versão -- ERRADO, achado ao vivo em
+#: 02/09/2026 pouco depois de ligado: `wdo_grid_reload_maker` entrou num
+#: laço de reinício a cada ~3min por HORAS (`live_events`, fonte "watchdog",
+#: 14:35 a 16:19). Causa: sob conectividade degradada (medido `ping_last`
+#: ~6,3s no terminal MT5 nesse mesmo dia, contra <500ms normal), o passo de
+#: warm-start/catch-up de barras perdidas (o robô já tolera sozinho buracos
+#: de 18-26min via `_parado_ha_segundos`, ver os eventos "buraco de N min
+#: sem rodar") pode legitimamente passar de 180s numa ÚNICA chamada de
+#: `run_once()` -- e o heartbeat só é tocado no TOPO do laço, uma vez por
+#: iteração inteira. O watchdog matava o processo NO MEIO do catch-up, sempre
+#: antes dele terminar, e cada reinício reiniciava o mesmo catch-up (mais
+#: atrasado ainda) do zero -- um loop que só piora a si mesmo. 900s (15min)
+#: dá folga confortável acima do que o próprio robô já tolera como gap
+#: normal, e ainda detecta um travamento de verdade ~84x mais rápido que o
+#: incidente original de 21h+.
+_HEARTBEAT_FLOOR_SECONDS = 900.0
 #: Quantas vezes o watchdog tenta reiniciar sozinho o MESMO slot dentro da
 #: janela de cooldown antes de desistir e só alertar -- um travamento que
 #: volta rápido demais depois de reiniciado é sintoma de problema estrutural
@@ -1620,6 +1635,15 @@ def reiniciar_travado(slot_id: str) -> dict:
     if estado is None or estado.get("pid") is None:
         raise RuntimeError(f"slot {slot_id!r} não está rodando -- nada a reiniciar.")
     _matar_arvore(estado["pid"])
+    # Achado ao vivo em 02/09/2026: ler o diário LOGO após um `taskkill /F`
+    # às vezes esbarra em "disk I/O error" -- o processo morto ainda segura
+    # por uma fração de segundo o mapeamento do WAL do SQLite (`journal_mode
+    # =WAL`, ver `journal.live_store._connect`), e o SO ainda não liberou o
+    # arquivo por completo. `taskkill` é assíncrono (devolve antes do
+    # processo terminar de verdade); esta folga é a mesma ideia de
+    # `_STARTUP_GRACE_SECONDS` em `start()`, só que do lado da MORTE em vez
+    # da subida.
+    time.sleep(0.5)
     # `start()` recusa de cara se `status(slot)` ainda apontar um PID
     # (mesmo guard de `stop()`) -- sem zerar aqui, o PID que acabou de ser
     # morto continuaria "rodando" no arquivo de estado e `start()` abaixo

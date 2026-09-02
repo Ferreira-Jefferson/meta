@@ -114,15 +114,16 @@ def test_limiar_day_trade_e_o_piso_nao_o_multiplo(isolated):
     from core.config import slot_by_id
 
     slot = slot_by_id(DAYTRADE)
-    # passo de 5s * margem 6 = 30s, abaixo do piso de 180s -- o piso vence.
-    assert live_control._hang_threshold_seconds(slot) == 180.0
+    # passo de 5s * margem 6 = 30s, bem abaixo do piso de 900s -- o piso vence.
+    assert live_control._hang_threshold_seconds(slot) == 900.0
 
 
-def test_limiar_swing_usa_o_multiplo_do_passo_de_60s(isolated):
+def test_limiar_swing_tambem_usa_o_piso(isolated):
     from core.config import slot_by_id
 
     slot = slot_by_id(SWING)
-    assert live_control._hang_threshold_seconds(slot) == 360.0
+    # passo de 60s * margem 6 = 360s, ainda abaixo do piso de 900s.
+    assert live_control._hang_threshold_seconds(slot) == 900.0
 
 
 # ---------- slots_travados ---------------------------------------------------
