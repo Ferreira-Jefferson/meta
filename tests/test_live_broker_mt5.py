@@ -105,6 +105,13 @@ def _make_fake_mt5(
 
     def order_send(request):
         calls["order_send"].append(request)
+        # Gap 1.15: `order_send_result` pode ser uma FUNCAO de `request` (em
+        # vez de um resultado fixo) para simular respostas DIFERENTES entre a
+        # 1a tentativa (com `"position"`) e o reenvio de fallback (sem ele) --
+        # os testes de retry precisam disso; todo teste anterior continua
+        # passando um valor fixo (nao-chamavel), comportamento inalterado.
+        if callable(order_send_result):
+            return order_send_result(request)
         return order_send_result
 
     def history_deals_get(ticket=None):
@@ -127,6 +134,13 @@ def _make_fake_mt5(
     mod.ORDER_TIME_DAY = 112
     mod.ORDER_FILLING_RETURN = 113
     mod.POSITION_TYPE_BUY = 0
+    # Gap 1.15 (`MT5Broker.place_pending(position_ticket=...)`, fallback):
+    # valor REAL do pacote MT5 ("Invalid request"), usado pelos testes de
+    # fallback -- o codigo sob teste resolve isto por NOME
+    # (`getattr(mt5, "TRADE_RETCODE_INVALID", None)`), entao o numero exato
+    # so' importa para os proprios testes montarem um `order_send_result`
+    # que bata com ele.
+    mod.TRADE_RETCODE_INVALID = 10013
 
     # `positions`/`orders` fixos, ignorando `symbol=` de proposito -- os
     # testes que usam isto ja montam so' o que importa pro simbolo testado,
@@ -881,6 +895,148 @@ def test_place_pending_sem_niveis_nao_manda_sl_nem_tp(fake_mt5):
 
     assert "sl" not in calls["order_send"][0]
     assert "tp" not in calls["order_send"][0]
+
+
+# ---------- gap 1.15 (2026-09-03): `position` na ordem-limite PENDENTE -----
+#
+# A correcao do campo `position` depois do incidente MG51 (item 1.1) so'
+# cobriu `_send`/`close_position` (fechamento a MERCADO). `place_pending`
+# nunca ganhou o campo nem o parametro -- e' o caminho que `place_exit_limit`
+# usa para a fatia de SAIDA por alvo dos robos `gremah`/`gremah_tick`. Estes
+# testes fecham a lacuna do lado do REQUEST; `test_intraday_live_runtime.py`
+# (secao "gap 1.15") fecha do lado de QUEM chama `place_pending` com o
+# ticket certo.
+
+def test_place_pending_com_position_ticket_leva_o_campo_no_request(fake_mt5):
+    """O caso central do gap: informado `position_ticket`, o request da
+    ordem-limite pendente leva `"position"` -- o MESMO campo que
+    `close_position` ja leva no fechamento a MERCADO (item 1.1)."""
+    _mod, calls = fake_mt5(initialize_ok=True, symbol_info=_symbol_info(),
+                           order_send_result=_order_send_result(retcode=106, order=555))
+    broker = MT5Broker()
+
+    devolvida = broker.place_pending(
+        Order(ticker="WDO@", side=OrderSide.SELL, quantity=1,
+              order_type=OrderType.LIMIT, limit_price=5200.0),
+        position_ticket=4242,
+    )
+
+    assert calls["order_send"][0]["position"] == 4242
+    assert devolvida.status == OrderStatus.SENT
+
+
+def test_place_pending_sem_position_ticket_nao_leva_o_campo(fake_mt5):
+    """Sem `position_ticket` (o caso de sempre -- ordem-limite de ENTRADA),
+    nada muda: nenhum campo `"position"` novo vaza para o request."""
+    _mod, calls = fake_mt5(initialize_ok=True, symbol_info=_symbol_info(),
+                           order_send_result=_order_send_result(retcode=106, order=555))
+    broker = MT5Broker()
+
+    broker.place_pending(Order(ticker="WDO@", side=OrderSide.BUY, quantity=1,
+                               order_type=OrderType.LIMIT, limit_price=5200.0))
+
+    assert "position" not in calls["order_send"][0]
+
+
+def test_place_pending_de_FECHAMENTO_nunca_leva_sl_tp(fake_mt5):
+    """Uma ordem-limite que FECHA posicao (`position_ticket` preenchido) nao
+    abre nada que precise de protecao -- mandar sl/tp nela mexeria na
+    posicao que esta sendo encerrada. Mesma exclusao que `_send` ja faz para
+    `TRADE_ACTION_DEAL` (`test_ordem_de_FECHAMENTO_nunca_leva_sl_tp`)."""
+    _mod, calls = fake_mt5(initialize_ok=True, symbol_info=_symbol_info(),
+                           order_send_result=_order_send_result(retcode=106, order=555))
+    broker = MT5Broker()
+
+    broker.place_pending(
+        Order(ticker="WDO@", side=OrderSide.SELL, quantity=1,
+              order_type=OrderType.LIMIT, limit_price=5200.0,
+              stop_price=5180.0, target_price=5205.0),
+        position_ticket=4242,
+    )
+
+    enviado = calls["order_send"][0]
+    assert enviado["position"] == 4242
+    assert "sl" not in enviado and "tp" not in enviado
+
+
+def test_place_pending_com_ticket_recusado_reenvia_UMA_vez_sem_o_campo(fake_mt5):
+    """RESTRICAO NAO-NEGOCIAVEL do gap 1.15: nunca foi confirmado contra
+    terminal real se `TRADE_ACTION_PENDING` aceita `"position"`. Se a
+    corretora recusar com um retcode que sugere "campo/formato invalido"
+    (`TRADE_RETCODE_INVALID`), o metodo tenta UMA UNICA vez sem o campo --
+    nunca falha em silencio (sucesso final ainda carrega a nota do
+    fallback) e nunca vira laco de retry (so' 2 chamadas a `order_send`)."""
+    invalido = _order_send_result(retcode=10013, comment="Invalid request")
+    done = _order_send_result(retcode=106, order=777)
+
+    def sequencia(request):
+        return invalido if "position" in request else done
+
+    mod, calls = fake_mt5(initialize_ok=True, symbol_info=_symbol_info(),
+                          order_send_result=sequencia)
+    # `TRADE_RETCODE_INVALID` do fake ja e' 10013 (ver `_make_fake_mt5`) e
+    # `TRADE_RETCODE_DONE` e' 106 -- fixados aqui em vez de lidos de `mod`
+    # porque `sequencia` precisa existir ANTES do modulo fake ser instalado.
+    assert mod.TRADE_RETCODE_INVALID == 10013
+    assert mod.TRADE_RETCODE_DONE == 106
+    broker = MT5Broker()
+
+    devolvida = broker.place_pending(
+        Order(ticker="WDO@", side=OrderSide.SELL, quantity=1,
+              order_type=OrderType.LIMIT, limit_price=5200.0),
+        position_ticket=4242,
+    )
+
+    assert len(calls["order_send"]) == 2, "tem de tentar exatamente UMA vez a mais, nunca um laco"
+    assert calls["order_send"][0]["position"] == 4242
+    assert "position" not in calls["order_send"][1]
+    assert devolvida.status == OrderStatus.SENT
+    assert devolvida.broker_ref == "777"
+    assert "FALLBACK" in devolvida.note
+    assert "1.15" in devolvida.note
+
+
+def test_place_pending_com_ticket_recusado_dos_dois_jeitos_fica_REJECTED(fake_mt5):
+    """A recusa persiste mesmo sem o campo (nao era o campo, era outra
+    coisa -- preco, margem, mercado fechado): fica REJECTED, com as DUAS
+    recusas na nota, e sem terceira tentativa nenhuma."""
+    invalido = _order_send_result(retcode=10013, comment="Invalid request")
+    mod, calls = fake_mt5(initialize_ok=True, symbol_info=_symbol_info(),
+                          order_send_result=lambda request: invalido)
+    assert mod.TRADE_RETCODE_INVALID == 10013
+    broker = MT5Broker()
+
+    devolvida = broker.place_pending(
+        Order(ticker="WDO@", side=OrderSide.SELL, quantity=1,
+              order_type=OrderType.LIMIT, limit_price=5200.0),
+        position_ticket=4242,
+    )
+
+    assert len(calls["order_send"]) == 2, "nunca mais que UMA tentativa extra"
+    assert devolvida.status == OrderStatus.REJECTED
+    assert "COM 'position'" in devolvida.note
+    assert "SEM" in devolvida.note
+
+
+def test_place_pending_com_ticket_recusado_por_outro_motivo_nao_reenvia(fake_mt5):
+    """Recusa que NAO sugere "campo invalido" (aqui: motivo generico de
+    negocio, ex. preco/margem) nao aciona o fallback -- reenviar sem o
+    campo nao mudaria nada, e mascarar o motivo real seria pior que nao
+    tentar. So' UMA chamada a `order_send`."""
+    _mod, calls = fake_mt5(initialize_ok=True, symbol_info=_symbol_info(),
+                           order_send_result=_order_send_result(
+                               retcode=999999, comment="No money"))
+    broker = MT5Broker()
+
+    devolvida = broker.place_pending(
+        Order(ticker="WDO@", side=OrderSide.SELL, quantity=1,
+              order_type=OrderType.LIMIT, limit_price=5200.0),
+        position_ticket=4242,
+    )
+
+    assert len(calls["order_send"]) == 1, "motivo nao e' o campo -- nao reenvia"
+    assert devolvida.status == OrderStatus.REJECTED
+    assert "No money" in devolvida.note
 
 
 def test_ordem_a_mercado_de_ABERTURA_leva_sl_tp(fake_mt5):

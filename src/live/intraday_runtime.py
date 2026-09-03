@@ -118,6 +118,7 @@ from live import clock
 from live.bar_feed import MT5BarFeed
 from live.intraday_execution import (BrokerExecutionError, MT5IntradayExecution,
                                      descarta_confirmados, orphan_refs)
+from live.margin_lock import MargemTravada, acquire_margin_gate
 from live.notify import NullNotifier
 from live.runtime import StepReport
 from strategy.daytrade.base import (
@@ -867,6 +868,13 @@ class IntradayLiveRuntime:
         return {
             "lado": order.side,
             "preco": order.limit_price,
+            # Niveis pretendidos, nao so' o preco de entrada (2026-09-03,
+            # pedido do dono): uma ordem-limite pode ficar parada sem
+            # preencher -- o dono quer poder posicionar a MERCADO por conta
+            # propria nesse caso, e pra isso precisa ver stop/alvo no painel,
+            # nao so' vasculhar o diario atras da linha que armou a ordem.
+            "stop": order.initial_stop,
+            "alvo": order.initial_target,
             # Uma ordem REAL por filho que ainda falta preencher (ver
             # `IntradaySessionMachine.resting_children`) -- e' o "y" do "x/y"
             # no cabecalho do cartao. Ordem nao dividida = 1.
@@ -1104,25 +1112,113 @@ class IntradayLiveRuntime:
         if self._needs_warm_start(now):
             seed_bars = self.bar_feed.session_bars_until(session, pd.Timestamp(now))
             if seed_bars:
-                pending = warm_start_calibration(self.strategy, session, seed_bars)
-                self.machine.resume_session(session, seed_pending=pending)
+                # Caixa corrente ANTES do warm start (2026-09-03, achado de
+                # auditoria adversarial -- LICOES_DE_PRODUCAO.md item 3.14):
+                # MESMA formula que `IntradaySessionMachine.step()` usa em
+                # `on_capital_update` a cada barra real (`cfg.initial_capital
+                # + self.realized_pnl`, machine.py). Os dois numeros ja estao
+                # corretos aqui -- `_resincroniza_capital` (linha acima) ja
+                # releu o ledger, e `_restore` (chamado antes de
+                # `_start_session`) ja repos `realized_pnl` do snapshot
+                # persistido. Sem passar isto para `warm_start_calibration`,
+                # um robo que dimensiona por caixa (`_cash_atual_brl`)
+                # recalibra com o caixa ainda em 0.0 e o teto por risco
+                # colapsa em silencio pro piso de 1 contrato ate a proxima
+                # barra ao vivo -- a direcao do erro e' conservadora
+                # (subdimensiona, nunca superdimensiona), mas acontecia
+                # SEMPRE, sem nenhum log distinguindo o caso.
+                cash_brl = self.config.initial_capital + self.machine.realized_pnl
+                if not (cash_brl > 0):
+                    # Alarme, nao silencio (LICOES item 1.6): sem caixa
+                    # valido aqui o dimensionamento por risco/margem fica
+                    # preso no piso deliberado de 1 contrato
+                    # (`max(1, teto)`, ver
+                    # `WdoGridReloadMaker._quantidade_da_entrada`) ate a
+                    # proxima atualizacao de capital -- e antes desta
+                    # correcao isso acontecia sempre, para qualquer robo que
+                    # dimensiona pelo caixa, sem nenhum log.
+                    self._log(conn, account.id, "error",
+                              f"warm start: caixa corrente invalido (R$ {cash_brl:.2f}) "
+                              "-- dimensionamento por risco/margem fica preso em 1 "
+                              "contrato ate uma atualizacao de capital valida",
+                              {"cash_brl": cash_brl,
+                               "initial_capital": self.config.initial_capital,
+                               "realized_pnl": self.machine.realized_pnl})
+                pending = warm_start_calibration(self.strategy, session, seed_bars,
+                                                 cash_brl=cash_brl)
+                # Quantidade PEDIDA pelo robo, antes do teto agregado --
+                # so' para o log abaixo saber se `resume_session` precisou
+                # encolher/descartar (ver o comentario apos a chamada).
+                qtd_pedida = (sum(pending.children(self.config.default_quantity))
+                             if isinstance(pending, EnterLimit) else None)
+                pending = self.machine.resume_session(session, seed_pending=pending)
                 # `resume_session` planta a ordem do warm start direto em
                 # `resting_limit`, SEM passar por `LimitPlaced` (nao ha barra
                 # sendo consumida). Em execucao real isso a deixaria vigiada
                 # aqui dentro e inexistente na corretora: o robo esperaria por
                 # um fill que nunca poderia acontecer, porque ninguem chegou a
                 # registrar a ordem. Registrar aqui e' o que fecha esse buraco.
-                # `self.machine.resting_limit is pending` NAO e' redundante
-                # com `isinstance(pending, EnterLimit)`: `resume_session`
-                # RECUSA plantar a ordem quando ja existe posicao aberta
-                # (`if self.positions: return`, ver a docstring dela --
-                # plantar por cima deixaria a ordem orfa). Sem esta checagem
-                # o runtime mandava a ordem REAL para a corretora assim
-                # mesmo, com a maquina explicitamente NAO vigiando ela: uma
-                # entrada extra, sobre uma posicao que ja existe, que
-                # ninguem esperava nem contabilizava. Identidade (`is`), nao
-                # igualdade -- o que interessa e' que a maquina adotou ESTE
-                # objeto.
+                #
+                # `resume_session` agora tambem CAPA a quantidade pelo teto
+                # agregado (`_cap_efetivo`) antes de plantar -- 2026-09-03,
+                # item 3.7/3.14 do LICOES_DE_PRODUCAO.md: sem isso, um robo
+                # com dimensionamento dinamico podia pedir mais contratos do
+                # que o teto comporta (caixa real, mas `_lotes_por_realocacao`
+                # nao sabe de margem/futuro), a ordem ficava plantada com o
+                # tamanho PEDIDO, e o fill recusava ela por INTEIRO no
+                # primeiro toque -- robo inerte com ordem morta no book, pior
+                # do que o subdimensionamento conservador que 3.14 veio
+                # substituir. Por isso `pending` e' REATRIBUIDO ao retorno de
+                # `resume_session` (pode ser a MESMA ordem, uma copia com
+                # `quantity` menor, ou `None` se nem 1 unidade coubesse) --
+                # tudo daqui pra baixo (log, cancelamento de refs antigas,
+                # checagem de margem, envio real) usa a ordem CAPADA, nunca a
+                # pedida. `self.machine.resting_limit is pending` NAO e'
+                # redundante com `isinstance(pending, EnterLimit)`:
+                # `resume_session` RECUSA plantar a ordem quando ja existe
+                # posicao aberta (`if self.positions: return None`, ver a
+                # docstring dela -- plantar por cima deixaria a ordem orfa).
+                # Sem esta checagem o runtime mandava a ordem REAL para a
+                # corretora assim mesmo, com a maquina explicitamente NAO
+                # vigiando ela: uma entrada extra, sobre uma posicao que ja
+                # existe, que ninguem esperava nem contabilizava. Identidade
+                # (`is`), nao igualdade -- o que interessa e' que a maquina
+                # adotou ESTE objeto.
+                if qtd_pedida is not None:
+                    qtd_aceita = (sum(pending.children(self.config.default_quantity))
+                                 if isinstance(pending, EnterLimit) else 0)
+                    if qtd_aceita != qtd_pedida:
+                        # Alarme, nao silencio (LICOES item 1.6): o teto
+                        # agregado encolheu ou descartou a ordem que o robo
+                        # pediu -- o dono precisa ver isto no diario, nao so'
+                        # inferir pelo tamanho da ordem em pe.
+                        #
+                        # Mas `resume_session` devolve `None` por DOIS motivos
+                        # diferentes, e atribuir os dois ao teto seria alarme
+                        # com a causa errada -- mesma distincao que
+                        # `MargemTravada` vs `_recusa_por_margem` faz mais
+                        # abaixo. Com posicao aberta ela RECUSA plantar de
+                        # proposito (plantar por cima deixaria a ordem orfa,
+                        # ver a docstring dela): isso e' o desenho
+                        # funcionando, nao um teto estourado, e um restart no
+                        # meio do pregao SEGURANDO posicao e' justamente o
+                        # cenario comum -- logar `error` "teto capou" ali
+                        # encheria o diario de alarme falso no pior momento
+                        # pra' o dono nao confiar no diario.
+                        if self.machine.positions:
+                            self._log(conn, account.id, "info",
+                                      "warm start: ordem nao plantada porque ja existe "
+                                      "posicao aberta (o robo re-arma pelo criterio dele "
+                                      "depois de fechar) -- o teto agregado nao foi o motivo",
+                                      {"qtd_pedida": qtd_pedida, "qtd_aceita": qtd_aceita,
+                                       "motivo": "posicao_aberta"})
+                        else:
+                            self._log(conn, account.id, "error" if qtd_aceita == 0 else "warn",
+                                      f"warm start: teto agregado capou a ordem de "
+                                      f"{qtd_pedida} para {qtd_aceita} contrato(s)"
+                                      + ("" if qtd_aceita else " -- nenhuma ordem plantada"),
+                                      {"qtd_pedida": qtd_pedida, "qtd_aceita": qtd_aceita,
+                                       "motivo": "teto_agregado"})
                 if (self.executor is not None and isinstance(pending, EnterLimit)
                         and self.machine.resting_limit is pending):
                     if self._snapshot.pending_entry_refs:
@@ -1143,42 +1239,85 @@ class IntradayLiveRuntime:
                     # Mesmo portao de margem do envio por barra: o warm start
                     # tambem manda ordem REAL, e um restart nao e' motivo pra
                     # ele pular a conferencia que a barra faz.
-                    sem_margem = self._check_margem_da_conta(
-                        pending.side,
-                        sum(pending.children(self.config.default_quantity)),
-                        pending.limit_price)
-                    if sem_margem is not None:
+                    #
+                    # Trava de margem ENTRE PROCESSOS (2026-09-03, item 3.13
+                    # do LICOES_DE_PRODUCAO.md) -- MESMO padrao aplicado em
+                    # `_on_limit_placed` (ver a docstring dele: trava de
+                    # ARQUIVO do SO porque cada slot e' um PROCESSO separado,
+                    # timeout curto para nao prender um slot saudavel atras
+                    # de um vizinho anormal). A secao critica (consultar
+                    # margem + mandar ESTA ordem) fica inteira dentro de
+                    # `acquire_margin_gate`, sem I/O de diario dentro -- o
+                    # resultado (jornal, `pending_entry_refs`) e' aplicado so'
+                    # DEPOIS de soltar a trava. Este e' o SEGUNDO ponto de
+                    # envio do runtime (o primeiro, `_on_limit_placed`, e' a
+                    # decisao por barra); ficou de fora da correcao original
+                    # do item 3.13 so' porque esta regiao estava em edicao
+                    # concorrente naquele momento -- mesma lacuna, mesmo
+                    # fechamento, sem inventar padrao novo.
+                    sem_margem: Optional[str] = None
+                    enviadas = None
+                    erro_envio: Optional[BrokerExecutionError] = None
+                    erro_trava: Optional[MargemTravada] = None
+                    try:
+                        with acquire_margin_gate():
+                            sem_margem = self._check_margem_da_conta(
+                                pending.side,
+                                sum(pending.children(self.config.default_quantity)),
+                                pending.limit_price)
+                            if sem_margem is None:
+                                # Mesma recusa possivel do envio por barra,
+                                # mesmo tratamento (ver `_recusa_de_envio`):
+                                # `resume_session` acabou de plantar a ordem
+                                # em `resting_limit`, e uma recusa aqui a
+                                # deixaria vigiada sem existir no book.
+                                try:
+                                    enviadas = self.executor.place_limit(
+                                        side=pending.side, limit_price=pending.limit_price,
+                                        quantities=pending.children(self.config.default_quantity),
+                                        ts=seed_bars[-1].ts,
+                                        # Protecao ATOMICA -- ver `place_limit`.
+                                        stop=pending.initial_stop,
+                                        target=self._alvo_atomico(pending),
+                                    )
+                                except BrokerExecutionError as erro:
+                                    erro_envio = erro
+                    except MargemTravada as erro:
+                        erro_trava = erro
+                    if erro_trava is not None:
+                        # Nao consegui verificar a margem com seguranca (outro
+                        # processo segurava a trava alem do timeout) --
+                        # tratado como consulta que FALHOU (item 1.6 do
+                        # LICOES_DE_PRODUCAO.md: "nao sei" nunca autoriza),
+                        # nunca como recusa por margem insuficiente de
+                        # verdade (por isso NAO passa por `_recusa_por_margem`,
+                        # que e' especifica desse outro caso). Mesmo desfecho
+                        # de uma recusa da corretora: a maquina larga a
+                        # `resting_limit` e o robo re-arma pelo proprio
+                        # criterio no proximo ciclo.
+                        self._recusa_de_envio(
+                            conn, account, session, self._snapshot.trade_num,
+                            BrokerExecutionError(
+                                f"nao enviei: trava de margem entre processos ocupada -- {erro_trava}",
+                                orphan_refs=[]))
+                    elif sem_margem is not None:
                         # Mesmo desfecho de uma recusa da corretora: a maquina
                         # larga a `resting_limit` e o pregao segue normalmente
                         # (o robo re-arma pelo criterio dele quando a conta
                         # comportar). Nao ha ordem no book pra limpar.
                         self._recusa_por_margem(conn, account, session,
                                                 self._snapshot.trade_num, sem_margem)
+                    elif erro_envio is not None:
+                        self._recusa_de_envio(conn, account, session,
+                                              self._snapshot.trade_num, erro_envio)
                     else:
-                        # Mesma recusa possivel do envio por barra, mesmo
-                        # tratamento (ver `_recusa_de_envio`): `resume_session`
-                        # acabou de plantar a ordem em `resting_limit`, e uma
-                        # recusa aqui a deixaria vigiada sem existir no book.
-                        try:
-                            enviadas = self.executor.place_limit(
-                                side=pending.side, limit_price=pending.limit_price,
-                                quantities=pending.children(self.config.default_quantity),
-                                ts=seed_bars[-1].ts,
-                                # Protecao ATOMICA -- ver `place_limit`.
-                                stop=pending.initial_stop,
-                                target=self._alvo_atomico(pending),
-                            )
-                        except BrokerExecutionError as erro:
-                            self._recusa_de_envio(conn, account, session,
-                                                  self._snapshot.trade_num, erro)
-                        else:
-                            # SOMA, nao substitui: um ticket que o cancelamento
-                            # acima nao confirmou morto continua precisando de
-                            # vigilancia (`_aplica_cancelamento`).
-                            self._snapshot.pending_entry_refs = list(dict.fromkeys(
-                                (self._snapshot.pending_entry_refs or [])
-                                + [o.broker_ref for o in enviadas if o.broker_ref]
-                            ))
+                        # SOMA, nao substitui: um ticket que o cancelamento
+                        # acima nao confirmou morto continua precisando de
+                        # vigilancia (`_aplica_cancelamento`).
+                        self._snapshot.pending_entry_refs = list(dict.fromkeys(
+                            (self._snapshot.pending_entry_refs or [])
+                            + [o.broker_ref for o in enviadas if o.broker_ref]
+                        ))
                 modo, semente = "warm_start", len(seed_bars)
                 self._snapshot.session = session
                 # NUNCA anda pra tras: num restart (`restaurada=True`) o
@@ -1197,14 +1336,28 @@ class IntradayLiveRuntime:
                 if restaurada and self._snapshot.last_bar_ts is not None:
                     marco = max(marco, self._snapshot.last_bar_ts)
                 self._snapshot.last_bar_ts = marco
+                # Preco + stop/alvo na linha (2026-09-03, pedido do dono):
+                # antes so' dizia "ordem em pe" sem nivel nenhum -- pra' saber
+                # onde a ordem estava o dono tinha de ir atras do dado bruto.
+                # Mesmo motivo do `_bracket_txt` em `_on_limit_placed`: e'
+                # exatamente aqui, com a ordem plantada FORA do caminho normal
+                # (ver a docstring desta funcao), que ela mais fica parada sem
+                # preencher, e o dono pode preferir posicionar a mercado
+                # sozinho se souber os precos.
+                nivel_txt = (f" @ {pending.limit_price:.4f}"
+                             f"{self._bracket_txt(pending.initial_stop, pending.initial_target)}"
+                             if pending else "")
                 self._log(conn, account.id, "info",
                           # "ordem em pe"/"sem ordem" em vez de "posicionada":
                           # depois da reescrita de 2026-08-25 quem POSICIONA e'
                           # a linha "LIMITE ...", e usar a palavra velha aqui
                           # faria parecer que o warm start armou uma ordem nova.
                           f"{session.isoformat()}: warm start, {len(seed_bars)} barra(s), "
-                          f"{'ordem em pe' if pending else 'sem ordem'}",
-                          {"barras": len(seed_bars), "modo": modo})
+                          f"{'ordem em pe' if pending else 'sem ordem'}{nivel_txt}",
+                          {"barras": len(seed_bars), "modo": modo,
+                           "limit_price": pending.limit_price if pending else None,
+                           "stop": pending.initial_stop if pending else None,
+                           "target": pending.initial_target if pending else None})
         if modo == "cold":
             self.machine.begin_session(session)
             if not restaurada:
@@ -2689,14 +2842,24 @@ class IntradayLiveRuntime:
         # -- e robo sem alvo nem parentese tem. `tipo` no payload e' o que o
         # card "Ordens" le (ver `live_store.daytrade_order_events_on`), entao o
         # texto ficou livre pra mudar sem quebrar o painel.
+        #
+        # stop/alvo no PARENTESE (2026-09-03, pedido do dono): uma ordem-
+        # limite pode ficar parada sem preencher por um bom tempo (ver o
+        # caso do warm start abaixo) -- sem o nivel aqui, a UNICA forma de
+        # saber onde o robo pretende proteger/realizar era esperar o fill.
+        # Util pro dono decidir posicionar a MERCADO por conta propria se
+        # achar que a limite nao vai preencher.
         self._log(conn, account.id, "info",
                   f"LIMITE {evento.order.side.upper()} #{numero:02d} "
                   f"{self._lotes_txt(qtd)} {self.strategy.symbol} "
                   f"@ {evento.order.limit_price:.4f}"
+                  f"{self._bracket_txt(evento.order.initial_stop, evento.order.initial_target)}"
                   + (" (substitui)" if evento.replaced is not None else ""),
                   {"numero_ordem": numero, "side": evento.order.side, "quantity": qtd,
                    "tipo": "armada",
                    "limit_price": evento.order.limit_price,
+                   "stop": evento.order.initial_stop,
+                   "target": evento.order.initial_target,
                    "substitui_anterior": evento.replaced is not None,
                    "sessao": self._snapshot.session.isoformat()})
         if self.executor is None:
@@ -2726,18 +2889,92 @@ class IntradayLiveRuntime:
         # conta inteira (outros slots, posicao aberta do dono) -- ver
         # `_check_margem_da_conta`. Recusar uma entrada e' sempre melhor do
         # que abrir uma que a conta nao sustenta.
-        sem_margem = self._check_margem_da_conta(
-            evento.order.side, qtd, evento.order.limit_price)
+        #
+        # Trava de margem ENTRE PROCESSOS (2026-09-03, item 3.13 do
+        # LICOES_DE_PRODUCAO.md): todo slot de day trade compartilha a MESMA
+        # margem fisica (mesmo login MT5), e ate aqui cada processo so'
+        # conferia margem contra o PROPRIO estado -- dois processos podiam
+        # ler a mesma `margin_free` otimista dentro da janela de latencia de
+        # um envio e os dois mandarem ordem, reproduzindo o padrao do
+        # incidente da Parte 0 (item 3.2) agora entre processos. A secao
+        # critica (consultar margem + checar cadencia local + mandar ESTA
+        # ordem) fica inteira dentro de `acquire_margin_gate` -- sem I/O de
+        # diario, sem logica de estrategia -- e o resultado e' aplicado
+        # (jornal, freio, snapshot) so' DEPOIS de soltar a trava, pra nao
+        # segurar os outros slots por mais tempo que o necessario. Sem
+        # `else` para `self.executor is None`: o `return` la' em cima (logo
+        # apos o `_log` da linha LIMITE) ja garante que so' se chega aqui
+        # com executor de verdade -- modo sombra nunca manda nada, entao
+        # nunca entra na trava.
+        sem_margem: Optional[str] = None
+        em_laco: Optional[str] = None
+        enviadas = None
+        erro_envio: Optional[BrokerExecutionError] = None
+        erro_trava: Optional[MargemTravada] = None
+        try:
+            with acquire_margin_gate():
+                sem_margem = self._check_margem_da_conta(
+                    evento.order.side, qtd, evento.order.limit_price)
+                if sem_margem is None:
+                    # Laco de envio -- ver `_check_cadencia_de_ordens`. Vem
+                    # DEPOIS da margem de proposito: gastar uma vaga da
+                    # janela numa ordem que a conta nem comporta seria
+                    # contar o que nao aconteceu. Fica dentro da trava
+                    # porque e' checagem local em memoria (sem I/O) --
+                    # solta-la so' para pega-la de volta duas linhas depois
+                    # nao reduziria o tempo segurado.
+                    em_laco = self._check_cadencia_de_ordens(evento.ts)
+                    if em_laco is None:
+                        # Um filho REAL por elemento de
+                        # `EnterLimit.split_quantities` (ver a docstring de
+                        # `EnterLimit.children` e a Fase 2 em
+                        # `live/intraday_execution.py`) -- `[quantity]`
+                        # quando a ordem nao veio dividida, o comportamento
+                        # de sempre.
+                        try:
+                            enviadas = self.executor.place_limit(
+                                side=evento.order.side,
+                                limit_price=evento.order.limit_price,
+                                quantities=evento.order.children(self.config.default_quantity),
+                                ts=evento.ts,
+                                # Protecao ATOMICA: o stop e o alvo que a
+                                # estrategia declarou nesta `EnterLimit`
+                                # viajam no MESMO request que registra a
+                                # ordem na corretora, entao a posicao nasce
+                                # protegida no instante do fill -- sem
+                                # janela, sem depender deste processo estar
+                                # vivo. `_ensure_protecao` continua rodando,
+                                # agora como REDE (protecao que sumiu, stop
+                                # movido depois), nao como o caminho
+                                # principal. Ver `MT5Broker.place_pending`.
+                                stop=evento.order.initial_stop,
+                                target=self._alvo_atomico(evento.order),
+                            )
+                        except BrokerExecutionError as erro:
+                            erro_envio = erro
+        except MargemTravada as erro:
+            erro_trava = erro
+        if erro_trava is not None:
+            # Nao consegui verificar a margem com seguranca (outro processo
+            # segurava a trava alem do timeout) -- tratado como consulta que
+            # FALHOU (item 1.6 do LICOES_DE_PRODUCAO.md: "nao sei" nunca
+            # autoriza), nunca como recusa por margem insuficiente de
+            # verdade (por isso NAO passa por `_margem_alarmada`/
+            # `_recusa_por_margem`, que sao especificos desse outro caso).
+            # Mesmo desfecho de uma recusa da corretora: desfaz a vigilancia
+            # e o robo re-arma pelo proprio criterio no proximo ciclo.
+            self._recusa_de_envio(
+                conn, account, self._snapshot.session, numero,
+                BrokerExecutionError(
+                    f"nao enviei: trava de margem entre processos ocupada -- {erro_trava}",
+                    orphan_refs=[]))
+            return
         if sem_margem is not None:
             if sem_margem not in self._margem_alarmada:
                 self._margem_alarmada.add(sem_margem)
             self._recusa_por_margem(conn, account, self._snapshot.session,
                                     numero, sem_margem)
             return
-        # Laco de envio -- ver `_check_cadencia_de_ordens`. Vem DEPOIS da
-        # margem de proposito: gastar uma vaga da janela numa ordem que a
-        # conta nem comporta seria contar o que nao aconteceu.
-        em_laco = self._check_cadencia_de_ordens(evento.ts)
         if em_laco is not None:
             self._snapshot.disaster_halt = True
             self._snapshot.disaster_reason = em_laco
@@ -2748,28 +2985,8 @@ class IntradayLiveRuntime:
                        "numero_ordem": numero})
             self.machine.discard_resting_limit()
             return
-        # Um filho REAL por elemento de `EnterLimit.split_quantities` (ver a
-        # docstring de `EnterLimit.children` e a Fase 2 em
-        # `live/intraday_execution.py`) -- `[quantity]` quando a ordem nao
-        # veio dividida, o comportamento de sempre.
-        try:
-            enviadas = self.executor.place_limit(
-                side=evento.order.side,
-                limit_price=evento.order.limit_price,
-                quantities=evento.order.children(self.config.default_quantity),
-                ts=evento.ts,
-                # Protecao ATOMICA: o stop e o alvo que a estrategia declarou
-                # nesta `EnterLimit` viajam no MESMO request que registra a
-                # ordem na corretora, entao a posicao nasce protegida no
-                # instante do fill -- sem janela, sem depender deste processo
-                # estar vivo. `_ensure_protecao` continua rodando, agora como
-                # REDE (protecao que sumiu, stop movido depois), nao como o
-                # caminho principal. Ver `MT5Broker.place_pending`.
-                stop=evento.order.initial_stop,
-                target=self._alvo_atomico(evento.order),
-            )
-        except BrokerExecutionError as erro:
-            self._recusa_de_envio(conn, account, self._snapshot.session, numero, erro)
+        if erro_envio is not None:
+            self._recusa_de_envio(conn, account, self._snapshot.session, numero, erro_envio)
             return
         # SOMA, nao substitui: ver `_aplica_cancelamento`.
         self._snapshot.pending_entry_refs = list(dict.fromkeys(

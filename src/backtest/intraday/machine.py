@@ -38,7 +38,7 @@ antes do fechamento durante ~4 meses do ano.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import time
 from typing import Literal, Optional, Union
 
@@ -682,7 +682,8 @@ class IntradaySessionMachine:
         self.strategy.on_session_start(session_date)
         self._reset_session(session_date)
 
-    def resume_session(self, session_date, seed_pending: Enter | EnterLimit | None = None) -> None:
+    def resume_session(self, session_date,
+                       seed_pending: Enter | EnterLimit | None = None) -> Enter | EnterLimit | None:
         """Retoma uma sessao JA EM ANDAMENTO sem tocar no estado interno do
         robo — usar quando ele acabou de ser calibrado por fora
         (`warm_start_calibration`) e um `on_session_start` apagaria essa
@@ -700,20 +701,89 @@ class IntradaySessionMachine:
         `positions=[]`) e recalcula a ordem pendente do zero -- plantar
         essa ordem por cima de uma posicao ja aberta a deixaria orfa e
         desconectada assim que a posicao fechasse (o preco/nivel dela pode
-        nem existir mais)."""
+        nem existir mais).
+
+        Devolve a ordem REALMENTE plantada -- para `EnterLimit`, pode ser
+        `seed_pending` sem alteracao, uma COPIA com quantidade menor, ou
+        `None` (2026-09-03, item 3.7/3.14 do LICOES_DE_PRODUCAO.md:
+        "portao que libera o que a camada seguinte recusa"). O caminho
+        normal de decisao (`on_closed_bar`, secao 5) so' descobre se uma
+        `EnterLimit` cabe no teto agregado (`_cabe_no_teto`) no FILL,
+        barra a barra -- mas aqui a ordem e' plantada direto em
+        `resting_limit`/`_resting_children_qty`, SEM passar por
+        `LimitPlaced`, e' a PRIMEIRA barra que ela ja fica vigiada (ver o
+        paragrafo acima). Sem capar aqui, um robo com dimensionamento
+        dinamico (`on_capital_update`) que pede mais do que o caixa atual
+        sustenta planta uma ordem que o proprio motor vai recusar por
+        INTEIRO no primeiro toque (`_cabe_no_teto(fill_qty)` abaixo, com um
+        unico filho do tamanho pedido) -- o robo fica com uma ordem morta
+        no book, inerte pelo resto do pregao, pior do que o
+        subdimensionamento conservador que a correcao do item 3.14 veio
+        substituir. `_aceita_dentro_do_teto` aplica o MESMO criterio que o
+        FILL ja aplica (`_cap_efetivo`/`open_contracts`), so' que ANTES de
+        plantar: encolhe o(s) filho(s) para caber, ou devolve `None` (nao
+        planta nada) quando nem 1 unidade cabe -- nunca afrouxa o teto,
+        nunca planta o tamanho pedido "torcendo" para caber depois."""
         self._reset_session(session_date, clear_resting=False)
         if self.positions:
-            return
+            return None
         if isinstance(seed_pending, Enter):
             self.pending = seed_pending
+            return seed_pending
         elif isinstance(seed_pending, EnterLimit):
+            pedidos = seed_pending.children(self.config.default_quantity)
+            aceitos = self._aceita_dentro_do_teto(pedidos)
+            if not aceitos:
+                # Teto agregado nao comporta nem 1 unidade AGORA -- mesmo
+                # desfecho de uma recusa por capital de verdade (item 3.7):
+                # a ordem nao e' plantada, o robo re-arma pelo proprio
+                # criterio quando o caixa/margem permitir.
+                return None
+            if aceitos != pedidos:
+                seed_pending = replace(
+                    seed_pending, quantity=sum(aceitos),
+                    split_quantities=(tuple(aceitos)
+                                      if seed_pending.split_quantities is not None else None),
+                )
             self.resting_limit = seed_pending
             self.resting_limit_bars_waited = 0
-            self._resting_children_qty = seed_pending.children(self.config.default_quantity)
+            self._resting_children_qty = list(aceitos)
             # Warm start nao sabe quanto da fila real ja tinha sido cortado
             # antes do processo cair -- assume o pior caso (fila inteira de
             # novo), mesmo espirito conservador do resto do warm start.
             self._queue_ahead_remaining = self.config.queue_ahead_qty
+            return seed_pending
+        return None
+
+    def _aceita_dentro_do_teto(self, filhos: list[int]) -> list[int]:
+        """Aceita os `filhos` (quantidades de cada pedaco independente de uma
+        `EnterLimit`, ver `EnterLimit.children`) em ORDEM, ate o teto
+        agregado (`_cap_efetivo`) parar de caber -- o MESMO criterio que
+        `on_closed_bar` ja aplica filho a filho no FILL
+        (`_cabe_no_teto(fill_qty)`), so' que calculado ANTES de plantar a
+        ordem (ver `resume_session`), nao depois.
+
+        O ULTIMO filho aceito pode ser ENCOLHIDO (nunca descartado por
+        inteiro se sobrar espaco) para caber no que resta do teto -- e' o
+        que transforma "26 contratos pedidos, teto 4" em "planta 4", em vez
+        de "planta 0" (desperdicaria espaco que existe de verdade) ou
+        "planta 26 e deixa o fill recusar tudo depois" (o bug do item
+        3.14). Lista vazia quando nem o primeiro filho cabe (teto <=
+        `open_contracts` agora). Sem teto configurado
+        (`_cap_efetivo() is None`), devolve `filhos` sem tocar -- mesmo
+        "sem limite" de sempre."""
+        cap = self._cap_efetivo()
+        if cap is None:
+            return list(filhos)
+        disponivel = cap - self.open_contracts
+        aceitos: list[int] = []
+        for qtd in filhos:
+            if disponivel <= 0:
+                break
+            usar = min(qtd, disponivel)
+            aceitos.append(usar)
+            disponivel -= usar
+        return aceitos
 
     def _reset_session(self, session_date, clear_resting: bool = True) -> None:
         self.session_date = session_date

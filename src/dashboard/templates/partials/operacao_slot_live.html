@@ -291,6 +291,20 @@
       {% endif %}
       {% if s.daytrade.ordem_em_pe and s.daytrade.ordem_em_pe.lado == "long" %}
       · em pé @ {{ "%.4f"|format(s.daytrade.ordem_em_pe.preco) }}
+      {# Niveis pretendidos (2026-09-03, pedido do dono): pra' poder
+         posicionar a MERCADO por conta propria se a limite nunca preencher,
+         sem precisar caçar a linha do diario que armou a ordem. #}
+      {# `.get(...)` em vez de `.stop`/`.alvo`: uma sessao persistida ANTES
+         desta mudanca nao tem essas chaves no dict, e o painel precisa
+         continuar renderizando ate' o proximo passo do robo regravar o
+         espelho -- Jinja levanta erro tentando formatar `Undefined`,
+         `.get()` devolve `None` de volta e cai no `is not none` normal. #}
+      {% if s.daytrade.ordem_em_pe.get('stop') is not none %}
+      · stop {{ "%.4f"|format(s.daytrade.ordem_em_pe.get('stop')) }}
+      {% endif %}
+      {% if s.daytrade.ordem_em_pe.get('alvo') is not none %}
+      · alvo {{ "%.4f"|format(s.daytrade.ordem_em_pe.get('alvo')) }}
+      {% endif %}
       {# Ticket de VERDADE da corretora (2026-08-27, pedido do dono) --
          `None` em modo sombra, que nunca manda ordem pra corretora. #}
       {% if s.daytrade.ordem_em_pe.tickets %}
@@ -311,6 +325,17 @@
       {% endif %}
       {% if s.daytrade.ordem_em_pe and s.daytrade.ordem_em_pe.lado == "short" %}
       · em pé @ {{ "%.4f"|format(s.daytrade.ordem_em_pe.preco) }}
+      {# `.get(...)` em vez de `.stop`/`.alvo`: uma sessao persistida ANTES
+         desta mudanca nao tem essas chaves no dict, e o painel precisa
+         continuar renderizando ate' o proximo passo do robo regravar o
+         espelho -- Jinja levanta erro tentando formatar `Undefined`,
+         `.get()` devolve `None` de volta e cai no `is not none` normal. #}
+      {% if s.daytrade.ordem_em_pe.get('stop') is not none %}
+      · stop {{ "%.4f"|format(s.daytrade.ordem_em_pe.get('stop')) }}
+      {% endif %}
+      {% if s.daytrade.ordem_em_pe.get('alvo') is not none %}
+      · alvo {{ "%.4f"|format(s.daytrade.ordem_em_pe.get('alvo')) }}
+      {% endif %}
       {# Ticket de VERDADE da corretora (2026-08-27, pedido do dono) --
          `None` em modo sombra, que nunca manda ordem pra corretora. #}
       {% if s.daytrade.ordem_em_pe.tickets %}

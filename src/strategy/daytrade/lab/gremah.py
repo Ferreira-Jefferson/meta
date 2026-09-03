@@ -1145,10 +1145,18 @@ class Gremah(IntradayStrategy):
 
         self._state = _SessionState()
         # Atualizado por `on_capital_update`, chamado pelo motor logo antes de
-        # `on_bar` -- 0.0 so' antes da primeira barra real (warm start nunca
-        # chama `on_capital_update`, entao a primeira ordem calibrada por
-        # replay usa 1 lote, o minimo; a primeira barra AO VIVO ja chega com o
-        # caixa real).
+        # `on_bar` -- 0.0 so' antes da primeira barra real. Desde 2026-09-03
+        # (LICOES_DE_PRODUCAO.md item 3.14) o warm start (replay de
+        # `warm_start_calibration`) TAMBEM chama `on_capital_update`, uma vez
+        # por barra do replay, quando o chamador passa `cash_brl` --
+        # `live/intraday_runtime.py::_start_session` passa o caixa real
+        # (`initial_capital + realized_pnl`) num restart no meio do pregao,
+        # entao a primeira ordem calibrada por replay ja usa o caixa de
+        # verdade. Sem esse argumento (default `None`, comportamento antigo)
+        # o replay ainda nao chama o hook e a primeira ordem calibrada usa 1
+        # lote, o minimo; a primeira barra AO VIVO sempre chega com o caixa
+        # real de qualquer forma (a maquina chama `on_capital_update` antes
+        # de cada `on_bar`, ver `machine.py`).
         self._cash_atual_brl = 0.0
         # Sobrevive a `on_session_start` de proposito (so' a parte de HOJE
         # zera, ver `RollingVolumeWindow.iniciar_sessao`) -- a cauda do
@@ -1309,7 +1317,13 @@ class Gremah(IntradayStrategy):
         custo dele -- decisao deliberada (nao um descuido): distinguir
         "caixa genuinamente insuficiente" de "caixa ainda DESCONHECIDO"
         (`_cash_atual_brl` comeca em 0.0 e so' e' atualizado por
-        `on_capital_update`, nunca chamado durante `warm_start_calibration`)
+        `on_capital_update` -- a maquina chama a cada barra real, e desde
+        2026-09-03 `warm_start_calibration` TAMBEM chama, uma vez por barra
+        do replay, quando o CHAMADOR passa `cash_brl` -- ver
+        `live/intraday_runtime.py::_start_session` e o item 3.14 do
+        LICOES_DE_PRODUCAO.md. Sem esse argumento -- default `None`, o
+        comportamento antigo -- o replay NAO chama o hook e o caixa segue
+        0.0 ate a proxima barra real)
         exigiria um segundo estado (`_cash_conhecido`) e tocaria uma
         convencao usada em dezenas de testes existentes (capital de teste
         pequeno de proposito, so' para exercitar OUTRO comportamento, nao

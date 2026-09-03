@@ -573,7 +573,8 @@ class IntradayStrategy(ABC):
 
 
 def warm_start_calibration(
-    strategy: IntradayStrategy, session_date, seed_bars: list[Bar]
+    strategy: IntradayStrategy, session_date, seed_bars: list[Bar],
+    cash_brl: float | None = None,
 ) -> Enter | EnterLimit | None:
     """Calibra `strategy` para um pregao JA EM ANDAMENTO, a partir de barras
     REAIS ja passadas (buscadas do historico, ex.: via MT5), sem depender
@@ -604,10 +605,33 @@ def warm_start_calibration(
     barra ao vivo, em vez de descartada — descartar jogaria fora uma
     decisao genuina; `None` se o robo nao tem nenhuma ordem em pe no fim
     do replay (ou a ultima acao foi `Exit`, que so faz sentido com
-    posicao real aberta, inexistente aqui)."""
+    posicao real aberta, inexistente aqui).
+
+    `cash_brl` (2026-09-03, achado de auditoria adversarial --
+    `LICOES_DE_PRODUCAO.md` item 3.14): o caixa corrente da conta
+    (`initial_capital + realized_pnl`), quando o CHAMADOR ja o conhece.
+    Passado, chama `strategy.on_capital_update(cash_brl)` antes de CADA
+    barra do replay -- a MESMA sequencia que
+    `IntradaySessionMachine.step()` roda a cada barra real
+    (`backtest/intraday/machine.py`, `on_capital_update` sempre
+    imediatamente antes de `on_bar`). Sem isto, um robo que dimensiona
+    posicao pelo caixa via `on_capital_update` (`Gremah`, `GremahTick`,
+    `CopaWin`, `WdoGridReloadMaker`) recalibra num restart no meio do
+    pregao com `_cash_atual_brl` ainda no default `0.0` -- o teto por
+    risco/margem colapsa em SILENCIO pro piso deliberado de 1 contrato
+    (`max(1, teto)`) ate a proxima atualizacao normal de capital, sem
+    nenhum log ou erro no caminho. Esta funcao continua PURA mesmo assim
+    (AGENTS.md, regra 2): nao busca caixa nenhum sozinha, so' repassa um
+    numero que o chamador ja calculou -- `live/` (ou o motor de backtest)
+    e' quem tem I/O pra saber o caixa real, nunca `strategy/`. `None`
+    (default) preserva o comportamento antigo -- nenhuma chamada a
+    `on_capital_update` durante o replay -- para quem ainda nao tem esse
+    numero disponivel."""
     strategy.on_session_start(session_date)
     pending: Enter | EnterLimit | None = None
     for bar in seed_bars:
+        if cash_brl is not None:
+            strategy.on_capital_update(cash_brl)
         for action in strategy.on_bar(bar.ts, bar, [], 0.0):
             if isinstance(action, (Enter, EnterLimit)):
                 pending = action

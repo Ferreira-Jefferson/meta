@@ -78,12 +78,25 @@ esperada e temporaria, nao motivo para derrubar o runtime inteiro.
 """
 from __future__ import annotations
 
+import logging
 import math
 import re
 from typing import Optional
 
 from core.live_models import Order, OrderSide, OrderStatus
 from live.broker import Broker
+
+# So' para o fallback do item 1.15 de LICOES_DE_PRODUCAO.md (`place_pending`
+# com `position_ticket`, campo cuja aceitacao em `TRADE_ACTION_PENDING` nunca
+# foi confirmada contra terminal real). Nenhum outro caminho deste modulo usa
+# `logging` -- o resto sempre devolve o motivo em `order.note` (que o RUNTIME
+# journaliza), porque `live/broker.py` proibe o broker de escrever no diario.
+# Este e' o UNICO caso em que a nota sozinha nao bastava: o texto pedido
+# precisa aparecer no log do PROCESSO (stdout/stderr, capturado pelo servico
+# NSSM) mesmo que ninguem abra o dashboard depois -- `logging.warning` sem
+# `basicConfig` ja imprime em `sys.stderr` via o `lastResort` handler padrao
+# do Python, entao isto nao depende de nenhuma configuracao externa nova.
+_logger = logging.getLogger(__name__)
 
 
 class MT5Broker(Broker):
@@ -532,7 +545,31 @@ class MT5Broker(Broker):
     # entre chamadas, pode ser cancelada, e o fill chega DEPOIS -- entao nao
     # cabem em `place()`/`poll()`, que assumem resposta imediata.
 
-    def place_pending(self, order: Order) -> Order:
+    # Retcodes que indicam "a corretora rejeitou o FORMATO/campo do request",
+    # nao o MERITO da ordem (preco, margem, mercado fechado). So' este tipo de
+    # recusa dispara o fallback do `position_ticket` em `place_pending` --
+    # qualquer outro motivo (sem dinheiro, preco mudou, mercado fechado)
+    # continua indo direto para REJECTED, porque reenviar sem o campo nao
+    # resolveria nada e esconderia o motivo real da recusa atras de um
+    # fallback que nao tem relacao com ele.
+    #
+    # Resolvidos por NOME (via `getattr(mt5, nome, None)`), nunca por numero
+    # fixo: os dois vem do pacote `MetaTrader5` (real ou fake de teste), e o
+    # ponto 3 da docstring do modulo ja explica por que constantes desse
+    # pacote so' existem depois do import lazy.
+    _RETCODES_REQUEST_INVALIDO = (
+        "TRADE_RETCODE_INVALID",        # 10013 -- "Invalid request"
+        "TRADE_RETCODE_INVALID_ORDER",  # 10035 -- "Invalid order filling type"/campo
+    )
+
+    def _retcode_sugere_campo_nao_suportado(self, mt5, retcode) -> bool:
+        for nome in self._RETCODES_REQUEST_INVALIDO:
+            codigo = getattr(mt5, nome, None)
+            if codigo is not None and retcode == codigo:
+                return True
+        return False
+
+    def place_pending(self, order: Order, position_ticket: Optional[int] = None) -> Order:
         """Registra uma ordem-limite PENDENTE no terminal e devolve `order`
         com `broker_ref` = ticket da ordem pendente (nao um fill).
 
@@ -547,7 +584,38 @@ class MT5Broker(Broker):
         pregao para o outro dispararia uma entrada que nenhum robo decidiu.
         O robo tambem cancela explicitamente (`cancel`), mas o terminal
         expirando sozinho e' a segunda linha de defesa que sobrevive ao
-        processo morrer."""
+        processo morrer.
+
+        `position_ticket` (gap fechado 2026-09-03, item 1.15 de
+        LICOES_DE_PRODUCAO.md): o MESMO papel que `_send`/`close_position` ja
+        davam ao campo `"position"` para fechamento a MERCADO depois do
+        incidente 2026-08-28 (MG51) -- diz ao motor de risco da corretora que
+        esta ordem ABATE uma posicao EXISTENTE, agora tambem no caminho
+        PENDENTE. Quem usa isto e' `MT5IntradayExecution.place_exit_limit`,
+        para a fatia de SAIDA por alvo (`exit_split_unit`) que os robos
+        `gremah`/`gremah_tick` armam sempre que `dividir_entrada=True` (o
+        default). Antes deste campo existir, a ordem-limite de FECHAMENTO
+        nunca dizia qual posicao estava abatendo -- exatamente a lacuna que
+        MG51 explorou do lado da ordem A MERCADO.
+
+        Quando `position_ticket` esta preenchido, `sl`/`tp` do PROPRIO `order`
+        NAO viajam neste request (mesma exclusao que `_send` ja faz): uma
+        ordem que FECHA posicao nao abre nada para proteger, e mandar sl/tp
+        nela mexeria na posicao que esta sendo encerrada.
+
+        **Risco NAO resolvido, documentado no proprio item 1.15**: nunca foi
+        possivel confirmar contra um terminal MT5 real se `TRADE_ACTION_
+        PENDING` aceita `"position"` do mesmo jeito que `TRADE_ACTION_DEAL`
+        aceitou depois do incidente -- o comportamento pode divergir entre os
+        dois tipos de acao, e ninguem testou. Por isso este metodo NUNCA
+        assume que o campo e' aceito: se a corretora recusar com um retcode
+        que sugere "request invalido" (`_retcode_sugere_campo_nao_suportado`),
+        ele tenta UMA UNICA VEZ de novo sem o campo -- nunca um laco de
+        retry -- e registra (`logging.warning`, nivel ALTO, nunca em
+        silencio) que esta plataforma pode nao aceitar `position` numa ordem
+        pendente. Qualquer outro motivo de recusa (preco, margem, mercado
+        fechado) NAO aciona o fallback -- vai direto para REJECTED, porque
+        reenviar sem o campo nao mudaria nada."""
         try:
             import MetaTrader5 as mt5  # lazy: ver docstring do modulo
         except Exception as exc:  # pragma: no cover - ambiente sem o pacote
@@ -599,8 +667,16 @@ class MT5Broker(Broker):
                 "type_filling": (self._filling_type if self._filling_type is not None
                                  else mt5.ORDER_FILLING_RETURN),
             }
+            if position_ticket is not None:
+                # Ver a docstring do metodo -- item 1.15 de
+                # LICOES_DE_PRODUCAO.md. Mesmo campo que `_send`/
+                # `close_position` usam para fechamento a MERCADO (incidente
+                # 2026-08-28, MG51); aqui e' o caminho PENDENTE equivalente.
+                request["position"] = int(position_ticket)
             protegida = ""
-            if order.stop_price is not None or order.target_price is not None:
+            if position_ticket is None and (
+                order.stop_price is not None or order.target_price is not None
+            ):
                 # PROTECAO ATOMICA -- ver o bloco equivalente em `_send`. Numa
                 # ordem PENDENTE o ganho e' ainda maior: entre registrar a
                 # ordem e ela preencher podem passar minutos ou horas, e o
@@ -609,6 +685,12 @@ class MT5Broker(Broker):
                 # vivo para reagir ao fill. A distancia minima da corretora e'
                 # medida contra o proprio nivel da limite (nao contra o preco
                 # corrente) -- e' onde a posicao vai nascer.
+                #
+                # So' numa ordem de ABERTURA (`position_ticket is None`): uma
+                # ordem que FECHA posicao existente nao abre nada para
+                # proteger, e mandar sl/tp nela mexeria na posicao que esta
+                # sendo encerrada -- mesma exclusao que `_send` ja faz para
+                # `TRADE_ACTION_DEAL`.
                 sl, tp, avisos = self._niveis_protecao(
                     mt5, symbol, "long" if is_buy else "short",
                     order.stop_price, order.target_price,
@@ -620,25 +702,74 @@ class MT5Broker(Broker):
                     request["tp"] = float(tp)
                 protegida = (f", sl={sl:.4f} tp={tp:.4f} amarrados na propria ordem"
                              + ("; " + "; ".join(avisos) if avisos else ""))
+
             result = mt5.order_send(request)
             if result is None:
                 code, desc = self._last_error(mt5)
                 order.status = OrderStatus.REJECTED
                 order.note = f"order_send (pendente) devolveu None (last_error={code}: {desc})"
                 return order
+
+            fallback_nota = ""
             if result.retcode != mt5.TRADE_RETCODE_DONE:
-                order.status = OrderStatus.REJECTED
-                order.note = (
-                    f"MT5 recusou a ordem-limite pendente (retcode={result.retcode}): "
-                    f"{getattr(result, 'comment', '')}"
-                )
-                return order
+                if position_ticket is not None and self._retcode_sugere_campo_nao_suportado(
+                    mt5, result.retcode
+                ):
+                    # FALLBACK (item 1.15) -- ver a docstring do metodo. Uma
+                    # UNICA tentativa extra, nunca um laco: se esta tambem
+                    # falhar, cai no REJECTED normal la embaixo com as DUAS
+                    # recusas na nota.
+                    recusa_com_ticket = (
+                        f"retcode={result.retcode}: {getattr(result, 'comment', '')}"
+                    )
+                    _logger.warning(
+                        "MT5Broker.place_pending: a corretora RECUSOU a ordem-limite de "
+                        "fechamento com o campo 'position'=%s (%s) -- reenviando UMA vez "
+                        "sem o campo. Isto sugere que esta plataforma nao aceita "
+                        "'position' em TRADE_ACTION_PENDING; confirme contra o terminal "
+                        "MT5 real antes de assumir que o fallback e' permanente -- ver "
+                        "item 1.15 de LICOES_DE_PRODUCAO.md.",
+                        position_ticket, recusa_com_ticket,
+                    )
+                    request_sem_ticket = dict(request)
+                    request_sem_ticket.pop("position", None)
+                    retry = mt5.order_send(request_sem_ticket)
+                    if retry is not None and retry.retcode == mt5.TRADE_RETCODE_DONE:
+                        result = retry
+                        fallback_nota = (
+                            f" [FALLBACK item 1.15: reenviada SEM 'position' apos recusa "
+                            f"com o campo ({recusa_com_ticket}) -- esta plataforma parece "
+                            "nao aceitar 'position' em ordem pendente; a posicao fechada "
+                            "por esta ordem nao ficou identificada no request, confirme "
+                            "manualmente contra o terminal]"
+                        )
+                    else:
+                        recusa_sem_ticket = (
+                            f"retcode={getattr(retry, 'retcode', None)}: "
+                            f"{getattr(retry, 'comment', '')}" if retry is not None
+                            else "order_send devolveu None"
+                        )
+                        order.status = OrderStatus.REJECTED
+                        order.note = (
+                            f"MT5 recusou a ordem-limite pendente de fechamento tanto COM "
+                            f"'position' ({recusa_com_ticket}) quanto SEM ('{recusa_sem_ticket}'"
+                            ") -- a causa nao e' o campo novo, e' outro motivo (preco, "
+                            "margem, mercado fechado)."
+                        )
+                        return order
+                else:
+                    order.status = OrderStatus.REJECTED
+                    order.note = (
+                        f"MT5 recusou a ordem-limite pendente (retcode={result.retcode}): "
+                        f"{getattr(result, 'comment', '')}"
+                    )
+                    return order
 
             order.status = OrderStatus.SENT
             order.broker_ref = str(getattr(result, "order", None) or "")
             order.note = (
                 f"ordem-limite pendente registrada em {symbol} @ "
-                f"{order.limit_price:.4f} (ticket={order.broker_ref}){protegida}"
+                f"{order.limit_price:.4f} (ticket={order.broker_ref}){protegida}{fallback_nota}"
             )
             return order
         except Exception as exc:

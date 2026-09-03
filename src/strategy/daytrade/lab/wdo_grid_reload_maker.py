@@ -126,11 +126,18 @@ sentido para um instrumento com teto OFICIAL de contratos simultaneos
 
 `on_capital_update` segue o MESMO padrao ja usado por `Gremah`
 (`_cash_atual_brl`, atualizado pelo motor logo antes de cada `on_bar`,
-comeca em 0.0) -- enquanto o hook nunca foi chamado (replay de
-`warm_start_calibration`, ou a primeira barra do backtest), `contracts_
-from_capital(0.0, ...)` devolve 0, e o `max(1, ...)` aplicado no ponto de
-uso garante pelo menos 1 contrato mesmo assim (mesmo espirito do piso ja
-existente em `Gremah._lotes_por_realocacao`).
+comeca em 0.0) -- ANTES da primeira barra real, ou quando o replay de
+`warm_start_calibration` roda sem `cash_brl` (default `None`, comportamento
+antigo), o hook nunca e' chamado: `contracts_from_capital(0.0, ...)` devolve
+0, e o `max(1, ...)` aplicado no ponto de uso garante pelo menos 1 contrato
+mesmo assim (mesmo espirito do piso ja existente em `Gremah._lotes_por_
+realocacao`). Desde 2026-09-03 (LICOES_DE_PRODUCAO.md item 3.14),
+`warm_start_calibration` TAMBEM chama `on_capital_update` a cada barra do
+replay quando o CHAMADOR passa `cash_brl` -- `live/intraday_runtime.py::
+_start_session` passa o caixa real (`initial_capital + realized_pnl`) num
+restart no meio do pregao, entao o teto dinamico volta a valer desde a
+PRIMEIRA entrada recalibrada, em vez de ficar preso no piso de 1 contrato
+ate a proxima barra ao vivo.
 
 ## Incidente REAL de 2026-08-28 -- teto agregado passou a morar no MOTOR
 
@@ -396,10 +403,13 @@ class WdoGridReloadMaker(IntradayStrategy):
 
         self._state = _SessionState()
         # Atualizado por `on_capital_update`, chamado pelo motor logo antes
-        # de cada `on_bar` -- 0.0 so' antes da primeira barra real (warm
-        # start via replay nunca chama `on_capital_update`; mesmo padrao de
-        # `Gremah._cash_atual_brl`). So' importa quando
-        # `margin_per_contract_brl` esta setado.
+        # de cada `on_bar` -- 0.0 so' antes da primeira barra real. Desde
+        # 2026-09-03 (LICOES_DE_PRODUCAO.md item 3.14) o warm start (replay
+        # de `warm_start_calibration`) TAMBEM chama `on_capital_update`, uma
+        # vez por barra do replay, quando o chamador passa `cash_brl` --
+        # sem esse argumento (default `None`) o replay ainda nao chama o
+        # hook, mesmo padrao antigo de `Gremah._cash_atual_brl`. So' importa
+        # quando `margin_per_contract_brl` esta setado.
         self._cash_atual_brl = 0.0
 
     def on_session_start(self, session_date) -> None:

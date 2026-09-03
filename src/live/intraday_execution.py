@@ -316,6 +316,48 @@ class MT5IntradayExecution:
 
     # ---------- ordem-limite pendente (SAIDA dividida, Fase 2) --------------
 
+    def _exit_position_ticket(self, position_side: str) -> Optional[int]:
+        """Ticket da posicao que esta fatia de SAIDA vai fechar, para
+        `broker.place_pending(position_ticket=...)` -- gap 1.15 de
+        LICOES_DE_PRODUCAO.md: a mesma amarracao que `exit_market`/
+        `close_position` ja fazem para fechamento a MERCADO (incidente
+        2026-08-28, MG51), agora tambem na ordem-limite PENDENTE de saida.
+
+        Le a corretora AGORA (`_read_position`) em vez de confiar em
+        `self.last_entry_ref` -- esse campo so' e' populado por `limit_fill`
+        NESTA instancia, e um restart no meio do pregao herda a posicao sem
+        nunca ter chamado `limit_fill`; ficaria sem ticket para sempre se
+        dependesse dele.
+
+        **Nunca levanta e nunca bloqueia o envio da ordem.** Se a consulta
+        falhar ou a posicao lida nao bater o lado esperado, devolve `None` --
+        e a ordem sai exatamente como saia ANTES deste campo existir, sem
+        `"position"` no request. Isto e' so' plumbing de execucao (uma tag a
+        mais no request), nao uma decisao sobre se a posicao existe: quem
+        decide isso e' `exit_fill`/`_read_position`, chamados por quem
+        precisa mesmo de uma resposta confiavel -- eles continuam propagando
+        divergencia real como excecao, sem mudanca nenhuma aqui. Perder o
+        ticket so' devolve este metodo ao comportamento anterior a
+        2026-09-03, nunca a um comportamento pior."""
+        try:
+            posicao = self._read_position()
+            if posicao is None or posicao.get("side") != position_side:
+                return None
+            ticket = posicao.get("ticket")
+            return int(ticket) if ticket is not None else None
+        except Exception:
+            # `except Exception`, nao so' `BrokerExecutionError`, para o codigo
+            # dizer o mesmo que a docstring promete. Com `MT5Broker` a unica
+            # excecao possivel HOJE e' `BrokerExecutionError` (`position_state`
+            # tem `except Exception` que devolve `ok=False`, e `_read_position`
+            # traduz isso), mas essa garantia mora em OUTRA classe: qualquer
+            # `Broker` novo, ou uma mudanca la, viraria excecao nova AQUI --
+            # num caminho que antes de 2026-09-03 nem consultava a corretora.
+            # Nao ter o ticket e' aceitavel (a ordem sai como saia antes);
+            # derrubar o armamento da fatia de SAIDA por causa de uma consulta
+            # que e' so' uma TAG a mais no request nao e'.
+            return None
+
     def place_exit_limit(self, position_side: str, quantity: int, limit_price: float,
                          current_position_qty: float, ts: pd.Timestamp) -> Order:
         """Registra UMA ordem-limite REAL de fechamento (fatia de
@@ -324,7 +366,13 @@ class MT5IntradayExecution:
         a posicao tem ANTES desta fatia (baseline para `exit_fill` medir o
         quanto encolheu depois) -- lido da propria maquina, nao da corretora
         de novo, para nao arriscar uma leitura atrasada/adiantada no
-        instante exato do armamento."""
+        instante exato do armamento.
+
+        `position_ticket` (gap 1.15, 2026-09-03) viaja no request desta
+        ordem-limite via `_exit_position_ticket` -- ver a docstring dele e a
+        de `MT5Broker.place_pending`. Antes desta mudanca, a fatia de SAIDA
+        por alvo nunca dizia qual posicao estava abatendo, a mesma lacuna
+        estrutural que MG51 explorou do lado da ordem a MERCADO (item 1.1)."""
         order = Order(
             ticker=self.symbol,
             side=OrderSide.SELL if position_side == "long" else OrderSide.BUY,
@@ -333,7 +381,8 @@ class MT5IntradayExecution:
             limit_price=limit_price,
             sent_at=ts.to_pydatetime(),
         )
-        enviada = self.broker.place_pending(order)
+        ticket = self._exit_position_ticket(position_side)
+        enviada = self.broker.place_pending(order, position_ticket=ticket)
         if enviada.status == OrderStatus.REJECTED:
             raise BrokerExecutionError(
                 f"corretora recusou a ordem-limite de SAIDA ({quantity} {self.symbol} @ "

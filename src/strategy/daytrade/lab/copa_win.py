@@ -69,10 +69,16 @@ contracts_from_capital(...))`, nunca so' o segundo termo.
 
 `on_capital_update` segue o MESMO padrao ja usado por `Gremah`
 (`_cash_atual_brl`, atualizado pelo motor logo antes de cada `on_bar`,
-comeca em 0.0): enquanto o motor nunca chamou o hook (replay de
-`warm_start_calibration`, ou a primeira barra do backtest), o robo nao
-"sabe" quanto caixa tem -- e o piso de 1 contrato ja existente
-(`max(1, round(...))`) cobre esse caso sem precisar de um segundo estado.
+comeca em 0.0): antes da primeira barra real, ou quando o replay de
+`warm_start_calibration` roda sem `cash_brl` (default `None`, comportamento
+antigo), o hook nunca e' chamado e o robo nao "sabe" quanto caixa tem -- e
+o piso de 1 contrato ja existente (`max(1, round(...))`) cobre esse caso
+sem precisar de um segundo estado. Desde 2026-09-03 (LICOES_DE_PRODUCAO.md
+item 3.14), `warm_start_calibration` TAMBEM chama `on_capital_update` a
+cada barra do replay quando o CHAMADOR passa `cash_brl` --
+`live/intraday_runtime.py::_start_session` passa o caixa real
+(`initial_capital + realized_pnl`) num restart no meio do pregao, entao o
+teto dinamico volta a valer desde a PRIMEIRA entrada recalibrada.
 
 ## Teto por RISCO por trade (2026-08-29, ADITIVA -- item 3.9 de LICOES_DE_PRODUCAO.md)
 
@@ -293,10 +299,13 @@ class CopaWin(IntradayStrategy):
         self.pernas_maker = 2 if self.entrada_maker else 1
 
         # Atualizado por `on_capital_update`, chamado pelo motor logo antes
-        # de cada `on_bar` -- 0.0 so' antes da primeira barra real (warm
-        # start via replay nunca chama `on_capital_update`; mesmo padrao de
-        # `Gremah._cash_atual_brl`). So' importa quando
-        # `margin_per_contract_brl` esta setado.
+        # de cada `on_bar` -- 0.0 so' antes da primeira barra real. Desde
+        # 2026-09-03 (LICOES_DE_PRODUCAO.md item 3.14) o warm start (replay
+        # de `warm_start_calibration`) TAMBEM chama `on_capital_update`, uma
+        # vez por barra do replay, quando o chamador passa `cash_brl` --
+        # sem esse argumento (default `None`) o replay ainda nao chama o
+        # hook, mesmo padrao antigo de `Gremah._cash_atual_brl`. So' importa
+        # quando `margin_per_contract_brl` esta setado.
         self._cash_atual_brl = 0.0
 
         self._faixa: deque[Bar] = deque(maxlen=self.janela_rompimento)

@@ -284,13 +284,13 @@ def test_numero_de_ordem_e_o_mesmo_do_armar_ate_a_saida_e_avanca_na_proxima_roda
     assert de_ordem == [
         "LONG #01 100 lotes PMAM3 @ 9.8000 (stop 7.8000 / alvo 9.9000)",
         "TARGET LONG #01 100 lotes PMAM3 @ 9.9000 - R$ +10.00",
-        "LIMITE LONG #02 100 lotes PMAM3 @ 9.8000",
+        "LIMITE LONG #02 100 lotes PMAM3 @ 9.8000 (stop 7.8000 / alvo 9.9000)",
         "LONG #02 100 lotes PMAM3 @ 9.8000 (stop 7.8000 / alvo 9.9000)",
         "TARGET LONG #02 100 lotes PMAM3 @ 9.9000 - R$ +10.00",
         # o robo se rearma de novo com a ultima barra do roteiro -- rodada
         # #03, ainda sem fill: prova que o numero segue avancando (nao
         # empaca em #02) mesmo sem uma saida fechando-a antes do fim do teste.
-        "LIMITE LONG #03 100 lotes PMAM3 @ 9.8000",
+        "LIMITE LONG #03 100 lotes PMAM3 @ 9.8000 (stop 7.8000 / alvo 9.9000)",
     ], de_ordem
 
 
@@ -441,6 +441,12 @@ class _FakeMT5Broker:
         # margem em R$ POR CONTRATO/ACAO que a corretora exigiria.
         self.margem_por_contrato = None
         self.margens_perguntadas: list = []
+        # Gap 1.15 (2026-09-03): `position_ticket` recebido em CADA chamada
+        # de `place_pending`, na mesma ordem de `pendentes_enviadas` -- prova
+        # de que a fatia de SAIDA (`place_exit_limit`) leva o ticket da
+        # posicao real, e a de ENTRADA (`place_limit`) continua sem ele
+        # (`None`, nunca fecha nada).
+        self.pending_position_tickets: list = []
 
     def connect(self):
         return self.conectado
@@ -457,11 +463,12 @@ class _FakeMT5Broker:
     def poll(self, order):
         return order
 
-    def place_pending(self, order):
+    def place_pending(self, order, position_ticket=None):
         self._ticket += 1
         order.status = OrderStatus.SENT
         order.broker_ref = str(self._ticket)
         self.pendentes_enviadas.append(order)
+        self.pending_position_tickets.append(position_ticket)
         return order
 
     def cancel(self, order):
@@ -2858,7 +2865,7 @@ class _BrokerQueRecusa(_FakeMT5Broker):
         self.recusas = recusas
         self.recusadas: list = []
 
-    def place_pending(self, order):
+    def place_pending(self, order, position_ticket=None):
         if self.recusas > 0:
             self.recusas -= 1
             order.status = OrderStatus.REJECTED
@@ -2866,7 +2873,7 @@ class _BrokerQueRecusa(_FakeMT5Broker):
                           "AutoTrading disabled by client")
             self.recusadas.append(order)
             return order
-        return super().place_pending(order)
+        return super().place_pending(order, position_ticket=position_ticket)
 
 
 def test_ordem_recusada_nao_deixa_ordem_fantasma_vigiada(tmp_path, pregao_aberto):
@@ -3385,6 +3392,89 @@ def test_fatia_de_saida_que_nao_cancelou_nao_e_esquecida(tmp_path):
     assert execucao2.exit_orphan_refs == []
 
 
+# ---------- gap 1.15 (2026-09-03): ticket na fatia PENDENTE de saida -------
+#
+# A correcao do campo `position` depois do incidente MG51 (item 1.1) so'
+# cobriu fechamento a MERCADO (`exit_market`/`close_position`). A fatia de
+# SAIDA por alvo (`place_exit_limit`, usada por `gremah`/`gremah_tick` sempre
+# que `dividir_entrada=True`, o default) nunca levava o ticket -- estes
+# testes provam que agora leva, e que a ausencia de ticket (consulta falhou,
+# posicao sumiu, lado divergente) nunca bloqueia o envio, so' devolve ao
+# comportamento de ANTES do gap existir.
+
+def test_place_exit_limit_leva_o_ticket_da_posicao_real(tmp_path):
+    """A fatia de SAIDA por alvo agora identifica qual posicao esta
+    fechando -- a mesma amarracao que o fechamento a MERCADO ja tinha desde
+    o item 1.1, fechada aqui do lado da ordem-limite PENDENTE."""
+    from live.intraday_execution import MT5IntradayExecution
+
+    broker = _FakeMT5Broker()
+    broker.posicao = {"side": "long", "price": 10.00, "quantity": 100,
+                      "ticket": 4242, "sl": 0.0, "tp": 0.0}
+    execucao = MT5IntradayExecution(broker=broker, symbol=SYMBOL)
+    ts = pd.Timestamp("2026-09-03 13:00")
+
+    execucao.place_exit_limit(position_side="long", quantity=100,
+                              limit_price=10.20, current_position_qty=100, ts=ts)
+
+    assert broker.pending_position_tickets == [4242]
+
+
+def test_place_limit_de_entrada_nunca_leva_ticket_de_posicao(tmp_path):
+    """A ordem-limite de ENTRADA nao fecha nada -- so' a fatia de SAIDA
+    (`place_exit_limit`) leva `position_ticket`. Guarda de regressao: o gap
+    1.15 nao pode vazar o campo para o caminho de abertura."""
+    from live.intraday_execution import MT5IntradayExecution
+
+    broker = _FakeMT5Broker()
+    execucao = MT5IntradayExecution(broker=broker, symbol=SYMBOL)
+
+    execucao.place_limit(side="long", limit_price=9.80, quantities=[100],
+                         ts=pd.Timestamp("2026-09-03 13:00"))
+
+    assert broker.pending_position_tickets == [None]
+
+
+def test_place_exit_limit_sem_conseguir_ler_posicao_segue_sem_ticket(tmp_path):
+    """Consulta de posicao que falha (terminal fora do ar, etc.) NUNCA pode
+    bloquear o envio da ordem de fechamento -- so' devolve o metodo ao
+    comportamento de ANTES do gap 1.15 existir: sem `"position"` no
+    request. Quem decide se a divergencia e' grave e' `exit_fill`/
+    `_read_position` (chamados por quem PRECISA de resposta confiavel),
+    nunca este atalho de enriquecimento do request."""
+    from live.intraday_execution import MT5IntradayExecution
+
+    broker = _FakeMT5Broker()
+    broker.leitura_falha = True
+    execucao = MT5IntradayExecution(broker=broker, symbol=SYMBOL)
+    ts = pd.Timestamp("2026-09-03 13:00")
+
+    enviada = execucao.place_exit_limit(position_side="long", quantity=100,
+                                        limit_price=10.20, current_position_qty=100, ts=ts)
+
+    assert enviada.status == OrderStatus.SENT
+    assert broker.pending_position_tickets == [None]
+
+
+def test_place_exit_limit_com_lado_divergente_segue_sem_ticket(tmp_path):
+    """A corretora reporta uma posicao SHORT enquanto a fatia de saida e' de
+    uma posicao LONG (leitura atrasada/corrida) -- nao inventa um ticket que
+    pode ser de OUTRA posicao. Segue sem `position_ticket`, o mesmo
+    comportamento seguro de antes do gap 1.15."""
+    from live.intraday_execution import MT5IntradayExecution
+
+    broker = _FakeMT5Broker()
+    broker.posicao = {"side": "short", "price": 10.00, "quantity": 100,
+                      "ticket": 999, "sl": 0.0, "tp": 0.0}
+    execucao = MT5IntradayExecution(broker=broker, symbol=SYMBOL)
+    ts = pd.Timestamp("2026-09-03 13:00")
+
+    execucao.place_exit_limit(position_side="long", quantity=100,
+                              limit_price=10.20, current_position_qty=100, ts=ts)
+
+    assert broker.pending_position_tickets == [None]
+
+
 # ---------- atividade estranha: robo real vs. ordem manual (2026-08-27) ----
 #
 # Motivado pelo teste ao vivo do dono: comprou/vendeu PMAM3 a mercado direto
@@ -3769,6 +3859,41 @@ def test_warm_start_NAO_manda_ordem_que_a_maquina_recusou_vigiar(tmp_path, prega
         "nenhuma ordem nova pode sair enquanto a maquina se recusa a vigiar uma")
 
 
+def test_warm_start_com_posicao_aberta_nao_culpa_o_teto_agregado(tmp_path, pregao_aberto):
+    """`resume_session` devolve `None` por DOIS motivos -- teto agregado sem
+    espaco, e posicao ja aberta (que ela recusa plantar por cima de proposito).
+    O diario tem de dizer QUAL dos dois: restart no meio do pregao segurando
+    posicao e' o cenario comum, e alarmar `error` "teto capou" ali ensina o
+    dono a desconfiar do diario justamente onde ele mais precisa confiar."""
+    broker = _FakeMT5Broker()
+    rt0, _feed0 = _abre_posicao_scriptada(tmp_path, broker)
+    assert rt0.machine.positions, "arranjo: a posicao tem de existir e ficar persistida"
+
+    # Processo NOVO no MESMO slot/banco -- e' o restart no meio do pregao de
+    # verdade, nao um `_calibrated_for = None` na mesma instancia: o snapshot
+    # persistido e' quem devolve a posicao (`_restore`), e `semente=` e' quem
+    # liga o warm start (sem ela o pregao entra como "sessao a frio" e nao
+    # passa nem perto do trecho sob teste).
+    barras = [_bar("13:00", 10.00, 10.00, 10.00, 10.00),
+              _bar("13:01", 10.00, 10.00, 9.79, 9.85)]
+    rt, _feed = _runtime_live(tmp_path, barras, broker, semente=barras[:1])
+    rt.run_once(now=_agora("13:02:00"))
+    assert rt.machine.positions, "o restart tem de reencontrar a posicao do snapshot"
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        eventos = [(e["level"], e["message"])
+                   for e in store.recent_events(conn, acc.id, limit=80)]
+    # Positiva PRIMEIRO: sem isto o teste passaria de graca em qualquer
+    # cenario que nem chegue no trecho (foi o que aconteceu na primeira
+    # versao dele, que caia em "sessao a frio").
+    assert [m for _n, m in eventos if "posicao aberta" in m], (
+        f"o trecho sob teste nao foi exercitado -- teste vazio: {eventos}")
+    assert not [m for nivel, m in eventos
+                if "teto agregado" in m and nivel in ("warn", "error")], (
+        f"posicao aberta nao e' teto estourado -- alarme com a causa errada: {eventos}")
+
+
 def test_freio_duro_cancela_ordem_parada_mesmo_SEM_posicao(tmp_path, pregao_aberto):
     """O freio duro saia na primeira linha quando nao havia posicao -- e
     deixava intacta a ordem-limite PARADA no book. O robo entrava em "nao
@@ -3994,6 +4119,62 @@ def test_margem_desconhecida_nunca_bloqueia(tmp_path, pregao_aberto):
     rt.run_once(now=_agora("13:01:00"))
 
     assert len(broker.pendentes_enviadas) == 1
+
+
+def test_trava_de_margem_entre_processos_indisponivel_recusa_sem_mandar(
+    tmp_path, pregao_aberto, monkeypatch
+):
+    """Corrida entre PROCESSOS (LICOES_DE_PRODUCAO.md item 3.13): a secao
+    critica "consultar margem -> mandar ordem" agora e' protegida por
+    `live.margin_lock.acquire_margin_gate`, que serializa TODOS os slots
+    (mesmo login MT5, mesma margem fisica). Se a trava nao pode ser obtida
+    a tempo (`MargemTravada`), o portao trata isso como uma consulta que
+    FALHOU -- mesma politica de "nao sei" do resto do arquivo -- NUNCA como
+    liberacao para mandar a ordem sem checar, e NUNCA grava como se fosse
+    uma recusa por margem insuficiente de verdade (informacao diferente
+    para o dono: uma e' "a conta nao aguenta", a outra e' "nao consegui
+    nem perguntar"). A mecanica real de exclusao entre processos do SO
+    (dois processos de verdade, timeout, trava que morre com o processo)
+    e' provada em `tests/test_margin_lock.py`; aqui so' se prova que
+    `_on_limit_placed` reage certo quando a trava recusa."""
+    class _TravaOcupada:
+        def __enter__(self):
+            raise itr_mod.MargemTravada(
+                "teste: trava ocupada por outro processo")
+
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(itr_mod, "acquire_margin_gate",
+                        lambda *a, **k: _TravaOcupada())
+
+    broker = _FakeMT5Broker()
+    broker.margem_por_contrato = 150.0
+    # Margem de sobra -- se o portao chegasse a checar, passaria. A recusa
+    # tem de vir da trava, nao da margem.
+    broker.risco = {"equity": 900.0, "margin_free": 400.0, "balance": 900.0}
+    script = {
+        0: [EnterLimit(side="long", limit_price=10.00, initial_stop=9.00,
+                       initial_target=11.00, quantity=1, reason="teste")],
+    }
+    rt, feed = _runtime_live_scripted(tmp_path, broker, script)
+    rt.run_once(now=_agora("13:00:00"))
+    feed._barras.append(_bar("13:01", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:01:00"))
+
+    assert not broker.pendentes_enviadas, "nao pode mandar sem checar margem"
+    assert rt.machine.resting_limit is None, (
+        "mesmo desfecho de uma recusa da corretora: a maquina nao pode "
+        "ficar vigiando um fill que nunca vai acontecer"
+    )
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        eventos = [e["message"] for e in store.recent_events(conn, acc.id, limit=50)]
+    assert any("trava de margem" in m for m in eventos), eventos
+    # Nao pode ser confundida com a recusa por margem insuficiente de
+    # verdade (`_recusa_por_margem`/`_check_margem_da_conta`) -- e' outra
+    # causa e o dono precisa distinguir uma da outra no diario.
+    assert not any("margem livre da conta" in m for m in eventos), eventos
 
 
 def test_freio_de_perda_dispara_com_a_posicao_ainda_ABERTA(tmp_path, pregao_aberto):

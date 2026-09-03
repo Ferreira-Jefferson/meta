@@ -29,6 +29,7 @@ from backtest.intraday.engine import IntradayBacktestConfig, run_intraday_backte
 from core.models import IntradayExitReason
 from strategy.daytrade.base import Bar, warm_start_calibration
 from strategy.daytrade.lab.gremah import Gremah
+from strategy.daytrade.lab.wdo_grid_reload_maker import WdoGridReloadMaker
 
 
 def _bars(rows: list[tuple[float, float, float, float]]) -> pd.DataFrame:
@@ -133,3 +134,76 @@ def test_warm_start_nao_fabrica_trade_nem_pnl():
     assert strat._state.open_price == pytest.approx(10.00)
     assert strat._state.long_fills == 0
     assert strat._state.short_fills == 0
+
+
+def _wdo_grid_com_risco() -> WdoGridReloadMaker:
+    """`WdoGridReloadMaker` com dimensionamento dinamico ligado (margem +
+    teto por risco) -- os dois numeros de `_quantidade_da_entrada` que ficam
+    presos em 0/1 quando `_cash_atual_brl` nunca e' atualizado (LICOES_DE_
+    PRODUCAO.md item 3.14)."""
+    return WdoGridReloadMaker(
+        stop_ticks=16,
+        margin_per_contract_brl=150.0,  # margem WDO@ (CLAUDE.md: margem x buffer)
+        risco_pct_por_trade=0.01,
+        point_value_brl=10.0,  # R$/ponto do WDO@
+    )
+
+
+def _wdo_seed_bars() -> list[Bar]:
+    ts = pd.Timestamp("2026-01-05 13:00", tz="UTC")
+    return [Bar(ts=ts, open=5000.0, high=5000.0, low=5000.0, close=5000.0, volume=0.0)]
+
+
+def test_warm_start_sem_cash_brl_mantem_teto_preso_em_1_contrato():
+    """Caracteriza o BUG do item 3.14 antes da correcao: sem `cash_brl`
+    (comportamento antigo, default `None` preserva compatibilidade com
+    qualquer outro chamador que ainda nao tenha esse numero), `on_capital_
+    update` nunca e' chamado durante o replay -- `_cash_atual_brl` fica no
+    default `0.0` e o teto dinamico (margem E risco) colapsa para 0,
+    forcando `max(1, teto)` a devolver sempre 1 contrato, em silencio."""
+    strat = _wdo_grid_com_risco()
+    seed_bars = _wdo_seed_bars()
+
+    warm_start_calibration(strat, seed_bars[0].ts.date(), seed_bars)
+
+    assert strat._cash_atual_brl == 0.0
+    assert strat._quantidade_da_entrada() == 1
+
+
+def test_warm_start_com_cash_brl_repoe_caixa_antes_do_teto_por_risco():
+    """A CORRECAO: passando `cash_brl` (o caixa corrente que o runtime ja
+    conhece -- `initial_capital + realized_pnl`, MESMA formula que o motor
+    usa em `on_capital_update` a cada barra real), `warm_start_calibration`
+    chama `strategy.on_capital_update(cash_brl)` ANTES do primeiro `on_bar`
+    do replay -- `_cash_atual_brl` fica sincronizado e o teto por risco volta
+    a valer, em vez de ficar preso no piso de 1 contrato.
+
+    Numeros: margem R$150 x buffer 2.0 x reserva 1.25 = R$375/contrato ->
+    teto por margem = floor(50_000 / 375) = 133. Stop fixo de 16 ticks x
+    R$0,50 x R$10,00/ponto = R$80,00/contrato -> teto por risco = floor(
+    50_000 x 0.01 / 80) = 6. O MENOR dos dois teto (risco) e' quem decide,
+    e 6 != 1 prova que o teto voltou a ser calculado de verdade, nao mais
+    o piso de emergencia."""
+    strat = _wdo_grid_com_risco()
+    seed_bars = _wdo_seed_bars()
+
+    warm_start_calibration(strat, seed_bars[0].ts.date(), seed_bars, cash_brl=50_000.0)
+
+    assert strat._cash_atual_brl == pytest.approx(50_000.0)
+    assert strat._quantidade_da_entrada() == 6
+
+
+def test_warm_start_cash_brl_nao_fabrica_trade_nem_pnl():
+    """Mesma garantia de `test_warm_start_nao_fabrica_trade_nem_pnl`, agora
+    com `cash_brl` setado: sincronizar o caixa nao e' o mesmo que executar --
+    `on_capital_update` so' guarda um numero, nao abre posicao nem mexe em
+    P&L (a chamada em si e' NO-OP em qualquer estrategia sem dimensionamento
+    dinamico, e mesmo nas que tem, so' atualiza o caixa GUARDADO)."""
+    strat = _wdo_grid_com_risco()
+    seed_bars = _wdo_seed_bars()
+
+    warm_start_calibration(strat, seed_bars[0].ts.date(), seed_bars, cash_brl=50_000.0)
+
+    assert strat._state.long_fills == 0
+    assert strat._state.short_fills == 0
+    assert strat._state.open_side is None
