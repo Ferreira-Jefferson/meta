@@ -287,6 +287,79 @@ existente fechar libera vaga para uma nova ordem AINDA no mesmo pregão.
 > saber que aquele pedido morreu — do contrário qualquer rejeição isolada
 > aposenta o robô pelo resto do pregão, em silêncio.
 
+### 1.15 A correção do campo `position` (item 1.1, MG51) não cobriu ordem PENDENTE de fechamento — CORRIGIDO 2026-09-03
+
+Achado de auditoria adversarial em 2026-09-03, ainda NÃO confirmado contra
+terminal real — registrado porque é a mesma classe estrutural de bug que já
+custou dinheiro uma vez (item 1.1), num caminho que toca robô ao vivo hoje.
+Depois do incidente, `close_position()`/`_send()` (ordem de fechamento A
+MERCADO) passaram a enviar sempre `request["position"]=<ticket>`. Mas
+`MT5Broker.place_pending()` — usado por `place_exit_limit()` para a fatia de
+SAÍDA por alvo quando a estratégia declara `exit_split_unit` — nunca ganhou
+esse campo; não existe nem parâmetro pra ele na assinatura do método. Esse
+caminho está ativo em produção: `gremah`/`gremah_tick` (os robôs campeões de
+day trade) usam `exit_split_unit` sempre que `dividir_entrada=True` — o
+default —, e `dt-gremah_tick-pmam3-live` operava com dinheiro real no
+momento deste achado. Não foi possível confirmar sem terminal MT5 real se
+uma ordem `TRADE_ACTION_PENDING` de fechamento sofre a mesma rejeição de
+margem que a ordem a mercado sofreu (MG51) — o comportamento do MT5 para
+pendente pode ser diferente do comportamento pra ordem a mercado — mas
+ninguém verificou, e é exatamente o tipo de lacuna que só aparece no
+primeiro pregão em que as condições batem, como da última vez.
+
+> **Regra:** quando um incidente revela que um campo faltava num caminho de
+> ordem, procurar TODOS os métodos irmãos que montam o MESMO tipo de
+> request (mercado, pendente, parcial) antes de declarar corrigido — o bug
+> tende a estar duplicado em qualquer lugar que reimplementou a mesma
+> lógica de request separadamente.
+> **Pergunte à plataforma nova:** ordem PENDENTE de fechamento (limite, não
+> a mercado) tem a mesma exigência de "amarrar à posição" que ordem a
+> mercado de fechamento? Testar antes de confiar no caminho de saída
+> fatiada com posição real — não assumir que a correção de um caminho
+> cobriu o irmão.
+
+**Correção aplicada:** o identificador da posição passou a viajar no request
+da ordem pendente de fechamento, e é lido da corretora no instante em que a
+ordem é armada — não de um campo em memória preenchido pelo processo
+anterior, que um reinício no meio do pregão deixaria vazio para sempre.
+`sl`/`tp` deixaram de viajar quando a ordem está fechando (ordem que fecha
+não abre nada pra proteger); na prática era no-op, porque a fatia de saída
+nunca preenchia esses campos, mas a exclusão agora é explícita como já era no
+caminho a mercado. Como a aceitação do campo em ordem pendente **continua não
+confirmada** contra terminal real, o envio nunca assume que ela existe: se a
+recusa tiver código de "request inválido", reenvia UMA vez sem o campo, com
+alarme no log do processo — nunca um laço, e recusa por preço/margem/mercado
+fechado não aciona o reenvio (o motivo real da recusa não pode ficar
+escondido atrás de um fallback que não tem relação com ele).
+
+Fica um risco residual honesto: o conjunto de códigos de recusa que dispara o
+reenvio é suposição documentada, não fato medido. Se a plataforma recusar com
+um código fora desse conjunto, a ordem fica recusada — sem regressão, mas sem
+rede. A pergunta 6 da Parte 8 continua valendo integralmente.
+
+### 1.16 Um desfecho, duas causas: alarme com a causa errada ensina a desconfiar do diário
+
+Achado em revisão de código em 2026-09-03, antes de chegar à produção — e o
+alarme falso foi introduzido justamente pela correção do item 3.15, que é
+como esse tipo de defeito costuma nascer. A rotina de retomada passou a
+avisar no diário quando o teto agregado encolhe ou descarta a ordem que o
+robô pediu (item 3.15). Só que a função que planta a ordem devolve "não
+plantei" por DOIS motivos diferentes: o teto não comportar nada, e já existir
+posição aberta — caso em que ela recusa plantar **de propósito**, porque uma
+ordem plantada por cima de uma posição viva fica órfã quando a posição
+fechar. O aviso novo atribuía os dois ao teto, em nível de erro. Reinício no
+meio do pregão segurando posição não é caso raro: é o cenário comum de
+reinício. O diário ia acumular alarme de erro com a causa errada exatamente
+no momento em que o dono mais precisa confiar nele.
+
+> **Regra:** quando um mesmo desfecho observável tem mais de uma causa, o
+> registro tem de dizer QUAL — e o nível do alarme segue a causa, não o
+> desfecho. Desenho funcionando como planejado é informação (nível baixo);
+> portão estourado é alarme. Misturar os dois treina o operador a ignorar a
+> categoria inteira, e aí o alarme verdadeiro também é perdido. Mesma
+> distinção que o item 1.6 faz entre "não sei" e "não há", e o item 3.13
+> entre "não consegui verificar a margem" e "a margem não cobre".
+
 ---
 
 ## Parte 2 — Estado, reinício e duplicidade
@@ -727,6 +800,132 @@ alto (R$50.000: +R$13.095,09 contra os +R$2.671,80 fixos de sempre).
 > com a barra/dia? Se variar, um teto por % de risco se adapta sozinho; se
 > for fixo, o % precisa ser calibrado para o pior caso (capital mínimo de
 > sobrevivência, item 3.10), não emprestado de outro robô.
+
+### 3.13 Corrida entre "consultar margem" e "enviar ordem" não tem trava entre processos — CORRIGIDO 2026-09-03
+
+Achado de auditoria adversarial em 2026-09-03 (não é incidente medido —
+ninguém viu isso acontecer ainda). `_check_margem_da_conta` lê `margin_free`
+fresco a cada chamada, sem cache — mas cada slot de day trade roda como
+processo do SO separado (`subprocess.Popen`), todos no mesmo login MT5, ou
+seja, na MESMA margem física. Não existe lock (arquivo, mutex, transação)
+entre a leitura da margem e o envio da ordem. Duas ordens de abertura de
+dois processos distintos que caiam dentro da janela de latência de um
+`order_send` (round-trip até o terminal) cada uma leria `margin_free`
+otimista e passaria — reproduzindo o padrão exato do incidente da Parte 0
+(item 3.2), agora ENTRE processos em vez de dentro de um. O próprio repo já
+documenta um caso real de "Popen órfão" (dois processos pro mesmo slot) em
+`dashboard/live_control.py` — o gatilho de duplicação já existe; falta só
+coincidir no tempo com uma checagem de margem.
+
+> **Regra:** quando várias estratégias/processos compartilham UMA margem
+> física na mesma corretora, o portão de margem tem de ser serializado ENTRE
+> processos, não só correto dentro de cada processo. "Cada robô confere
+> sozinho antes de mandar" não basta quando o recurso conferido é
+> compartilhado por todos.
+> **Pergunte à plataforma nova:** múltiplas estratégias/processos operam a
+> mesma conta e compartilham margem física? Se sim, existe alguma trava
+> entre "consultar quanto sobra" e "gastar", ou cada processo confia só na
+> própria última leitura?
+
+**Correção aplicada:** o par "consultar margem → enviar a ordem" virou seção
+crítica serializada por uma trava de ARQUIVO do sistema operacional,
+compartilhada por todos os processos que usam o mesmo login. Trava de
+processo, não de thread — thread não resolve nada aqui, porque cada robô é um
+processo separado. Escrita no diário e I/O de banco ficam FORA da trava, pra
+seção crítica não durar mais do que precisa.
+
+Dois cuidados que fazem a diferença entre trava e robô travado. Primeiro: a
+trava é mantida pelo núcleo do sistema contra o descritor de arquivo do
+processo, então ela é liberada no instante em que o processo termina, por
+qualquer motivo — sem arquivo de PID, sem heurística de "trava velha", sem
+ninguém precisar rodar limpeza. Segundo: quem espera desiste por tempo, e
+desistir é tratado como **consulta que falhou**, nunca como recusa por margem
+insuficiente (item 1.6: "não sei" nunca autoriza; e são fatos diferentes pra
+quem opera — ver item 1.16). A ordem não sai, e o robô re-arma pelo critério
+dele no ciclo seguinte.
+
+Os DOIS pontos de envio do robô ficaram cobertos — a decisão por barra e a
+retomada depois de reinício. O segundo quase ficou de fora, e vale registrar
+por quê: a correção foi feita em paralelo com a do item 3.14, que estava
+editando exatamente aquele trecho. Correção que para na fronteira de outra
+correção precisa de alguém conferindo a costura depois; foi só isso que
+impediu de sobrar metade da lacuna aberta com o item marcado como resolvido.
+
+### 3.14 Restart no meio do pregão reseta o teto por risco pra zero — silenciosamente — CORRIGIDO 2026-09-03
+
+Achado de auditoria adversarial em 2026-09-03. `warm_start_calibration`
+(recalibração ao reconectar no meio do pregão) chama `on_session_start` +
+`on_bar`, mas nunca `on_capital_update` — o caixa dinâmico
+(`_cash_atual_brl`) fica em `0.0` até a próxima atualização normal do
+mecanismo. Com `risco_pct_por_trade` setado (WDO F1 desde o item 3.12),
+`teto_por_risco` calcula 0 e o `max(1, teto)` do item 3.9 força sempre 1
+contrato — nunca o número que o caixa atual de verdade permitiria. A direção
+do erro é conservadora (subdimensiona, nunca superdimensiona), mas o efeito
+prático é: **todo restart no meio do pregão desliga o dimensionamento
+dinâmico até a próxima resincronização**, sem nenhum log ou alerta que diga
+isso — e o log `"sessao a fria"` já mostrado no painel não distingue esse
+caso de um restart qualquer.
+
+> **Regra:** todo caminho de (re)inicialização que alimenta um cálculo de
+> risco tem de popular as MESMAS variáveis que o caminho normal popula,
+> antes do primeiro cálculo que depende delas — "warm start" que pula um
+> passo de setup vira bug silencioso, não atalho inofensivo.
+> **Pergunte à plataforma nova:** toda rotina de reconexão/retomada
+> recalcula o mesmo estado que a inicialização normal calcula, ou herda um
+> campo zerado/default até o próximo ciclo regular?
+
+**Correção aplicada:** o caixa corrente passa a ser injetado na recalibração
+de reconexão, e é atualizado antes de cada barra do replay — a mesma sequência
+que o motor já roda em cada barra de produção. O número vem de fora (quem tem
+acesso ao estado da conta calcula e passa), não de uma consulta dentro da
+lógica de sinal: a lógica de sinal tem de continuar recebendo dado e
+devolvendo decisão, sem ir buscar nada, porque ela vai ser portada. E se o
+caixa vier inválido, isso agora vira alarme no diário em vez de degradação
+muda.
+
+**A correção revelou um problema pior, que ela estava mascarando** — virou o
+item 3.15, e é a parte mais importante deste item. Vale a leitura antes de
+aplicar esta mesma correção em qualquer outra plataforma: com o caixa
+corrigido, o robô voltou a pedir o tamanho de verdade, e foi aí que apareceu
+que o tamanho pedido nunca passava pelo teto da camada seguinte.
+
+### 3.15 Consertar um subdimensionamento silencioso pode entregar um robô inerte — a camada que ARMA a ordem tem de aplicar o teto da camada que PREENCHE
+
+Achado em 2026-09-03, ao verificar a correção do item 3.14 — não por
+hipótese: dois testes já existentes começaram a falhar, e a falha era
+`resultado do dia = 0`, robô que não operou nada.
+
+Encadeamento. Enquanto o caixa ficava zerado na retomada (o bug do 3.14), o
+teto dinâmico degradava pra 1 unidade — que cabia, e portanto operava.
+Corrigido o caixa, o robô voltou a pedir o tamanho real: **26 contratos**,
+contra um teto agregado de **~4** naquele cenário (caixa de R$1.000, margem de
+R$100 por contrato). O pedido de 26 não é absurdo do ponto de vista de quem o
+fez — o dimensionamento por caixa daquele robô não conhece margem nem futuro,
+e essa ignorância é deliberada: ela mora na lógica de sinal, que precisa
+continuar portável. O problema é o que acontecia depois: a ordem da retomada é
+plantada direto, sem passar pelo caminho normal de decisão, então o teto
+agregado só era conferido no PREENCHIMENTO — e lá a recusa é por inteiro. Sem
+trade fechado, o caixa não muda; sem caixa novo, o pedido continua 26. Robô
+inerte pelo resto do pregão, com uma ordem no book que nunca poderia
+preencher, e o painel mostrando um robô com ordem armada.
+
+Ou seja: a correção conservadora trocou "opera pequeno demais, em silêncio"
+por "não opera, em silêncio". A segunda é pior, e uma correção que troca um
+modo de falha pelo outro sem ninguém medir passa por melhoria.
+
+> **Regra:** nenhuma camada arma uma ordem que a camada seguinte vai recusar
+> por inteiro. O teto que o preenchimento aplica tem de ser aplicado no
+> momento de ARMAR — encolhendo o pedido pro que cabe, ou não armando nada
+> quando não cabe nem uma unidade. Não armar é um desfecho legítimo e
+> informativo; armar tamanho que não passa é uma ordem morta que se disfarça
+> de robô operando. O corolário de método: ao corrigir um subdimensionamento
+> silencioso, medir o que o sistema passa a PEDIR antes de comemorar — o
+> valor errado podia estar escondendo que ninguém validava o pedido.
+> **Pergunte à plataforma nova:** a plataforma recusa no momento do REGISTRO
+> uma ordem cujo tamanho não cabe na margem livre, ou aceita registrar e só
+> recusa no preenchimento? Se recusa só no preenchimento, a recusa é parcial
+> (preenche o que cabe) ou total? Recusa total no preenchimento é o caminho
+> mais curto para um robô inerte com ordem viva no book.
 
 ---
 
@@ -1242,55 +1441,73 @@ dinheiro ou meses.
 3. O que acontece quando a ordem de fechamento é maior que a posição — rejeita ou inverte? (1.4)
 4. Como a plataforma reporta um cancelamento que falhou? Dá para distinguir de sucesso? (1.5)
 5. Ao atualizar proteção, campo vazio significa "manter" ou "remover"? (1.10)
+6. Ordem PENDENTE de fechamento (limite, não a mercado) tem a mesma
+   exigência de "amarrar à posição" que ordem a mercado de fechamento?
+   Testar antes de confiar no caminho de saída fatiada com posição real —
+   não assumir que a correção de um caminho cobriu o irmão. (1.15)
 
 **Sobre o estado**
-6. Dá para listar as ordens vivas do meu robô ao iniciar? (1.8)
-7. A leitura de posição distingue "não há" de "não consegui perguntar"? (1.6)
-8. O que sobrevive a um reinício da plataforma, e o que eu preciso persistir por fora? (2.1)
-9. Como impedir duas instâncias do mesmo robô? A plataforma impede? (2.4)
-10. Dá para gravar de forma durável no meio de uma sequência de ordens, sem
+7. Dá para listar as ordens vivas do meu robô ao iniciar? (1.8)
+8. A leitura de posição distingue "não há" de "não consegui perguntar"? (1.6)
+9. O que sobrevive a um reinício da plataforma, e o que eu preciso persistir por fora? (2.1)
+10. Como impedir duas instâncias do mesmo robô? A plataforma impede? (2.4)
+11. Dá para gravar de forma durável no meio de uma sequência de ordens, sem
     perder a sessão e sem um segundo escritor travar a operação em andamento? Se
     não, qual é o menor lote que pode ser gravado atomicamente? (2.5)
-11. O modelo de erro permite carregar dado junto da exceção — ou recuperar o
+12. O modelo de erro permite carregar dado junto da exceção — ou recuperar o
     resultado parcial de uma chamada que abortou no meio? Se não, nada de
     acumular efeito confirmado em variável local: cada um é emitido assim que
     confirma. (2.5)
-12. O evento de rejeição de uma ordem chega de volta pra quem decidiu, ou fica
+13. O evento de rejeição de uma ordem chega de volta pra quem decidiu, ou fica
     só no log do motor de execução? (1.14)
+14. Toda rotina de reconexão/retomada recalcula o mesmo estado (caixa
+    dinâmico, indicadores) que a inicialização normal calcula, ou herda um
+    campo zerado/default até o próximo ciclo regular? Um "warm start" que
+    pula um passo de setup vira bug silencioso, não atalho inofensivo. (3.14)
 
 **Sobre o dinheiro**
-13. Dá para consultar a margem exigida por uma ordem e a margem livre da conta? (3.3)
-14. A conta é netting ou hedging? (1.4)
-15. Existe algum limite de perda diária imposto pela plataforma, ou preciso construí-lo? (Parte 0, falha 5)
-16. O capital mínimo que abre 1 posição foi testado rodando o histórico
+15. Dá para consultar a margem exigida por uma ordem e a margem livre da conta? (3.3)
+16. Múltiplas estratégias/processos operam a mesma conta e compartilham
+    margem física? Se sim, existe alguma trava entre "consultar quanto
+    sobra" e "gastar", ou cada processo confia só na própria última
+    leitura? (3.13)
+17. A conta é netting ou hedging? (1.4)
+18. Existe algum limite de perda diária imposto pela plataforma, ou preciso construí-lo? (Parte 0, falha 5)
+19. O capital mínimo que abre 1 posição foi testado rodando o histórico
     INTEIRO com esse capital, ou só calculado pela fórmula de margem? Os
     dois números costumam divergir por uma ordem de grandeza. (3.10)
-17. Se o capital de sobrevivência estiver acima do capital real disponível,
+20. Se o capital de sobrevivência estiver acima do capital real disponível,
     isso já foi confirmado como estrutural (parede em TODO ponto do
     parâmetro já mapeado), ou ainda pode ser um parâmetro mal escolhido?
     Varrer o espaço inteiro contra capital baixo responde em uma tarde. (3.11)
-18. O stop desta estratégia é fixo (ticks/pontos) ou varia com a
+21. O stop desta estratégia é fixo (ticks/pontos) ou varia com a
     barra/dia (volatilidade)? Um teto por % de risco emprestado de outro
     robô com o tipo OPOSTO de stop pode reproduzir o problema que ele foi
     criado pra evitar, só que noutro capital. (3.12)
-19. Abrir uma posição vendida credita caixa (venda a descoberto) ou debita
+22. Abrir uma posição vendida credita caixa (venda a descoberto) ou debita
     margem/garantia (compromete capital, igual à compra)? O valor-a-mercado
     da posição na tela tem de inverter exatamente o débito/crédito real da
     abertura — não uma convenção genérica de "venda é negativo". (5.8)
 
+23. A plataforma recusa no momento do REGISTRO uma ordem cujo tamanho não
+    cabe na margem livre, ou aceita registrar e só recusa no preenchimento?
+    Se recusa só no preenchimento, a recusa é parcial (preenche o que cabe)
+    ou total? Recusa total no preenchimento é o caminho mais curto para um
+    robô inerte com ordem viva no book. (3.15)
+
 **Sobre a medida**
-20. O simulador modela posição na fila? Se não, o que ele está respondendo? (4.1)
-21. O horário de sessão que ele usa é fixo ou segue o instrumento? (5.2)
-22. Qual é o edge da estratégia **em ticks** neste instrumento? (4.5)
-23. Uma sequência de stops cabe no capital real? Se o tamanho da posição
+24. O simulador modela posição na fila? Se não, o que ele está respondendo? (4.1)
+25. O horário de sessão que ele usa é fixo ou segue o instrumento? (5.2)
+26. Qual é o edge da estratégia **em ticks** neste instrumento? (4.5)
+27. Uma sequência de stops cabe no capital real? Se o tamanho da posição
     escala com o caixa, existe um teto de RISCO por trade separado do teto
     de MARGEM? (3.5, 3.9)
-24. O preço que a API devolve para este instrumento já é reais por unidade,
+28. O preço que a API devolve para este instrumento já é reais por unidade,
     ou é cotação (pontos de índice, pontos de dólar, ticks) que exige um
     multiplicador para virar dinheiro? Se exige, o débito/crédito de caixa
     lê esse multiplicador do MESMO lugar que o cálculo de P&L, ou é uma
     segunda cópia da fórmula? (5.7)
-25. Um reinício no meio do pregão detecta e repõe (por replay) o estado de
+29. Um reinício no meio do pregão detecta e repõe (por replay) o estado de
     JANELA/indicador intra-sessão de QUALQUER estratégia, ou só das que
     alguém lembrou de marcar com um atributo especial? Um portão de warm
     start por allowlist nomeada é um cold-restart silencioso pra toda
@@ -1313,6 +1530,10 @@ da amostra, e morreu no primeiro dia sem nunca ter errado um sinal.
 *Fonte deste arquivo: incidente de 2026-08-28 e a auditoria adversarial que o
 seguiu (27 lacunas, todas fechadas), mais os três defeitos que os próprios
 relatórios de correção deixaram anotados como "risco residual" e que, verificados
-depois, eram reais e reproduzíveis. Mais o registro acumulado do projeto. Quando
-um item aqui contradisser o código, o código ganha — e este arquivo está
-desatualizado.*
+depois, eram reais e reproduzíveis. Mais uma segunda rodada de auditoria
+adversarial em 2026-09-03, focada no dimensionamento dinâmico adicionado depois
+da primeira: 3 lacunas novas (1.15, 3.13, 3.14), todas corrigidas no mesmo dia —
+e a correção de uma delas revelou outras duas que ninguém tinha procurado (1.16
+e 3.15, a segunda mais grave que a lacuna original). Mais o registro acumulado
+do projeto. Quando um item aqui contradisser o código, o código ganha — e este
+arquivo está desatualizado.*
