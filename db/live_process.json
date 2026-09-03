@@ -2,11 +2,11 @@
   "version": 2,
   "slots": {
     "dt-gremah_tick-pmam3-shadow": {
-      "pid": 41888,
-      "started_at": "2026-09-02T18:15:25+00:00",
+      "pid": 33488,
+      "started_at": "2026-09-03T13:13:00+00:00",
       "config": {
         "mode": "mt5",
-        "capital": 73.34,
+        "capital": 105.3,
         "strategy": "gremah_tick",
         "slot": "dt-gremah_tick-pmam3-shadow",
         "execution_mode": "shadow",
@@ -18,7 +18,7 @@
     },
     "dt-gremah-pmam3-shadow": {
       "pid": 29624,
-      "started_at": "2026-09-02T18:15:28+00:00",
+      "started_at": "2026-09-02T23:02:48+00:00",
       "config": {
         "mode": "mt5",
         "capital": 34.92,
@@ -32,8 +32,8 @@
       }
     },
     "dt-gremah_tick-pmam3-live": {
-      "pid": 6332,
-      "started_at": "2026-09-02T18:35:54+00:00",
+      "pid": 16356,
+      "started_at": "2026-09-03T13:12:38+00:00",
       "config": {
         "mode": "mt5",
         "capital": 30.0,
@@ -62,11 +62,11 @@
       }
     },
     "dt-wdo_grid_reload_maker-wdo@-live": {
-      "pid": null,
-      "started_at": null,
+      "pid": 42784,
+      "started_at": "2026-09-03T16:41:05+00:00",
       "config": {
         "mode": "mt5",
-        "capital": 300.0,
+        "capital": 375.0,
         "strategy": "wdo_grid_reload_maker",
         "slot": "dt-wdo_grid_reload_maker-wdo@-live",
         "execution_mode": "live",
@@ -74,16 +74,16 @@
         "mt5_shares_per_lot": 1.0,
         "mt5_fractional_map": null,
         "mt5_symbol_map": {
-          "WDO@": "WDOQ27"
+          "WDO@": "WDOV26"
         }
       }
     },
     "dt-wdo_grid_reload_maker-wdo@-shadow": {
-      "pid": 22712,
-      "started_at": "2026-09-02T18:15:37+00:00",
+      "pid": 46292,
+      "started_at": "2026-09-03T13:12:47+00:00",
       "config": {
         "mode": "mt5",
-        "capital": 597.5,
+        "capital": 746.0,
         "strategy": "wdo_grid_reload_maker",
         "slot": "dt-wdo_grid_reload_maker-wdo@-shadow",
         "execution_mode": "shadow",
@@ -97,7 +97,7 @@
     },
     "dt-gremah-klbn3-shadow": {
       "pid": 32120,
-      "started_at": "2026-09-02T18:15:40+00:00",
+      "started_at": "2026-09-02T23:02:48+00:00",
       "config": {
         "mode": "mt5",
         "capital": 802.46,
@@ -126,11 +126,11 @@
       }
     },
     "dt-copa_win-win@-shadow": {
-      "pid": 29420,
-      "started_at": "2026-09-02T18:15:45+00:00",
+      "pid": 48080,
+      "started_at": "2026-09-03T14:43:49+00:00",
       "config": {
         "mode": "mt5",
-        "capital": 344.5,
+        "capital": 434.0,
         "strategy": "copa_win",
         "slot": "dt-copa_win-win@-shadow",
         "execution_mode": "shadow",
