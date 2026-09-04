@@ -111,6 +111,91 @@ da entrada reinfla sem nenhum novo gatilho. Em parametros mais sensiveis
 testados isso deixou a conta em EQUITY NEGATIVA -- pior que nao fazer nada.
 
 `None` (default) desliga -- comportamento IDENTICO ao de antes desta secao.
+
+## Saida defensiva de RECUO (2026-09-03, ADITIVA e OPT-IN)
+
+Mesma ideia pedida pelo dono e ja implementada em `WdoGridReloadMaker`
+(`strategy.daytrade.lab.wdo_grid_reload_maker`, ver a docstring do parametro
+`defesa_ativa` la' para o precedente completo): "se a posicao chegou perto do
+stop e depois voltou perto do alvo, fecha antecipado" -- generalizado em dois
+parametros, `defesa_gatilho_stop_pct` (fracao da distancia do STOP que precisa
+ser sofrida, em excursao ADVERSA nao realizada, para a defesa ARMAR) e
+`defesa_alvo_proximidade_pct` (depois de armada, fracao da distancia RESTANTE
+ate o alvo abaixo da qual a posicao fecha antecipada). Ver a docstring do
+parametro `defesa_ativa` em `__init__` abaixo para a formula exata.
+
+Testado PRIMEIRO na WDO F1 e achado DEGENERADO la': com o alvo de producao de
+1 tick, nao existe estado intermediario entre "0% do alvo" e "100% do alvo"
+(bateu) -- a defesa nunca via a condicao de fechar antes do motor ja ter
+fechado a posicao pelo caminho normal (ver `wdof1_defesa_recuo_sweep_2026_09_
+03.py`). O `CopaWin` e' o candidato natural para medir a ideia de verdade: o
+alvo de producao tem `alvo_vol=19,0` (19 volatilidades de referencia, dezenas
+de pontos de espaco real) contra o stop de `stop_vol=12,0` -- "quase la'" e'
+um estado que existe de fato nesta config, ao contrario da WDO F1. Ver
+`scripts/daytrade/copawin_defesa_recuo_sweep_2026_09_03.py` para a varredura
+que mede se/quanto isto ajuda.
+
+`defesa_ativa=False` (default) preserva o comportamento BYTE A BYTE de antes
+desta secao -- os dois `*_pct` so' importam com `defesa_ativa=True`.
+
+## Corte por PERSISTENCIA no lado ADVERSO (2026-09-03, ADITIVO e OPT-IN)
+
+Achado RETROSPECTIVO de `scripts/daytrade/copawin_duracao_operacoes_2026_09_
+03.py` (secao bonus): entre os trades resolvidos por STOP ou TARGET, ja em
+10% da DURACAO EVENTUAL do trade (medida so' DEPOIS que ele fecha) estar do
+lado adverso ja indicava 84,4% de chance de terminar em STOP; entre 70%-90%
+da duracao isso vira ~100%. O problema: "% da duracao EVENTUAL" so' se
+conhece DEPOIS que o trade fecha -- nao da' pra usar essa forma ao vivo,
+porque a duracao total e' desconhecida enquanto o trade esta' aberto (seria
+olhar o futuro).
+
+Esta secao e' a versao CAUSAL do mesmo achado -- so' usa o que ja e' conhecido
+no momento, nunca o futuro. Em vez de "fracao da duracao EVENTUAL", mede
+"fracao das barras JA VIVIDAS desde a entrada": quantas barras M1 ja se
+passaram (`IntradayOpenPosition.bars_held`, campo que o motor JA preenche --
+nao recalculado aqui) e, dessas, quantas ja estiveram do lado adverso (isto
+SIM precisa de contador proprio -- ver `self._barras_adversas` abaixo --
+porque `bars_held` conta barras, nao diz quantas foram do lado ruim).
+
+Regra (`corte_persistencia_ativo=True`): se `pos.bars_held >= corte_
+persistencia_min_barras` (aquecimento minimo por trade -- evita disparar com
+2-3 barras de ruido logo apos a entrada) E `barras_adversas / pos.bars_held >=
+corte_persistencia_frac_adverso`, fecha a posicao AGORA (`Exit(reason=
+"corte_persistencia")`) -- aceita um prejuizo MENOR agora em vez de arriscar o
+STOP cheio depois, que e' exatamente o que o achado retrospectivo mediu.
+
+Lado adverso de uma barra: `bar.close < entry_price` (comprado) ou `bar.close
+> entry_price` (vendido) -- usa o FECHAMENTO, nao o pior preco da barra
+(`bar.low`/`bar.high`, que e' o que `defesa_ativa` usa para excursao). Escolha
+deliberada: aqui a pergunta e' "onde o mercado ASSENTOU", nao "qual foi o pior
+momento" -- excursao intrabarra e' o dominio da defesa de recuo (distancia),
+nao deste mecanismo (persistencia no tempo). Fechamento exatamente igual a
+`entry_price` conta como NAO adverso (mais conservador -- nao empurra o
+contador por um empate).
+
+Contagem (`self._barras_adversas`, chave `(side, entry_ts)`, mesma convencao
+de `self._defesa_armada`): a CADA `on_bar` com a posicao aberta, primeiro
+CHECA a condicao acima usando o contador ACUMULADO ATE a barra anterior (por
+isso a checagem so' roda quando `pos.bars_held > 0` -- na primeira barra em
+que a posicao aparece, `bars_held=0` e nao ha' barra anterior nenhuma para o
+contador descrever), so' DEPOIS atualiza o contador com o lado da barra
+CORRENTE (para a PROXIMA chamada). Isto mantem o contador e `pos.bars_held`
+descrevendo exatamente a MESMA janela de barras passadas em toda checagem --
+nunca conta a barra corrente contra si mesma no numerador (mesma disciplina
+anti-look-ahead de `self._faixa` no `on_bar` principal). Resetado em `on_
+session_start`, mesmo lugar que ja reseta `self._defesa_armada`.
+
+Prioridade entre os dois mecanismos de saida quando os dois estao ativos:
+`corte_persistencia` e' checado PRIMEIRO (ver `on_bar`) porque e' mais
+simples/direto -- "desistir" nao depende de olhar a distancia ate o alvo, so'
+de quanto tempo a posicao ja resistiu do lado errado. Se nenhum dos dois
+dispara, cai no `_trailing` normal, igual antes desta secao.
+
+`corte_persistencia_ativo=False` (default) preserva o comportamento BYTE A
+BYTE de antes desta secao. `corte_persistencia_frac_adverso=1.0` e' o valor
+NEUTRO quando ligado sem querer varrer a grade inteira -- 100% das barras
+passadas do lado adverso e' o caso mais raro/extremo, entao serve como "quase
+nunca dispara sozinho" em vez de um valor arbitrario.
 """
 from __future__ import annotations
 
@@ -124,6 +209,7 @@ from strategy.daytrade.base import (
     Bar,
     Enter,
     EnterLimit,
+    Exit,
     IntradayAction,
     IntradayOpenPosition,
     IntradayStrategy,
@@ -181,6 +267,12 @@ class CopaWin(IntradayStrategy):
         margin_per_contract_brl: float | None = None,
         margin_buffer: float = MARGIN_BUFFER_FUTUROS,
         risco_pct_por_trade: float | None = None,
+        defesa_ativa: bool = False,
+        defesa_gatilho_stop_pct: float = 0.0,
+        defesa_alvo_proximidade_pct: float = 0.0,
+        corte_persistencia_ativo: bool = False,
+        corte_persistencia_min_barras: int = 0,
+        corte_persistencia_frac_adverso: float = 1.0,
     ):
         """`teto_contratos`: teto de contratos SIMULTANEOS da competicao.
         Obrigatorio e sem default -- e' o unico limitador de tamanho num
@@ -256,7 +348,86 @@ class CopaWin(IntradayStrategy):
         contracts_from_risk(caixa_atual, risco_pct_por_trade,
         stop_vol x volatilidade_do_dia x point_value_brl))` -- so' pode
         ENCOLHER a entrada, nunca cresce-la acima do que os outros tetos
-        permitem."""
+        permitem.
+
+        `defesa_ativa`/`defesa_gatilho_stop_pct`/`defesa_alvo_proximidade_pct`
+        (2026-09-03, pedido do dono -- saida defensiva de RECUO, ver a secao
+        do modulo "Saida defensiva de RECUO"): "chegou perto do stop e depois
+        voltou perto do alvo, fecha a posicao". ADITIVO e OPT-IN --
+        `defesa_ativa=False` (default) preserva o comportamento BYTE A BYTE
+        de antes; os dois `*_pct` so' importam com `defesa_ativa=True`.
+
+        Mecanica, avaliada a CADA `on_bar` com posicao aberta (nunca antes de
+        o fill ser confirmado -- este robo so' chama `_entrada`/`EnterLimit`
+        quando `positions` esta vazio, entao qualquer posicao vista aqui ja
+        esta' preenchida):
+
+        1. ARMAR (uma vez por trade, nunca desarma depois): a posicao sofreu
+           excursao ADVERSA (nao realizada) de pelo menos
+           `defesa_gatilho_stop_pct x dist_stop_pontos`, onde
+           `dist_stop_pontos = |entry_price - current_stop|` (derivado do
+           stop REAL da posicao -- pode ja ter sido apertado por `_trailing`
+           -- nunca de `stop_vol x vol` recalculado, que e' so' o valor NO
+           MOMENTO da entrada). A excursao usa o preco mais ADVERSO DENTRO da
+           barra M1 (`bar.low` comprado, `bar.high` vendido), nao so' o
+           `close` -- o pico de dor pode ter acontecido e revertido dentro da
+           mesma barra.
+        2. FECHAR (so' depois de armada): a distancia RESTANTE ate o alvo, em
+           FRACAO da distancia total entrada->alvo, cai a
+           `defesa_alvo_proximidade_pct` ou abaixo -- formula exata:
+           `dist_restante_pontos / dist_total_pontos <= defesa_alvo_
+           proximidade_pct`, onde `dist_restante_pontos` usa o preco mais
+           FAVORAVEL da barra (`bar.high` comprado, `bar.low` vendido,
+           espelhando o preco mais adverso do passo 1) e nunca fica negativo
+           (clampado em 0). Fecha via `Exit(reason="defesa_recuo")`,
+           IGNORANDO o `_trailing` normal que rodaria para a MESMA posicao
+           nesta chamada (a defesa tem prioridade).
+
+        Diferente da WDO F1 (alvo de 1 tick, sem estado intermediario): aqui
+        o alvo tem dezenas de pontos de espaco real (`alvo_vol=19,0` na
+        config de producao), entao "quase la'" e' um estado que de fato
+        existe -- se a defesa dispara ou nao, e quanto ajuda, e' o que
+        `scripts/daytrade/copawin_defesa_recuo_sweep_2026_09_03.py` mede.
+
+        Estado de armada mora em `self._defesa_armada` (dict, chave
+        `(side, entry_ts)`), NUNCA em `IntradayOpenPosition.metadata` --
+        `metadata` e' um snapshot READ-ONLY reconstruido do zero a cada
+        chamada (`machine.py::_position_view`, `metadata=dict(pos.metadata)`
+        e' uma COPIA) -- resetado em `on_session_start`, mesmo lugar que ja
+        reseta `self._faixa`/`self._barras_hoje`/etc (sem memoria entre
+        pregoes). `(side, entry_ts)` basta porque este robo so' abre UMA
+        posicao por vez (o motor recusa `Enter`/`EnterLimit` com posicao
+        aberta).
+
+        `corte_persistencia_ativo`/`corte_persistencia_min_barras`/
+        `corte_persistencia_frac_adverso` (2026-09-03, pedido do dono -- corte
+        por PERSISTENCIA no lado adverso, ver a secao do modulo "Corte por
+        PERSISTENCIA no lado ADVERSO"): versao CAUSAL (so' usa o que ja e'
+        conhecido no momento) do achado retrospectivo de `copawin_duracao_
+        operacoes_2026_09_03.py` -- "estar do lado adverso por uma fracao alta
+        da vida do trade ja indica STOP com alta probabilidade". Mede
+        PERSISTENCIA no tempo (quantas barras JA VIVIDAS estiveram do lado
+        errado), NAO distancia de preco -- mecanismo DIFERENTE de `defesa_
+        ativa` acima (que mede o quao perto do stop/alvo o preco chegou); os
+        dois coexistem como parametros independentes desta mesma classe.
+
+        Mecanica exata, ver a secao do modulo para a formula/justificativa
+        completa: a CADA `on_bar` com posicao aberta, se `pos.bars_held >=
+        corte_persistencia_min_barras` E a fracao de barras JA PASSADAS que
+        estiveram do lado adverso (`self._barras_adversas[chave] / pos.
+        bars_held`, so' avaliada quando `pos.bars_held > 0`) for `>=
+        corte_persistencia_frac_adverso`, fecha via `Exit(reason=
+        "corte_persistencia")` -- checado ANTES de `defesa_ativa` (ver
+        `on_bar`), prioridade por ser o mecanismo mais simples ("desistir" nao
+        depende de olhar o alvo).
+
+        `corte_persistencia_ativo=False` (default) preserva o comportamento
+        BYTE A BYTE de antes desta secao -- `corte_persistencia_min_barras`/
+        `corte_persistencia_frac_adverso` so' importam com `corte_persistencia_
+        ativo=True`. `corte_persistencia_frac_adverso=1.0` e' o valor NEUTRO
+        (100% das barras passadas do lado adverso e' o extremo raro, entao
+        "quase nunca dispara sozinho" mesmo se `corte_persistencia_ativo`
+        fosse ligado sem varrer a grade)."""
         if teto_contratos < 1:
             raise ValueError(
                 f"copa_win: `teto_contratos` tem de ser >= 1, veio {teto_contratos!r}. "
@@ -290,10 +461,28 @@ class CopaWin(IntradayStrategy):
         self.risco_pct_por_trade = (
             None if risco_pct_por_trade is None else float(risco_pct_por_trade)
         )
+        self.defesa_ativa = bool(defesa_ativa)
+        self.defesa_gatilho_stop_pct = float(defesa_gatilho_stop_pct)
+        self.defesa_alvo_proximidade_pct = float(defesa_alvo_proximidade_pct)
+        self.corte_persistencia_ativo = bool(corte_persistencia_ativo)
+        self.corte_persistencia_min_barras = int(corte_persistencia_min_barras)
+        self.corte_persistencia_frac_adverso = float(corte_persistencia_frac_adverso)
         # Atualizado por `_entrada` logo antes de pedir `quantidade_por_
         # entrada` -- distancia do STOP desta entrada especifica, em pontos.
         # So' importa quando `risco_pct_por_trade` esta setado.
         self._ultimo_stop_dist_pontos: float | None = None
+        # Estado de "ja armou a defesa de recuo" por POSICAO -- chave
+        # `(side, entry_ts)`, mora no self por causa do snapshot read-only de
+        # `IntradayOpenPosition` (ver a docstring do parametro `defesa_ativa`
+        # acima). Resetado em `on_session_start`. So' cresce (nunca desarma
+        # dentro do mesmo trade) -- zerado inteiro a cada pregao.
+        self._defesa_armada: dict[tuple[str, pd.Timestamp], bool] = {}
+        # Contador de "quantas das barras JA PASSADAS desde a entrada
+        # estiveram do lado adverso" -- chave `(side, entry_ts)`, mesma
+        # convencao de `self._defesa_armada` (ver a docstring do parametro
+        # `corte_persistencia_ativo` acima). So' cresce dentro do mesmo trade
+        # (nunca desconta), resetado inteiro em `on_session_start`.
+        self._barras_adversas: dict[tuple[str, pd.Timestamp], int] = {}
         # A entrada parada e' a SEGUNDA perna maker (a primeira e' o alvo) --
         # ver o comentario do atributo de classe.
         self.pernas_maker = 2 if self.entrada_maker else 1
@@ -385,6 +574,8 @@ class CopaWin(IntradayStrategy):
         self._barras_hoje = 0
         self._entradas_hoje = 0
         self._encerrado_hoje = False
+        self._defesa_armada = {}
+        self._barras_adversas = {}
         self._espera = None
 
     # ---------- decisao ----------------------------------------------------
@@ -396,6 +587,74 @@ class CopaWin(IntradayStrategy):
         if not self._faixa:
             return 0.0
         return sum(b.high - b.low for b in self._faixa) / len(self._faixa)
+
+    def _corte_persistencia_deve_fechar(self, pos: IntradayOpenPosition, bar: Bar) -> bool:
+        """`True` se o corte por persistencia (`corte_persistencia_ativo`)
+        manda fechar `pos` AGORA -- ver a docstring do parametro
+        `corte_persistencia_ativo` em `__init__` para a mecanica completa. So'
+        chamada quando `self.corte_persistencia_ativo` ja e' `True`.
+
+        Ordem importa: CHECA primeiro com o contador acumulado ATE a barra
+        anterior (`pos.bars_held > 0` -- na barra em que a posicao aparece
+        pela primeira vez, `bars_held=0`, e nao ha' barra anterior para o
+        contador descrever, entao nunca dispara ali), so' DEPOIS atualiza o
+        contador com o lado da barra CORRENTE -- a barra corrente nunca conta
+        contra si mesma no numerador (mesma disciplina anti-look-ahead de
+        `self._faixa` no `on_bar` principal)."""
+        chave = (pos.side, pos.entry_ts)
+        adversas = self._barras_adversas.get(chave, 0)
+        dispara = (
+            pos.bars_held > 0
+            and pos.bars_held >= self.corte_persistencia_min_barras
+            and (adversas / pos.bars_held) >= self.corte_persistencia_frac_adverso - 1e-9
+        )
+        adverso_agora = (
+            (bar.close < pos.entry_price) if pos.side == "long"
+            else (bar.close > pos.entry_price)
+        )
+        if adverso_agora:
+            self._barras_adversas[chave] = adversas + 1
+        return dispara
+
+    def _defesa_deve_fechar(self, pos: IntradayOpenPosition, bar: Bar) -> bool:
+        """`True` se a defesa de recuo (`defesa_ativa`) manda fechar `pos`
+        AGORA -- ver a docstring do parametro `defesa_ativa` em `__init__`
+        para a mecanica completa e a formula exata. So' chamada quando
+        `self.defesa_ativa` ja e' `True`."""
+        if pos.current_stop is None:
+            return False  # sem stop, nada a derivar
+        eps = 1e-9
+        chave = (pos.side, pos.entry_ts)
+        dist_stop_pontos = abs(pos.entry_price - pos.current_stop)
+        if dist_stop_pontos <= 0:
+            return False
+
+        if not self._defesa_armada.get(chave, False):
+            preco_adverso = bar.low if pos.side == "long" else bar.high
+            excursao_pontos = (
+                (pos.entry_price - preco_adverso) if pos.side == "long"
+                else (preco_adverso - pos.entry_price)
+            )
+            excursao_pontos = max(0.0, excursao_pontos)
+            gatilho_pontos = self.defesa_gatilho_stop_pct * dist_stop_pontos
+            if excursao_pontos + eps >= gatilho_pontos:
+                self._defesa_armada[chave] = True
+            else:
+                return False  # ainda nao armou -- nao ha' o que checar de alvo
+
+        if pos.current_target is None:
+            return False  # armada, mas sem alvo declarado -- nao ha' proximidade a medir
+        dist_total_pontos = abs(pos.current_target - pos.entry_price)
+        if dist_total_pontos <= 0:
+            return False
+        preco_favoravel = bar.high if pos.side == "long" else bar.low
+        dist_restante_pontos = (
+            (pos.current_target - preco_favoravel) if pos.side == "long"
+            else (preco_favoravel - pos.current_target)
+        )
+        dist_restante_pontos = max(0.0, dist_restante_pontos)
+        fracao_restante = dist_restante_pontos / dist_total_pontos
+        return fracao_restante <= self.defesa_alvo_proximidade_pct + eps
 
     def on_bar(
         self,
@@ -424,6 +683,20 @@ class CopaWin(IntradayStrategy):
 
             if positions:
                 self._espera = None
+                if self.corte_persistencia_ativo:
+                    # Checado ANTES de `defesa_ativa` -- prioridade decidida
+                    # na docstring do parametro `corte_persistencia_ativo`
+                    # em `__init__` ("desistir" e' mais simples/direto, nao
+                    # depende de olhar a distancia ate o alvo).
+                    for pos in positions:
+                        if self._corte_persistencia_deve_fechar(pos, bar):
+                            return [Exit(reason="corte_persistencia")]
+                if self.defesa_ativa:
+                    # Prioridade sobre o trailing normal desta chamada -- ver
+                    # a docstring do parametro `defesa_ativa` em `__init__`.
+                    for pos in positions:
+                        if self._defesa_deve_fechar(pos, bar):
+                            return [Exit(reason="defesa_recuo")]
                 acoes.extend(self._trailing(positions, bar, vol))
                 return acoes
 

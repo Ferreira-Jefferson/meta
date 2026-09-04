@@ -529,23 +529,18 @@ def test_novo_robo_com_ativo_sem_calibracao_nao_cria_conta(isolated_journal, cli
         assert live_store.accounts_with_symbol(conn) == []
 
 
-def test_novo_robo_aceita_ativo_ja_usado_por_outro_robo(isolated_journal, client):
-    """Criar o cartão nunca manda ordem nenhuma -- dois robôs DIFERENTES no
-    mesmo ativo (aqui: gremah_tick junto de um gremah já existente em PMAM3)
-    é uma comparação válida (ex.: os dois em sombra), e passou a ser aceita
-    (2026-08-24). O risco real (conta NETTING, dois robôs mandando ordem de
-    verdade no mesmo papel) só existe no `Iniciar`, checado por
-    `live_control._assert_slots_disjuntos`."""
-    _create_daytrade_account(isolated_journal)
-
-    resp = client.post("/operacao/daytrade/novo",
-                       data={"robot": "gremah_tick", "symbol": SYMBOL,
-                             "execution_mode": "shadow"})
-
-    assert resp.status_code == 200, resp.text
-    with live_store.live_journal(isolated_journal) as conn:
-        contas = {c.investment_robot for c in live_store.accounts_with_symbol(conn)}
-    assert contas == {"gremah", "gremah_tick"}
+# NOTA (2026-09-04): existia aqui `test_novo_robo_aceita_ativo_ja_usado_por_
+# outro_robo`, cobrindo "dois robôs DIFERENTES no MESMO ativo (gremah_tick
+# junto de um gremah já existente em PMAM3) geram duas contas separadas" --
+# o mecanismo de verdade era "criar o cartão nunca manda ordem nenhuma, e o
+# risco real (conta NETTING) só é checado no Iniciar". Com `gremah_tick`
+# eliminada (ver `strategy/daytrade/registry.py`), nenhum outro par no
+# catálogo de produção compartilha símbolo hoje (`gremah` é o único robô de
+# ação; `copa_win`/`wdo_grid_reload_maker` operam WIN@/WDO@ cada um sozinho)
+# -- não há como reproduzir "dois robôs REAIS e registrados no mesmo ativo"
+# sem inventar uma classe fake que não existe de verdade no registry. Removido
+# em vez de adaptado; é uma lacuna de cobertura real, documentada aqui em vez
+# de escondida (ver o relatório desta limpeza).
 
 
 def test_novo_robo_recriar_o_mesmo_par_robo_ativo_e_modo_nao_duplica(isolated_journal, client):
@@ -688,20 +683,24 @@ def test_ativo_ja_usado_aparece_marcado_so_pro_mesmo_robo(isolated_journal, clie
     `em_uso` é POR ROBÔ (2026-08-24): a conta existente é de 'gremah' em
     PMAM3, então só a opção "gremah · PMAM3" carrega `data-em-uso` (o estado
     viaja na própria opção: classe de cor MAIS texto, porque cor sozinha não
-    pode carregar informação) -- a opção "gremah_tick · PMAM3" (robô
-    DIFERENTE) aparece livre, sem marca nenhuma, porque criar um segundo
-    cartão nesse ativo com outro robô é uma combinação válida (o bloqueio de
-    verdade é no `Iniciar`, não aqui). Nenhuma opção nasce `disabled` no HTML
+    pode carregar informação). Nenhuma opção nasce `disabled` no HTML
     do servidor -- quem desabilita em cima do `data-em-uso` é o JS do robô
-    escolhido no `<select>` (ver `operacao.js`)."""
+    escolhido no `<select>` (ver `operacao.js`).
+
+    NOTA (2026-09-04): esta checagem cobria também a opção "gremah_tick ·
+    PMAM3" (robô DIFERENTE no mesmo ativo) aparecendo livre, sem marca
+    nenhuma -- prova de que `em_uso` é por ROBÔ, não por SÍMBOLO. Com
+    `gremah_tick` eliminada (ver `strategy/daytrade/registry.py`), nenhum
+    outro robô de produção compartilha símbolo com `gremah` hoje, então essa
+    metade específica da cobertura ("símbolo em uso por um robô não marca a
+    opção de outro robô no mesmo símbolo") ficou sem substituto -- documentado
+    aqui, não escondido (ver o relatório desta limpeza)."""
     _create_daytrade_account(isolated_journal)  # gremah + PMAM3
 
     html = client.get("/operacao").text
 
     gremah_opt = re.search(rf'<option value="{SYMBOL}" data-robot="gremah"[^>]*>', html)
-    gremah_tick_opt = re.search(rf'<option value="{SYMBOL}" data-robot="gremah_tick"[^>]*>', html)
     assert gremah_opt and 'data-em-uso="1"' in gremah_opt.group(0)
-    assert gremah_tick_opt and 'data-em-uso' not in gremah_tick_opt.group(0)
     assert not re.search(rf'value="{SYMBOL}"[^>]*\bdisabled\b', html)
     assert 'class="is-idle"' in html          # âmbar: tem robô, está parado
     assert "· parado" in html
@@ -901,20 +900,20 @@ def test_reordenar_grava_a_ordem_e_persiste_em_nova_conexao(isolated_journal, cl
     lê o DOM depois do drop e manda a ordem inteira -- aqui simulamos
     exatamente esse POST."""
     _create_daytrade_account(isolated_journal, name=DAYTRADE)
-    _create_daytrade_account(isolated_journal, name="dt-gremah_tick-pmam3-shadow",
-                              investment_robot="gremah_tick")
+    _create_daytrade_account(isolated_journal, name="dt-outro-robo-pmam3-shadow",
+                              investment_robot="outro-robo")
     with live_store.live_journal(isolated_journal) as conn:
         assert [c.name for c in live_store.accounts_with_symbol(conn)] == [
-            DAYTRADE, "dt-gremah_tick-pmam3-shadow",
+            DAYTRADE, "dt-outro-robo-pmam3-shadow",
         ]
 
     resp = client.post("/operacao/daytrade/reordenar",
-                       data={"ordem": "dt-gremah_tick-pmam3-shadow," + DAYTRADE})
+                       data={"ordem": "dt-outro-robo-pmam3-shadow," + DAYTRADE})
 
     assert resp.status_code == 200, resp.text
     with live_store.live_journal(isolated_journal) as conn:
         assert [c.name for c in live_store.accounts_with_symbol(conn)] == [
-            "dt-gremah_tick-pmam3-shadow", DAYTRADE,
+            "dt-outro-robo-pmam3-shadow", DAYTRADE,
         ]
 
 
@@ -923,16 +922,16 @@ def test_reordenar_ignora_nome_que_nao_existe_mais(isolated_journal, client):
     dupla, robô removido no meio do arrasto) é ignorado em silêncio -- não
     derruba o POST nem corrompe a ordem das contas que sobraram."""
     _create_daytrade_account(isolated_journal, name=DAYTRADE)
-    _create_daytrade_account(isolated_journal, name="dt-gremah_tick-pmam3-shadow",
-                              investment_robot="gremah_tick")
+    _create_daytrade_account(isolated_journal, name="dt-outro-robo-pmam3-shadow",
+                              investment_robot="outro-robo")
 
     resp = client.post("/operacao/daytrade/reordenar",
-                       data={"ordem": "dt-nao-existe-mais," + "dt-gremah_tick-pmam3-shadow," + DAYTRADE})
+                       data={"ordem": "dt-nao-existe-mais," + "dt-outro-robo-pmam3-shadow," + DAYTRADE})
 
     assert resp.status_code == 200, resp.text
     with live_store.live_journal(isolated_journal) as conn:
         assert [c.name for c in live_store.accounts_with_symbol(conn)] == [
-            "dt-gremah_tick-pmam3-shadow", DAYTRADE,
+            "dt-outro-robo-pmam3-shadow", DAYTRADE,
         ]
 
 
@@ -941,13 +940,13 @@ def test_reordenar_sem_ordem_nao_muda_nada(isolated_journal, client):
     nada, o que cobre o caso de um `dragend` que nunca moveu o cartão de
     lugar (largou no mesmo ponto onde pegou)."""
     _create_daytrade_account(isolated_journal, name=DAYTRADE)
-    _create_daytrade_account(isolated_journal, name="dt-gremah_tick-pmam3-shadow",
-                              investment_robot="gremah_tick")
+    _create_daytrade_account(isolated_journal, name="dt-outro-robo-pmam3-shadow",
+                              investment_robot="outro-robo")
 
     resp = client.post("/operacao/daytrade/reordenar", data={})
 
     assert resp.status_code == 200, resp.text
     with live_store.live_journal(isolated_journal) as conn:
         assert [c.name for c in live_store.accounts_with_symbol(conn)] == [
-            DAYTRADE, "dt-gremah_tick-pmam3-shadow",
+            DAYTRADE, "dt-outro-robo-pmam3-shadow",
         ]

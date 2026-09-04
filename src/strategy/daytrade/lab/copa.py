@@ -17,9 +17,9 @@ estrategia propria registrada nesta familia.
 
 `Copa` e' so' a porta: recebe o simbolo e o teto de contratos e devolve a
 instancia certa. Simbolo sem estrategia propria LEVANTA, do mesmo jeito que
-`Gremah`/`GremahTick` recusam simbolo sem calibracao medida (ver
-`strategy/daytrade/lab/gremah_tick.py`) -- herdar em silencio a estrategia de
-outro ativo e' exatamente o erro que a decisao acima proibe.
+`Gremah` recusa simbolo sem calibracao medida (ver `strategy/daytrade/lab/
+gremah.py`) -- herdar em silencio a estrategia de outro ativo e' exatamente o
+erro que a decisao acima proibe.
 
 ## Por que `__new__`, e nao uma funcao `criar_copa(...)`
 

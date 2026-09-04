@@ -79,7 +79,7 @@ Vale o mesmo espírito para **varredura de parâmetros**: `ProcessPoolExecutor`
 com `submit`/`as_completed` (nunca `pool.map`, que só entrega na ordem de
 submissão e prende resultado pronto atrás de unidade lenta), `redirect_stdout`
 por unidade e `flush=True` em todo print — ver
-`scripts/daytrade/sweep_gremah_tick.py`.
+`scripts/daytrade/gremah_defesa_corte_sweep_2026_09_03.py`.
 
 ### Resultado sai assim que fica pronto
 

@@ -38,7 +38,6 @@ from market_data_intraday.storage import load_m1  # noqa: E402
 from market_data_intraday.tick_bars import ticks_to_degenerate_bars  # noqa: E402
 from market_data_intraday.tick_storage import load_ticks  # noqa: E402
 from strategy.daytrade.lab.gremah import _CALIBRATION_BY_SYMBOL, Gremah  # noqa: E402
-from strategy.daytrade.lab.gremah_tick import _CALIBRATION_BY_SYMBOL_TICK, GremahTick  # noqa: E402
 
 #: A partir de quando o preco do ativo deixou de ser outro patamar. Propriedade
 #: do ATIVO, nao da fonte de dado -- a mesma data vale em M1 e em tick.
@@ -49,9 +48,13 @@ REGIME_START = {
     "BMGB4": "2025-06-04",
 }
 
-#: Os dois motores da familia, pela chave curta usada na linha de comando.
-#: `Gremah` le' barra de 1 minuto; `GremahTick` le' negocio a negocio.
-MOTORES = ("m1", "tick")
+#: A familia tinha dois motores ("m1" e "tick"); `GremahTick` (motor tick) foi
+#: ELIMINADA em 2026-09-04 (perdeu em 0 de 9 simbolos para a `Gremah` M1, ver
+#: o comentario no topo de `strategy/daytrade/registry.py`). So' resta "m1" --
+#: a tupla e as duas funcoes abaixo continuam existindo (em vez de inlinar
+#: `Gremah` direto nos 22 scripts que importam daqui) para que um `--motor`
+#: invalido erre no `argparse` (`choices=list(MOTORES)`), nao dentro do sweep.
+MOTORES = ("m1",)
 
 SIMBOLOS = tuple(sorted(_CALIBRATION_BY_SYMBOL))
 
@@ -59,13 +62,13 @@ SIMBOLOS = tuple(sorted(_CALIBRATION_BY_SYMBOL))
 def classe_do_motor(motor: str):
     if motor == "m1":
         return Gremah
-    if motor == "tick":
-        return GremahTick
     raise ValueError(f"motor desconhecido: {motor!r} (esperado: {MOTORES})")
 
 
 def calibracao_do_motor(motor: str):
-    return _CALIBRATION_BY_SYMBOL if motor == "m1" else _CALIBRATION_BY_SYMBOL_TICK
+    if motor == "m1":
+        return _CALIBRATION_BY_SYMBOL
+    raise ValueError(f"motor desconhecido: {motor!r} (esperado: {MOTORES})")
 
 
 @dataclass(frozen=True)

@@ -91,15 +91,15 @@ def test_processo_que_o_arquivo_nao_conhece_aparece_como_nao_rastreado(estado, m
     """O caso que motivou tudo: robô vivo que nenhum botão do painel alcança."""
     _varredura(monkeypatch, [
         (5728, 1, _LINHA.format(slot="dt-gremah-pmam3-shadow", modo="shadow")),
-        (777, 1, _LINHA.format(slot="dt-gremah_tick-pmam3-live", modo="live")),
+        (777, 1, _LINHA.format(slot="dt-outro-robo-pmam3-live", modo="live")),
     ])
     _grava(estado, **{"dt-gremah-pmam3-shadow": 5728})
 
     por_slot = {p.slot: p for p in live_control.listar_processos()}
 
     assert por_slot["dt-gremah-pmam3-shadow"].rastreado is True
-    assert por_slot["dt-gremah_tick-pmam3-live"].rastreado is False
-    assert por_slot["dt-gremah_tick-pmam3-live"].execution_mode == "live"
+    assert por_slot["dt-outro-robo-pmam3-live"].rastreado is False
+    assert por_slot["dt-outro-robo-pmam3-live"].execution_mode == "live"
 
 
 def test_lista_ordenada_por_slot(estado, monkeypatch):

@@ -16,18 +16,22 @@ from live.bar_feed import MT5BarFeed
 from live.intraday_feed import feed_for
 from live.tick_feed import MT5TickFeed
 from strategy.daytrade.lab.gremah import Gremah
-from strategy.daytrade.lab.gremah_tick import GremahTick
 from strategy.daytrade.lab.wdo_grid_reload_maker import WdoGridReloadMaker
 from strategy.daytrade.registry import list_daytrade_robots, symbols_for_robot
 
 
 # ---------- o robo declara, o ambiente obedece -----------------------------
 
-def test_gremah_tick_recebe_feed_de_negocio_a_negocio():
-    feed = feed_for(GremahTick())
+def test_robo_tick_recebe_feed_de_negocio_a_negocio():
+    """`GremahTick` foi eliminada em 2026-09-04 (ver o comentario no topo de
+    `strategy/daytrade/registry.py`) -- este teste cobria o mesmo dispatch por
+    `feed_kind` (nao por nome de classe), e `WdoGridReloadMaker` (tambem
+    `feed_kind = "tick"`) prova a mesma cobertura sem depender da classe
+    removida."""
+    feed = feed_for(WdoGridReloadMaker())
 
     assert isinstance(feed, MT5TickFeed)
-    assert feed.symbol == "PMAM3"
+    assert feed.symbol == "WDO@"
 
 
 def test_wdo_grid_reload_maker_recebe_feed_de_negocio_a_negocio():
@@ -78,38 +82,35 @@ def test_os_dois_montadores_de_runtime_usam_a_mesma_fabrica():
 
 # ---------- o podio declarado ----------------------------------------------
 
-def test_podio_declarado_2026_08_28():
+def test_podio_declarado_2026_09_04():
     """Decisao do dono, 2026-08-27: `wdo_grid_reload_maker` promovido a
     TOP-1 (unico candidato de day trade com confirmacao OOS que sustenta --
     89% de retencao IS->OOS, 30/30 blocos de 4 pregoes positivos).
 
     Decisao do dono, 2026-08-28: `copa_win` entra como TOP-2 apos
     recalibracao de `alvo_vol`/`stop_vol` confirmada em OOS (o par (19,12)
-    MELHOROU fora da amostra, R$54,86 -> R$61,80/pregao) -- `gremah_tick` e
-    `gremah` descem um degrau cada. Ver o comentario sobre `_ROBOTS` em
-    `strategy/daytrade/registry.py`."""
+    MELHOROU fora da amostra, R$54,86 -> R$61,80/pregao).
+
+    Decisao do dono, 2026-09-04: `gremah_tick` ELIMINADA (venceu em 0 de 9
+    simbolos contra `gremah` M1, tanto no historico completo quanto no
+    protocolo IS/OOS em PMAM3/KLBN3) -- o podio cai de 4 para 3 robos. Ver o
+    comentario sobre `_ROBOTS` em `strategy/daytrade/registry.py`."""
     robos = list_daytrade_robots()
 
     assert [r.key for r in robos] == [
-        "wdo_grid_reload_maker", "copa_win", "gremah_tick", "gremah",
+        "wdo_grid_reload_maker", "copa_win", "gremah",
     ]
-    assert [r.rank for r in robos] == [1, 2, 3, 4]
-    assert [r.feed_kind for r in robos] == ["tick", "m1", "tick", "m1"]
-    assert [r.is_futuro for r in robos] == [True, True, False, False]
+    assert [r.rank for r in robos] == [1, 2, 3]
+    assert [r.feed_kind for r in robos] == ["tick", "m1", "m1"]
+    assert [r.is_futuro for r in robos] == [True, True, False]
 
 
-def test_o_painel_so_oferece_ativo_medido_em_tick():
-    """O painel so' oferece ativo com medicao propria em tick.
-
-    Eram 10 ate' 2026-08-26, quando a CLSC4 saiu do conjunto calibrado: ela
-    imprime preco em 18,4 barras M1 por pregao (contra 217-427 dos outros) e
-    exige R$15.130 de caixa contra R$658-810 deles -- nao havia giro que
-    sustentasse um robo maker ali, e ela era negativa em 48 de 48 celulas de
-    geometria nos dois motores. Ver `gremah_tick.py`, acima de
-    `TICK_CONFIRMED_SYMBOLS`."""
-    assert symbols_for_robot("gremah_tick") == (
-        "PMAM3", "BMGB4", "KLBN3", "LPSB3", "DASA3", "KLBN4", "PCAR3", "CSAN3",
-        "GRND3",
-    )
-    # A `gremah` acompanha: sao os mesmos nove, medidos em M1.
+def test_gremah_cobre_os_nove_simbolos_confirmados():
+    """Eram 10 ativos ate' 2026-08-26, quando a CLSC4 saiu do conjunto
+    calibrado: ela imprime preco em 18,4 barras M1 por pregao (contra 217-427
+    dos outros) e exige R$15.130 de caixa contra R$658-810 deles -- nao havia
+    giro que sustentasse um robo maker ali, e ela era negativa em 48 de 48
+    celulas de geometria nos dois motores da familia (M1 e tick). A `gremah`
+    (motor M1, unico sobrevivente da familia desde 2026-09-04) mede os
+    mesmos nove."""
     assert len(symbols_for_robot("gremah")) == 9

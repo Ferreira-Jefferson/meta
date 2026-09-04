@@ -1642,7 +1642,7 @@ class IntradaySessionMachine:
         descolado do presente (regra 7 do AGENTS.md). `Exit` NAO e' limpo
         aqui de proposito (2026-08-24): pode ter sido decidido para achatar
         VARIAS posicoes de uma vez (ex.: stop agregado de sessao,
-        `gremah_tick.py`) -- so' e' consumido quando de fato executa
+        `gremah.py` com `dividir_entrada=True`) -- so' e' consumido quando de fato executa
         (`on_closed_bar`, secao 3), nunca invalidado so' porque UMA posicao
         entre varias fechou seu proprio stop primeiro. Limpar aqui faria o
         robo nunca achatar as posicoes irmas quando ele mesmo ja parou de

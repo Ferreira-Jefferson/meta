@@ -34,7 +34,7 @@ _LINHA = ("C:\\meta\\.venv\\Scripts\\python.exe C:\\meta\\scripts\\run_live.py "
           "--mode mt5 --slot {slot} --execution-mode {modo} loop --seconds 5")
 
 COM_CARTAO = daytrade_slot("gremah", "PMAM3", "shadow")
-SEM_CARTAO = daytrade_slot("gremah_tick", "CSAN3", "live")
+SEM_CARTAO = daytrade_slot("outrorobo", "CSAN3", "live")
 
 
 @pytest.fixture
@@ -112,11 +112,11 @@ def test_varredura_classifica_rastreado_solto_e_sem_cartao(diario, client, monke
     perigosa: cartão dizendo "parado" com o processo vivo. Um clique em
     "Iniciar" ali subiria um SEGUNDO supervisor para a mesma conta."""
     _cria_cartao()
-    _cria_cartao(daytrade_slot("gremah_tick", "PMAM3", "shadow"))
+    _cria_cartao(daytrade_slot("outrorobo", "PMAM3", "shadow"))
     _rastreia(111)
     _varredura(monkeypatch,
                (111, COM_CARTAO.id, "shadow"),                       # rastreado
-               (222, "dt-gremah_tick-pmam3-shadow", "shadow"),       # cartão, sem rastro
+               (222, "dt-outrorobo-pmam3-shadow", "shadow"),         # cartão, sem rastro
                (333, SEM_CARTAO.id, "live"))                         # órfão puro
 
     html = client.get("/operacao/processos").text

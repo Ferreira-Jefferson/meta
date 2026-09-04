@@ -324,6 +324,23 @@ class WdoGridReloadMaker(IntradayStrategy):
         "cerca de dezesseis ganhos.",
     )
 
+    #: Descricoes curtas para a ficha do robo (`dashboard/robot_view.py` via
+    #: `strategy.registry.declared_params`/`_param_docs`) -- mesmo padrao ja
+    #: usado por `Gremah`/`GremahTick` (`param_docs` de classe, mesclado pelo
+    #: MRO). Este arquivo ainda nao tinha o dict (os parametros anteriores
+    #: so' tem prosa no docstring do `__init__`) -- comeca aqui so' com os 3
+    #: novos (2026-09-03), sem retrofitar os demais fora do escopo pedido.
+    param_docs = {
+        "defesa_ativa": "Liga a saida defensiva de recuo (default desligado -- "
+                        "comportamento identico ao de antes).",
+        "defesa_gatilho_stop_pct": "Fracao do stop (em ticks) que a posicao "
+                                   "precisa sofrer CONTRA ela para a defesa ARMAR.",
+        "defesa_alvo_proximidade_pct": "Depois de armada, fracao da distancia "
+                                       "RESTANTE ate o alvo (0% = ainda longe, "
+                                       "100% = ja bateria o alvo) abaixo da qual "
+                                       "a posicao fecha antecipada.",
+    }
+
     def __init__(
         self,
         symbol: str = "WDO@",
@@ -340,6 +357,9 @@ class WdoGridReloadMaker(IntradayStrategy):
         hard_cap_contratos: int | None = None,
         risco_pct_por_trade: float | None = None,
         point_value_brl: float | None = None,
+        defesa_ativa: bool = False,
+        defesa_gatilho_stop_pct: float = 0.0,
+        defesa_alvo_proximidade_pct: float = 0.0,
     ):
         """Ver a docstring do modulo para a mecanica completa e para os
         parametros existentes acima (`tick_size`, `level_spacing_ticks`,
@@ -375,7 +395,74 @@ class WdoGridReloadMaker(IntradayStrategy):
         dia como no `CopaWin`), o risco em reais por contrato e' CONSTANTE:
         `stop_ticks x tick_size x point_value_brl`. Os dois precisam vir
         JUNTOS (um sem o outro nao computa nada) -- `None`/`None` (default)
-        desliga, comportamento IDENTICO ao de antes."""
+        desliga, comportamento IDENTICO ao de antes.
+
+        `defesa_ativa`/`defesa_gatilho_stop_pct`/`defesa_alvo_proximidade_pct`
+        (2026-09-03, pedido do dono -- saida defensiva de RECUO): "chegou a
+        80% do stop e depois o preco voltar a 1% do alvo, a posicao e'
+        fechada", generalizado para os dois parametros abaixo. ADITIVO e
+        OPT-IN -- `defesa_ativa=False` (default) preserva o comportamento
+        BYTE A BYTE de antes; os dois `*_pct` so' importam com
+        `defesa_ativa=True`.
+
+        Mecanica, avaliada a CADA `on_bar` com posicao aberta (nunca na
+        barra em que a `EnterLimit` ainda esta pendente -- so' depois do
+        fill confirmado):
+
+        1. ARMAR (uma vez por trade, NUNCA desarma depois): a posicao sofreu
+           excursao ADVERSA (nao realizada) de pelo menos
+           `defesa_gatilho_stop_pct x stop_ticks_da_posicao`, onde
+           `stop_ticks_da_posicao = |entry_price - current_stop| / tick_size`
+           (derivado do stop REAL da posicao, nao de `self.stop_ticks` --
+           o stop pode ter sido ajustado por `AdjustStop`, embora este robo
+           hoje nunca emita essa acao). A excursao usa o preco mais ADVERSO
+           da barra (`bar.low` comprado, `bar.high` vendido), nao so' o
+           `close` -- o pico de dor pode ter acontecido e revertido dentro
+           da mesma barra (tick, aqui: `bar.high==bar.low==bar.close` quase
+           sempre, ver `feed_kind`).
+        2. FECHAR (so' depois de armada): a distancia RESTANTE ate o alvo,
+           em FRACAO da distancia total entrada->alvo, cai a
+           `defesa_alvo_proximidade_pct` ou abaixo -- formula exata:
+           `dist_restante_ticks / dist_total_ticks <= defesa_alvo_
+           proximidade_pct`, onde `dist_restante_ticks` usa o preco mais
+           FAVORAVEL da barra (`bar.high` comprado, `bar.low` vendido,
+           espelhando o preco mais adverso do passo 1) e nunca fica negativo
+           (clampado em 0 -- bater o alvo de verdade fecha pelo caminho
+           normal do motor ANTES deste `on_bar` rodar, ver a prioridade "(1)
+           stop/target automatico" em `machine.py`, entao esta funcao nunca
+           deveria ver `dist_restante_ticks<=0` na pratica). Esta e' a
+           leitura mais direta do pedido do dono ("voltar a X% do alvo"):
+           X% PEQUENO exige estar MUITO perto do alvo; X% GRANDE ja basta
+           estar relativamente perto -- e' a fracao que FALTA percorrer, nao
+           a fracao ja percorrida.
+           Fecha via `Exit(reason="defesa_recuo")`, IGNORANDO qualquer outra
+           acao que a logica normal geraria para a MESMA posicao nesta
+           chamada (a defesa tem prioridade -- mesmo padrao ja usado por
+           `session_stop_brl` acima, que tambem devolve `Exit` sozinho).
+
+        DEGENERESCENCIA CONHECIDA com a config de PRODUCAO (`profit_ticks=1`):
+        o preco so' se move em ticks inteiros, entao nao existe estado
+        intermediario entre "0% do alvo" (nunca tocou) e "100% do alvo"
+        (bateu, ja fechado pelo motor ANTES desta funcao rodar -- ver o
+        passo 2 acima). Ou seja, para QUALQUER `defesa_alvo_proximidade_pct
+        < 100%`, a condicao de fechar so' poderia bater exatamente quando o
+        alvo JA foi tocado -- o que este `on_bar` nunca chega a ver. Com a
+        config de producao, esta defesa pode portanto NUNCA disparar antes
+        da saida normal por alvo ja ter fechado a posicao -- hipotese a
+        CONFIRMAR empiricamente (ver `scripts/daytrade/wdof1_defesa_recuo_
+        sweep_2026_09_03.py`), nao assumida corrigida aqui: a mecanica acima
+        e' implementada corretamente e independente de `profit_ticks`,
+        e o numero medido e' quem decide se ela dispara.
+
+        Estado de armada mora em `self._defesa_armada` (dict, chave
+        `(side, entry_ts)`), NUNCA em `IntradayOpenPosition.metadata` --
+        `metadata` e' um snapshot READ-ONLY reconstruido do zero a cada
+        chamada (`machine.py::_position_view`, `metadata=dict(pos.metadata)`
+        e' uma COPIA), a estrategia nao tem como escrever de volta um estado
+        persistente por ali. `(side, entry_ts)` basta porque este robo nunca
+        usa `EnterLimit.split_quantities` (uma unica posicao por vez) --
+        resetado em `on_session_start`, mesmo lugar que ja reseta `self.
+        _state` (sem memoria entre pregoes)."""
         if (risco_pct_por_trade is None) != (point_value_brl is None):
             raise ValueError(
                 "wdo_grid_reload_maker: passe `risco_pct_por_trade` e "
@@ -400,8 +487,18 @@ class WdoGridReloadMaker(IntradayStrategy):
             None if risco_pct_por_trade is None else float(risco_pct_por_trade)
         )
         self.point_value_brl = None if point_value_brl is None else float(point_value_brl)
+        self.defesa_ativa = bool(defesa_ativa)
+        self.defesa_gatilho_stop_pct = float(defesa_gatilho_stop_pct)
+        self.defesa_alvo_proximidade_pct = float(defesa_alvo_proximidade_pct)
 
         self._state = _SessionState()
+        # Estado de "ja armou a defesa de recuo" por POSICAO -- chave
+        # `(side, entry_ts)`, mora no self por causa do snapshot read-only de
+        # `IntradayOpenPosition` (ver a docstring do parametro `defesa_ativa`
+        # acima). Resetado em `on_session_start`, mesmo espirito de `self.
+        # _state`. So' cresce (nunca desarma dentro do mesmo trade) -- e' zerado
+        # inteiro a cada pregao, entao nunca acumula alem do que a sessao usou.
+        self._defesa_armada: dict[tuple[str, pd.Timestamp], bool] = {}
         # Atualizado por `on_capital_update`, chamado pelo motor logo antes
         # de cada `on_bar` -- 0.0 so' antes da primeira barra real. Desde
         # 2026-09-03 (LICOES_DE_PRODUCAO.md item 3.14) o warm start (replay
@@ -414,6 +511,7 @@ class WdoGridReloadMaker(IntradayStrategy):
 
     def on_session_start(self, session_date) -> None:
         self._state = _SessionState()
+        self._defesa_armada = {}
 
     def on_capital_update(self, cash_brl: float) -> None:
         """Guarda o caixa acumulado para a proxima `EnterLimit` usar -- so'
@@ -506,6 +604,46 @@ class WdoGridReloadMaker(IntradayStrategy):
                 return side
         return None
 
+    def _defesa_deve_fechar(self, pos: IntradayOpenPosition, bar: Bar) -> bool:
+        """`True` se a defesa de recuo (`defesa_ativa`) manda fechar `pos`
+        AGORA -- ver a docstring do parametro `defesa_ativa` em `__init__`
+        para a mecanica completa e a formula exata. So' chamada quando
+        `self.defesa_ativa` ja e' `True`."""
+        if self.tick_size <= 0 or pos.current_stop is None:
+            return False  # sem grade de preco ou sem stop, nada a derivar
+        eps = 1e-9
+        chave = (pos.side, pos.entry_ts)
+        stop_ticks_pos = abs(pos.entry_price - pos.current_stop) / self.tick_size
+        if stop_ticks_pos <= 0:
+            return False
+
+        if not self._defesa_armada.get(chave, False):
+            preco_adverso = bar.low if pos.side == "long" else bar.high
+            excursao_ticks = (
+                (pos.entry_price - preco_adverso) if pos.side == "long"
+                else (preco_adverso - pos.entry_price)
+            ) / self.tick_size
+            excursao_ticks = max(0.0, excursao_ticks)
+            gatilho_ticks = self.defesa_gatilho_stop_pct * stop_ticks_pos
+            if excursao_ticks + eps >= gatilho_ticks:
+                self._defesa_armada[chave] = True
+            else:
+                return False  # ainda nao armou -- nao ha' o que checar de alvo
+
+        if pos.current_target is None:
+            return False  # armada, mas sem alvo declarado -- nao ha' proximidade a medir
+        dist_total_ticks = abs(pos.current_target - pos.entry_price) / self.tick_size
+        if dist_total_ticks <= 0:
+            return False
+        preco_favoravel = bar.high if pos.side == "long" else bar.low
+        dist_restante_ticks = (
+            (pos.current_target - preco_favoravel) if pos.side == "long"
+            else (preco_favoravel - pos.current_target)
+        ) / self.tick_size
+        dist_restante_ticks = max(0.0, dist_restante_ticks)
+        fracao_restante = dist_restante_ticks / dist_total_ticks
+        return fracao_restante <= self.defesa_alvo_proximidade_pct + eps
+
     def on_bar(
         self,
         ts: pd.Timestamp,
@@ -548,6 +686,13 @@ class WdoGridReloadMaker(IntradayStrategy):
                     state.short_fills += 1
                 state.open_side = state.pending_side
                 state.pending_side = None
+            if self.defesa_ativa:
+                # Prioridade da defesa sobre a logica normal desta chamada
+                # (que aqui e' so' "nao faca nada, alvo/stop ja sao geridos
+                # pelo motor") -- ver a docstring do parametro `defesa_ativa`.
+                for pos in positions:
+                    if self._defesa_deve_fechar(pos, bar):
+                        return [Exit(reason="defesa_recuo")]
             return []  # alvo e stop ja sao geridos pelo motor (initial_target/initial_stop)
 
         # Sem posicao. Se `open_side` ainda estava marcado, a posicao que

@@ -93,7 +93,7 @@ There are **two SQLite files on purpose** — `db/journal.sqlite` (backtest) and
 ```
 Default `--execution-mode` is `shadow` (journals everything, sends no orders). See `DEPLOY.md` for the NSSM service + Windows-only rationale.
 
-**Parameter sweeps / exploratory scripts** live in `scripts/daytrade/` and `scripts/`. Follow the parallelism pattern in `scripts/daytrade/sweep_gremah_tick.py`: `ProcessPoolExecutor` with `submit`/`as_completed` (never `pool.map`), one `redirect_stdout` per unit, `flush=True` on every print, and **stream each unit's result as it finishes** — never wait for the whole sweep to speak.
+**Parameter sweeps / exploratory scripts** live in `scripts/daytrade/` and `scripts/`. Follow the parallelism pattern in `scripts/daytrade/gremah_defesa_corte_sweep_2026_09_03.py`: `ProcessPoolExecutor` with `submit`/`as_completed` (never `pool.map`), one `redirect_stdout` per unit, `flush=True` on every print, and **stream each unit's result as it finishes** — never wait for the whole sweep to speak.
 
 ## Standard backtest table — do not invent columns
 
@@ -122,7 +122,7 @@ Use `config_for(..., preco_atual=preco_ref)` para ação e `contracts_from_capit
 1. **Sem caminho de arquivo fixo compartilhado.** `tmp_path` sempre. Dois workers ao mesmo tempo pegariam o mesmo arquivo.
 2. **Sem dependência de ordem entre testes.** `--dist load` distribui teste-a-teste; ordem de coleta ≠ ordem de execução.
 
-Mesmo espírito para **sweeps de parâmetro**: `ProcessPoolExecutor` com `submit`/`as_completed` (nunca `pool.map`, que trava resultado pronto atrás de unidade lenta), `redirect_stdout` por unidade, `flush=True` em todo print, cada unidade imprime a linha DELA assim que termina — resumo ordenado vem depois. Ver `scripts/daytrade/sweep_gremah_tick.py` e `scripts/daytrade/sweep_copa.py`.
+Mesmo espírito para **sweeps de parâmetro**: `ProcessPoolExecutor` com `submit`/`as_completed` (nunca `pool.map`, que trava resultado pronto atrás de unidade lenta), `redirect_stdout` por unidade, `flush=True` em todo print, cada unidade imprime a linha DELA assim que termina — resumo ordenado vem depois. Ver `scripts/daytrade/gremah_defesa_corte_sweep_2026_09_03.py` e `scripts/daytrade/sweep_copa.py`.
 
 ## Front-end: HTMX + Terminal Editorial
 

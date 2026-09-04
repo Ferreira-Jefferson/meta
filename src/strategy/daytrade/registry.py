@@ -26,7 +26,6 @@ from dataclasses import dataclass
 from strategy.daytrade.base import IntradayStrategy
 from strategy.daytrade.lab.copa_win import CopaWin
 from strategy.daytrade.lab.gremah import Gremah
-from strategy.daytrade.lab.gremah_tick import GremahTick
 from strategy.daytrade.lab.wdo_grid_reload_maker import WdoGridReloadMaker
 
 # A ORDEM DESTE DICIONÁRIO É O PÓDIO DE DAY TRADE — o primeiro é o TOP-1.
@@ -38,6 +37,62 @@ from strategy.daytrade.lab.wdo_grid_reload_maker import WdoGridReloadMaker
 # dado ou o mesmo instrumento, então não existe uma run em que apareçam lado
 # a lado. Um ranking automático teria de comparar números medidos em bases
 # diferentes, que é a comparação desonesta que este projeto evita.
+#
+# 2026-09-04, decisão do dono: medir `gremah` (M1) contra `gremah_tick`
+# (motor tick) nos 9 símbolos que os dois calibravam separadamente,
+# decidir qual sobrevive, eliminar o outro — a família tinha dois robôs
+# disputando os mesmos ativos, e só um pode operar cada um ao vivo.
+#
+# RESULTADO -- `gremah_tick` ELIMINADA. `gremah` (M1) fica com o nome
+# (por isso não há renomeação: `Gremah.name` já era `"gremah"`).
+#
+# Comparação de config de PRODUÇÃO (cada motor com a calibração já
+# medida/confirmada por ele), histórico completo disponível, capital =
+# `capital_minimo_brl` real por símbolo -- `gremah` M1 venceu nos 9 DE 9
+# símbolos testados:
+#   PMAM3   M1 R$   677,85  x tick R$   186,16
+#   KLBN4   M1 R$ 2.085,72  x tick R$   568,41
+#   CSAN3   M1 R$   157,39  x tick R$  -375,23  (tick foi NEGATIVA)
+#   DASA3   M1 R$   644,49  x tick R$   202,80
+#   PCAR3   M1 R$   688,63  x tick R$  -206,53  (tick foi NEGATIVA)
+#   KLBN3   M1 R$ 1.463,54  x tick R$   565,48
+#   GRND3   M1 R$ 1.464,53  x tick R$    79,77
+#   LPSB3   M1 R$   875,54  x tick R$   530,94
+#   BMGB4   M1 R$ 1.424,02  x tick R$   106,17
+# Ressalva do próprio agente que mediu a tick: CSAN3/PCAR3 negativas podem
+# ser efeito de janela mais longa que a testada antes (mesmo mecanismo de
+# "capital preso no preço do 1º dia" já documentado na família) e
+# mereceriam auditoria própria antes de tratar como decisão isolada -- mas
+# a vitória do M1 não depende só dessas duas linhas.
+#
+# Confirmação com protocolo IS/OOS de verdade (não só histórico
+# combinado), nos dois símbolos que hoje operam com dinheiro real:
+#   PMAM3  M1   IS R$   480,88 / OOS R$  191,16  (R$  672,04 combinado)
+#          tick IS R$   177,19 / OOS R$   54,96  (R$  232,15 combinado)
+#          M1 vence por ~2,9x
+#   KLBN3  M1   IS R$ 1.259,25 / OOS R$  197,81  (R$1.457,06 combinado)
+#          tick IS R$   512,95 / OOS R$   60,04  (R$  572,99 combinado)
+#          M1 vence por ~2,5x
+#
+# O que isso CONTRARIA, e precisa ser dito: a decisão original de
+# 2026-08-22 (preservada como registro histórico logo abaixo) preferia a
+# tick por argumento TEÓRICO de realismo de preenchimento (ordem só conta
+# como tocada se alguém negociou no nível, contra o M1 que resolve stop-e-
+# alvo-na-mesma-barra por "chute pessimista"). A medição não confirmou:
+# a tick gera MAIS trades por símbolo em todos os casos (edge mais fino
+# por trade, mesmo achado de `edge_subtick_familia_gremah` -- 18/18 pares
+# abaixo de 1 tick de edge), e isso não compensa no líquido. Este projeto
+# mede para decidir, não decide por argumento teórico quando a medição
+# contraria -- ver CLAUDE.md.
+#
+# Mecanismos `defesa_recuo`/`corte_persistencia` (mesmo pedido do dono,
+# mesma rodada): TESTADOS nos dois motores antes desta decisão --
+# `defesa_recuo` degenerado ou prejudicial (alvo de 1 tick não deixa
+# espaço pra "quase lá"), `corte_persistencia` com efeito real mas em
+# combos DIFERENTES por símbolo (ver `scripts/daytrade/gremah_defesa_
+# corte_sweep_2026_09_03.py`) -- AINDA NÃO ativado em produção, decisão
+# pendente do dono (mesmo padrão do `copa_win` acima: só liga depois de
+# decisão explícita, nunca por default silencioso).
 #
 # 2026-08-28, decisão do dono: `copa_win` entra no pódio como TOP-2,
 # empurrando `gremah_tick` para TOP-3 e `gremah` para TOP-4. Por quê:
@@ -99,6 +154,10 @@ from strategy.daytrade.lab.wdo_grid_reload_maker import WdoGridReloadMaker
 # confirmação OOS original (R$148,89/pregão, 89% de retenção) volta a
 # descrever o default em produção.
 #
+# SUPERADO em 2026-09-04 -- ver o bloco no topo do arquivo: gremah_tick foi
+# eliminada, a medição contrariou o argumento abaixo. Preservado como
+# registro histórico da decisão original.
+#
 # 2026-08-22, decisão do dono (ordem original, agora TOP-3/TOP-4): entre
 # `gremah_tick` e `gremah`, tick a tick não tem a ambiguidade "stop e alvo
 # na mesma barra" que o M1 resolve por chute pessimista — um negócio tem um
@@ -111,7 +170,6 @@ from strategy.daytrade.lab.wdo_grid_reload_maker import WdoGridReloadMaker
 _ROBOTS: dict[str, type[IntradayStrategy]] = {
     WdoGridReloadMaker.name: WdoGridReloadMaker,
     CopaWin.name: CopaWin,
-    GremahTick.name: GremahTick,
     Gremah.name: Gremah,
 }
 
@@ -203,6 +261,33 @@ _KWARGS_PADRAO: dict[str, dict] = {
         # 2026_08_29.py`), mas nenhum valor específico passou por uma
         # varredura própria nem por confirmação OOS ainda.
         risco_pct_por_trade=0.05,
+        # 2026-09-03, pedido do dono: liga os DOIS mecanismos de saída
+        # antecipada testados nesta rodada (`scripts/daytrade/copawin_
+        # corte_persistencia_sweep_2026_09_03.py`, seção `--bonus`) —
+        # combinados, IS R$7.076,40 -> R$11.236,50 (+58,8%), OOS R$3.426,00
+        # -> R$4.014,50 (+17,2%), no histórico completo de WIN@ com
+        # R$3.000 de capital (o nível "de folga" onde o robô não trava por
+        # caixa — ver a memória `copawin-e-gremah-piso-capital-2026-08-29`;
+        # com o capital REAL do slot, R$434, o OOS tem 1 trade só e não da'
+        # pra confirmar nada).
+        # RESSALVA que fica registrada aqui por não ter sido resolvida antes
+        # de ligar (decisão explícita do dono, ver LICOES_DE_PRODUCAO.md se
+        # quiser o item completo): a janela OOS do WIN@ (>=2026-06-13) já
+        # tinha sido usada uma vez antes pra confirmar `alvo_vol`/`stop_vol`
+        # acima (2026-08-28) — não é mais um teste cego de verdade pra esta
+        # estratégia, então o "+17,2% no OOS" acima e' evidência mais fraca
+        # do que um OOS nunca visto. Também NÃO e' o candidato mais ROBUSTO
+        # medido (esse seria `corte_persistencia_min_barras=20,
+        # corte_persistencia_frac_adverso=0.6` sozinho, que melhora IS e OOS
+        # de forma mais equilibrada e sem a ressalva de fragilidade vista em
+        # `frac_adverso` 70%-80%) — o combo abaixo foi o que o dono pediu
+        # explicitamente depois de ver os dois números lado a lado.
+        corte_persistencia_ativo=True,
+        corte_persistencia_min_barras=10,
+        corte_persistencia_frac_adverso=1.0,
+        defesa_ativa=True,
+        defesa_gatilho_stop_pct=0.20,
+        defesa_alvo_proximidade_pct=0.10,
     ),
 }
 

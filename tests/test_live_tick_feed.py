@@ -1,5 +1,6 @@
 """Testes de `live/tick_feed.py::MT5TickFeed` — o feed de NEGOCIO A NEGOCIO
-que a `gremah_tick` consome ao vivo.
+que todo robo `feed_kind="tick"` consome ao vivo (`WdoGridReloadMaker` hoje;
+`GremahTick` tambem consumia ate' ser eliminada em 2026-09-04).
 
 O que esta em jogo, e por que os invariantes sao OPOSTOS aos de
 `test_live_bar_feed.py`: uma barra M1 e' um agregado que continua mudando ate'
@@ -52,7 +53,8 @@ def _feed(monkeypatch, df: pd.DataFrame, agora: str, capturado: list | None = No
 def test_entrega_o_negocio_mais_recente_sem_esperar_o_minuto_fechar(monkeypatch):
     """A guarda central do feed M1 seria um BUG aqui: um negocio nao se forma,
     acontece. Segurar o mais novo por 60s custaria exatamente a vantagem que
-    justifica a `gremah_tick` ser o TOP-1."""
+    justifica um robo `feed_kind="tick"` (`WdoGridReloadMaker` hoje) preferir
+    este feed ao M1."""
     df = _ticks("2026-08-21 13:00:00", 5)  # 13:00:00..13:00:04
     feed = _feed(monkeypatch, df, "2026-08-21 13:00:05")
 

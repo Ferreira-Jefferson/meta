@@ -163,8 +163,9 @@ CHAVE de um robo do registry de swing (`strategy.registry.list_strategies()`
 `strategy.registry.get_strategy(chave).factory()`. Slot `daytrade`: a chave
 vem do registry PROPRIO de day trade (`strategy.daytrade.registry.
 list_daytrade_robots()` — ver docstring de la para o motivo de nao ser o mesmo
-registry, e para o podio declarado: `gremah_tick` e' o TOP-1, `gremah` o
-TOP-2). A GRANULARIDADE do dado tambem vem do robo (`feed_kind`): o mesmo
+registry, e o comentario sobre `_ROBOTS` em `strategy/daytrade/registry.py`
+para o podio DECLARADO atual, que muda por decisao do dono e nao deve ser
+hardcoded aqui). A GRANULARIDADE do dado tambem vem do robo (`feed_kind`): o mesmo
 comando sobe um robo de barra M1 ou um de negocio a negocio sem nenhuma flag a
 mais, porque quem monta o feed le a declaracao dele
 (`live/intraday_feed.py::feed_for`). O SIMBOLO negociado e' propriedade do

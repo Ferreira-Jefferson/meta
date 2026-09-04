@@ -10,7 +10,7 @@ from datetime import time
 import pandas as pd
 import pytest
 
-from strategy.daytrade.base import Bar
+from strategy.daytrade.base import Bar, Exit, IntradayOpenPosition
 from strategy.daytrade.lab.gremah import (
     _CALIBRATION_BY_SYMBOL,
     _GEOMETRIA_TICKS_BY_SYMBOL,
@@ -442,8 +442,9 @@ def test_janela_do_teto_de_volume_e_1min_por_decisao_do_dono_2026_08_22():
 
 
 # ---------- divisao de entrada em pedacos (2026-08-23) ---------------------
-# MESMA logica de `GremahTick._dividir_pecas` (ver `tests/test_gremah_tick.py`),
-# aqui "evento" e' a barra M1 fechada em vez do negocio individual. So' tem
+# MESMA logica que existia em `GremahTick._dividir_pecas` (motor tick
+# eliminado em 2026-09-04, ver `strategy/daytrade/registry.py`), aqui
+# "evento" e' a barra M1 fechada em vez do negocio individual. So' tem
 # efeito de verdade com `IntradayBacktestConfig.limit_fill_capped_by_volume=
 # True` (testado em `test_intraday_machine.py`); aqui so' a LOGICA de
 # fatiamento, isolada do motor.
@@ -599,16 +600,16 @@ def test_simbolo_fora_da_tabela_de_ticks_segue_no_percentual():
     )
 
 
-def test_pmam3_nao_entra_na_geometria_em_ticks_do_motor_tick():
-    """Reprovado no OOS = descarte, sem segunda tentativa: o candidato da
-    PMAM3 em tick (T1 E1 S2) venceu o IS por +9,4% e perdeu o OOS por -5,6%
-    em 2026-08-26. A tabela do motor tick EXISTE (a BMGB4 passou na mesma
-    rodada), entao o que este teste guarda e' a decisao sobre a PMAM3, nao a
-    ausencia da tabela -- foi assim que ele foi escrito primeiro, com a
-    premissa larga demais, e a BMGB4 o derrubou no mesmo dia."""
-    from strategy.daytrade.lab.gremah_tick import _GEOMETRIA_TICKS_BY_SYMBOL_TICK
-    assert "PMAM3" not in _GEOMETRIA_TICKS_BY_SYMBOL_TICK
-    assert _GEOMETRIA_TICKS_BY_SYMBOL_TICK["BMGB4"] == (1, 1, 8)
+# NOTA (2026-09-04): existia aqui `test_pmam3_nao_entra_na_geometria_em_
+# ticks_do_motor_tick`, guardando a decisão de que a PMAM3 (reprovada no OOS
+# do motor tick, 2026-08-26) não entrava em `GremahTick.
+# _GEOMETRIA_TICKS_BY_SYMBOL_TICK` enquanto a BMGB4 entrava. Com `gremah_tick`
+# eliminada (motor tick perdeu de 0 a 9 para o M1, ver
+# `strategy/daytrade/registry.py`), o módulo e a tabela inteira deixaram de
+# existir -- não há mais tabela nem decisão para guardar. Removido junto com
+# o resto da limpeza da eliminação; nenhuma lacuna de cobertura (o teste
+# equivalente da `gremah` M1, `_GEOMETRIA_TICKS_BY_SYMBOL`, continua coberto
+# acima, ex. `test_...` para DASA3).
 
 
 # ---------------------------------------------------------------------------
@@ -676,3 +677,190 @@ def test_filtro_none_explicito_restaura_comportamento_antigo():
     actions = strat.on_bar(ts0, bar0, positions=[], session_pnl_brl=0.0)
     assert len(actions) == 1
     assert actions[0].limit_price == pytest.approx(4.90)
+
+
+# ---------------------------------------------------------------------------
+# SAIDA ANTECIPADA opt-in (2026-09-03, PORTADA de `CopaWin`/
+# `WdoGridReloadMaker` -- ver a secao do modulo "Saida defensiva de RECUO e
+# corte por PERSISTENCIA" em `strategy/daytrade/lab/gremah.py`). Cenario
+# sintetico: `positions` construido a mao (bypassa a maquina de entrada por
+# completo), mesmo padrao de `tests/test_copa_win.py`.
+# ---------------------------------------------------------------------------
+
+def _bar(minuto: int, o, h, low, c, volume=0.0) -> Bar:
+    ts = pd.Timestamp("2026-01-05 13:00", tz="UTC") + pd.Timedelta(minutes=minuto)
+    return Bar(ts=ts, open=float(o), high=float(h), low=float(low), close=float(c), volume=volume)
+
+
+def _pos_bars_held(side, entry, stop, bars_held, target=None) -> IntradayOpenPosition:
+    return IntradayOpenPosition(
+        side=side, entry_ts=pd.Timestamp("2026-01-05 13:05", tz="UTC"),
+        entry_price=entry, quantity=100, current_stop=stop,
+        current_target=target, bars_held=bars_held,
+    )
+
+
+# ---------- corte por persistencia -----------------------------------------
+
+def test_corte_persistencia_respeita_aquecimento_minimo_antes_de_disparar():
+    """3 barras 100% adversas seguidas, aquecimento minimo de 3 barras -- so'
+    pode disparar quando `bars_held` atinge o minimo, nunca antes."""
+    strat = _strat(corte_persistencia_ativo=True, corte_persistencia_min_barras=3,
+                    corte_persistencia_frac_adverso=0.8)
+    strat.on_session_start(None)
+    entry = 5.00
+    for bh in range(3):  # bars_held 0, 1, 2 -- todas adversas
+        bar = _bar(10 + bh, entry - 0.10, entry - 0.05, entry - 0.15, entry - 0.10)
+        pos = _pos_bars_held("long", entry, entry - 0.50, bars_held=bh)
+        acoes = strat.on_bar(bar.ts, bar, [pos], 0.0)
+        assert acoes == [], f"disparou antes do aquecimento em bars_held={bh}"
+
+
+def test_corte_persistencia_dispara_quando_fracao_adversa_bate_o_corte():
+    """Seguindo o cenario acima: na barra em que `bars_held` atinge o minimo
+    E as 3 barras passadas foram 100% adversas (>= corte de 80%), fecha."""
+    strat = _strat(corte_persistencia_ativo=True, corte_persistencia_min_barras=3,
+                    corte_persistencia_frac_adverso=0.8)
+    strat.on_session_start(None)
+    entry = 5.00
+    for bh in range(3):
+        bar = _bar(10 + bh, entry - 0.10, entry - 0.05, entry - 0.15, entry - 0.10)
+        pos = _pos_bars_held("long", entry, entry - 0.50, bars_held=bh)
+        strat.on_bar(bar.ts, bar, [pos], 0.0)
+    bar3 = _bar(13, entry - 0.10, entry - 0.05, entry - 0.15, entry - 0.10)
+    pos3 = _pos_bars_held("long", entry, entry - 0.50, bars_held=3)
+    acoes = strat.on_bar(bar3.ts, bar3, [pos3], 0.0)
+    assert len(acoes) == 1 and isinstance(acoes[0], Exit)
+    assert acoes[0].reason == "corte_persistencia"
+
+
+def test_corte_persistencia_nao_dispara_com_fracao_adversa_abaixo_do_corte():
+    """Aquecimento cumprido, mas so' 1 das 2 barras passadas foi adversa --
+    fracao 0,5 fica abaixo do corte de 0,9, entao nao dispara."""
+    strat = _strat(corte_persistencia_ativo=True, corte_persistencia_min_barras=2,
+                    corte_persistencia_frac_adverso=0.9)
+    strat.on_session_start(None)
+    entry = 5.00
+    bar0 = _bar(20, entry - 0.10, entry - 0.05, entry - 0.15, entry - 0.20)  # adversa
+    pos0 = _pos_bars_held("long", entry, entry - 0.50, bars_held=0)
+    assert strat.on_bar(bar0.ts, bar0, [pos0], 0.0) == []
+
+    bar1 = _bar(21, entry + 0.05, entry + 0.15, entry, entry + 0.10)  # favoravel
+    pos1 = _pos_bars_held("long", entry, entry - 0.50, bars_held=1)
+    assert strat.on_bar(bar1.ts, bar1, [pos1], 0.0) == []
+
+    bar2 = _bar(22, entry - 0.10, entry - 0.05, entry - 0.15, entry - 0.20)  # adversa
+    pos2 = _pos_bars_held("long", entry, entry - 0.50, bars_held=2)
+    assert strat.on_bar(bar2.ts, bar2, [pos2], 0.0) == []
+
+
+def test_corte_persistencia_desligado_por_padrao_nao_interfere():
+    """Regressao: `corte_persistencia_ativo=False` (default) preserva o
+    comportamento BYTE A BYTE de antes -- mesmo cenario 100% adverso do teste
+    de disparo acima, mas sem o parametro novo ligado, nunca fecha."""
+    strat = _strat()
+    strat.on_session_start(None)
+    entry = 5.00
+    for bh in range(4):
+        bar = _bar(30 + bh, entry - 0.10, entry - 0.05, entry - 0.15, entry - 0.10)
+        pos = _pos_bars_held("long", entry, entry - 0.50, bars_held=bh)
+        assert strat.on_bar(bar.ts, bar, [pos], 0.0) == []
+
+
+def test_on_session_start_zera_contador_de_barras_adversas_e_defesa_armada():
+    strat = _strat(corte_persistencia_ativo=True, corte_persistencia_min_barras=1,
+                    corte_persistencia_frac_adverso=0.5,
+                    defesa_ativa=True, defesa_gatilho_stop_pct=0.1,
+                    defesa_alvo_proximidade_pct=0.9)
+    strat.on_session_start(None)
+    entry = 5.00
+    bar0 = _bar(40, entry - 0.10, entry - 0.05, entry - 0.15, entry - 0.10)
+    pos0 = _pos_bars_held("long", entry, entry - 0.50, bars_held=0, target=entry + 0.50)
+    assert strat.on_bar(bar0.ts, bar0, [pos0], 0.0) == []  # aquece corte, arma defesa, nenhum dispara
+    chave = ("long", pos0.entry_ts)
+    assert strat._barras_adversas.get(chave, 0) == 1
+    assert strat._defesa_armada.get(chave, False) is True  # excursao de bar0 ja' arma
+
+    strat.on_session_start(pd.Timestamp("2026-01-06").date())
+    assert strat._barras_adversas == {}
+    assert strat._defesa_armada == {}
+
+
+# ---------- defesa de recuo -------------------------------------------------
+
+def test_defesa_recuo_arma_e_dispara_quando_preco_volta_perto_do_alvo():
+    """Bar1 sofre excursao adversa suficiente para ARMAR (mas fica longe do
+    alvo -- nao dispara ainda); bar2 volta perto do alvo e fecha."""
+    strat = _strat(defesa_ativa=True, defesa_gatilho_stop_pct=0.5,
+                    defesa_alvo_proximidade_pct=0.4)
+    strat.on_session_start(None)
+    entry, stop, target = 5.00, 4.50, 5.50  # dist_stop=0.50, dist_total=0.50
+
+    bar1 = _bar(10, entry, entry + 0.05, 4.70, entry - 0.05)  # excursao 0,30 >= 0,25 -> arma
+    pos1 = _pos_bars_held("long", entry, stop, bars_held=1, target=target)
+    assert strat.on_bar(bar1.ts, bar1, [pos1], 0.0) == []
+    chave = ("long", pos1.entry_ts)
+    assert strat._defesa_armada.get(chave, False) is True
+
+    bar2 = _bar(11, entry, 5.35, entry - 0.05, 5.30)  # dist_restante 0,15/0,50=0,30<=0,40 -> fecha
+    pos2 = _pos_bars_held("long", entry, stop, bars_held=2, target=target)
+    acoes = strat.on_bar(bar2.ts, bar2, [pos2], 0.0)
+    assert len(acoes) == 1 and isinstance(acoes[0], Exit)
+    assert acoes[0].reason == "defesa_recuo"
+
+
+def test_defesa_recuo_nao_dispara_antes_de_armar():
+    """Preco chega perto do alvo (proximidade frouxa o bastante para
+    disparar SE armada), mas a excursao adversa nunca bateu o gatilho --
+    sem armar, a defesa nao pode checar proximidade nenhuma."""
+    strat = _strat(defesa_ativa=True, defesa_gatilho_stop_pct=1.0,
+                    defesa_alvo_proximidade_pct=0.9)
+    strat.on_session_start(None)
+    entry, stop, target = 5.00, 4.50, 5.50  # dist_stop=0.50 -- gatilho exige excursao=0,50 inteira
+
+    bar = _bar(10, entry, 5.49, 4.80, 5.45)  # excursao so' 0,20 < 0,50 -> nao arma
+    pos = _pos_bars_held("long", entry, stop, bars_held=1, target=target)
+    assert strat.on_bar(bar.ts, bar, [pos], 0.0) == []
+    chave = ("long", pos.entry_ts)
+    assert strat._defesa_armada.get(chave, False) is False
+
+
+def test_defesa_recuo_desligado_por_padrao_nao_interfere():
+    """Regressao: `defesa_ativa=False` (default) preserva o comportamento
+    BYTE A BYTE de antes -- mesmo cenario de disparo do teste acima, mas sem
+    o parametro novo ligado, nunca fecha."""
+    strat = _strat()
+    strat.on_session_start(None)
+    entry, stop, target = 5.00, 4.50, 5.50
+
+    bar1 = _bar(10, entry, entry + 0.05, 4.70, entry - 0.05)
+    pos1 = _pos_bars_held("long", entry, stop, bars_held=1, target=target)
+    assert strat.on_bar(bar1.ts, bar1, [pos1], 0.0) == []
+
+    bar2 = _bar(11, entry, 5.35, entry - 0.05, 5.30)
+    pos2 = _pos_bars_held("long", entry, stop, bars_held=2, target=target)
+    assert strat.on_bar(bar2.ts, bar2, [pos2], 0.0) == []
+
+
+def test_corte_persistencia_tem_prioridade_sobre_defesa_recuo_no_mesmo_bar():
+    """Os dois mecanismos podem estar ligados ao mesmo tempo -- `defesa_ativa`
+    armado com gatilho/proximidade frouxos o bastante para tambem disparar no
+    mesmo bar. `corte_persistencia` e' checado PRIMEIRO (ver `on_bar`): o
+    motivo devolvido tem que ser o dele, nunca `defesa_recuo`."""
+    strat = _strat(
+        corte_persistencia_ativo=True, corte_persistencia_min_barras=1,
+        corte_persistencia_frac_adverso=0.5,
+        defesa_ativa=True, defesa_gatilho_stop_pct=0.0,
+        defesa_alvo_proximidade_pct=1.0,
+    )
+    strat.on_session_start(None)
+    entry = 5.00
+    bar0 = _bar(50, entry - 0.10, entry - 0.05, entry - 0.15, entry - 0.10)
+    pos0 = _pos_bars_held("long", entry, entry - 0.50, bars_held=0, target=entry + 0.50)
+    assert strat.on_bar(bar0.ts, bar0, [pos0], 0.0) == []  # aquecimento (bars_held=0)
+
+    bar1 = _bar(51, entry - 0.10, entry - 0.05, entry - 0.15, entry - 0.10)
+    pos1 = _pos_bars_held("long", entry, entry - 0.50, bars_held=1, target=entry + 0.50)
+    acoes = strat.on_bar(bar1.ts, bar1, [pos1], 0.0)
+    assert len(acoes) == 1
+    assert acoes[0].reason == "corte_persistencia"

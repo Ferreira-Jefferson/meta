@@ -14,6 +14,7 @@ from strategy.daytrade.base import (
     Bar,
     Enter,
     EnterLimit,
+    Exit,
     IntradayOpenPosition,
 )
 from strategy.daytrade.lab.copa_win import CopaWin
@@ -324,3 +325,116 @@ def test_on_capital_update_nunca_chamado_ainda_produz_pelo_menos_1_contrato():
     devolve 0, mesmo espirito do piso de `Gremah._lotes_por_realocacao`."""
     robo = CopaWin(teto_contratos=15, fracao_entrada=1.0, margin_per_contract_brl=100.0)
     assert robo.quantidade_por_entrada == 1
+
+
+# ---------- corte por persistencia no lado adverso (2026-09-03, aditivo/opt-in) --
+# Versao CAUSAL do achado retrospectivo de `copawin_duracao_operacoes_2026_09_
+# 03.py`: quantas barras JA VIVIDAS (`bars_held`, o motor preenche de verdade
+# em producao) estiveram do lado adverso. Os testes simulam o motor
+# construindo `IntradayOpenPosition` a mao com `bars_held` CRESCENTE a cada
+# chamada -- na estrategia sozinha nao existe motor incrementando isso.
+
+def _pos_bars_held(side, entry, stop, bars_held, target=None) -> IntradayOpenPosition:
+    return IntradayOpenPosition(
+        side=side, entry_ts=pd.Timestamp("2026-03-02 12:05", tz="UTC"),
+        entry_price=entry, quantity=6, current_stop=stop,
+        current_target=target, bars_held=bars_held,
+    )
+
+
+def test_corte_persistencia_respeita_aquecimento_minimo_antes_de_disparar():
+    """3 barras 100% adversas seguidas, aquecimento minimo de 3 barras -- so'
+    pode disparar quando `bars_held` atinge o minimo, nunca antes."""
+    robo = _robo(corte_persistencia_ativo=True, corte_persistencia_min_barras=3,
+                 corte_persistencia_frac_adverso=0.8, trail_vol=None)
+    entry = 140_300.0
+    for bh in range(3):  # bars_held 0, 1, 2 -- todas adversas
+        bar = _bar(10 + bh, entry - 100, entry - 50, entry - 150, entry - 100)
+        pos = _pos_bars_held("long", entry, entry - 500, bars_held=bh)
+        acoes = robo.on_bar(bar.ts, bar, [pos], 0.0)
+        assert acoes == [], f"disparou antes do aquecimento em bars_held={bh}"
+
+
+def test_corte_persistencia_dispara_quando_fracao_adversa_bate_o_corte():
+    """Seguindo o cenario acima: na barra em que `bars_held` atinge o minimo
+    E as 3 barras passadas foram 100% adversas (>= corte de 80%), fecha."""
+    robo = _robo(corte_persistencia_ativo=True, corte_persistencia_min_barras=3,
+                 corte_persistencia_frac_adverso=0.8, trail_vol=None)
+    entry = 140_300.0
+    for bh in range(3):
+        bar = _bar(10 + bh, entry - 100, entry - 50, entry - 150, entry - 100)
+        pos = _pos_bars_held("long", entry, entry - 500, bars_held=bh)
+        robo.on_bar(bar.ts, bar, [pos], 0.0)
+    bar3 = _bar(13, entry - 100, entry - 50, entry - 150, entry - 100)
+    pos3 = _pos_bars_held("long", entry, entry - 500, bars_held=3)
+    acoes = robo.on_bar(bar3.ts, bar3, [pos3], 0.0)
+    assert len(acoes) == 1 and isinstance(acoes[0], Exit)
+    assert acoes[0].reason == "corte_persistencia"
+
+
+def test_corte_persistencia_nao_dispara_com_fracao_adversa_abaixo_do_corte():
+    """Aquecimento cumprido, mas so' 1 das 2 barras passadas foi adversa --
+    fracao 0,5 fica abaixo do corte de 0,9, entao nao dispara."""
+    robo = _robo(corte_persistencia_ativo=True, corte_persistencia_min_barras=2,
+                 corte_persistencia_frac_adverso=0.9, trail_vol=None)
+    entry = 140_300.0
+    bar0 = _bar(20, entry - 100, entry - 50, entry - 150, entry - 200)  # adversa
+    pos0 = _pos_bars_held("long", entry, entry - 500, bars_held=0)
+    assert robo.on_bar(bar0.ts, bar0, [pos0], 0.0) == []
+
+    bar1 = _bar(21, entry + 50, entry + 150, entry, entry + 100)  # favoravel
+    pos1 = _pos_bars_held("long", entry, entry - 500, bars_held=1)
+    assert robo.on_bar(bar1.ts, bar1, [pos1], 0.0) == []
+
+    bar2 = _bar(22, entry - 100, entry - 50, entry - 150, entry - 200)  # adversa
+    pos2 = _pos_bars_held("long", entry, entry - 500, bars_held=2)
+    assert robo.on_bar(bar2.ts, bar2, [pos2], 0.0) == []
+
+
+def test_corte_persistencia_desligado_por_padrao_nao_interfere():
+    """Regressao: `corte_persistencia_ativo=False` (default) preserva o
+    comportamento BYTE A BYTE de antes -- mesmo cenario 100% adverso do teste
+    de disparo acima, mas sem o parametro novo ligado, nunca fecha."""
+    robo = _robo(trail_vol=None)
+    entry = 140_300.0
+    for bh in range(4):
+        bar = _bar(30 + bh, entry - 100, entry - 50, entry - 150, entry - 100)
+        pos = _pos_bars_held("long", entry, entry - 500, bars_held=bh)
+        assert robo.on_bar(bar.ts, bar, [pos], 0.0) == []
+
+
+def test_on_session_start_zera_o_contador_de_barras_adversas():
+    robo = _robo(corte_persistencia_ativo=True, corte_persistencia_min_barras=1,
+                 corte_persistencia_frac_adverso=0.5, trail_vol=None)
+    entry = 140_300.0
+    bar0 = _bar(40, entry - 100, entry - 50, entry - 150, entry - 100)
+    pos0 = _pos_bars_held("long", entry, entry - 500, bars_held=0)
+    robo.on_bar(bar0.ts, bar0, [pos0], 0.0)
+    chave = ("long", pos0.entry_ts)
+    assert robo._barras_adversas.get(chave, 0) == 1
+
+    robo.on_session_start(pd.Timestamp("2026-03-03").date())
+    assert robo._barras_adversas == {}
+
+
+def test_corte_persistencia_tem_prioridade_sobre_defesa_ativa_no_mesmo_bar():
+    """Os dois mecanismos podem estar ligados ao mesmo tempo -- `defesa_ativa`
+    armado com gatilho/proximidade frouxos o bastante para tambem disparar no
+    mesmo bar. `corte_persistencia` e' checado PRIMEIRO (ver `on_bar`): o
+    motivo devolvido tem que ser o dele, nunca `defesa_recuo`."""
+    robo = _robo(
+        corte_persistencia_ativo=True, corte_persistencia_min_barras=1,
+        corte_persistencia_frac_adverso=0.5,
+        defesa_ativa=True, defesa_gatilho_stop_pct=0.0,
+        defesa_alvo_proximidade_pct=1.0, trail_vol=None,
+    )
+    entry = 140_300.0
+    bar0 = _bar(50, entry - 100, entry - 50, entry - 150, entry - 100)
+    pos0 = _pos_bars_held("long", entry, entry - 500, bars_held=0, target=entry + 500)
+    assert robo.on_bar(bar0.ts, bar0, [pos0], 0.0) == []  # aquecimento (bars_held=0)
+
+    bar1 = _bar(51, entry - 100, entry - 50, entry - 150, entry - 100)
+    pos1 = _pos_bars_held("long", entry, entry - 500, bars_held=1, target=entry + 500)
+    acoes = robo.on_bar(bar1.ts, bar1, [pos1], 0.0)
+    assert len(acoes) == 1
+    assert acoes[0].reason == "corte_persistencia"

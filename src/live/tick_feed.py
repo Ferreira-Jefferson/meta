@@ -1,6 +1,9 @@
-"""Feed de TICK a tick (negocios reais) — o que a `gremah_tick` consome ao
-vivo. Par intradiario de `live/bar_feed.py`, com a MESMA interface, para o
-`IntradayLiveRuntime` nao saber de qual dos dois esta lendo.
+"""Feed de TICK a tick (negocios reais) — o que todo robo com
+`feed_kind="tick"` consome ao vivo (`WdoGridReloadMaker` hoje; `GremahTick`
+tambem consumia ate' ser eliminada em 2026-09-04, ver o comentario no topo de
+`strategy/daytrade/registry.py`). Par intradiario de `live/bar_feed.py`, com
+a MESMA interface, para o `IntradayLiveRuntime` nao saber de qual dos dois
+esta lendo.
 
 Por que existe uma segunda classe em vez de um parametro no `MT5BarFeed`
 ------------------------------------------------------------------------
@@ -69,8 +72,10 @@ _COLD_START_LOOKBACK = timedelta(minutes=5)
 #: nenhum erro no log. So' uma janela que alcanca o dia anterior devolveu os
 #: 139 certos. Alcancar sempre este piso (o filtro por `after_ts` em `_bars`
 #: continua decidindo o que e' NOVO) custa mais dado por chamada, mas so'
-#: importa em papel liquido -- este feed hoje so' serve a `gremah_tick`
-#: (PMAM3, poucos negocios/dia).
+#: importa em papel liquido -- medido contra `gremah_tick`/PMAM3 (poucos
+#: negocios/dia), o robo que consumia este feed em 2026-08-24; hoje quem
+#: consome e' `WdoGridReloadMaker`/WDO@ (`gremah_tick` foi eliminada em
+#: 2026-09-04), volume bem maior, entao este piso custa mais dado ainda.
 _SAFE_FETCH_LOOKBACK = timedelta(days=1)
 
 #: Folga somada ao fim da janela pedida ao terminal. O limite superior e'

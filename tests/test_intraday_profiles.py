@@ -18,7 +18,6 @@ from strategy.daytrade.base import (
     contracts_from_capital_com_reserva,
 )
 from strategy.daytrade.lab.gremah import _CALIBRATION_BY_SYMBOL
-from strategy.daytrade.lab.gremah_tick import _CALIBRATION_BY_SYMBOL_TICK
 
 
 def test_todo_simbolo_calibrado_da_gremah_tem_perfil_para_operar_ao_vivo():
@@ -35,17 +34,6 @@ def test_perfis_da_gremah_usam_lote_padrao_de_100_acoes():
             f"{symbol}: gremah so opera lote padrao (sem fracionar) -- "
             "default_quantity tem que ser 100."
         )
-
-
-def test_todo_simbolo_calibrado_da_gremah_tick_tem_perfil_para_operar_ao_vivo():
-    """Mesma lacuna do teste acima, so' que para `_CALIBRATION_BY_SYMBOL_TICK`
-    -- existia sem cobertura ate' 2026-08-23 (achado ao implementar o alvo
-    por volatilidade, que toca os dois robos igual)."""
-    faltando = set(_CALIBRATION_BY_SYMBOL_TICK) - set(PROFILES)
-    assert not faltando, (
-        f"simbolo(s) calibrado(s) em gremah_tick._CALIBRATION_BY_SYMBOL_TICK sem "
-        f"perfil em profiles.PROFILES (nao operam ao vivo): {sorted(faltando)}"
-    )
 
 
 # ---------- enforce_capital_minimo (2026-08-23) -----------------------------
