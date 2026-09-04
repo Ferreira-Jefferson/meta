@@ -60,6 +60,7 @@ if str(ROOT / "scripts" / "daytrade") not in sys.path:
 from backtest.intraday.report import num_br  # noqa: E402
 from wdof1_padrao_multiescala_2026_08_28 import (  # noqa: E402
     M1,
+    SYMBOL_LABEL,
     _letras,
     cabecalho,
     direcao_do_padrao,
@@ -119,7 +120,7 @@ def main() -> None:
     df = pd.read_parquet(M1)
 
     print("=" * 108)
-    print("MOMENTO CURTO (janelas fixas: 10/5/2/1 barras) -- WDOU26 M1")
+    print(f"MOMENTO CURTO (janelas fixas: 10/5/2/1 barras) -- {SYMBOL_LABEL} M1")
     print("=" * 108)
     print("t1(100%)=ult.10 barras | t2(50%)=ult.5 | t3(25%)=ult.2 | t4(10%)=a anterior")
     print(f"Desfecho fixo em {HORIZONTE} barras -- a convencao ja' estabelecida.")

@@ -46,8 +46,9 @@ Os mesmos dos arquivos anteriores, pelo mesmo motivo:
 
 ## Janela de dados
 
-33 pregoes de `WDOU26` (2026-07-15 a 2026-08-28) -- o que o terminal
-entrega para o contrato. As 4 escalas exigem 3 pregoes de historico, entao
+33 pregoes do contrato WDO em vigor naquela janela (2026-07-15 a
+2026-08-28, ver `SYMBOL_LABEL`/`M1` abaixo) -- o que o terminal entrega
+para o contrato. As 4 escalas exigem 3 pregoes de historico, entao
 sobram ~30 utilizaveis. Nao e' teste cego: este intervalo cai depois do
 corte OOS do perfil, que ja foi gasto em 2026-08-26 (ver a memoria
 `copa-oos-gasto-2026-08-26`). Serve para EXPLORAR, nao para confirmar.
@@ -71,7 +72,15 @@ if str(ROOT / "src") not in sys.path:
 
 from backtest.intraday.report import num_br  # noqa: E402
 
-M1 = ROOT / "data" / "raw_intraday" / "WDOU26_M1.parquet"
+#: Nome do arquivo deliberadamente SEM o codigo de vencimento do contrato --
+#: o nome nao carrega a letra do mes pra nao parecer "o mes atual" quando
+#: lido meses depois. O contrato real daquele pregao esta em `SYMBOL_REAL`
+#: de `wdof1_tendencia_confirmacao_2026_08_28.py`, a fonte forense de verdade.
+M1 = ROOT / "data" / "raw_intraday" / "wdo_fut_2026_08_28_M1.parquet"
+#: Rótulo pros prints -- derivado do NOME DO ARQUIVO acima, nunca digitado
+#: de novo: se um dia este script for reaproveitado para outro contrato
+#: (outro `M1`), o rótulo impresso já vem certo sozinho.
+SYMBOL_LABEL = M1.stem.removesuffix("_M1")
 FRACOES = (1.00, 0.50, 0.25, 0.10)
 ESCALAS = (1, 2, 3, 4)          # em pregoes
 MIN_BARRAS_JANELA = 3
@@ -209,7 +218,7 @@ def main() -> None:
     sessoes = sorted({i.sessao for i in instantes})
 
     print("=" * 108)
-    print("PADRAO das 4 janelas em MULTIPLAS ESCALAS -- WDOU26 M1")
+    print(f"PADRAO das 4 janelas em MULTIPLAS ESCALAS -- {SYMBOL_LABEL} M1")
     print("=" * 108)
     print(f"{len(df):,} barras | {len(sessoes)} pregoes com decisao "
           f"({sessoes[0]} a {sessoes[-1]}) | {len(instantes):,} instantes")

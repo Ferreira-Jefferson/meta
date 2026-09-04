@@ -322,8 +322,10 @@ def build_intraday(args):
 
     credenciais = _mt5_credentials()
     # `symbol_map` traduz o ticker do robo (`WDO@`, `WIN@` -- continuo, so'
-    # cotacao) pro contrato REAL com vencimento em aberto (ex. `"WDOU26"`) --
-    # sem ele, toda ordem de futuro no dia trade e' recusada pelo servidor
+    # cotacao) pro contrato REAL com vencimento em aberto (padrao
+    # RAIZ+letra-do-mes+ano -- a letra/ano exatos dependem so' de QUANDO
+    # isto roda, nunca fixos aqui) -- sem ele, toda ordem de futuro
+    # no dia trade e' recusada pelo servidor
     # (retcode 10017 `TRADE_DISABLED`, achado ao vivo em 2026-08-28). Vem
     # detectado sozinho a cada "Iniciar operacao"
     # (`dashboard/live_control.py::detect_futures_symbol_map`), nunca digitado

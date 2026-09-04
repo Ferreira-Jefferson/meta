@@ -435,9 +435,10 @@ def test_place_sem_tick_rejeita(fake_mt5):
 
 # ---------- gap (b), incidente 2026-08-28: retcode=DONE sem fill real ------
 #
-# Log real do slot `dt-wdo_grid_reload_maker-wdo@-live`: "fill @ 0.0000 via
-# MT5 em WDOU26 (deal=0, comment=Request executed)" -- a corretora devolveu
-# retcode=TRADE_RETCODE_DONE ("sucesso") mas sem preco nem deal de verdade.
+# Log real do slot `dt-wdo_grid_reload_maker-wdo@-live`: fill devolvido a
+# preco 0.0 e deal=0 (comment="Request executed") no contrato WDO em vigor
+# naquele dia -- a corretora devolveu retcode=TRADE_RETCODE_DONE ("sucesso")
+# mas sem preco nem deal de verdade.
 # `_send` tem de recusar isso, nunca inventar um fill com preco 0.
 
 def test_place_retcode_done_com_price_zero_rejeita_sem_inventar_fill(fake_mt5):
@@ -1498,7 +1499,7 @@ def test_detect_futures_symbol_map_escolhe_contrato_de_maior_volume(fake_mt5):
     mod, _calls = fake_mt5(initialize_ok=True)
     _instala_futuros(
         mod,
-        _futuro("WDOU26", volume=120.0),
+        _futuro("WDOZ99", volume=120.0),
         _futuro("WDOV26", volume=9500.0),
     )
     broker = MT5Broker()
@@ -1515,11 +1516,11 @@ def test_detect_futures_symbol_map_ignora_contrato_com_trade_mode_desabilitado(f
     _instala_futuros(
         mod,
         _futuro("WDO@", trade_mode=0, volume=999999.0),
-        _futuro("WDOU26", trade_mode=4, volume=50.0),
+        _futuro("WDOZ99", trade_mode=4, volume=50.0),
     )
     broker = MT5Broker()
 
-    assert broker.detect_futures_symbol_map(["WDO@"]) == {"WDO@": "WDOU26"}
+    assert broker.detect_futures_symbol_map(["WDO@"]) == {"WDO@": "WDOZ99"}
 
 
 def test_detect_futures_symbol_map_filtra_simbolos_fora_do_padrao_de_vencimento(fake_mt5):
@@ -1531,18 +1532,18 @@ def test_detect_futures_symbol_map_filtra_simbolos_fora_do_padrao_de_vencimento(
         mod,
         _futuro("WDOFUT", volume=99999.0),
         _futuro("WDO26", volume=99999.0),
-        _futuro("WDOU26", volume=10.0),
+        _futuro("WDOZ99", volume=10.0),
     )
     broker = MT5Broker()
 
-    assert broker.detect_futures_symbol_map(["WDO@"]) == {"WDO@": "WDOU26"}
+    assert broker.detect_futures_symbol_map(["WDO@"]) == {"WDO@": "WDOZ99"}
 
 
 def test_detect_futures_symbol_map_sem_contrato_tradavel_mantem_ticker_original(fake_mt5):
     """Nenhum candidato tradavel encontrado: mapeia pro proprio simbolo base
     -- degrada pro sintoma de hoje (ordem recusada) em vez de quebrar."""
     mod, _calls = fake_mt5(initialize_ok=True)
-    _instala_futuros(mod, _futuro("WDOU26", trade_mode=0, volume=10.0))
+    _instala_futuros(mod, _futuro("WDOZ99", trade_mode=0, volume=10.0))
     broker = MT5Broker()
 
     assert broker.detect_futures_symbol_map(["WDO@"]) == {"WDO@": "WDO@"}
@@ -1571,11 +1572,11 @@ def test_detect_futures_symbol_map_mistura_futuro_e_acao(fake_mt5):
     """Universo misto (ex. slot com mais de um papel): cada ticker resolve
     de forma independente, sem exigir uniformidade entre eles."""
     mod, _calls = fake_mt5(initialize_ok=True)
-    _instala_futuros(mod, _futuro("WDOU26", volume=10.0))
+    _instala_futuros(mod, _futuro("WDOZ99", volume=10.0))
     broker = MT5Broker()
 
     assert broker.detect_futures_symbol_map(["WDO@", "PMAM3.SA"]) == {
-        "WDO@": "WDOU26", "PMAM3.SA": "PMAM3",
+        "WDO@": "WDOZ99", "PMAM3.SA": "PMAM3",
     }
 
 
@@ -1588,10 +1589,13 @@ def test_detect_futures_symbol_map_falha_de_conexao_devolve_none_sem_excecao(fak
 
 # ---------- gap (d), incidente 2026-08-28: contrato SEM MERCADO nunca vence -
 #
-# Reproducao do bug real: num restart, a deteccao escolheu `WDOQ27` (maior
-# volume no criterio de TICK UNICO) em vez do `WDOU26` correto -- confirmado
-# na mao que `WDOQ27` tinha `bid=0.0` (sem book de dois lados, contrato sem
-# mercado). O criterio novo tem de descartar isso mesmo com volume alto.
+# Mesma estrutura do bug real: num restart, a deteccao escolheu `WDOQ27`
+# (maior volume no criterio de TICK UNICO) em vez do contrato corrente
+# correto -- confirmado na mao que `WDOQ27` tinha `bid=0.0` (sem book de
+# dois lados, contrato sem mercado). O criterio novo tem de descartar isso
+# mesmo com volume alto. (`WDOQ27` e' o simbolo real do incidente; o
+# contrato "correto" abaixo usa um mes generico de teste -- o literal real
+# fica em `wdof1_tendencia_confirmacao_2026_08_28.py::SYMBOL_REAL`.)
 
 def test_detect_futures_symbol_map_descarta_contrato_com_bid_zero_mesmo_com_volume_alto(fake_mt5):
     mod, _calls = fake_mt5(initialize_ok=True)
@@ -1600,11 +1604,11 @@ def test_detect_futures_symbol_map_descarta_contrato_com_bid_zero_mesmo_com_volu
         # WDOQ27: exatamente o bug real -- volume alto (tick preso de negocio
         # velho), mas SEM mercado (bid=0.0).
         _futuro("WDOQ27", volume=999999.0, bid=0.0, ask=5225.0),
-        _futuro("WDOU26", volume=50.0, bid=5224.5, ask=5225.0),
+        _futuro("WDOZ99", volume=50.0, bid=5224.5, ask=5225.0),
     )
     broker = MT5Broker()
 
-    assert broker.detect_futures_symbol_map(["WDO@"]) == {"WDO@": "WDOU26"}
+    assert broker.detect_futures_symbol_map(["WDO@"]) == {"WDO@": "WDOZ99"}
 
 
 def test_detect_futures_symbol_map_descarta_contrato_com_ask_zero(fake_mt5):
@@ -1612,11 +1616,11 @@ def test_detect_futures_symbol_map_descarta_contrato_com_ask_zero(fake_mt5):
     _instala_futuros(
         mod,
         _futuro("WDOQ27", volume=999999.0, bid=5224.0, ask=0.0),
-        _futuro("WDOU26", volume=50.0, bid=5224.5, ask=5225.0),
+        _futuro("WDOZ99", volume=50.0, bid=5224.5, ask=5225.0),
     )
     broker = MT5Broker()
 
-    assert broker.detect_futures_symbol_map(["WDO@"]) == {"WDO@": "WDOU26"}
+    assert broker.detect_futures_symbol_map(["WDO@"]) == {"WDO@": "WDOZ99"}
 
 
 def test_detect_futures_symbol_map_sem_nenhum_candidato_com_book_mantem_ticker_original(fake_mt5):
@@ -1624,7 +1628,7 @@ def test_detect_futures_symbol_map_sem_nenhum_candidato_com_book_mantem_ticker_o
     pro sintoma atual (mapeia pro proprio ticker `@`) em vez de escolher um
     contrato morto."""
     mod, _calls = fake_mt5(initialize_ok=True)
-    _instala_futuros(mod, _futuro("WDOU26", volume=10.0, bid=0.0, ask=0.0))
+    _instala_futuros(mod, _futuro("WDOZ99", volume=10.0, bid=0.0, ask=0.0))
     broker = MT5Broker()
 
     assert broker.detect_futures_symbol_map(["WDO@"]) == {"WDO@": "WDO@"}
@@ -1632,20 +1636,20 @@ def test_detect_futures_symbol_map_sem_nenhum_candidato_com_book_mantem_ticker_o
 
 def test_detect_futures_symbol_map_usa_volume_de_barras_recentes_quando_disponivel(fake_mt5):
     """Com `copy_rates_from_pos` disponivel (terminal real), o desempate usa
-    a SOMA de barras M1 recentes, nao o tick unico -- WDOU26 tem tick.volume
+    a SOMA de barras M1 recentes, nao o tick unico -- WDOZ99 tem tick.volume
     MAIOR mas WDOV26 tem mais volume ACUMULADO nas ultimas barras, que e' o
     sinal mais robusto de qual contrato concentra a liquidez agora."""
     mod, _calls = fake_mt5(initialize_ok=True)
     _instala_futuros(
         mod,
-        _futuro("WDOU26", volume=500.0),   # tick unico alto...
+        _futuro("WDOZ99", volume=500.0),   # tick unico alto...
         _futuro("WDOV26", volume=10.0),    # ...mas tick unico baixo aqui
     )
     mod.TIMEFRAME_M1 = 1
 
     def _copy_rates(nome, timeframe, start, count):
         barras_por_simbolo = {
-            "WDOU26": [{"tick_volume": 5.0}] * count,       # pouco volume por barra
+            "WDOZ99": [{"tick_volume": 5.0}] * count,       # pouco volume por barra
             "WDOV26": [{"tick_volume": 900.0}] * count,     # muito volume por barra
         }
         return barras_por_simbolo.get(nome, [])
@@ -1662,7 +1666,7 @@ def test_detect_futures_symbol_map_cai_para_tick_unico_quando_barras_indisponive
     mod, _calls = fake_mt5(initialize_ok=True)
     _instala_futuros(
         mod,
-        _futuro("WDOU26", volume=120.0),
+        _futuro("WDOZ99", volume=120.0),
         _futuro("WDOV26", volume=9500.0),
     )
     assert not hasattr(mod, "copy_rates_from_pos")

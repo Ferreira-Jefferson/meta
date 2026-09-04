@@ -6,7 +6,8 @@ dinheiro de verdade.
 
 Hoje, 2026-08-28, o `wdo_grid_reload_maker` operou ao vivo pela primeira
 vez e a conta terminou em -R$298,60. Forense confirmado no MT5 (deals
-`475209177`..`475216399`, magic 862399285, simbolo WDOU26):
+`475209177`..`475216399`, magic 862399285, simbolo real em `SYMBOL_REAL`
+abaixo -- literal de proposito, e' o que a corretora de fato negociou):
 
     11:58:53  COMPRA 1 @ 5204,0     abre LONG
     11:58:53  VENDA  1 @ 5203,5     fecha LONG          -R$  5,00
@@ -486,7 +487,7 @@ def leitura_nas_entradas_reais(bars: pd.DataFrame) -> None:
     Independe de backtest: e' leitura de dado no relogio dos deals. Se o
     filtro tivesse existido hoje, ESTE e' o numero que ele teria visto."""
     print("\n=== 1. o que a tendencia indicava NAS ENTRADAS REAIS de hoje ===")
-    print("(deals do MT5, conta 11724331, magic 862399285, WDOU26)\n")
+    print(f"(deals do MT5, conta 11724331, magic 862399285, {SYMBOL_REAL})\n")
 
     alvos = {}
     for hora, lado, preco, nota in ENTRADAS_REAIS:

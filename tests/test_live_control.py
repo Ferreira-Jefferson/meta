@@ -227,7 +227,7 @@ def test_start_mt5_sem_symbol_map_nao_inclui_flag_no_argv(isolated, monkeypatch)
 
 
 def test_start_mt5_com_symbol_map_inclui_json_no_argv(isolated, monkeypatch):
-    """Contrato de futuro detectado (ex. `WDO@` -> `WDOU26`) vira JSON em
+    """Contrato de futuro detectado (ex. `WDO@` -> `WDOZ99`) vira JSON em
     `--mt5-symbol-map` -- o MESMO formato que `run_live.py::build()` já sabe
     ler (`json.loads`)."""
     _seed_cash(isolated["db"], "swing", 1_000.0)
@@ -235,10 +235,10 @@ def test_start_mt5_com_symbol_map_inclui_json_no_argv(isolated, monkeypatch):
     monkeypatch.setattr(live_control.subprocess, "Popen",
                         _fake_popen(poll_value=None, captured_argv=captured))
 
-    live_control.start(_cfg(mt5_symbol_map={"WDO@": "WDOU26"}))
+    live_control.start(_cfg(mt5_symbol_map={"WDO@": "WDOZ99"}))
 
     argv = captured[0]
-    assert json.loads(argv[argv.index("--mt5-symbol-map") + 1]) == {"WDO@": "WDOU26"}
+    assert json.loads(argv[argv.index("--mt5-symbol-map") + 1]) == {"WDO@": "WDOZ99"}
 
 
 def test_create_account_serializa_fractional_map_em_json_para_build(monkeypatch):
@@ -305,10 +305,10 @@ def test_create_account_serializa_symbol_map_em_json_para_build(monkeypatch):
 
     monkeypatch.setattr(live_control, "_load_cli", lambda: _FakeCli)
 
-    resultado = live_control.create_account(_cfg(mt5_symbol_map={"WDO@": "WDOU26"}))
+    resultado = live_control.create_account(_cfg(mt5_symbol_map={"WDO@": "WDOZ99"}))
 
     assert resultado == "conta-fake"
-    assert json.loads(captured_args[0].mt5_symbol_map) == {"WDO@": "WDOU26"}
+    assert json.loads(captured_args[0].mt5_symbol_map) == {"WDO@": "WDOZ99"}
 
 
 def test_create_account_sem_symbol_map_passa_none_para_build(monkeypatch):
@@ -1143,7 +1143,7 @@ class _FakeFuturesBroker:
 
 
 def test_detect_futures_symbol_map_do_slot_de_day_trade(monkeypatch):
-    """WDO@ -> WDOU26 e' o que torna a ordem de futuro executavel (achado ao
+    """WDO@ -> WDOZ99 e' o que torna a ordem de futuro executavel (achado ao
     vivo em 2026-08-28: "Trade disabled" mandando ordem direto em WDO@)."""
     monkeypatch.setattr(live_control, "load_credentials", lambda: {"mt5_login": "12345"})
     captured: list = []
@@ -1151,7 +1151,7 @@ def test_detect_futures_symbol_map_do_slot_de_day_trade(monkeypatch):
     import live.broker_mt5 as broker_mt5
 
     def _factory(**kwargs):
-        fake = _FakeFuturesBroker({"WDO@": "WDOU26"}, captured, **kwargs)
+        fake = _FakeFuturesBroker({"WDO@": "WDOZ99"}, captured, **kwargs)
         fakes.append(fake)
         return fake
 
@@ -1160,7 +1160,7 @@ def test_detect_futures_symbol_map_do_slot_de_day_trade(monkeypatch):
     # id dinamico `dt-<robo>-<ativo>-<modo>` (`core.config.daytrade_slot_id`):
     # robo/ativo nao podem conter "-" (e' o separador), so' "wdo@" com "@".
     assert live_control.detect_futures_symbol_map("dt-wdo_grid_reload_maker-wdo@-shadow") == {
-        "WDO@": "WDOU26",
+        "WDO@": "WDOZ99",
     }
     assert captured[0]["login"] == 12345
 

@@ -1,5 +1,6 @@
 """A tendencia anterior AUMENTA A ACERTIVIDADE? (pergunta do dono,
-2026-08-28) -- pregao de hoje, WDOU26.
+2026-08-28) -- pregao daquele dia, contrato WDO em `SYMBOL_REAL` (importado
+de `wdof1_tendencia_confirmacao_2026_08_28.py`).
 
 ## Por que este arquivo existe separado do de P&L
 
@@ -358,7 +359,7 @@ def veredito(real: float, nulos: list[float]) -> str:
 
 def main() -> None:
     print("=" * 96)
-    print("A tendencia anterior AUMENTA A ACERTIVIDADE? -- WDOU26, 2026-08-28")
+    print(f"A tendencia anterior AUMENTA A ACERTIVIDADE? -- {SYMBOL_REAL}, 2026-08-28")
     print("=" * 96)
     print("Ciclo medido, fiel a' mecanica: arma a limite 1 tick da ancora ->")
     print("espera o TOQUE -> corre alvo (+1 tick) contra stop (-4 ticks).")

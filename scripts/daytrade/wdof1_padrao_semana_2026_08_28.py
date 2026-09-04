@@ -65,6 +65,7 @@ if str(ROOT / "scripts" / "daytrade") not in sys.path:
 from backtest.intraday.report import num_br  # noqa: E402
 from wdof1_padrao_multiescala_2026_08_28 import (  # noqa: E402
     M1,
+    SYMBOL_LABEL,
     _letras,
     cabecalho,
     direcao_do_padrao,
@@ -149,7 +150,7 @@ def main() -> None:
     instantes, n_sessoes, n_semanas = montar(df)
 
     print("=" * 108)
-    print(f"PADRAO das 4 janelas na ESCALA DA SEMANA -- WDOU26 M1, "
+    print(f"PADRAO das 4 janelas na ESCALA DA SEMANA -- {SYMBOL_LABEL} M1, "
           f"desfecho fixo em {HORIZONTE} barras")
     print("=" * 108)
     print(f"{len(df):,} barras | {n_sessoes} pregoes | {n_semanas} SEMANAS | "

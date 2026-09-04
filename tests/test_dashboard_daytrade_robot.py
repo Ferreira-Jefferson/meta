@@ -238,7 +238,7 @@ def test_operacao_iniciar_daytrade_usa_mapa_de_futuro_detectado_no_config(
     `detect_futures_symbol_map()` (só ele opera futuro, WIN@/WDO@) -- achado
     ao vivo em 2026-08-28 (slot do WDO F1: ordem em `WDO@` recusada pelo
     servidor, "Trade disabled", porque o `"@"` contínuo só dá cotação). O
-    mapa detectado (ex. `WDO@` -> `WDOU26`, contrato com vencimento em
+    mapa detectado (ex. `WDO@` -> `WDOZ99`, contrato com vencimento em
     aberto) tem de chegar até `ProcessConfig` -- é ele que faz
     `MT5Broker.symbol_for()` traduzir pro contrato que o servidor de fato
     aceita ordem."""
@@ -247,14 +247,14 @@ def test_operacao_iniciar_daytrade_usa_mapa_de_futuro_detectado_no_config(
     monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda slot, robot_key=None: 1.0)
     monkeypatch.setattr(live_control, "detect_fractional_symbol_map", lambda slot, robot_key=None: None)
     monkeypatch.setattr(live_control, "detect_futures_symbol_map",
-                        lambda slot, robot_key=None: {"WDO@": "WDOU26"})
+                        lambda slot, robot_key=None: {"WDO@": "WDOZ99"})
 
     client.post(f"/operacao/{DAYTRADE}/caixa", data={"caixa": "100.00"})
     resp = client.post(f"/operacao/{DAYTRADE}/iniciar", data={"robo": "gremah"})
 
     assert resp.status_code == 200
     assert len(captured) == 1
-    assert captured[0].mt5_symbol_map == {"WDO@": "WDOU26"}
+    assert captured[0].mt5_symbol_map == {"WDO@": "WDOZ99"}
 
 
 def test_operacao_iniciar_daytrade_usa_piso_do_robo_nao_o_piso_generico_do_slot(
