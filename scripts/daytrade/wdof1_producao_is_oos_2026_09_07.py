@@ -138,38 +138,58 @@ deste script:
 
 ## RODADA 2 (2026-09-08, apos `297bc6a`) -- so' T2, regra de capital nova
 
-    janela  liquido R$   MaxDD R$  win%  trades trd/dia  p60  alvo stop flat s/trade qtd_max  zerou  caixa_min
-    OOS     135.618,50   2.650,00 94,4%    9446   185,2   42  8918  485   43       0       5    NAO     290,00
-    IS      (rodando)
+    janela liquido R$  MaxDD R$  win%  trades trd/dia  p60  alvo stop flat s/trade qtd_max zerou caixa_min
+    IS     344.855,00  2.905,00 94,2%   19835   275,5   23 18688 1102   45       0       5   NAO    370,00
+    OOS    135.618,50  2.650,00 94,4%    9446   185,2   42  8918  485   43       0       5   NAO    290,00
 
-O que a correcao do portao de capital mudou no OOS: de 2 trades / -R$76 /
-50 pregoes inertes para 9.446 trades / 0 pregoes inertes. **`caixa_min =
-R$290,00` e' a prova direta**: e' o ponto mais fundo da curva, uma queda de
-R$85 (um stop de R$80 + corretagem) sobre os R$375 de partida. R$290 caia
-exatamente na faixa que a regra antiga matava (< R$375) e que a nova
-sustenta (> R$150 de margem crua). A janela inteira pendurou nessa
-diferenca.
+**A correcao mudou o OOS e NAO mudou o IS** -- e o par explica o porque. O
+OOS foi de 2 trades / -R$76 / 50 pregoes inertes para 9.446 trades / 0
+inertes; o IS saiu numericamente IDENTICO a RODADA 1, ate' a ultima casa.
+Motivo: no IS o caixa REALIZADO nunca desceu abaixo dos R$375, entao o
+portao antigo nunca mordeu ali. Confirma o enquadramento do item 6.15 --
+o IS ganhou o sorteio das primeiras operacoes e nunca chegou perto do
+piso; o OOS perdeu no 2o trade.
 
-`zerou = NAO` (`IntradayBacktestResult.wiped_out_at is None`): o patrimonio
-nunca cruzou o zero. Note que ZERAR e PARALISAR sao modos de falha
-diferentes, e a esta capitalizacao e' o segundo que morde -- no fundo da
-curva a folga sobre o piso de sobrevivencia era de R$140, ~1,75 stops.
+`caixa_min` MEDE PATRIMONIO, NAO O NUMERO QUE O PORTAO OLHA. A curva e'
+`initial_capital + realized_pnl + unrealized_brl(close)` (`engine.py`), com
+mark-to-market; o portao usa `initial_capital + realized_pnl`, SEM MTM. Por
+isso o IS pode marcar `caixa_min = R$370,00` (abaixo dos R$375) sem que o
+portao tenha recusado nada -- aquele fundo e' posicao aberta no vermelho,
+nao caixa. Nao leia essas duas colunas como a mesma grandeza.
+
+`zerou = NAO` nas duas janelas (`IntradayBacktestResult.wiped_out_at is
+None`): o patrimonio nunca cruzou o zero. Mas ZERAR e PARALISAR sao modos
+de falha diferentes, e a esta capitalizacao quem morde e' o segundo -- no
+fundo do OOS a folga sobre o piso de sobrevivencia era de R$140, ~1,75
+stops.
 
 ### BLOQUEIO DE PRODUCAO encontrado nesta rodada
 
-`pior_janela_60s = 42`, contra `MAX_ENVIOS_POR_MINUTO = 30` de
-`live.intraday_runtime` -- ao vivo isso liga `disaster_halt` e cala o robo.
+`pior_janela_60s`: **42 no OOS**, contra `MAX_ENVIOS_POR_MINUTO = 30` de
+`live.intraday_runtime` -- ao vivo isso liga `disaster_halt` e cala o robo
+pelo resto do pregao. No IS da' 23, dentro do teto.
 
-A causa NAO e' o freio: `reancora_min_segundos` cobre reprecificacao e
-rearme pos-RECUSA, e por desenho NAO cobre o rearme pos-FILL (ver a
-docstring de `reancora_min_segundos` em `wdo_grid_reload_maker`: freia-lo
-"seria trocar o desenho"). Os dois caminhos freados somam no maximo 12
-envios/min a 10s; o resto vem dos fills. **A calibracao de
-`reancora_min_segundos=10` foi feita num robo que quase nao preenchia** --
-sob a regra de capital antiga ele morria no 1o stop e passava o pregao
-rearmando 1x a cada 10s, que e' exatamente o `pior_janela_60s = 6` da
-RODADA 1. Nenhum valor da grade 6-20s resolve um caminho que o freio nao
-percorre; varrer de novo seria queimar CPU. A decisao (contar so' envios
+E' TAIL, NAO REGIME, e o par IS/OOS prova: o IS tem MAIS fills por pregao
+(275,5 contra 185,2) e pico MENOR (23 contra 42). Logo o pico nao e' funcao
+da taxa media de preenchimento -- e' um minuto especifico de rajada em
+algum pregao do OOS. Nao conclua "o robo estoura sempre"; ele estourou pelo
+menos uma vez em 51 pregoes, e uma vez ja' basta para calar o dia.
+
+De onde vem: `reancora_min_segundos` cobre reprecificacao e rearme
+pos-RECUSA e, por desenho, NAO cobre o rearme pos-FILL (ver a docstring de
+`reancora_min_segundos` em `wdo_grid_reload_maker`: freia-lo "seria trocar
+o desenho"). A 10s os dois caminhos freados somam no MAXIMO 12 envios/min,
+entao >=30 dos 42 sao obrigatoriamente do caminho pos-fill. Isso e'
+aritmetica dos tetos, nao medicao direta -- o script conta `EnterLimit` sem
+distinguir origem; instrumentar por origem e' o passo seguinte se a decisao
+for mexer no detector.
+
+Por que a calibracao de `reancora_min_segundos=10` nao viu isso: ela rodou
+pregao a pregao com caixa REPOSTO em R$375 todo dia, sob a regra de capital
+ANTIGA -- ou seja, em cada pregao o robo operava ate' o primeiro stop e
+depois so' rearmava a 1x/10s. Media um robo que parava cedo todo dia.
+Nenhum valor da grade 6-20s cobre um caminho que o freio nao percorre,
+entao NAO re-varri: seria queimar CPU. A decisao (contar so' envios
 improdutivos no detector, subir o teto, ou frear o pos-fill) e' do dono.
 """
 from __future__ import annotations
