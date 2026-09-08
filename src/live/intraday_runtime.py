@@ -182,6 +182,41 @@ def _utc_time_para_brt(t: time) -> time:
 
 MAX_GAP_SECONDS = 15 * 60.0
 
+#: Quanto uma barra pode estar ATRASADA (segundos entre o `ts` dela e o
+#: relogio de parede) e ainda assim poder virar ORDEM NOVA na corretora.
+#: Somado ao atraso ESTRUTURAL do feed (`nominal_delay_seconds`) -- ver
+#: `IntradayLiveRuntime._limite_de_atraso`.
+#:
+#: 2026-09-08, o pregao que pagou por isto (slot
+#: `dt-wdo_grid_reload_maker-wdo@-live`, -R$116 no dia). O terminal MT5
+#: parou de entregar tick NOVO de WDO@ por 44,8 min sem erro nenhum:
+#: `closed_bars_since` devolveu lista VAZIA em 538 passos seguidos com a
+#: marca d'agua congelada em 14:14:20.804, e no passo seguinte devolveu
+#: 13.644 barras de uma vez. O estado da conta as 15:00:57 mostrava
+#: `last_bar_ts=14:36:21` contra `last_poll_at=15:00:57` -- 24 min de
+#: atraso -- e o loop `for bar in barras` tratou CADA barra velha como se
+#: fosse agora: 45 ordens-limite REAIS posicionadas em precos de ate' 45
+#: min atras. Uma limite num preco que ja' morreu chega ao book como
+#: ordem AGRESSIVA (marketable) e preenche na hora no pior preco, com o
+#: alvo -- calculado a partir do mesmo nivel morto -- ja' violado: a
+#: sequencia real foi -R$5,50 por ida e volta, repetida ate' o freio de
+#: perda do dia disparar.
+#:
+#: O freio que JA existia (`MAX_GAP_SECONDS`) nao pegou nada, e nao tinha
+#: como: ele mede tempo sem RODAR (`_parado_ha_segundos`), e o processo
+#: rodou o tempo todo, de 5 em 5 segundos. Quem estava velho era o DADO,
+#: nao o processo. Este teto e' o que faltava -- mede a idade da BARRA.
+#:
+#: O numero (120s) e' folga larga sobre a entrega saudavel, MEDIDA no
+#: mesmo terminal em 2026-09-08 -- sonda de 5 em 5s reproduzindo a chamada
+#: exata do feed (`MT5TickFeed.closed_bars_since`) por 22 min de pregao,
+#: 260 passos, 249 deles com barra: p50 = 0,14s, p99 = 4,17s, maximo
+#: 4,27s, limitado pelo proprio passo de 5s do supervisor. 120s e' ~29x o
+#: p99, entao um dia de feed lento nao cala o robo (que e' o modo de falha
+#: do item 6.15 do `LICOES_DE_PRODUCAO.md`); e' curto o bastante para que
+#: nada parecido com os 24-45 min de 08/09 passe.
+MAX_ATRASO_PARA_ORDEM_SEGUNDOS = 120.0
+
 #: Gap (f), incidente 2026-08-28: quantas recusas SEGUIDAS de fechamento
 #: (`BrokerExecutionError` vindo de `MT5IntradayExecution.exit_market`) o
 #: robo tenta sozinho, a cada passo, antes de acionar o freio duro
@@ -539,6 +574,15 @@ class IntradayLiveRuntime:
         # Persistir um numero parcial daria a impressao de uma medicao
         # completa.
         self._volume_no_nivel = 0.0
+        # Contagem do LOTE corrente de barras: quantos armes de entrada nao
+        # foram ao book por barra velha, e o pior atraso visto. Zerados no
+        # topo de cada `_consume` -- so' existem aqui para os dois pontos de
+        # saida antecipada dele poderem journalizar a mesma contagem. Nao vao
+        # para o snapshot de proposito: descrevem UM passo, nao o pregao.
+        self._armes_de_barra_velha = 0
+        self._atraso_max_barra_velha = 0.0
+        self._ultima_barra_velha: Optional[pd.Timestamp] = None
+        self._limite_atraso_do_lote = 0.0
         # Ticket de saida ja' avisado no diario -- o retry acontece a
         # cada barra, o aviso nao (ver `_drena_orfas_de_saida`).
         self._orfas_de_saida_avisadas: set[str] = set()
@@ -1645,7 +1689,7 @@ class IntradayLiveRuntime:
             if parado_ha is not None and parado_ha > MAX_GAP_SECONDS:
                 passos.append(self._handle_gap(conn, account, hoje, barras, parado_ha))
             else:
-                passos.append(self._consume(conn, account, hoje, barras))
+                passos.append(self._consume(conn, account, hoje, barras, now))
 
             self._persist(conn, account)
         return passos
@@ -3138,7 +3182,63 @@ class IntradayLiveRuntime:
             self._checkpoint(conn, account)
         return abertas, fechadas
 
-    def _consume(self, conn, account: AccountState, session: date, barras: list[Bar]) -> StepReport:
+    def _limite_de_atraso(self) -> float:
+        """Idade maxima (segundos) que uma barra pode ter e ainda virar ORDEM
+        NOVA na corretora, NESTE feed.
+
+        `MAX_ATRASO_PARA_ORDEM_SEGUNDOS` mais o atraso ESTRUTURAL do feed
+        (`nominal_delay_seconds`), que nao e' atraso de nada -- e' o formato
+        do dado. Um teto fixo mataria o feed M1 por construcao: uma barra M1
+        so' pode ser lida DEPOIS de fechar, e o `ts` dela e' a ABERTURA do
+        minuto (`live/bar_feed.py`), entao toda barra M1 chega com >=60s de
+        idade num robo perfeitamente saudavel. Somando: 120s para o feed de
+        tick (`nominal_delay_seconds=0`), 180s para o M1 (60+120)."""
+        estrutural = float(getattr(self.bar_feed, "nominal_delay_seconds", 0.0) or 0.0)
+        return estrutural + MAX_ATRASO_PARA_ORDEM_SEGUNDOS
+
+    def _journaliza_armes_de_barra_velha(self, conn, account: AccountState,
+                                         session: date) -> None:
+        """UMA linha de diario por LOTE em que algum arme de entrada foi
+        recusado por barra velha -- mesmo padrao do bloco de `descartadas`
+        (barra de pregao anterior), como o dono pediu.
+
+        Nivel `warn`, nao `info`, e isso e' a parte que importa: um robo que
+        para de mandar ordem EM SILENCIO e' exatamente o modo de falha do
+        item 6.15 do `LICOES_DE_PRODUCAO.md` (a janela censurada que parece
+        edge negativo e e' so' o robo calado). Se o feed cegar de novo, o
+        dono ve na hora -- com a contagem e o tamanho do atraso -- em vez de
+        descobrir no fim do dia que "o robo nao operou hoje".
+
+        Uma linha por LOTE e nao por ordem: no pregao de 2026-09-08 seriam 45
+        linhas (e 45 notificacoes) para dizer a mesma coisa uma vez."""
+        if not self._armes_de_barra_velha:
+            return
+        self._log(conn, account.id, "warn",
+                  f"{self._armes_de_barra_velha} ordem(ns) de entrada NAO "
+                  f"enviada(s): barra velha (atraso ate' "
+                  f"{self._atraso_max_barra_velha / 60.0:.0f} min, teto "
+                  f"{self._limite_atraso_do_lote:.0f}s) -- o preco daquela "
+                  f"barra ja' morreu. Ultima barra velha: "
+                  f"{_hora_brt(self._ultima_barra_velha)}. Alvo, stop e "
+                  "fechamento continuam valendo normalmente.",
+                  {"armes_barra_velha": self._armes_de_barra_velha,
+                   "atraso_max_segundos": round(self._atraso_max_barra_velha, 1),
+                   "limite_atraso_segundos": round(self._limite_atraso_do_lote, 1),
+                   "sessao": session.isoformat()})
+
+    def _detalha_armes_de_barra_velha(self, detalhe: dict) -> None:
+        """Acrescenta a contagem ao `detail` do `StepReport` (o que vai para o
+        log do supervisor). Separado do journal acima porque os dois pontos
+        de saida ANTECIPADA de `_consume` (`daytrade_recusa_fechamento`,
+        `daytrade_robo_incompativel`) tambem precisam da contagem -- e o de
+        recusa de fechamento e' justamente o tipo de passo que dominou o
+        pregao de 2026-09-08."""
+        if self._armes_de_barra_velha:
+            detalhe["armes_barra_velha"] = self._armes_de_barra_velha
+            detalhe["atraso_max_segundos"] = round(self._atraso_max_barra_velha, 1)
+
+    def _consume(self, conn, account: AccountState, session: date, barras: list[Bar],
+                 now: datetime) -> StepReport:
         """Alimenta as barras na maquina, EM ORDEM, e journaliza os eventos.
 
         Barra carimbada num pregao ANTERIOR e' descartada (quem declara a
@@ -3198,15 +3298,73 @@ class IntradayLiveRuntime:
         barra tinha escrito -- nunca as anteriores, ja' comitadas. A barra
         que de fato levanta `FALHA_ALTO` continua sem jornalizar NADA dela
         mesma (comportamento inalterado, ver acima) -- o que muda e' so' o
-        destino das barras que ja' tinham terminado de aplicar ANTES dela."""
+        destino das barras que ja' tinham terminado de aplicar ANTES dela.
+
+        BARRA VELHA NAO VIRA ORDEM (2026-09-08)
+        ---------------------------------------
+        O mesmo lote de "mais de uma barra fechada neste UNICO passo" do
+        MEDIO 7 tem uma segunda cara, e essa custou -R$116 num pregao. Se o
+        lote e' grande porque o feed CEGOU (o terminal parou de entregar
+        tick de WDO@ por 44,8 min e depois devolveu 13.644 barras num passo
+        so' -- ver `MAX_ATRASO_PARA_ORDEM_SEGUNDOS`), cada barra desse lote
+        e' um preco que ja' morreu, e ate' aqui cada uma podia virar uma
+        ordem-limite REAL na corretora. Foram 45 delas, contra precos de
+        ate' 45 min atras.
+
+        A regra agora: **barra mais velha que `_limite_de_atraso()` continua
+        sendo CONSUMIDA pela maquina -- indicador, ancora, contador,
+        posicao, tudo fica quente -- mas nao gera ORDEM NOVA de entrada.**
+        E' evento por evento, nao "pula a barra":
+
+        * `LimitPlaced` (arme de entrada) -> NAO vai ao book. Tratado como
+          "nao enviei" pelo caminho que ja' existia para a recusa por
+          margem (`_descarta_arme_de_barra_velha` ->
+          `machine.discard_resting_limit`), entao a maquina nao fica
+          vigiando um fill impossivel e a estrategia rearma pelo criterio
+          DELA na barra seguinte.
+        * `LimitCancelled`, `PositionOpened`, `PositionClosed` (alvo, stop,
+          flatten, fatia reconciliada) -> PASSAM, sempre. Nao sao decisao
+          nova: sao a maquina constatando um FATO. Engolir um fechamento
+          porque a barra estava velha criaria posicao fantasma -- exposicao
+          real que o robo acha que nao tem -- que e' pior do que o problema
+          que este portao resolve. Vale tambem para as saidas REAIS: elas
+          fecham a MERCADO, no preco de AGORA, nunca no da barra velha.
+
+        Isto NAO e' `live/` decidindo o que negociar (regra 6 do
+        `AGENTS.md`). A decisao continua inteira da estrategia, que roda
+        exatamente como no backtest sobre exatamente as mesmas barras. O
+        que `live/` recusa e' EXECUTAR uma decisao cujo insumo a propria
+        maquina ja' sabe obsoleto -- mesma familia da regra 7 ("ao vivo,
+        decisao atrasada nao executa"), so' que na escala de barra em vez
+        de pregao. Nada disso existe em `backtest/intraday/`, e nao deve
+        existir: la' `bar.ts` E' o tempo, nenhuma barra e' velha e o
+        caminho novo nunca dispara. Backtest e producao continuam
+        descrevendo o MESMO robo em todo pregao em que o feed funciona."""
         abertas = fechadas = descartadas = 0
         ultima_descartada = None
+        limite_atraso = self._limite_de_atraso()
+        agora = pd.Timestamp(now)
+        self._armes_de_barra_velha = 0
+        self._atraso_max_barra_velha = 0.0
+        self._ultima_barra_velha = None
+        self._limite_atraso_do_lote = limite_atraso
         for bar in barras:
             if self.machine.is_previous_session_bar(bar.ts):
                 descartadas += 1
                 ultima_descartada = bar.ts
                 self._snapshot.last_bar_ts = bar.ts
                 continue
+            # Idade DESTA barra contra o relogio de parede -- ver a secao
+            # "BARRA VELHA NAO VIRA ORDEM" na docstring. Medida por barra e
+            # nao pelo lote inteiro de proposito: num lote de recuperacao as
+            # primeiras barras estao velhas e as ultimas ja' nao estao, e o
+            # robo tem de voltar a operar exatamente na primeira que chega
+            # dentro do prazo -- sem esperar o proximo passo.
+            atraso = (agora - bar.ts).total_seconds()
+            barra_velha = atraso > limite_atraso
+            if barra_velha:
+                self._atraso_max_barra_velha = max(self._atraso_max_barra_velha, atraso)
+                self._ultima_barra_velha = bar.ts
             self._acumula_volume_no_nivel(bar)
             self._reconcilia_entrada_orfa(conn, account, bar)
             try:
@@ -3229,6 +3387,8 @@ class IntradayLiveRuntime:
                           "modo": self.execution_mode, "erro": str(erro)}
                 if descartadas:
                     detalhe["descartadas"] = descartadas
+                self._detalha_armes_de_barra_velha(detalhe)
+                self._journaliza_armes_de_barra_velha(conn, account, session)
                 return StepReport("daytrade_recusa_fechamento", session, detail=detalhe)
             except EntradaAMercadoNaoSuportada as erro:
                 # A estrategia pediu `Enter` a mercado, que nao tem caminho
@@ -3267,13 +3427,15 @@ class IntradayLiveRuntime:
                 detalhe = {"barras": len(barras), "entradas": abertas + p_abertas,
                            "saidas": fechadas + p_fechadas, "modo": self.execution_mode,
                            "erro": str(erro)}
+                self._detalha_armes_de_barra_velha(detalhe)
+                self._journaliza_armes_de_barra_velha(conn, account, session)
                 return StepReport("daytrade_robo_incompativel", session, detail=detalhe)
             for evento in eventos:
                 if isinstance(evento, PositionOpened):
                     abertas += 1
                 elif isinstance(evento, PositionClosed):
                     fechadas += 1
-                self._apply(conn, account, evento, bar)
+                self._apply(conn, account, evento, bar, barra_velha=barra_velha)
             self._drena_orfas_de_saida(conn, account, bar.ts)
             self._snapshot.last_bar_ts = bar.ts
             # CHECKPOINT (MEDIO 7, ver a docstring acima): esta barra
@@ -3290,17 +3452,33 @@ class IntradayLiveRuntime:
                       f"{descartadas} barra(s) de pregao anterior descartada(s) "
                       f"(ultima: {_hora_brt(ultima_descartada)})",
                       {"descartadas": descartadas, "sessao": session.isoformat()})
+        self._journaliza_armes_de_barra_velha(conn, account, session)
         detalhe = {"barras": len(barras), "entradas": abertas, "saidas": fechadas,
                    "modo": self.execution_mode}
         if descartadas:
             detalhe["descartadas"] = descartadas
+        self._detalha_armes_de_barra_velha(detalhe)
         return StepReport("daytrade", session, detail=detalhe)
 
     # ---------- journal + execucao ------------------------------------------
 
-    def _apply(self, conn, account: AccountState, evento, bar: Bar) -> None:
+    def _apply(self, conn, account: AccountState, evento, bar: Bar,
+               *, barra_velha: bool = False) -> None:
+        """Despacha UM evento da maquina para o lado real/diario.
+
+        `barra_velha` chega so' do loop de `_consume` (ver a secao "BARRA
+        VELHA NAO VIRA ORDEM" na docstring dele) e muda o destino de UM
+        unico tipo de evento, `LimitPlaced` -- exposicao NOVA, decidida
+        contra um preco que ja' morreu. Todos os outros seguem o caminho de
+        sempre por decisao explicita: `LimitCancelled`, `PositionOpened` e
+        `PositionClosed` nao sao decisao, sao constatacao de fato, e
+        suprimi-los produziria posicao fantasma. Os dois outros chamadores
+        (`_handle_gap` e `_aplica_eventos_parciais_antes_de_falhar`) usam o
+        default `False`: o primeiro so' aplica o que `force_flatten` gerou
+        (fechamento, nunca arme), e o segundo aplica o que a corretora JA
+        confirmou -- em nenhum dos dois existe ordem nova a barrar."""
         if isinstance(evento, LimitPlaced):
-            self._on_limit_placed(conn, account, evento)
+            self._on_limit_placed(conn, account, evento, barra_velha=barra_velha)
         elif isinstance(evento, LimitCancelled):
             self._on_limit_cancelled(conn, account, evento)
         elif isinstance(evento, PositionOpened):
@@ -3308,8 +3486,57 @@ class IntradayLiveRuntime:
         elif isinstance(evento, PositionClosed):
             self._on_closed(conn, account, evento, bar)
 
-    def _on_limit_placed(self, conn, account: AccountState, evento: LimitPlaced) -> None:
+    def _descarta_arme_de_barra_velha(self, conn, account: AccountState,
+                                      evento: LimitPlaced) -> None:
+        """A maquina armou uma entrada numa barra VELHA: nao vai ao book.
+
+        Mesmo desfecho de `_recusa_por_margem` -- "a maquina ja' gravou
+        `resting_limit` e ficaria esperando um fill impossivel" -- e pelo
+        mesmo mecanismo (`machine.discard_resting_limit`, que esquece a
+        ordem SEM emitir `LimitCancelled`, porque ela nunca chegou ao book).
+        Sem esse esquecimento o robo ficaria vigiando para sempre um nivel
+        que nao existe na corretora: silencio, que e' o modo de falha que
+        este projeto ja' pagou (item 6.15 do `LICOES_DE_PRODUCAO.md`).
+
+        O que NAO e' igual a uma recusa por margem: aqui nao ha' `_log` de
+        `error` por ordem. No pregao de 2026-09-08 isto teria escrito 45
+        linhas de erro (e 45 notificacoes) para dizer uma coisa so'. A
+        contagem sai numa linha unica por lote, em
+        `_journaliza_armes_de_barra_velha`. Pelo mesmo motivo o numero de
+        rodada (`trade_num`) NAO avanca: queimar 45 numeros num arme que
+        nunca existiu tornaria o diario do dia ilegivel.
+
+        A ordem REAL que estava em pe' ANTES do lote velho, essa sim, tem de
+        MORRER -- e por isso o cancelamento continua acontecendo aqui.
+        Cancelar nao e' "mandar ordem contra preco morto": e' TIRAR
+        exposicao que a maquina deixou de vigiar. Deixa-la viva seria pior
+        do que o bug original -- um ticket que ninguem acompanha, exatamente
+        o que `_reconcilia_ordens_de_entrada` existe para impedir. Depois do
+        primeiro descarte a maquina nao vigia mais nada, entao os arme(s)
+        seguintes do mesmo lote nao tem predecessor real e nao cancelam nada.
+        """
+        self._armes_de_barra_velha += 1
+        if self.executor is not None:
+            if evento.replaced is not None:
+                self._aplica_cancelamento(
+                    conn, account,
+                    self.executor.cancel_limit(evento.ts, reason="superseded"))
+            elif self._snapshot.pending_entry_refs:
+                self._aplica_cancelamento(
+                    conn, account,
+                    self.executor.cancel_stale_refs(
+                        self._snapshot.pending_entry_refs, ts=evento.ts))
+        self.machine.discard_resting_limit()
+
+    def _on_limit_placed(self, conn, account: AccountState, evento: LimitPlaced,
+                         *, barra_velha: bool = False) -> None:
         """Uma ordem-limite passou a ser vigiada.
+
+        `barra_velha=True` (ver `_apply` e a secao "BARRA VELHA NAO VIRA
+        ORDEM" em `_consume`) desvia TUDO daqui para
+        `_descarta_arme_de_barra_velha`, antes de qualquer contador, numero
+        de rodada, linha de diario ou envio: uma ordem decidida contra um
+        preco de dezenas de minutos atras nao vira ordem nenhuma.
 
         Grava no diario (2026-08-24, pedido do dono: "quero que o histórico
         registre qualquer evento feito pelo robô", depois de eu explicar um
@@ -3334,6 +3561,9 @@ class IntradayLiveRuntime:
         passou por aqui, entao nunca ganhou numero. Trata como rodada nova
         do ponto de vista do diario: e' a primeira vez que esta rodada
         aparece nele."""
+        if barra_velha:
+            self._descarta_arme_de_barra_velha(conn, account, evento)
+            return
         self._snapshot.ordens_postas += 1
         if evento.replaced is None or self._snapshot.trade_num is None:
             self._snapshot.trade_seq += 1

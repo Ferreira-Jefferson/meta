@@ -80,6 +80,12 @@ class _ScriptedBarFeed:
     declarada."""
 
     name = "fake_bars"
+    #: Os dois feeds de verdade declaram este campo (`MT5TickFeed` 0.0,
+    #: `MT5BarFeed` 60.0) e desde 2026-09-08 o runtime LE ele para montar o
+    #: teto de idade de barra (`_limite_de_atraso`). O dublê declara junto:
+    #: 0.0 = "tick", que e' o que estes roteiros imitam (barra com o ts do
+    #: instante em que o preco aconteceu).
+    nominal_delay_seconds = 0.0
 
     def __init__(self, barras: list[Bar], semente: list[Bar] | None = None):
         self._barras = list(barras)
@@ -252,17 +258,24 @@ def test_numero_de_ordem_e_o_mesmo_do_armar_ate_a_saida_e_avanca_na_proxima_roda
     a #02 tambem e' long -- o teste ficou vermelho por dois dias medindo um
     comportamento que o robo nao tem mais. O que ele mede continua sendo o
     NUMERO da rodada, nao o lado."""
+    # ROTEIRO COMPRIMIDO em 2026-09-08: as barras andam de 20 em 20s (nao
+    # de minuto em minuto) e `now` fica logo depois da ultima. Motivo:
+    # desde `MAX_ATRASO_PARA_ORDEM_SEGUNDOS`, barra mais velha que o teto
+    # nao gera ORDEM NOVA -- e um roteiro de 6 minutos consumido num
+    # `run_once` so' deixava a barra de abertura com 5+ min de idade. O
+    # que este teste mede (sequencia de OHLC, numeracao, P&L) nao depende
+    # do espacamento; a idade agora depende.
     barras = [
-        _bar("13:00", 10.00, 10.00, 10.00, 10.00),  # abertura: arma a 1a (long)
-        _bar("13:01", 10.00, 10.00, 9.79, 9.85),    # toca o nivel long (9.80)
-        _bar("13:02", 9.85, 9.91, 9.85, 9.90),      # toca o alvo (9.90) -- fecha #01
-        _bar("13:03", 9.90, 9.90, 9.79, 9.85),      # repete LONG e ja' preenche #02
-        _bar("13:04", 9.85, 9.91, 9.85, 9.90),      # toca o alvo de novo -- fecha #02
-        _bar("13:05", 9.90, 9.90, 9.90, 9.90),
+        _bar("13:00:00", 10.00, 10.00, 10.00, 10.00),  # abertura: arma a 1a (long)
+        _bar("13:00:20", 10.00, 10.00, 9.79, 9.85),    # toca o nivel long (9.80)
+        _bar("13:00:40", 9.85, 9.91, 9.85, 9.90),      # toca o alvo (9.90) -- fecha #01
+        _bar("13:01:00", 9.90, 9.90, 9.79, 9.85),      # repete LONG e ja' preenche #02
+        _bar("13:01:20", 9.85, 9.91, 9.85, 9.90),      # toca o alvo de novo -- fecha #02
+        _bar("13:01:40", 9.90, 9.90, 9.90, 9.90),
     ]
     rt, _feed = _runtime(tmp_path, barras)
 
-    passos = rt.run_once(now=_agora("13:07:00"))
+    passos = rt.run_once(now=_agora("13:01:45"))
 
     passo = [p for p in passos if p.action == "daytrade"][0]
     assert passo.detail["entradas"] == 2 and passo.detail["saidas"] == 2
@@ -1383,18 +1396,25 @@ def test_short_grava_quantidade_negativa_na_posicao(tmp_path, pregao_aberto):
     volta a escolher short -- que e' o que este teste precisa medir. O
     roteiro antigo dependia da alternancia pura e ficou vermelho por dois
     dias sem que nada estivesse errado no codigo de producao."""
+    # ROTEIRO COMPRIMIDO em 2026-09-08: as barras andam de 20 em 20s (nao
+    # de minuto em minuto) e `now` fica logo depois da ultima. Motivo:
+    # desde `MAX_ATRASO_PARA_ORDEM_SEGUNDOS`, barra mais velha que o teto
+    # nao gera ORDEM NOVA -- e um roteiro de 6 minutos consumido num
+    # `run_once` so' deixava a barra de abertura com 5+ min de idade. O
+    # que este teste mede (sequencia de OHLC, numeracao, P&L) nao depende
+    # do espacamento; a idade agora depende.
     barras = [
-        _bar("13:00", 10.00, 10.00, 10.00, 10.00),
-        _bar("13:01", 10.00, 10.00, 9.79, 9.85),   # long em 9.80
-        _bar("13:02", 9.85, 9.91, 9.85, 9.90),     # alvo 9.90 -> fecha long
+        _bar("13:00:00", 10.00, 10.00, 10.00, 10.00),
+        _bar("13:00:20", 10.00, 10.00, 9.79, 9.85),   # long em 9.80
+        _bar("13:00:40", 9.85, 9.91, 9.85, 9.90),     # alvo 9.90 -> fecha long
         # Com o long no teto, a recarga e' do OUTRO lado (short), ancorada na
         # abertura: 10.00 + 20 ticks de espacamento = 10.20. Esta barra
         # atravessa.
-        _bar("13:03", 9.90, 10.21, 9.90, 10.15),
+        _bar("13:01:00", 9.90, 10.21, 9.90, 10.15),
     ]
     rt, _feed = _runtime(tmp_path, barras, max_trades_per_side=1)
 
-    rt.run_once(now=_agora("13:05:00"))
+    rt.run_once(now=_agora("13:01:05"))
 
     with store.live_journal(rt.db_path) as conn:
         acc = store.load_account(conn, SLOT.id)
@@ -2519,16 +2539,23 @@ def test_status_traz_ganhos_perdas_cagr_dd_e_acerto_por_lado_de_ponta_a_ponta(
     realmente grava no payload. Era um filtro por TEXTO da mensagem ate'
     2026-08-25 -- ver `test_card_de_ordens_nao_depende_do_texto_da_mensagem`,
     que e' o teste que guarda essa fronteira agora."""
+    # ROTEIRO COMPRIMIDO em 2026-09-08: as barras andam de 20 em 20s (nao
+    # de minuto em minuto) e `now` fica logo depois da ultima. Motivo:
+    # desde `MAX_ATRASO_PARA_ORDEM_SEGUNDOS`, barra mais velha que o teto
+    # nao gera ORDEM NOVA -- e um roteiro de 6 minutos consumido num
+    # `run_once` so' deixava a barra de abertura com 5+ min de idade. O
+    # que este teste mede (sequencia de OHLC, numeracao, P&L) nao depende
+    # do espacamento; a idade agora depende.
     barras = [
-        _bar("13:00", 10.00, 10.00, 10.00, 10.00),  # abertura: posiciona a 1a (long)
-        _bar("13:01", 10.00, 10.00, 9.79, 9.85),    # toca o nivel long (9.80)
-        _bar("13:02", 9.85, 9.91, 9.85, 9.90),      # toca o alvo (9.90) -- fecha #01 (+10)
-        _bar("13:03", 9.90, 9.90, 9.79, 9.85),      # repete LONG (ganhou) e preenche #02
-        _bar("13:04", 9.85, 9.91, 9.85, 9.90),      # toca o alvo de novo -- fecha #02 (+10)
-        _bar("13:05", 9.90, 9.90, 9.90, 9.90),
+        _bar("13:00:00", 10.00, 10.00, 10.00, 10.00),  # abertura: posiciona a 1a (long)
+        _bar("13:00:20", 10.00, 10.00, 9.79, 9.85),    # toca o nivel long (9.80)
+        _bar("13:00:40", 9.85, 9.91, 9.85, 9.90),      # toca o alvo (9.90) -- fecha #01 (+10)
+        _bar("13:01:00", 9.90, 9.90, 9.79, 9.85),      # repete LONG (ganhou) e preenche #02
+        _bar("13:01:20", 9.85, 9.91, 9.85, 9.90),      # toca o alvo de novo -- fecha #02 (+10)
+        _bar("13:01:40", 9.90, 9.90, 9.90, 9.90),
     ]
     rt, _feed = _runtime(tmp_path, barras)
-    rt.run_once(now=_agora("13:07:00"))
+    rt.run_once(now=_agora("13:01:45"))
 
     s = rt.status()["daytrade"]
 
@@ -2997,10 +3024,17 @@ def test_barra_atrasada_de_ontem_nao_achata_o_pregao_de_hoje(tmp_path, pregao_ab
     no pregao inteiro e nenhum erro no diario. O robo do slot vizinho
     (`gremah_tick`, mesmo ativo, mesmo modo) operou 7 vezes no mesmo dia: nao
     era restricao de "um ativo por robo", era esta barra."""
+    # ROTEIRO COMPRIMIDO em 2026-09-08: as barras andam de 20 em 20s (nao
+    # de minuto em minuto) e `now` fica logo depois da ultima. Motivo:
+    # desde `MAX_ATRASO_PARA_ORDEM_SEGUNDOS`, barra mais velha que o teto
+    # nao gera ORDEM NOVA -- e um roteiro de 6 minutos consumido num
+    # `run_once` so' deixava a barra de abertura com 5+ min de idade. O
+    # que este teste mede (sequencia de OHLC, numeracao, P&L) nao depende
+    # do espacamento; a idade agora depende.
     hoje = [
-        _bar("13:00", 10.00, 10.00, 10.00, 10.00),
-        _bar("13:01", 10.00, 10.00, 9.79, 9.85),   # toca o nivel long (9.80)
-        _bar("13:02", 9.85, 9.91, 9.85, 9.90),     # toca o alvo (9.90)
+        _bar("13:00:00", 10.00, 10.00, 10.00, 10.00),
+        _bar("13:00:20", 10.00, 10.00, 9.79, 9.85),   # toca o nivel long (9.80)
+        _bar("13:00:40", 9.85, 9.91, 9.85, 9.90),     # toca o alvo (9.90)
     ]
     feed = _FeedComBarraAtrasadaDeOntem(
         ontem_visivel=_bar_de_ontem("19:53", 10.00),
@@ -3009,7 +3043,7 @@ def test_barra_atrasada_de_ontem_nao_achata_o_pregao_de_hoje(tmp_path, pregao_ab
     )
     rt, _f = _runtime(tmp_path, hoje, feed=feed)
 
-    passos = rt.run_once(now=_agora("13:05:00"))
+    passos = rt.run_once(now=_agora("13:00:45"))
 
     passo = [p for p in passos if p.action == "daytrade"][0]
     assert passo.detail["descartadas"] == 1
@@ -5488,3 +5522,165 @@ def test_posicao_SEM_protecao_registrada_ainda_fecha_a_mercado(tmp_path, pregao_
         "sem nivel registrado na corretora nao ha o que esperar -- tem de fechar"
     )
     assert rt.machine.position is None
+
+
+# ---------- barra velha nao vira ordem (2026-09-08) -------------------------
+#
+# O pregao que pagou por esta secao: slot `dt-wdo_grid_reload_maker-wdo@-live`,
+# -R$116 em 08/09/2026. O terminal MT5 parou de entregar tick NOVO de WDO@ por
+# 44,8 min sem erro nenhum (`closed_bars_since` devolveu lista VAZIA em 538
+# passos seguidos, marca d'agua congelada em 14:14:20.804) e no passo seguinte
+# devolveu 13.644 barras de uma vez. O estado da conta as 15:00:57 mostrava
+# `last_bar_ts=14:36:21` contra `last_poll_at=15:00:57` -- 24 min de atraso --
+# e o loop de `_consume` tratou CADA barra velha como se fosse agora: 45
+# ordens-limite REAIS em precos de ate' 45 min atras. Uma limite num preco
+# morto chega ao book como ordem AGRESSIVA e preenche na hora no pior preco.
+#
+# O freio que ja' existia (`MAX_GAP_SECONDS`) nao tinha como pegar: ele mede
+# tempo sem RODAR, e o processo rodou de 5 em 5s o tempo todo. Quem estava
+# velho era o DADO. Ver `MAX_ATRASO_PARA_ORDEM_SEGUNDOS`.
+
+
+def test_barra_velha_NAO_vira_ordem_real_na_corretora(tmp_path, pregao_aberto):
+    """O caso do incidente, reduzido ao osso: a maquina arma sobre uma barra
+    de 30 min atras. A ordem NAO pode sair para a corretora.
+
+    Prova tambem os dois efeitos colaterais obrigatorios: a maquina nao pode
+    ficar VIGIANDO um nivel que nao existe no book (isso calaria o robo pelo
+    resto do pregao, o modo de falha do item 6.15 do `LICOES_DE_PRODUCAO.md`),
+    e o descarte tem de aparecer no diario com CONTAGEM -- em `warn`, para o
+    dono ver na hora que o robo parou de mandar ordem, em vez de descobrir no
+    fim do dia."""
+    broker = _FakeMT5Broker()
+    script = {0: [EnterLimit(side="long", limit_price=10.00, initial_stop=9.00,
+                             initial_target=11.00, quantity=1,
+                             reason="teste_barra_velha")]}
+    rt, feed = _runtime_live_scripted(tmp_path, broker, script)
+    # 1o passo com o feed VAZIO so' para abrir a sessao a frio -- senao
+    # `_start_session` consome a 1a barra do roteiro antes de `_consume` ver
+    # ela (mesmo padrao dos outros testes com `_runtime_live_scripted`).
+    rt.run_once(now=_agora("13:29:55"))
+
+    # O passo que consome vem 5s depois do anterior -- o processo NAO ficou
+    # parado (`MAX_GAP_SECONDS` nao dispara, como no incidente real, em que o
+    # supervisor rodou de 5 em 5s o tempo todo). Quem esta' velho e' o DADO.
+    feed._barras.append(_bar("13:00", 10.00, 10.00, 10.00, 10.00))
+    passos = rt.run_once(now=_agora("13:30:00"))   # 1.800s de atraso
+
+    assert broker.pendentes_enviadas == [], (
+        "barra de 30 min atras virou ordem REAL na corretora -- e' exatamente "
+        "o que custou R$116 em 08/09/2026"
+    )
+    assert rt.machine.resting_limit is None, (
+        "a maquina ficou vigiando um nivel que nunca chegou ao book: o robo "
+        "esperaria para sempre um fill impossivel"
+    )
+
+    passo = [p for p in passos if p.action == "daytrade"][0]
+    assert passo.detail["armes_barra_velha"] == 1
+    assert passo.detail["atraso_max_segundos"] == pytest.approx(1800.0)
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        eventos = [dict(r) for r in conn.execute(
+            "SELECT level, message, payload FROM live_events WHERE account_id = ?",
+            (acc.id,))]
+    avisos = [e for e in eventos if "barra velha" in e["message"]]
+    assert len(avisos) == 1, "uma linha por LOTE, nunca uma por ordem descartada"
+    assert avisos[0]["level"] == "warn"
+    assert "1 ordem(ns) de entrada NAO enviada(s)" in avisos[0]["message"]
+    assert '"armes_barra_velha": 1' in avisos[0]["payload"]
+
+
+def test_barra_RECENTE_do_mesmo_lote_continua_virando_ordem(tmp_path, pregao_aberto):
+    """A contraprova, e a razao de o criterio ser POR BARRA e nao por lote: no
+    MESMO lote de recuperacao as primeiras barras estao velhas e a ultima ja'
+    nao esta'. O robo tem de voltar a operar na primeira que chega dentro do
+    prazo -- no preco de AGORA -- sem esperar o proximo passo.
+
+    Sem isto o portao viraria a doenca que ele cura: robo mudo em silencio."""
+    broker = _FakeMT5Broker()
+    arme = lambda preco: EnterLimit(  # noqa: E731
+        side="long", limit_price=preco, initial_stop=preco - 1.0,
+        initial_target=preco + 1.0, quantity=1, reason="teste_barra_velha")
+    script = {0: [arme(10.00)], 1: [arme(10.10)], 2: [arme(10.20)]}
+    rt, feed = _runtime_live_scripted(tmp_path, broker, script)
+    rt.run_once(now=_agora("13:29:55"))     # abre a sessao a frio, sem barra
+
+    feed._barras.extend([
+        _bar("13:00:00", 10.00, 10.00, 10.00, 10.00),   # 1.800s -> velha
+        _bar("13:20:00", 10.10, 10.10, 10.10, 10.10),   #   600s -> velha
+        _bar("13:29:55", 10.20, 10.20, 10.20, 10.20),   #     5s -> ATUAL
+    ])
+    passos = rt.run_once(now=_agora("13:30:00"))
+
+    assert len(broker.pendentes_enviadas) == 1, (
+        "so' a barra ATUAL pode virar ordem -- as duas velhas nao, a recente sim"
+    )
+    assert float(broker.pendentes_enviadas[0].limit_price) == pytest.approx(10.20)
+    passo = [p for p in passos if p.action == "daytrade"][0]
+    assert passo.detail["armes_barra_velha"] == 2
+    assert rt.machine.resting_limit is not None
+
+
+def test_barra_velha_NAO_engole_fechamento_de_posicao(tmp_path, pregao_aberto):
+    """O outro lado da regra, e o que ela nao pode quebrar: o portao vale so'
+    para EXPOSICAO NOVA. Stop, alvo, cancelamento e fechamento passam sempre.
+
+    Motivo: nao sao decisao nova, sao a maquina constatando um FATO. Engolir
+    um fechamento porque a barra estava velha deixaria posicao FANTASMA --
+    exposicao real que o robo acha que nao tem -- que e' pior do que o
+    problema original. O fechamento sai a MERCADO, no preco de AGORA, nunca
+    no da barra velha."""
+    broker = _FakeMT5Broker()
+    broker.preco_de_saida = 9.30
+    script = {0: [EnterLimit(side="long", limit_price=10.00, initial_stop=9.50,
+                             initial_target=11.00, quantity=1,
+                             reason="teste_barra_velha")]}
+    rt, feed = _runtime_live_scripted(tmp_path, broker, script)
+    rt.run_once(now=_agora("12:59:55"))     # abre a sessao a frio, sem barra
+
+    # (1) arma e preenche com barras FRESCAS -- ha' posicao real de verdade.
+    feed._barras.append(_bar("13:00:00", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:00:00"))
+    assert len(broker.pendentes_enviadas) == 1
+    broker.posicao = {"side": "long", "price": 10.00, "quantity": 1, "ticket": 42,
+                      "sl": 0.0, "tp": 0.0}
+    feed._barras.append(_bar("13:00:10", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:00:10"))
+    assert rt.machine.position is not None
+
+    # (2) o stop e' tocado numa barra de 30 min atras. TEM de fechar.
+    enviadas_antes = len(broker.pendentes_enviadas)
+    rt.run_once(now=_agora("13:05:00"))    # passo vazio: mantem a cadencia
+    rt.run_once(now=_agora("13:10:00"))
+    feed._barras.append(_bar("13:00:20", 10.00, 10.00, 9.40, 9.45))
+    passos = rt.run_once(now=_agora("13:10:05"))   # barra de ~10 min atras
+
+    assert rt.machine.position is None, (
+        "fechamento suprimido por barra velha = posicao fantasma na corretora"
+    )
+    passo = [p for p in passos if p.action == "daytrade"][0]
+    assert passo.detail["saidas"] == 1
+    assert len(broker.ordens_a_mercado) == 1, "o stop fecha a MERCADO, no preco de agora"
+    assert len(broker.pendentes_enviadas) == enviadas_antes, (
+        "o rearme sobre a MESMA barra velha nao pode ir ao book"
+    )
+
+
+def test_limite_de_atraso_soma_o_atraso_ESTRUTURAL_do_feed(tmp_path, pregao_aberto):
+    """O teto nao pode ser um numero fixo: mataria o feed M1 por construcao.
+
+    Uma barra M1 so' e' legivel DEPOIS de fechar e o `ts` dela e' a ABERTURA
+    do minuto (`live/bar_feed.py`), entao toda barra M1 chega com >=60s de
+    idade num robo perfeitamente saudavel. `nominal_delay_seconds` do feed
+    entra somando -- 120s no feed de tick, 180s no M1."""
+    broker = _FakeMT5Broker()
+    rt, feed = _runtime_live_scripted(tmp_path, broker, {})
+
+    assert feed.nominal_delay_seconds == 0.0
+    assert rt._limite_de_atraso() == pytest.approx(itr_mod.MAX_ATRASO_PARA_ORDEM_SEGUNDOS)
+
+    feed.nominal_delay_seconds = 60.0            # como o `MT5BarFeed` declara
+    assert rt._limite_de_atraso() == pytest.approx(
+        60.0 + itr_mod.MAX_ATRASO_PARA_ORDEM_SEGUNDOS)

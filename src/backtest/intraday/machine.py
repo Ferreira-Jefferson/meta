@@ -1582,15 +1582,25 @@ class IntradaySessionMachine:
         """Esquece a ordem-limite vigiada SEM emitir evento e SEM mandar
         cancelamento nenhum -- ela nunca chegou a existir no book.
 
-        So' a operacao REAL usa, e para um caso so': a corretora RECUSOU o
-        envio (`live/intraday_execution.py::BrokerExecutionError`, que so'
-        sobe depois de cancelar as fatias ja enviadas -- nunca fica entrada
-        pela metade). A maquina grava `resting_limit` ANTES do envio, entao
-        uma recusa a deixava vigiando um fill impossivel: em 25/08/2026 o
-        slot `dt-gremah_tick-pmam3-live` passou de 13:02 as 14:00 esperando
-        uma ordem que o terminal tinha recusado (`AutoTrading disabled by
-        client`), e so' voltou a mandar quando o proprio robo declarou a
-        ordem obsoleta pelo relogio.
+        So' a operacao REAL usa, e sempre pelo MESMO motivo: a ordem que a
+        maquina acabou de gravar em `resting_limit` NAO existe no book, e
+        deixa-la vigiada faria o robo esperar um fill impossivel. Dois
+        caminhos chegam aqui, os dois em `live/intraday_runtime.py`:
+
+        1. a corretora RECUSOU o envio (`live/intraday_execution.py::
+           BrokerExecutionError`, que so' sobe depois de cancelar as fatias
+           ja enviadas -- nunca fica entrada pela metade), ou a margem da
+           conta nao cobria (`_recusa_por_margem`, nada chegou a sair). Em
+           25/08/2026 o slot `dt-gremah_tick-pmam3-live` passou de 13:02 as
+           14:00 esperando uma ordem que o terminal tinha recusado
+           (`AutoTrading disabled by client`), e so' voltou a mandar quando
+           o proprio robo declarou a ordem obsoleta pelo relogio;
+        2. `live/` recusou ENVIAR porque a barra que gerou o arme estava
+           velha demais (`_descarta_arme_de_barra_velha`, 2026-09-08 --
+           feed cego por 44,8 min, 45 ordens reais contra precos mortos).
+
+        Nada disto muda o backtest: `discard_resting_limit` nunca e'
+        chamada com `self.execution is None`.
 
         `LimitCancelled` seria a ferramenta errada aqui: ele significa "uma
         ordem que ESTAVA no book saiu dele" e faz o chamador ao vivo mandar
