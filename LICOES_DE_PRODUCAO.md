@@ -2634,6 +2634,67 @@ travar, não o acaso de qual sequência de trades calhou primeiro.
 > item 6.15, só que ao longo do eixo do PARÂMETRO em vez do eixo da JANELA.
 > (6.16, generaliza 6.15/pergunta 47)
 
+### 6.17 T4 travado por capital (6.16) tinha causa raiz diferente: edge negativo por trade, não undercapitalização — mais caixa PIORA o resultado
+
+O item 6.16 achou que T4/S16 travava no capital real (R$375) do WDO F1. A
+pergunta óbvia depois disso foi do dono: "pra T4 funcionar, qual seria o
+capital mínimo pro caixa não ficar zerado?" Medido em
+`scripts/daytrade/wdof1_t4_capital_minimo_2026_09_08.py`, 2026-09-08, escada
+de capital de R$375 a R$5.000 no histórico M1 completo do WDO@ (177 pregões),
+mesmo método de `wdof1_sobrevivencia_capital_baixo_2026_08_29.py`:
+
+| Capital | trades | líquido R$ | pregões sem trade (de 177) | caixa_min |
+|---|---|---|---|---|
+| R$375 | 27 | −264,33 | 176 | 110,67 |
+| R$500 | 29 | −435,33 | 176 | 64,67 |
+| R$750 | 49 | −601,16 | 176 | 148,84 |
+| R$1.000 | 57 | −860,55 | 176 | 139,45 |
+| R$1.500 | 171 | −1.416,35 | 174 | 83,65 |
+| R$2.000 | 252 | −1.879,19 | 173 | 120,81 |
+| R$3.000 | 1.091 | −2.914,80 | 161 | 85,20 |
+| R$5.000 | 4.882 | **−4.905,87** | 110 | 94,13 |
+
+Nenhum nível destrava T4 — `pregões sem trade` nunca cai perto de zero como
+acontece com T2/T3 no item 6.16 — e o líquido **piora monotonicamente** com
+mais capital: R$5.000 (13x o capital real do slot) dá o PIOR resultado da
+escada, não o melhor. `qtd_max` fica em 1 em todos os níveis (o
+dimensionamento dinâmico por risco só libera o 2º contrato perto de R$8.000
+com esse stop). `zerou` nunca dispara — não é ruína, é a armadilha silenciosa
+do item 1.19/3.9: o caixa cai abaixo da margem crua de R$150 e nunca mais
+reabre.
+
+O breakeven teórico de T4/S16 (`stop_ticks/(profit_ticks+stop_ticks)` =
+16/20 = 80,0%) já constava do item 6.16. O win% medido nas janelas IS/OOS
+daquele item foi 76,5% e 75,0% — **abaixo do breakeven nas duas.** T4 não é
+"boa geometria mal capitalizada": é uma geometria com edge negativo por
+trade. Mais capital não resolve edge negativo — só adia o mesmo resultado e
+deixa o robô rodar mais trades perdedores antes de esbarrar de novo no piso
+de caixa, aumentando o prejuízo absoluto no caminho. O travamento por
+capital que o item 6.16 documentou era só o que mascarava esse tamanho de
+prejuízo — não era a causa raiz.
+
+> **Regra:** antes de tratar qualquer travamento por capital (item 6.16)
+> como "precisa de mais caixa", confira se o win% já medido está ABAIXO do
+> breakeven teórico da geometria (`stop/(profit+stop)`). Se estiver, nenhum
+> capital resolve — o problema é edge negativo por trade, não
+> undercapitalização, e subir o capital só compra mais trades perdedores. A
+> assinatura desse caso é uma escada de capital que **piora
+> monotonicamente** em vez de estabilizar acima de algum piso; distinga dos
+> casos onde subir capital destrava e o resultado estabiliza — esses SIM
+> são undercapitalização de verdade, e aí sim vale procurar o capital
+> mínimo. O item 6.16 achou o travamento; este item (6.17) é o que
+> descobre, por trás dele, se travar é sintoma de pouco caixa ou de edge
+> negativo disfarçado de pouco caixa.
+>
+> **Pergunte à plataforma nova:** o meu backtest reporta o win% observado e
+> o breakeven teórico (derivado de alvo/stop) lado a lado, para qualquer
+> geometria testada, ANTES de eu decidir se um travamento por capital
+> merece mais caixa ou se é edge negativo disfarçado? Sem essa comparação
+> ao lado do resultado, uma escada de capital pode rodar do início ao fim
+> perseguindo undercapitalização que não existe — o número que resolveria
+> em uma linha (win% vs breakeven) só aparece depois de já ter gastado a
+> escada inteira. (6.17, decorre de 6.16/pergunta 52)
+
 ---
 
 ## Parte 7 — Disciplina de trabalho
@@ -3003,6 +3064,15 @@ dinheiro ou meses.
     sofre o mesmo viés: um número baixo pode ser a geometria censurada não
     acumulando rajada, não uma geometria mais segura. (6.16, generaliza
     6.15/pergunta 47)
+53. O meu backtest reporta o win% observado e o breakeven teórico (derivado
+    de alvo/stop: `stop/(profit+stop)`) lado a lado, para qualquer geometria
+    testada, ANTES de eu decidir se um travamento por capital merece mais
+    caixa ou se é edge negativo disfarçado? Uma escada de capital de R$375 a
+    R$5.000 rodou inteira atrás de undercapitalização que não existia: o
+    líquido piorou monotonicamente em vez de estabilizar, e o win% medido já
+    estava abaixo do breakeven antes da escada começar — a linha que
+    resolveria a pergunta em uma conta só apareceu depois de gastar a escada
+    inteira. (6.17, decorre de 6.16/pergunta 52)
 
 ---
 
