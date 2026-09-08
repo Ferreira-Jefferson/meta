@@ -442,6 +442,17 @@ def carregar_barras_de_hoje() -> pd.DataFrame:
 
     from market_data_intraday.mt5_ticks_source import fetch_ticks_range
 
+    # AVISO (2026-09-07): estes dois limites sao NAIVE (`DIA` e' um
+    # `datetime` sem fuso), e `fetch_ticks_range` repassa o limite cru para
+    # `copy_ticks_range`, que chama `.timestamp()` nele -- um naive e'
+    # resolvido no fuso da MAQUINA, entao a janela pedida vira parede
+    # 03:00..02:59 do dia seguinte em vez de 00:00..23:59. Nao morde HOJE
+    # porque o `CACHE` acima intercepta antes; se o cache for apagado, este
+    # script busca a janela errada. Registro de rodada (data no nome), entao
+    # fica o aviso em vez da correcao -- o numero que ele publicou veio do
+    # cache, nao desta chamada. A forma correta esta em
+    # `live/tick_feed.py::_limite_servidor` e no item 5.10 do
+    # LICOES_DE_PRODUCAO.md.
     ticks = fetch_ticks_range(SYMBOL_REAL, DIA.replace(hour=0, minute=0),
                               DIA.replace(hour=23, minute=59))
     if ticks.empty:

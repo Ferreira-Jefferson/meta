@@ -148,9 +148,68 @@ def test_limites_da_janela_sao_convertidos_para_o_relogio_do_servidor(monkeypatc
     start, _end, _kw = capturado[0]
     esperado = (datetime(2026, 8, 19, 13, 0, tzinfo=timezone.utc)
                 .astimezone(MT5_SERVER_TIMEZONE).replace(tzinfo=None))
-    assert start.tzinfo is None  # naive: o pacote MetaTrader5 nao pode reinterpretar
-    assert start == esperado
+    # Ate' 2026-09-07 este teste exigia `start.tzinfo is None`, afirmando que
+    # o naive impedia o pacote `MetaTrader5` de reinterpretar o limite. E' o
+    # contrario: `.timestamp()` de um naive e' resolvido no fuso da MAQUINA,
+    # o que CANCELA a conversao acima (ver `tick_feed._limite_servidor`). O
+    # limite certo e' o relogio de parede do servidor ROTULADO como UTC.
+    assert start.tzinfo == timezone.utc
+    assert start.replace(tzinfo=None) == esperado
     assert start.hour == 10  # 13:00 UTC == 10:00 em Brasilia
+
+
+def _parede_lida_pelo_terminal(limite: datetime) -> datetime:
+    """O relogio de parede que o terminal MT5 vai ler do limite entregue.
+
+    Reproduz o que o pacote `MetaTrader5` faz: `.timestamp()` no limite, e o
+    terminal trata esse epoch como hora de parede do servidor. Num limite
+    tz-aware `.timestamp()` nao consulta o fuso local; num naive, consulta —
+    e e' exatamente por isso que o naive deslocava a janela."""
+    return datetime.fromtimestamp(limite.timestamp(), timezone.utc).replace(tzinfo=None)
+
+
+def test_limite_chega_ao_terminal_como_a_parede_pedida_e_nao_deslocado(monkeypatch):
+    """Regressao do bug latente corrigido em 2026-09-07: o limite era naive, e
+    `.timestamp()` de um naive e' resolvido no fuso da MAQUINA — o que
+    cancelava a conversao para o relogio do servidor e fazia a janela pedida
+    andar +3h nesta maquina (medido: pedir naive 12:00 devolveu negocios de
+    15:00 de parede).
+
+    O teste olha o limite pelos olhos do terminal, nao pelo tipo do objeto: o
+    epoch entregue tem de valer a hora de BRASILIA do instante UTC pedido.
+    Com o codigo antigo o epoch valia o proprio horario UTC."""
+    capturado: list = []
+    feed = _feed(monkeypatch, _ticks("2026-08-21 13:00:00", 3),
+                 "2026-08-21 13:00:10", capturado=capturado)
+
+    feed.closed_bars_since(pd.Timestamp("2026-08-19 13:00:00", tz="UTC"))
+
+    start, end, _kw = capturado[0]
+    # tz-aware nos dois limites: e' o que torna `.timestamp()` independente
+    # da maquina que roda o robo.
+    assert start.tzinfo is not None and end.tzinfo is not None
+    # 13:00 UTC == 10:00 em Brasilia, que e' o relogio do servidor.
+    assert _parede_lida_pelo_terminal(start) == datetime(2026, 8, 19, 10, 0)
+    # limite superior: "agora" (13:00:10 UTC) + `_FUTURE_MARGIN` (2min).
+    assert _parede_lida_pelo_terminal(end) == datetime(2026, 8, 21, 10, 2, 10)
+
+
+def test_session_bars_until_tambem_pede_a_janela_no_relogio_do_servidor(monkeypatch):
+    """A outra porta de entrada do mesmo `_fetch` — o warm start. A janela e'
+    alargada em um dia para cada lado (o recorte do pregao e' feito depois,
+    sobre o index ja' corrigido), mas o alargamento e' folga, nao licenca para
+    pedir a janela na hora errada."""
+    capturado: list = []
+    feed = _feed(monkeypatch, _ticks("2026-08-21 13:00:00", 3),
+                 "2026-08-21 13:10:00", capturado=capturado)
+
+    feed.session_bars_until(date(2026, 8, 21), pd.Timestamp("2026-08-21 13:05", tz="UTC"))
+
+    start, end, _kw = capturado[0]
+    # meia-noite UTC de 2026-08-21, menos 1 dia == 2026-08-20 00:00 UTC,
+    # que em Brasilia e' 2026-08-19 21:00.
+    assert _parede_lida_pelo_terminal(start) == datetime(2026, 8, 19, 21, 0)
+    assert _parede_lida_pelo_terminal(end) == datetime(2026, 8, 22, 21, 0)
 
 
 def test_janela_estreita_e_alargada_para_alcancar_o_piso_seguro(monkeypatch):
@@ -169,7 +228,10 @@ def test_janela_estreita_e_alargada_para_alcancar_o_piso_seguro(monkeypatch):
     start, _end, _kw = capturado[0]
     pedido = (datetime(2026, 8, 21, 13, 0, 5, tzinfo=timezone.utc)
               .astimezone(MT5_SERVER_TIMEZONE).replace(tzinfo=None))
-    assert start < pedido - timedelta(hours=23)  # bem mais largo que os 5s pedidos
+    # `.replace(tzinfo=None)`: o limite passou a ser tz-aware em 2026-09-07
+    # (ver `tick_feed._limite_servidor`); o NUMERO de parede comparado aqui
+    # e' o mesmo de antes — o piso de seguranca nao mudou.
+    assert start.replace(tzinfo=None) < pedido - timedelta(hours=23)
 
 
 def test_conversao_de_volta_e_delegada_ao_mt5_ticks_source(monkeypatch):

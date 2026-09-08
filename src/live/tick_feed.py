@@ -35,12 +35,20 @@ FUSO DO SERVIDOR — a mesma armadilha do feed M1
 -----------------------------------------------
 `copy_ticks_range` interpreta os limites que recebe no relogio do SERVIDOR,
 nao em UTC (mesmo comportamento de `copy_rates_range`). A conversao de ida e'
-`core.b3_session.utc_to_server_wall_clock`; a de volta e' de
+`core.b3_session.utc_to_server_wall_clock` MAIS o rotulo de UTC que
+`_limite_servidor` poe por cima (ver a docstring dela — o naive sozinho era
+um bug latente, corrigido em 2026-09-07); a de volta e' de
 `mt5_ticks_source`, pelo FUSO declarado. Depois disso ainda filtramos pelo
 index ja' corrigido: se o relogio do servidor divergir do declarado, e' melhor
 entregar menos ticks do que entregar ticks rotulados na hora errada — um
 offset errado nao levanta erro nenhum, so' faz o robo rodar a fase errada do
 dia inteiro (ver `live_stop_intraday_2026_08_20` na memoria do projeto).
+
+Nenhuma das duas defesas abaixo virou redundante com essa correcao, e por
+isso nenhuma foi mexida: `_SAFE_FETCH_LOOKBACK` existe por um bug MEDIDO do
+terminal (`date_from` dentro do pregao devolve negocio incompleto ou zero),
+e o corte por `agora` em `_bars` existe para o caso de o relogio do servidor
+divergir do fuso declarado. Sao tres modos de falha independentes.
 """
 from __future__ import annotations
 
@@ -83,6 +91,34 @@ _SAFE_FETCH_LOOKBACK = timedelta(days=1)
 #: cortaria justamente os negocios mais recentes — os unicos que interessam.
 #: Ticks do "futuro" nao passam: o filtro por `now` abaixo os descarta.
 _FUTURE_MARGIN = timedelta(minutes=2)
+
+
+def _limite_servidor(instant_utc: datetime) -> datetime:
+    """O limite a entregar para `copy_ticks_range`: o relogio de PAREDE do
+    servidor, ROTULADO como UTC.
+
+    Nao basta converter para o relogio do servidor e passar o `datetime`
+    naive que `utc_to_server_wall_clock` devolve. O pacote `MetaTrader5`
+    chama `.timestamp()` no limite recebido, e `.timestamp()` de um naive e'
+    resolvido no fuso da MAQUINA que roda o robo — o que CANCELA a conversao
+    e faz a janela pedida andar o offset local inteiro (+3h nesta maquina,
+    que roda em Brasilia, o mesmo fuso do servidor). Medido 2026-09-07:
+    pedir naive 12:00 devolveu negocios de 15:00 de parede do servidor; pedir
+    15:00 UTC devolveu exatamente 15:00 de parede.
+
+    Um tz-aware cujo relogio de parede JA e' o do servidor e' imune a isso em
+    qualquer maquina, porque `.timestamp()` de um aware nao consulta o fuso
+    local. Mesmo padrao de `scripts/daytrade/wdo_grid_reload_f1_tick_probe.py`
+    e `scripts/daytrade/wdof1_mfe_mae_semana_2026_09_04.py`.
+
+    O defeito era LATENTE aqui (nunca chegou a operar sobre a janela errada):
+    `_SAFE_FETCH_LOOKBACK` pede 1 dia para tras, larga o bastante para as 3h
+    de deslocamento nao tirarem a janela de cima do dado que interessa, e o
+    recorte que decide o que o robo VE e' feito depois, sobre o index ja'
+    convertido corretamente por `mt5_ticks_source._ticks_to_df`. Bastava
+    apertar a janela (ou mudar de maquina/fuso) para o defeito aparecer.
+    """
+    return utc_to_server_wall_clock(instant_utc).replace(tzinfo=timezone.utc)
 
 
 class MT5TickFeed:
@@ -131,11 +167,12 @@ class MT5TickFeed:
 
     def _fetch(self, start_utc: datetime, end_utc: datetime) -> pd.DataFrame:
         """Ticks de negocio da janela, com o index ja' em UTC. Converte os
-        limites para o relogio do servidor na ida (ver docstring do modulo)."""
+        limites para o relogio do servidor na ida (ver `_limite_servidor` e a
+        docstring do modulo)."""
         return fetch_ticks_range(
             self.symbol,
-            utc_to_server_wall_clock(start_utc),
-            utc_to_server_wall_clock(end_utc),
+            _limite_servidor(start_utc),
+            _limite_servidor(end_utc),
             on_error=self._on_error,
             **self._credentials,
         )

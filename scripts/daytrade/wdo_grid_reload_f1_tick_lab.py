@@ -9,6 +9,14 @@ metade + nulo sign-flip + curva de pedagio) na leitura TICK do candidato
     conhecido (123 pregoes completos, fora deste repo): 305,74
     win rate -- tick: 99,4% | M1: 89,3% | breakeven da razao 1:16: ~94,1%
 
+AVISO 2026-09-07 -- os numeros citados acima (e todos os deste arquivo) sao
+de uma janela TRUNCADA. `buscar_ticks`, que este modulo importa do probe,
+pedia a janela errada ao terminal e rotulava o resultado 3h cedo: cada
+pregao vinha das 14:58 as 18:29 (3h31 de um pregao de 9h30). A funcao foi
+corrigida -- ler o AVISO no topo de `wdo_grid_reload_f1_tick_probe.py` --
+mas NADA aqui foi re-rodado, entao nenhum numero deste cabecalho e'
+reproduzivel pelo codigo atual.
+
 RESSALVA que se aplica a CADA numero deste arquivo, sem excecao: e' um
 subconjunto de 58,5% do IS (faltam os 51 PRIMEIROS pregoes, sem tick
 history retido pelo terminal/corretora) -- nada aqui e' "o candidato IS

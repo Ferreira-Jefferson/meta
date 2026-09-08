@@ -5,6 +5,15 @@ O dono AUTORIZOU EXPLICITAMENTE destravar o OOS agora (>=2026-06-13) para
 esta validacao final -- `LockedBars.unlock(reason=...)` e' chamado aqui de
 proposito, uma unica vez, com o motivo abaixo (`OOS_UNLOCK_REASON`).
 
+AVISO 2026-09-07 -- este e' um REGISTRO de rodada; os numeros abaixo foram
+medidos com `buscar_ticks` ainda defeituosa (janela pedida ao terminal
+deslocada +3h e index rotulado 3h cedo, cobrindo so' 14:58..18:29 de cada
+pregao). A funcao foi corrigida no probe, este arquivo NAO foi re-rodado.
+Ler o AVISO no topo de `wdo_grid_reload_f1_tick_probe.py`. (A cobertura de
+tick descrita abaixo continua valendo: re-testado em 2026-09-07 pela rota
+corrigida, 2026-08-03 e 2026-08-04 seguem devolvendo 0 ticks -- e' gap de
+retencao do terminal de verdade, nao efeito do defeito.)
+
 ## Cobertura de tick no trecho OOS -- CONFIRMADA (item 1 da missao)
 
 O terminal MT5 (Rico) tem 51 pregoes OOS elegiveis (>=400 barras M1),

@@ -26,3 +26,10 @@ data/wide_e/*.parquet
 data/vault_1998_2009/*.parquet
 data/raw_intraday/*.parquet
 data/raw_ticks/*.parquet
+# Sobras do procedimento seguro de regeneracao do parquet canonico (backup ->
+# arquivo novo -> compara -> uniao, nunca apaga -- ver a rodada de 2026-09-07,
+# quando a paginacao com fuso errado tinha comido 19,3% dos minutos de pregao
+# do WDO@). Sem estas duas linhas o backup de 112 MB entra no `git status` como
+# arquivo novo, porque `.parquet.bak-<data>` nao casa com `*.parquet`.
+data/raw_ticks/*.bak-*
+data/raw_ticks/*.uniao.parquet

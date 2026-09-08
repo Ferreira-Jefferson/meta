@@ -17,6 +17,7 @@ from datetime import date, datetime, timezone
 import pandas as pd
 import pytest
 
+from core.b3_session import MT5_SERVER_TIMEZONE
 from live import bar_feed as bar_feed_mod
 from live.bar_feed import MT5BarFeed
 from market_data_intraday.mt5_source import DEFAULT_SERVER_UTC_OFFSET_HOURS
@@ -178,6 +179,84 @@ def test_conversao_de_fuso_e_delegada_ao_mt5_source(monkeypatch):
     feed.closed_bars_since(None)
 
     assert capturado == ["ausente"]
+
+
+def _parede_lida_pelo_terminal(limite: datetime) -> datetime:
+    """O relogio de parede que o terminal MT5 vai ler do limite entregue.
+
+    Reproduz o que o pacote `MetaTrader5` faz: `.timestamp()` no limite, e o
+    terminal trata esse epoch como hora de parede do servidor. Num limite
+    tz-aware `.timestamp()` NAO consulta o fuso local; num naive, consulta.
+    Mesma tecnica de `tests/test_live_tick_feed.py` — olhar o limite pelos
+    OLHOS DO TERMINAL, nao pelo tipo do objeto, e' o unico jeito de um teste
+    sem terminal enxergar um deslocamento de janela."""
+    return datetime.fromtimestamp(limite.timestamp(), timezone.utc).replace(tzinfo=None)
+
+
+def test_session_bars_until_pede_a_janela_no_relogio_do_servidor(monkeypatch):
+    """REGRESSAO: ate' 2026-09-07 `session_bars_until` mandava `meia_noite ±
+    dias` em UTC CRU para `fetch_m1_range` -> `copy_rates_range`, que
+    interpreta os limites no relogio do SERVIDOR. A janela chegava 3h
+    deslocada. Ficava mascarado pelo alargamento de ±1 dia, mas mascarar nao
+    e' corrigir: bastava apertar a janela para o pregao ser cortado no lugar
+    errado. Mesma familia do bug que comeu 63 buracos de 3h do parquet
+    canonico do WDO@ (`mt5_ticks_source._cursor_paginacao`).
+
+    Com o codigo antigo a parede lida seria 2026-08-20 00:00 / 2026-08-23
+    00:00 — o proprio horario UTC, sem conversao."""
+    capturado: list = []
+
+    def _fake_range(symbol, start, end, on_error=None, **kw):
+        capturado.append((start, end))
+        return _df("2026-08-21 13:00", 8)
+
+    monkeypatch.setattr(bar_feed_mod, "fetch_m1_range", _fake_range)
+    feed = MT5BarFeed(
+        "PMAM3", now_fn=lambda: datetime(2026, 8, 21, 13, 10, tzinfo=timezone.utc)
+    )
+
+    feed.session_bars_until(date(2026, 8, 21), pd.Timestamp("2026-08-21 13:05", tz="UTC"))
+
+    start, end = capturado[0]
+    # tz-aware nos dois limites: e' o que torna `.timestamp()` independente da
+    # maquina que roda o robo (um naive seria resolvido no fuso LOCAL, o que
+    # cancelaria a conversao).
+    assert start.tzinfo is not None and end.tzinfo is not None
+    # 2026-08-21 00:00 UTC menos 1 dia == 2026-08-20 00:00 UTC, que no relogio
+    # do servidor (Brasilia) e' 2026-08-19 21:00.
+    assert _parede_lida_pelo_terminal(start) == datetime(2026, 8, 19, 21, 0)
+    assert _parede_lida_pelo_terminal(end) == datetime(2026, 8, 22, 21, 0)
+
+
+def test_alargamento_de_um_dia_para_cada_lado_continua_valendo(monkeypatch):
+    """O alargamento NAO virou redundante com a correcao de fuso acima, e por
+    isso nao foi removido: ele defende contra o dia civil do servidor nao ser
+    o dia civil em UTC e contra o fuso declarado divergir do servidor real —
+    modos de falha independentes do limite ir na hora errada (mesmo
+    raciocinio das defesas mantidas em `live/tick_feed.py`)."""
+    capturado: list = []
+
+    def _fake_range(symbol, start, end, on_error=None, **kw):
+        capturado.append((start, end))
+        return _df("2026-08-21 13:00", 8)
+
+    monkeypatch.setattr(bar_feed_mod, "fetch_m1_range", _fake_range)
+    feed = MT5BarFeed(
+        "PMAM3", now_fn=lambda: datetime(2026, 8, 21, 13, 10, tzinfo=timezone.utc)
+    )
+
+    feed.session_bars_until(date(2026, 8, 21), pd.Timestamp("2026-08-21 13:05", tz="UTC"))
+
+    start, end = capturado[0]
+    assert end - start == pd.Timedelta(days=3)
+    # a sessao pedida (00:00..24:00 de 2026-08-21 em Brasilia) cabe FOLGADA
+    # dentro da janela, com pelo menos meio dia de sobra de cada lado.
+    abre = pd.Timestamp("2026-08-21 00:00", tz=MT5_SERVER_TIMEZONE)
+    fecha = pd.Timestamp("2026-08-22 00:00", tz=MT5_SERVER_TIMEZONE)
+    p_start = pd.Timestamp(_parede_lida_pelo_terminal(start), tz=MT5_SERVER_TIMEZONE)
+    p_end = pd.Timestamp(_parede_lida_pelo_terminal(end), tz=MT5_SERVER_TIMEZONE)
+    assert p_start <= abre - pd.Timedelta(hours=12)
+    assert p_end >= fecha + pd.Timedelta(hours=12)
 
 
 # ---------- semente do warm start ----------------------------------------

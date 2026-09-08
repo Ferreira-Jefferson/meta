@@ -27,10 +27,46 @@ tem todos os campos identicos e e' descartado.
 `MAX_TICKS_PER_REQUEST`: sem limite documentado (testado ate 500k ticks
 numa unica chamada sem erro), mas pagina em blocos menores por seguranca --
 mesmo espirito defensivo de `mt5_source.MAX_BARS_PER_REQUEST`, so' que aqui
-o numero e' precaucao, nao um limite medido do terminal."""
+o numero e' precaucao, nao um limite medido do terminal.
+
+FUSO NOS LIMITES -- o bug que ja COMEU 63 buracos de 3h do parquet canonico
+===========================================================================
+Todo `datetime` entregue ao pacote `MetaTrader5` passa por `.timestamp()`, e
+`.timestamp()` de um NAIVE e' resolvido no fuso da MAQUINA que roda o
+processo. Nesta maquina (Brasilia, o mesmo fuso do servidor) isso soma +3h
+silenciosamente ao limite pedido. Um `datetime` tz-aware nao consulta o fuso
+local -- por isso todo limite que sai daqui e' aware.
+
+Duas rotas, com contratos DIFERENTES de proposito:
+
+  - `fetch_ticks_range(symbol, start, end)`: `start`/`end` ja' chegam no
+    relogio de PAREDE do servidor rotulado como UTC. Quem converte e' o
+    chamador (`live/tick_feed.py::_limite_servidor`), porque so' ele sabe se
+    o instante que tem em maos e' UTC de verdade.
+  - `fetch_ticks_full_history`: o cursor de paginacao NAO precisa de
+    conversao nenhuma -- `time_msc` ja' E' a parede do servidor. Precisa so'
+    do ROTULO de UTC, que e' o que `_cursor_paginacao` poe.
+
+O defeito era REAL (nao latente) na segunda rota: ate' 2026-09-07 o cursor
+era naive, entao cada troca de pagina pedia a partir de `cursor + 3h` em vez
+de `cursor`, pulando ate' 3h de negocio em CADA borda de pagina sem levantar
+erro nenhum. MEDIDO no `data/raw_ticks/WDO_A_.parquet` (126 pregoes de WDO@
+gerados por `scripts/daytrade/backfill_ticks.py`), 2026-09-07:
+
+  - 63 lacunas de EXATAMENTE 180min, uma a cada ~198.500 linhas -- que e'
+    o tamanho de uma pagina (`MAX_TICKS_PER_REQUEST` = 200.000, menos o tick
+    de sobreposicao que o dedupe come);
+  - 13.786 dos 71.316 minutos de pregao (19,3%) sem UM tick sequer;
+  - 84 dos 126 pregoes com buraco; os outros 42 batem com a rota por
+    INTERVALO tick a tick (`fetch_ticks_range` + `_dedupe_full_row`);
+  - pior pregao medido, 2026-08-19: 75.710 ticks no parquet contra 134.439
+    que a rota por intervalo devolve -- 43,7% do dia ausente, na faixa
+    10:11..13:09.
+
+Regerar o parquet e' o unico jeito de recuperar o dado."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Callable, Optional
 
 import pandas as pd
@@ -45,7 +81,26 @@ DEFAULT_SERVER_UTC_OFFSET_HOURS = server_utc_offset_hours()
 #: "antes de qualquer tick real existir". O terminal retorna o tick mais
 #: antigo que realmente tem (medido 2026-08-22: PMAM3 comeca em 2024-11-01
 #: mesmo pedindo desde 2000), entao um numero redondo aqui nao trava nada.
-_GENESIS = datetime(2000, 1, 1)
+#: `tzinfo=utc` pelo mesmo motivo de `_cursor_paginacao`: aqui o deslocamento
+#: de 3h de um naive seria INOFENSIVO (2000-01-01 03:00 tambem e' antes de
+#: qualquer tick), mas um naive escapando para a API do MT5 e' precisamente o
+#: padrao que este modulo nao pode mais ter em lugar nenhum.
+_GENESIS = datetime(2000, 1, 1, tzinfo=timezone.utc)
+
+
+def _cursor_paginacao(time_msc: int) -> datetime:
+    """O `data_inicio` da PROXIMA pagina de `copy_ticks_from`: a parede do
+    servidor do ultimo tick da pagina atual, ROTULADA como UTC.
+
+    `time_msc` ja' e' a hora de parede do servidor em ms (o mesmo campo que
+    `_ticks_to_df` converte para UTC de verdade na volta), entao aqui NAO ha
+    conversao de fuso a fazer -- so' o rotulo. O rotulo e' o que impede o
+    pacote `MetaTrader5` de resolver `.timestamp()` no fuso da maquina e
+    empurrar a pagina seguinte 3h para frente (ver a secao "FUSO NOS LIMITES"
+    na docstring do modulo, e `live/tick_feed.py::_limite_servidor` para a
+    mesma correcao do lado do range).
+    """
+    return pd.to_datetime(int(time_msc), unit="ms", utc=True).to_pydatetime()
 
 
 def _connect(mt5, login=None, password=None, server=None, path=None) -> bool:
@@ -101,7 +156,14 @@ def fetch_ticks_range(
 ) -> pd.DataFrame:
     """Trade ticks de `symbol` entre `start` e `end`. DataFrame vazio (nunca
     excecao) se o terminal/simbolo falhar -- mesmo contrato de
-    `mt5_source.fetch_m1_range`."""
+    `mt5_source.fetch_m1_range`.
+
+    `start`/`end` tem de chegar no relogio de PAREDE do servidor, tz-aware
+    (a receita esta em `live/tick_feed.py::_limite_servidor`): esta funcao
+    NAO converte, porque so' o chamador sabe se o instante que ele tem e' UTC
+    de verdade. Passar naive faz o pacote `MetaTrader5` resolver
+    `.timestamp()` no fuso da maquina e deslocar a janela -- ver a secao
+    "FUSO NOS LIMITES" na docstring do modulo."""
     try:
         import MetaTrader5 as mt5
     except Exception as exc:  # pragma: no cover - ambiente sem o pacote
@@ -136,7 +198,11 @@ def fetch_ticks_full_history(
     """Pagina `copy_ticks_from` a partir de `_GENESIS` ate um lote menor que
     `MAX_TICKS_PER_REQUEST` voltar (= alcancou o tick mais recente
     disponivel) -- mesmo espirito de `mt5_source.fetch_m1_full_history`,
-    adaptado para paginacao por tempo (ver docstring do modulo)."""
+    adaptado para paginacao por tempo (ver docstring do modulo).
+
+    O cursor de cada pagina sai de `_cursor_paginacao`, NUNCA de um naive:
+    era assim que 3h de pregao sumiam em cada borda de pagina, sem erro
+    nenhum (ver "FUSO NOS LIMITES" na docstring do modulo)."""
     try:
         import MetaTrader5 as mt5
     except Exception as exc:  # pragma: no cover - ambiente sem o pacote
@@ -169,7 +235,7 @@ def fetch_ticks_full_history(
         chunks.append(_ticks_to_df(ticks, server_utc_offset_hours))
         if len(ticks) < MAX_TICKS_PER_REQUEST:
             break
-        cursor = pd.to_datetime(int(ticks[-1]["time_msc"]), unit="ms").to_pydatetime()
+        cursor = _cursor_paginacao(ticks[-1]["time_msc"])
 
     if not chunks:
         return pd.DataFrame()

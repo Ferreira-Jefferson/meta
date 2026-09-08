@@ -6,12 +6,14 @@ from __future__ import annotations
 import inspect
 import sys
 import types
+from datetime import datetime, timezone
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from market_data_intraday import mt5_source, storage
+from core.b3_session import MT5_SERVER_TIMEZONE, server_utc_offset_hours
+from market_data_intraday import mt5_source, mt5_ticks_source, storage
 
 
 # MT5 devolve um numpy structured array com estes campos NOMEADOS (verificado
@@ -143,6 +145,182 @@ def test_mt5_source_nao_importa_metatrader5_no_topo_do_modulo():
     for line in source.splitlines():
         if line.startswith("import MetaTrader5") or line.startswith("from MetaTrader5"):
             pytest.fail(f"import de MetaTrader5 fora de metodo (coluna 0): {line!r}")
+
+
+# ---------- fuso do TICK: rota compartilhada vs. `tz_localize("UTC")` cru ----
+
+# Campos NOMEADOS que `copy_ticks_*` devolve (structured array), na mesma
+# disciplina de `_RATE_DTYPE` acima: `pd.DataFrame(ticks)` so preserva os
+# nomes de coluna se o fake reproduzir o dtype real.
+_TICK_DTYPE = np.dtype([
+    ("time", "i8"), ("bid", "f8"), ("ask", "f8"), ("last", "f8"),
+    ("volume", "u8"), ("time_msc", "i8"), ("flags", "u4"), ("volume_real", "f8"),
+])
+
+
+def _ticks_array(paredes: list[str], preco: float = 5432.5) -> np.ndarray:
+    """Ticks cujo `time_msc` e' a hora de PAREDE do servidor -- que e' o que
+    o terminal de verdade entrega (ver `core/b3_session.py`)."""
+    linhas = []
+    for s in paredes:
+        msc = int(pd.Timestamp(s).value // 1_000_000)  # naive de proposito
+        linhas.append((msc // 1000, 0.0, 0.0, preco, 1, msc, 0, 1.0))
+    return np.array(linhas, dtype=_TICK_DTYPE)
+
+
+def _fake_mt5_ticks(ticks_arr):
+    mod = types.ModuleType("MetaTrader5")
+    mod.COPY_TICKS_TRADE = 2
+    mod.initialize = lambda **kwargs: True
+    mod.last_error = lambda: (0, "sem erro")
+    mod.symbol_select = lambda symbol, enable=True: True
+    mod.copy_ticks_range = lambda symbol, start, end, flags: ticks_arr
+    return mod
+
+
+def test_fetch_ticks_range_converte_parede_do_servidor_para_utc(monkeypatch):
+    """`time_msc` e' hora de PAREDE do servidor MT5 (= Brasilia, medido em
+    `core/b3_session.py`), NUNCA UTC. Rotular direto com
+    `tz_localize("UTC")` -- o atalho que em 2026-09-04 deslocou em 3h todo
+    `entry_ts`/`exit_ts` de uma analise de MFE/MAE do WDO F1 e a fez nao
+    bater com os fills reais de `db/live.sqlite` -- erra em exatamente
+    `server_utc_offset_hours()` horas.
+
+    Este teste compara as DUAS rotas sobre o mesmo tick, para o atalho
+    voltar a passar despercebido nunca mais."""
+    abertura_parede = "2026-09-04 09:00:00.123"  # abertura do pregao do WDO
+    monkeypatch.setitem(sys.modules, "MetaTrader5", _fake_mt5_ticks(_ticks_array([abertura_parede])))
+
+    df = mt5_ticks_source.fetch_ticks_range("WDO@", object(), object())
+
+    cru = pd.Timestamp(abertura_parede).tz_localize("UTC")  # o metodo ERRADO
+    esperado = pd.Timestamp(abertura_parede, tz=MT5_SERVER_TIMEZONE).tz_convert("UTC")
+    assert len(df) == 1
+    assert df.index[0] == esperado
+    assert df.index[0] - cru == pd.Timedelta(hours=server_utc_offset_hours())
+    assert df.index[0] != cru  # o atalho e' DETECTAVEL, nao um no-op
+
+
+# ---------- fuso no LIMITE PEDIDO: a paginacao de historico completo --------
+
+def _parede_lida_pelo_terminal(limite) -> pd.Timestamp:
+    """O relogio de parede que o terminal MT5 vai ler do limite entregue.
+
+    Reproduz o que o pacote `MetaTrader5` faz: `.timestamp()` no limite, e o
+    terminal trata esse epoch como hora de parede do servidor. Num limite
+    tz-aware `.timestamp()` NAO consulta o fuso local; num naive, consulta —
+    e e' exatamente por isso que um cursor naive deslocava a paginacao.
+    Mesma tecnica de `tests/test_live_tick_feed.py`."""
+    return pd.Timestamp(datetime.fromtimestamp(limite.timestamp(), timezone.utc)
+                        .replace(tzinfo=None))
+
+
+def _fake_mt5_ticks_paginado(paredes: list[str], capturado: list, teto: int = 20):
+    """Fake de `copy_ticks_from` que se comporta como o TERMINAL, nao como o
+    pacote: le o limite recebido pelos olhos de `.timestamp()` e devolve os
+    proximos `count` negocios a partir dessa PAREDE. E' o unico jeito de um
+    teste sem terminal enxergar o deslocamento — olhando o tipo do objeto o
+    bug e' invisivel.
+
+    `teto` corta o loop se a paginacao deixar de progredir: o `while True` de
+    `fetch_ticks_full_history` nao tem limite proprio, e um teste que trava e'
+    pior que um teste que falha."""
+    todos = sorted(pd.Timestamp(s) for s in paredes)
+
+    def _copy_ticks_from(symbol, cursor, count, flags):
+        capturado.append(cursor)
+        if len(capturado) > teto:
+            return _ticks_array([])
+        parede = _parede_lida_pelo_terminal(cursor)
+        janela = [t for t in todos if t >= parede][:count]
+        return _ticks_array([str(t) for t in janela])
+
+    mod = types.ModuleType("MetaTrader5")
+    mod.COPY_TICKS_TRADE = 2
+    mod.initialize = lambda **kwargs: True
+    mod.last_error = lambda: (0, "sem erro")
+    mod.symbol_select = lambda symbol, enable=True: True
+    mod.copy_ticks_from = _copy_ticks_from
+    return mod
+
+
+#: pregao sintetico de 11 negocios, um por minuto, na PAREDE do servidor.
+_PREGAO_SINTETICO = [f"2026-09-01 09:{m:02d}:00" for m in range(11)]
+
+
+def test_paginacao_nao_perde_negocio_na_troca_de_pagina(monkeypatch):
+    """REGRESSAO do bug que comeu 63 buracos de 3h do `WDO_A_.parquet`.
+
+    Ate' 2026-09-07 o cursor de paginacao era um `datetime` NAIVE com a
+    parede do servidor. O pacote `MetaTrader5` chama `.timestamp()` no
+    limite, e `.timestamp()` de um naive e' resolvido no fuso da MAQUINA —
+    entao cada troca de pagina pedia a partir de `cursor + 3h` nesta maquina
+    (Brasilia), pulando ate' 3h de negocio em CADA borda de pagina, sem
+    levantar erro nenhum. Medido no parquet canonico do WDO@: 63 lacunas de
+    exatamente 180min, uma a cada ~198.500 linhas.
+
+    O teste pagina de 4 em 4 sobre 11 negocios (3 bordas) e exige os 11 de
+    volta. Com o cursor antigo a 2a pagina cairia 3h a frente do pregao
+    inteiro, voltaria vazia, e o historico pararia nos 4 primeiros."""
+    monkeypatch.setattr(mt5_ticks_source, "MAX_TICKS_PER_REQUEST", 4)
+    capturado: list = []
+    monkeypatch.setitem(sys.modules, "MetaTrader5",
+                        _fake_mt5_ticks_paginado(_PREGAO_SINTETICO, capturado))
+
+    df = mt5_ticks_source.fetch_ticks_full_history("WDO@")
+
+    paredes = df.index.tz_convert(MT5_SERVER_TIMEZONE).strftime("%H:%M:%S").tolist()
+    assert paredes == [f"09:{m:02d}:00" for m in range(11)]
+    assert len(capturado) >= 3  # de fato houve troca de pagina
+
+
+def test_cursor_de_paginacao_chega_ao_terminal_na_parede_pedida(monkeypatch):
+    """O mesmo bug visto pelo LIMITE em vez de pelo resultado, e sem depender
+    do fuso da maquina que roda a suite: o cursor tem de ser tz-aware (e' o
+    que torna `.timestamp()` independente da maquina) e o epoch entregue tem
+    de valer a parede do ULTIMO negocio da pagina anterior — nao ela mais o
+    offset local."""
+    monkeypatch.setattr(mt5_ticks_source, "MAX_TICKS_PER_REQUEST", 4)
+    capturado: list = []
+    monkeypatch.setitem(sys.modules, "MetaTrader5",
+                        _fake_mt5_ticks_paginado(_PREGAO_SINTETICO, capturado))
+
+    mt5_ticks_source.fetch_ticks_full_history("WDO@")
+
+    assert all(c.tzinfo is not None for c in capturado)
+    # 1a chamada parte do genesis; da 2a em diante, do ultimo tick da pagina
+    # anterior (09:03, 09:06, 09:09 — paginas de 4 com 1 tick de sobreposicao).
+    assert _parede_lida_pelo_terminal(capturado[0]) == pd.Timestamp("2000-01-01 00:00")
+    assert [_parede_lida_pelo_terminal(c) for c in capturado[1:4]] == [
+        pd.Timestamp("2026-09-01 09:03"),
+        pd.Timestamp("2026-09-01 09:06"),
+        pd.Timestamp("2026-09-01 09:09"),
+    ]
+
+
+def test_genesis_e_tz_aware():
+    """Aqui o naive era INOFENSIVO (2000-01-01 deslocado 3h continua antes de
+    qualquer tick real), mas um naive escapando para a API do MT5 e' o padrao
+    que este modulo nao pode mais ter em lugar nenhum — foi um naive
+    "inofensivo" ao lado de um naive letal que fez o segundo passar
+    despercebido por meses."""
+    assert mt5_ticks_source._GENESIS.tzinfo is not None
+
+
+def test_fetch_ticks_range_offset_explicito_bate_com_a_conversao_pelo_fuso(monkeypatch):
+    """`server_utc_offset_hours=None` (o default) converte pelo FUSO; passar
+    o escalar do momento tem de dar o mesmo instante hoje. Sao caminhos
+    diferentes dentro de `_ticks_to_df`, e a razao de o default ser o fuso e'
+    que so ele continua certo se o horario de verao brasileiro voltar."""
+    parede = "2026-09-04 15:30:45.500"
+    monkeypatch.setitem(sys.modules, "MetaTrader5", _fake_mt5_ticks(_ticks_array([parede])))
+
+    pelo_fuso = mt5_ticks_source.fetch_ticks_range("WDO@", object(), object())
+    pelo_escalar = mt5_ticks_source.fetch_ticks_range(
+        "WDO@", object(), object(), server_utc_offset_hours=server_utc_offset_hours(),
+    )
+
+    assert pelo_fuso.index[0] == pelo_escalar.index[0]
 
 
 # ---------- storage.merge_m1 --------------------------------------------------

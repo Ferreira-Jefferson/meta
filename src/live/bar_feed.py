@@ -30,14 +30,25 @@ comparando `ts.time() >= session_end_time`. Um offset errado nao produz erro
 nenhum — produz um robo rodando a fase errada, o dia inteiro, em silencio.
 Ver `live_stop_intraday_2026_08_20` na memoria do projeto.
 
-A conversao e' delegada inteira a `mt5_source`, que converte pelo FUSO
-declarado e medido em `core.b3_session`. Este feed NAO recebe mais um
-`offset_provider` apontando para a calibracao viva do `MT5Feed`: essa era a
-via pela qual um offset INFERIDO de um tick parado chegava as barras. Medido
-em 2026-08-21 no terminal real, a inferencia adotou +4.0h onde o correto e'
-+3.0h, e teria deslocado o dia inteiro do robo. Conferir o relogio continua
-sendo feito — em `MT5Feed.verify_server_clock`, contra um papel liquido, e o
-resultado IMPEDE a operacao em vez de reescrever o offset em silencio.
+A conversao de VOLTA (o `time` cru das barras -> UTC) e' delegada inteira a
+`mt5_source`, que converte pelo FUSO declarado e medido em `core.b3_session`.
+Este feed NAO recebe mais um `offset_provider` apontando para a calibracao
+viva do `MT5Feed`: essa era a via pela qual um offset INFERIDO de um tick
+parado chegava as barras. Medido em 2026-08-21 no terminal real, a inferencia
+adotou +4.0h onde o correto e' +3.0h, e teria deslocado o dia inteiro do robo.
+Conferir o relogio continua sendo feito — em `MT5Feed.verify_server_clock`,
+contra um papel liquido, e o resultado IMPEDE a operacao em vez de reescrever
+o offset em silencio.
+
+A conversao de IDA (os limites de janela que VAO para `copy_rates_range`) e'
+daqui, e mora em `_limite_servidor` — ver a docstring dela. Ate' 2026-09-07
+`session_bars_until` mandava o limite em UTC cru, e a janela chegava ao
+terminal 3h deslocada; o alargamento de ±1 dia mascarava o efeito, mas
+mascarar nao e' corrigir. Mesma familia de bug de
+`live/tick_feed.py::_limite_servidor` e de
+`market_data_intraday/mt5_ticks_source._cursor_paginacao` (esta ultima
+custou 63 buracos de 3h e 19,3% dos minutos de pregao do parquet canonico do
+WDO@ -- ver a medicao na docstring daquele modulo).
 """
 from __future__ import annotations
 
@@ -47,9 +58,32 @@ from typing import Callable, Optional
 import pandas as pd
 
 from backtest.intraday.engine import bar_from_row
-from core.b3_session import server_utc_offset_hours
+from core.b3_session import server_utc_offset_hours, utc_to_server_wall_clock
 from market_data_intraday.mt5_source import fetch_m1_range, fetch_m1_recent
 from strategy.daytrade.base import Bar
+
+
+def _limite_servidor(instant_utc: datetime) -> datetime:
+    """O limite a entregar para `copy_rates_range`: o relogio de PAREDE do
+    servidor, ROTULADO como UTC.
+
+    Gemea de `live/tick_feed.py::_limite_servidor`, e pelo mesmo motivo: nao
+    basta converter para o relogio do servidor e passar o `datetime` naive
+    que `utc_to_server_wall_clock` devolve. O pacote `MetaTrader5` chama
+    `.timestamp()` no limite recebido, e `.timestamp()` de um naive e'
+    resolvido no fuso da MAQUINA que roda o robo — o que CANCELA a conversao
+    e faz a janela pedida andar o offset local inteiro. Um tz-aware cujo
+    relogio de parede JA e' o do servidor e' imune a isso em qualquer
+    maquina.
+
+    Duplicado em vez de importado de `tick_feed`: os dois sao arquivos de
+    `live/`, mas importar um feed do outro so' para reusar duas linhas
+    acoplaria o feed M1 ao feed de tick sem ganhar nada — e a receita
+    compartilhada (`utc_to_server_wall_clock`) ja' mora onde tem de morar,
+    em `core.b3_session`.
+    """
+    return utc_to_server_wall_clock(instant_utc).replace(tzinfo=timezone.utc)
+
 
 #: idade minima (segundos) para uma barra M1 ser considerada FECHADA.
 _MIN_BAR_AGE_SECONDS = 60.0
@@ -138,15 +172,24 @@ class MT5BarFeed:
         `until_ts` costuma ser a ultima barra ja processada, mas mesmo assim
         nao ha razao para relaxar a regra.
 
-        A janela pedida ao terminal e' ALARGADA em um dia para cada lado, e o
-        recorte pro pregao certo e' feito DEPOIS, sobre o index ja corrigido
-        de fuso: os limites de `copy_rates_range` sao interpretados no
-        relogio do SERVIDOR (ver docstring de `mt5_source`), entao pedir
-        exatamente [00:00, 24:00) do dia em UTC cortaria a sessao no lugar
-        errado por `offset_hours`."""
+        Os limites vao no relogio do SERVIDOR (`_limite_servidor`): e' assim
+        que `copy_rates_range` interpreta o que recebe (ver docstring de
+        `mt5_source`). Ate' 2026-09-07 iam em UTC cru, e a janela chegava ao
+        terminal deslocada de `offset_hours`.
+
+        Alem disso a janela e' ALARGADA em um dia para cada lado, e o recorte
+        pro pregao certo e' feito DEPOIS, sobre o index ja corrigido de fuso.
+        O alargamento NAO virou redundante com a correcao acima e por isso
+        continua aqui: ele defende contra o dia civil do servidor nao ser o
+        dia civil em UTC e contra o proprio fuso declarado divergir do
+        servidor real — modos de falha independentes do limite ir na hora
+        errada (mesmo raciocinio das defesas mantidas em
+        `live/tick_feed.py`)."""
         meia_noite = datetime.combine(session, time(0, 0), tzinfo=timezone.utc)
         df = fetch_m1_range(
-            self.symbol, meia_noite - timedelta(days=1), meia_noite + timedelta(days=2),
+            self.symbol,
+            _limite_servidor(meia_noite - timedelta(days=1)),
+            _limite_servidor(meia_noite + timedelta(days=2)),
             on_error=self._on_error,
             **self._credentials,
         )
