@@ -2567,6 +2567,73 @@ win% maior, líquido maior). T2 fica em 23 e 6, dentro do teto.
 > esta acrescenta que o próprio BACKTEST precisa expor a contagem, não só a
 > operação real.)
 
+### 6.16 Varrer um parâmetro de geometria (não só janela IS/OOS) também atravessa o penhasco de censura do item 6.15 — confirmado em DUAS janelas independentes
+
+Medido em `scripts/daytrade/wdof1_producao_t3_t4_t5_2026_09_08.py`, 2026-09-08,
+rodando a config REAL de produção do WDO F1 via
+`strategy.daytrade.registry.get_daytrade_robot("wdo_grid_reload_maker")` — só
+`profit_ticks` variado (T2 produção, T3, T4, T5), `stop_ticks=16` fixo — no
+capital mínimo real (R$375,00, item 3.4/3.11) sobre as janelas IS (72
+pregões, 2026-02-27–2026-06-12) e OOS (51 pregões, 2026-06-15–2026-08-25) já
+congeladas de `WDO_A_f1.parquet`:
+
+| janela/geometria | líquido R$ | win% | trades | pregões sem trade | caixa_min R$ |
+|---|---|---|---|---|---|
+| IS T2/S16 (produção) | 344.855,00 | 94,2% | 19.835 | 0/72 | 370,00 |
+| IS T3/S16 | 218.788,50 | 89,8% | 12.891 | 0/72 | 299,50 |
+| IS T4/S16 | **−250,50** | 76,5% | **51** | **71/72** | **124,50** |
+| IS T5/S16 | **−261,00** | 73,6% | **72** | **70/72** | **114,00** |
+| OOS T2/S16 | 135.618,50 | 94,4% | 9.446 | 0/51 | 290,00 |
+| OOS T3/S16 | 45.366,00 | 89,9% | 5.076 | 0/51 | 299,00 |
+| OOS T4/S16 | **−270,00** | 75,0% | **40** | **50/51** | **105,00** |
+| OOS T5/S16 | 6.864,50 | 79,2% | 2.511 | **49/51** | 259,00 |
+
+Entre T3 e T4 o número de trades não desce numa reta — desce um DEGRAU, de
+5-13 mil por janela para 40-72. E o caixa mínimo atingido nos dois T4 (R$124,50
+e R$105,00) cai ABAIXO da margem crua da corretora (R$150,00, item 3.3/3.4):
+não é um robô operando pouco por falta de sinal, é um robô que caiu no regime
+"abaixo do piso de reabertura" (item 1.19/3.10) logo cedo e nunca mais saiu de
+lá pelo resto da janela — em silêncio, sem erro. Isso se repete em DUAS
+janelas com sequências de dias diferentes (IS e OOS), o que descarta a
+explicação de "sorteio de primeira operação" do item 6.15: ali a censura
+aparecia comparando duas JANELAS da MESMA geometria; aqui a mesma assinatura
+(líquido caindo, `pregões sem trade` dominando, `caixa_min` sob a margem)
+aparece varrendo a GEOMETRIA (`profit_ticks`) com capital e janela mantidos
+fixos — é a mudança de alvo em si que empurra o caixa cedo o bastante para
+travar, não o acaso de qual sequência de trades calhou primeiro.
+
+> **Regra:** o invariante do item 6.15 ("líquido sem `pregões sem trade`
+> ao lado não é resultado, é a restrição que parou o robô") generaliza para
+> QUALQUER eixo de varredura, não só IS-vs-OOS. Ao varrer um parâmetro de
+> geometria (alvo, stop, tamanho) com capital fixo no piso mínimo real, o
+> gráfico de "líquido × parâmetro" não é confiável sem o gráfico irmão
+> "pregões sem trade × parâmetro" (e o caixa mínimo atingido) ao lado — uma
+> queda abrupta no primeiro pode ser inteiramente explicada por uma subida
+> abrupta no segundo, e nesse caso o parâmetro não foi testado além do
+> ponto onde ele derruba o caixa para baixo do piso de reabertura. Qualquer
+> eixo que interage com o tamanho do stop em reais (perda por trade) contra
+> um capital fixo no mínimo pode produzir o mesmo penhasco — a defesa é a
+> mesma: nunca aceitar `líquido` sem `pregões sem trade`, `trades` e
+> `caixa_min`/`qtd_max` ao lado, em qualquer eixo, não só em IS vs OOS.
+>
+> **Achado secundário, para não confundir os dois:** o `pior_janela_60s` de
+> envios de ordem (item 1.18/1.20, teto `MAX_ENVIOS_POR_MINUTO=30`) muda de
+> verdade por geometria dentro do regime que opera de fato — T2/OOS estoura
+> (42), T3/OOS fica dentro (19), T3/IS fica perto (28). Já os números baixos
+> de T4/T5 (6, 6, 6, 24) são ARTEFATO da mesma censura, não evidência de
+> geometria mais segura: quem quase não opera não acumula rajada. Ler um
+> `pior_janela_60s` baixo como "essa geometria respeita melhor o freio de
+> cadência" sem antes checar `pregões sem trade` repete o mesmo erro de
+> método, só que na métrica de cadência em vez da métrica de lucro.
+>
+> **Pergunte à plataforma nova:** o meu backtest expõe, POR CÉLULA de uma
+> varredura de parâmetro (não só por janela IS/OOS), quantos pregões
+> ficaram sem trade e o caixa mínimo atingido — ou só o líquido agregado da
+> célula? Sem essa contagem por célula, uma varredura de alvo/stop pode
+> escolher (ou descartar) uma geometria inteira pelo mesmo motivo errado do
+> item 6.15, só que ao longo do eixo do PARÂMETRO em vez do eixo da JANELA.
+> (6.16, generaliza 6.15/pergunta 47)
+
 ---
 
 ## Parte 7 — Disciplina de trabalho
@@ -2924,6 +2991,18 @@ dinheiro ou meses.
     Sem a primeira resposta, uma âncora defasada converte a estratégia maker
     em taker na entrada; sem a segunda, a taxa de preenchimento passivo real
     (pergunta 40) não é medível. (4.17, 4.13)
+52. O meu backtest expõe, POR CÉLULA de uma varredura de parâmetro de
+    geometria (alvo, stop, tamanho) — não só por janela IS/OOS —, quantos
+    pregões ficaram sem trade e o caixa mínimo atingido, ou só o líquido
+    agregado da célula? Sem essa contagem por célula, alargar um alvo
+    mantendo o stop fixo pode atravessar um penhasco onde o caixa cai abaixo
+    do piso de reabertura cedo na janela — trades caindo de milhares para
+    dezenas, líquido negativo — e isso se lê como "geometria pior" quando é
+    censura por capital, confirmada em duas janelas independentes (IS e
+    OOS) na mesma varredura. O `pior_janela_60s` de cadência (pergunta 42)
+    sofre o mesmo viés: um número baixo pode ser a geometria censurada não
+    acumulando rajada, não uma geometria mais segura. (6.16, generaliza
+    6.15/pergunta 47)
 
 ---
 
