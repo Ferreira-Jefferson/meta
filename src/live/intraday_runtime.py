@@ -163,6 +163,23 @@ def _hora_brt(ts) -> str:
     return ts.tz_convert(SAO_PAULO).strftime("%H:%M")
 
 
+def _utc_time_para_brt(t: time) -> time:
+    """HORA DO DIA em UTC -> hora do dia em Brasilia, pelo FUSO.
+
+    Existe porque `SymbolProfile.session_end_time` e' UTC ("como todo perfil
+    deste modulo", diz `profiles.py`) e o painel precisa mostrar Brasilia --
+    ver `corte_flatten_brt`. Sem esta conversao o WDO@ aparecia como
+    "FLATTEN 21:30 BRT" em vez de 18:30 (2026-09-08).
+
+    Pelo fuso e nunca por um "-3h" fixo, mesma regra de `_hora_brt` e de
+    `core/b3_session.py`: o Brasil nao tem horario de verao desde 2019, mas
+    escrever a subtracao na mao e' como o projeto ja errou antes. A data
+    usada e' irrelevante para o offset (nao ha DST), entao qualquer uma
+    serve para converter uma hora-do-dia solta."""
+    base = datetime.combine(date(2026, 1, 1), t, tzinfo=timezone.utc)
+    return base.astimezone(SAO_PAULO).time()
+
+
 MAX_GAP_SECONDS = 15 * 60.0
 
 #: Gap (f), incidente 2026-08-28: quantas recusas SEGUIDAS de fechamento
@@ -4053,12 +4070,20 @@ class IntradayLiveRuntime:
                 # `b3_session.closing_bar_minute_utc`). `continuous_end` da' o
                 # instante real do fim do pregao continuo, ja em Brasilia (sem
                 # fuso para converter -- o Brasil nao tem horario de verao desde
-                # 2019). So' vale com a politica "b3_equities"; a "fixed" (testes
-                # sinteticos) ja guarda `session_end_time` direto em hora local.
+                # 2019).
+                #
+                # 2026-09-08: o ramo "fixed" devolvia `session_end_time` CRU,
+                # com o comentario de que ali o campo estaria "em hora local".
+                # Nao esta -- `profiles.py` diz, no proprio `_futures_profile`,
+                # "`session_end_time` em UTC, como todo perfil deste modulo".
+                # O painel exibia entao "FLATTEN 21:30 BRT" para o WDO@, que e'
+                # 18:30 em Brasilia: numero UTC com rotulo BRT, a MESMA familia
+                # de erro que ja custou uma base de tick inteira neste projeto
+                # (itens 5.x de LICOES_DE_PRODUCAO.md). Converte-se de verdade.
                 "corte_flatten_brt": (
                     b3_session.continuous_end(session).strftime("%H:%M")
                     if self.config.session_end_policy == "b3_equities"
-                    else self.config.session_end_time.strftime("%H:%M")
+                    else _utc_time_para_brt(self.config.session_end_time).strftime("%H:%M")
                 ),
                 "relogio_alarme": (self.clock_feed.server_clock_alarm
                                    if self.clock_feed is not None else None),
