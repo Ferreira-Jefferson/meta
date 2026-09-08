@@ -282,11 +282,12 @@ MAX_ENVIOS_POR_MINUTO = 30
 #: ressalva antes de usar este numero para qualquer decisao.
 #:
 #: Motivacao: no pregao de 2026-09-08 (`dt-wdo_grid_reload_maker-wdo@-live`)
-#: 10 das 22 posicoes abriram e fecharam em MENOS DE 1 SEGUNDO segundo o
+#: 11 das 22 posicoes abriram e fecharam em MENOS DE 1 SEGUNDO segundo o
 #: historico de deals da CORRETORA (58ms, 62ms, 64ms, 66ms, 100ms, 109ms,
-#: 127ms, 319ms, 342ms, 561ms), cada uma perdendo 1 tick -- R$40,00 dos
-#: R$116,00 do prejuizo. Todas foram gravadas como `exit_reason="target"`,
-#: e nada no diario as distinguia de um alvo de verdade.
+#: 127ms, 288ms, 319ms, 342ms, 561ms) -- -R$40,50 dos -R$116,00 do prejuizo
+#: (34,9%). Todas foram gravadas como `exit_reason="target"`, e nada no
+#: diario as distinguia de um alvo de verdade: com elas o pregao mostra 31,8%
+#: de acerto (7/22); sem elas, 54,5% (6/11).
 #:
 #: RESSALVA que impede o alarme automatico, e e' a MESMA licao do relogio que
 #: `_check_cadencia_de_ordens` aprendeu no mesmo pregao: nenhum dos dois
@@ -299,10 +300,19 @@ MAX_ENVIOS_POR_MINUTO = 30
 #:     (o caso comum na rajada, e SEMPRE no caminho de reconciliacao por
 #:     historico) ele mede a latencia do nosso laco, nao a vida da posicao.
 #: O unico relogio que responde a pergunta e' o da corretora (`time_msc` dos
-#: deals). Enquanto isso nao estiver plumbado ate' aqui, os dois campos sao
-#: DIAGNOSTICO -- ver a pergunta da Parte 8 sobre tempo de vida de posicao em
-#: `LICOES_DE_PRODUCAO.md`. Quem alarma sozinho hoje e' `deslize_vs_alvo_brl`,
-#: que nao depende de relogio nenhum e pegaria as 22 saidas daquele pregao.
+#: deals). Desde 2026-09-08 ele ESTA plumbado: `_on_closed` grava
+#: `duracao_corretora_ms` no evento de fechamento, vindo de
+#: `MT5IntradayExecution.vida_da_posicao_ms`. Ele reclassificou o pregao
+#: inteiro: sao 11 (nao 10) posicoes abaixo de 1 s -- a de 288 ms, que deu
+#: +R$5,00, tambem e' round-trip -- e -R$40,50 dos -R$116,00 (34,9%). Contra
+#: esses 11 casos, o relogio de TICK acha 4 e inventa 1 falso positivo, e o
+#: de PAREDE acha 1; por isso os dois seguem sendo DIAGNOSTICO e nenhum dos
+#: tres alarma sozinho -- o piso do que conta como round-trip e' decisao de
+#: estrategia/dono, e alarme montado sobre relogio nao validado foi o erro
+#: que `_check_cadencia_de_ordens` ja cometeu neste mesmo pregao. Quem alarma
+#: sozinho hoje e' `deslize_vs_alvo_brl`, que nao depende de relogio nenhum e
+#: pegaria as 22 saidas daquele pregao. Ver item 4.16 de
+#: `LICOES_DE_PRODUCAO.md`.
 
 
 def _unanime(valores):
@@ -4270,6 +4280,14 @@ class IntradayLiveRuntime:
             None if self._abertura_wall is None
             else round((datetime.now(timezone.utc) - self._abertura_wall).total_seconds(), 3))
         self._abertura_wall = None
+        # O relogio da CORRETORA (`time_msc` dos deals) -- o unico que mede a
+        # vida da posicao sem a defasagem do feed nem o colapso do poll. So'
+        # existe em execucao REAL; em sombra/backtest nao ha deal de
+        # corretora e o campo fica `None`. Observacao pura, nunca decisao
+        # (AGENTS.md regra 6) -- ver `MT5IntradayExecution.vida_da_posicao_ms`
+        # para os numeros de 2026-09-08 que justificaram plumbar isto.
+        duracao_corretora_ms = (
+            None if self.executor is None else self.executor.vida_da_posicao_ms())
         alvo = self._alvo_declarado
         self._alvo_declarado = None
         deslize = None
@@ -4286,11 +4304,14 @@ class IntradayLiveRuntime:
                    "pnl_brl": round(evento.pnl_brl, 4), "entry_price": trade.entry_price,
                    "exit_price": trade.exit_price, "execution_mode": self.execution_mode,
                    "assinado_saida": assinado_saida,
-                   # Os tres campos que faltavam para o diario denunciar
-                   # execucao ruim sozinho (2026-09-08) -- ver
-                   # `DURACAO_MINIMA_DE_TRADE_S` e o item 4.8.
+                   # Os campos que faltavam para o diario denunciar execucao
+                   # ruim sozinho (2026-09-08) -- ver `DURACAO_MINIMA_DE_TRADE_S`
+                   # e os itens 4.8/4.16. `duracao_corretora_ms` e' o unico dos
+                   # tres relogios que mede a vida REAL da posicao; os outros
+                   # dois ficam por serem os que existem tambem em sombra.
                    "duracao_s": duracao_s,
                    "duracao_parede_s": duracao_parede_s,
+                   "duracao_corretora_ms": duracao_corretora_ms,
                    "alvo_declarado": alvo,
                    "deslize_vs_alvo_brl": deslize,
                    "sessao": self._snapshot.session.isoformat()})

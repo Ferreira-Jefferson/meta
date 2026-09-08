@@ -5456,6 +5456,87 @@ def test_diario_mede_TEMPO_DE_VIDA_e_DESLIZE_da_saida(tmp_path, pregao_aberto):
     )
 
 
+def test_diario_grava_a_DURACAO_DA_CORRETORA_o_unico_relogio_que_mede(tmp_path, pregao_aberto):
+    """O terceiro relogio -- `time_msc` dos deals -- chega ao diario.
+
+    Os outros dois erram por construcao, e isso foi MEDIDO contra os 22
+    round-trips reais de 2026-09-08 (`dt-wdo_grid_reload_maker-wdo@-live`):
+    11 duraram menos de 1 segundo (58 ms a 561 ms) e custaram -R$40,50 dos
+    -R$116,00 do pregao. O carimbo de TICK achou 4 deles e inventou 1 falso
+    positivo (anda com a defasagem do feed: um round-trip de 62 ms aparece
+    como 51,5 s); o relogio de PAREDE achou 1 (abertura e fechamento no MESMO
+    passo do poll dao ~0). So' o relogio da corretora acha os 11.
+
+    Aqui a posicao 77 abre em 1.757.340.423.155 e fecha 58 ms depois -- o caso
+    real das 10:47:03. O diario tem de trazer `duracao_corretora_ms == 58`
+    junto com os dois campos antigos, que continuam existindo por serem os
+    unicos que a corrida em SOMBRA tambem tem."""
+    import json
+
+    broker = _BrokerComHistorico()
+    broker.preco_de_saida = 9.88
+    broker.resposta_deals = {"ok": True, "note": "", "deals": [
+        {"entry": 0, "price": 9.80, "quantity": 1, "time": 1757340423,
+         "time_msc": 1757340423155, "comment": ""},
+        {"entry": 1, "price": 9.88, "quantity": 1, "time": 1757340423,
+         "time_msc": 1757340423213, "comment": ""},
+    ]}
+    barras = [
+        _bar("13:00", 10.00, 10.00, 10.00, 10.00),
+        _bar("13:01", 10.00, 10.00, 9.79, 9.85),   # confirma entrada
+        _bar("13:02", 9.85, 9.95, 9.85, 9.90),     # toca o alvo (9.90)
+    ]
+    rt, _feed = _runtime_live(tmp_path, barras, broker)
+    broker.posicao = {"side": "long", "price": 9.80, "quantity": 1, "ticket": 77}
+
+    rt.run_once(now=_agora("13:04:00"))
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        linhas = list(conn.execute(
+            "SELECT payload FROM live_events WHERE account_id = ? ORDER BY id", (acc.id,)))
+    saidas = [json.loads(p) for (p,) in linhas if p and '"exit_reason"' in p]
+    assert saidas, "nenhuma saida foi jornalizada"
+    saida = saidas[-1]
+
+    assert saida["duracao_corretora_ms"] == 58, (
+        "sem o relogio da CORRETORA no diario, um round-trip de 58 ms e um "
+        "alvo de verdade sao a mesma linha -- foi o que escondeu R$40,50 em "
+        "2026-09-08 (item 4.16)"
+    )
+    assert 77 in broker.consultas_deals, (
+        "a duracao tem de vir dos deals da posicao que ACABOU de fechar"
+    )
+
+
+def test_duracao_da_corretora_e_None_em_SOMBRA_sem_quebrar_nada(tmp_path, pregao_aberto):
+    """Em sombra nao existe deal de corretora (nem `executor`). O campo tem
+    de ficar `None` e o fechamento tem de seguir identico -- este dado so'
+    existe na operacao REAL, e ausencia nao pode virar erro em lugar nenhum
+    (nem no diario, nem no painel)."""
+    import json
+
+    barras = [
+        _bar("13:00", 10.00, 10.00, 10.00, 10.00),
+        _bar("13:01", 10.00, 10.00, 9.79, 9.85),
+        _bar("13:02", 9.85, 9.95, 9.85, 9.95),
+    ]
+    rt, _feed = _runtime(tmp_path, barras)
+    rt.run_once(now=_agora("13:04:00"))
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        linhas = list(conn.execute(
+            "SELECT payload FROM live_events WHERE account_id = ? ORDER BY id", (acc.id,)))
+    saidas = [json.loads(p) for (p,) in linhas if p and '"exit_reason"' in p]
+    assert saidas, "nenhuma saida foi jornalizada em sombra"
+    assert saidas[-1]["duracao_corretora_ms"] is None
+    assert saidas[-1]["duracao_s"] is not None, (
+        "os relogios do processo continuam existindo -- sao os unicos que a "
+        "corrida em sombra tem para comparar com o real"
+    )
+
+
 def test_alvo_e_fechado_pela_PROTECAO_da_corretora_nunca_a_mercado(tmp_path, pregao_aberto):
     """Ordem do dono, 2026-09-08: "deve posicionar o target e o stop assim que
     abre a posicao, nao e' para sair a mercado, a posicao deve ser fechada ou

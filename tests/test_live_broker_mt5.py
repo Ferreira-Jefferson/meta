@@ -1867,6 +1867,52 @@ def test_deals_for_position_traduz_e_converte_quantidade_por_shares_per_lot(fake
     assert calls["history_deals_get_by_position"] == [909]
 
 
+def test_deals_for_position_expoe_time_msc_o_unico_relogio_que_mede_a_posicao(fake_mt5):
+    """`time_msc` (milissegundos da CORRETORA) tem de atravessar a traducao.
+
+    E' o unico relogio que mede quanto tempo uma posicao ficou aberta: os
+    dois do processo erram por construcao (o de TICK anda com a defasagem do
+    feed, o de PAREDE colapsa quando abertura e fechamento caem no mesmo
+    poll). Sem este campo, os 11 round-trips de menos de 1 segundo de
+    2026-09-08 -- -R$40,50 dos -R$116,00 do pregao -- continuam
+    indistinguiveis de alvo de verdade no diario (item 4.16)."""
+    mod, calls = fake_mt5(history_deals_by_position={
+        909: [
+            types.SimpleNamespace(ticket=1, order=10, entry=0, type=0, price=5110.5,
+                                  volume=1.0, profit=0.0, commission=0.0, swap=0.0,
+                                  fee=0.0, time=1757340423, time_msc=1757340423155,
+                                  comment=""),
+            types.SimpleNamespace(ticket=2, order=11, entry=1, type=1, price=5110.0,
+                                  volume=1.0, profit=-5.0, commission=0.0, swap=0.0,
+                                  fee=0.0, time=1757340423, time_msc=1757340423213,
+                                  comment="[tp 5111.0000]"),
+        ],
+    })
+    broker = MT5Broker(shares_per_lot=1.0)
+
+    entrada, saida = broker.deals_for_position(909)["deals"]
+
+    assert entrada["time_msc"] == 1757340423155
+    assert saida["time_msc"] == 1757340423213
+    # O caso real de 2026-09-08 as 10:47:03: 58 ms de vida, 1 tick perdido.
+    assert saida["time_msc"] - entrada["time_msc"] == 58
+
+
+def test_deals_for_position_sem_time_msc_no_pacote_vira_None_nunca_zero(fake_mt5):
+    """Deal sem o campo (dublê antigo, pacote que nao o exponha) tem de virar
+    `None` -- "nao sei". Um `0` silencioso viraria duracao de 1970 ou, pior,
+    faria toda posicao parecer um round-trip instantaneo."""
+    mod, calls = fake_mt5(history_deals_by_position={
+        909: [types.SimpleNamespace(ticket=1, order=10, entry=0, type=0, price=9.8,
+                                    volume=1.0, profit=0.0, commission=0.0, swap=0.0,
+                                    fee=0.0, time=100, comment="")],
+    })
+
+    (deal,) = MT5Broker().deals_for_position(909)["deals"]
+
+    assert deal["time_msc"] is None
+
+
 def test_deals_for_position_sem_deals_devolve_lista_vazia_ok_true(fake_mt5):
     mod, calls = fake_mt5(history_deals_by_position={})
     broker = MT5Broker()

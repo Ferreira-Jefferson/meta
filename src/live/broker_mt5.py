@@ -988,7 +988,22 @@ class MT5Broker(Broker):
         3=OUT_BY), "type" (0=compra, 1=venda), "price", "quantity" (JA
         convertida de lote para acoes/contratos via `shares_per_lot`, a
         mesma unidade de `Order.quantity` no resto do modulo), "profit",
-        "commission", "swap", "fee", "time" (epoch, segundos), "comment"}`.
+        "commission", "swap", "fee", "time" (epoch, segundos), "time_msc"
+        (epoch, MILISSEGUNDOS -- ver abaixo), "comment"}`.
+
+        `time_msc` e' o UNICO relogio deste sistema que mede quanto tempo uma
+        posicao ficou aberta de verdade. Os dois relogios do PROCESSO nao
+        medem isso: o carimbo de TICK anda com a defasagem do feed (24 min em
+        2026-09-08) e o relogio de PAREDE do supervisor colapsa para ~0
+        quando abertura e fechamento caem no mesmo passo. Medido nos 22
+        round-trips reais de 2026-09-08 (slot `dt-wdo_grid_reload_maker-wdo@
+        -live`): 11 duraram MENOS DE 1 SEGUNDO pelo `time_msc` (58 ms, 62,
+        64, 66, 100, 109, 127, 288, 319, 342, 561) e somaram -R$40,50 dos
+        -R$116,00 do pregao; o relogio de tick teria achado 4 deles (com 1
+        falso positivo) e o de parede, 1. Item 4.16 de LICOES_DE_PRODUCAO.md.
+
+        Ausente (dublê antigo, pacote que nao exponha o campo) vira `None` --
+        quem consome trata como "nao sei", nunca como duracao zero.
 
         `position_id`, numa conta NETTING, e' o identificador ESTAVEL da
         posicao -- sobrevive do deal de entrada ao de saida mesmo que sejam
@@ -1040,6 +1055,11 @@ class MT5Broker(Broker):
                     "swap": float(getattr(d, "swap", 0.0) or 0.0),
                     "fee": float(getattr(d, "fee", 0.0) or 0.0),
                     "time": getattr(d, "time", None),
+                    # Relogio da CORRETORA em milissegundos -- ver a docstring.
+                    # `getattr` com default: um dublê antigo (ou um pacote sem
+                    # o campo) nao pode quebrar a consulta inteira por causa de
+                    # um campo que so' serve para DIAGNOSTICO.
+                    "time_msc": getattr(d, "time_msc", None),
                     "comment": str(getattr(d, "comment", "") or ""),
                 })
             return {"ok": True, "deals": saida, "note": ""}

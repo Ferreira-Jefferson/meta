@@ -796,6 +796,82 @@ class MT5IntradayExecution:
             return None
         return {"price": preco, "order": None}
 
+    # ---------- tempo de vida da posicao (OBSERVACAO, nao decisao) ---------
+
+    def vida_da_posicao_ms(self) -> Optional[int]:
+        """Quanto tempo a ultima posicao ficou ABERTA, em milissegundos, pelo
+        relogio da CORRETORA (`time_msc` dos deals) -- ou `None` quando nao
+        da' para saber.
+
+        POR QUE ESTE METODO EXISTE (medido, 2026-09-08, slot
+        `dt-wdo_grid_reload_maker-wdo@-live`): das 22 posicoes reais do
+        pregao, **11 abriram e fecharam em menos de 1 segundo** -- 58 ms, 62,
+        64, 66, 100, 109, 127, 288, 319, 342 e 561 -- e somaram **-R$40,50 dos
+        -R$116,00** do prejuizo (34,9%). Todas entraram no diario como
+        `exit_reason="target"`. Uma posicao de 58 ms nao expressou tese
+        nenhuma sobre preco: e' round-trip de EXECUCAO, e misturada com trade
+        de verdade ela derruba a taxa de acerto do pregao de 54,5% (6/11 dos
+        trades reais) para 31,8% (7/22) sem que nada no diario diga por que.
+        Item 4.16 de LICOES_DE_PRODUCAO.md.
+
+        POR QUE NAO DA' PARA USAR OS RELOGIOS QUE JA' TINHAMOS -- os dois
+        foram reconstruidos contra estes mesmos 11 casos:
+          - carimbo de TICK (`IntradayTrade.entry_ts/exit_ts`): acha 4 dos 11
+            (36%) e inventa 1 falso positivo, porque anda com a defasagem do
+            feed (24 min naquele pregao) -- um round-trip de 62 ms aparece
+            como 51,5 s; deixa passar -R$28,50;
+          - relogio de PAREDE do supervisor (`_on_opened` -> `_on_closed`):
+            acha 1 dos 11 (9%), porque abertura e fechamento caem no MESMO
+            passo do poll e a conta da' ~0 -- ou, quando o poll trava, da'
+            3.184 s para uma posicao que viveu 456 s.
+
+        OBSERVACAO, NUNCA DECISAO (AGENTS.md regra 6): este numero e'
+        carimbo da corretora copiado para o diario. Ele nao filtra entrada,
+        nao muda tamanho, nao interrompe nada -- se mudasse, o backtest (que
+        nao tem deal de corretora) deixaria de descrever a producao. Por isso
+        tambem **nao existe alarme automatico em cima dele**: o piso do que
+        conta como round-trip e' decisao de estrategia/dono, e um alarme
+        montado sobre um relogio ainda nao validado ao vivo foi exatamente o
+        erro anterior (o freio de cadencia que quebrou uma reconciliacao
+        legitima). Primeiro o diario registra; depois se decide o piso.
+
+        `None` = "nao sei" e nunca "durou zero": sem `last_entry_ref` (posicao
+        herdada por restart, que nunca passou por `limit_fill`), broker sem
+        `deals_for_position` (dublê antigo / `PaperBroker`), consulta que
+        falhou (`ok=False`, item 1.6), deals sem `time_msc`, ou posicao que
+        ainda nao tem os dois lados no historico. Nunca levanta: perder um
+        campo de diagnostico nao pode derrubar o fechamento de uma posicao,
+        que e' o caminho que mexe com dinheiro."""
+        try:
+            if not self.last_entry_ref:
+                return None
+            consulta = getattr(self.broker, "deals_for_position", None)
+            if consulta is None:
+                return None
+            resposta = consulta(self.last_entry_ref)
+            if not resposta.get("ok"):
+                return None
+            deals = resposta.get("deals") or []
+            entradas = [d.get("time_msc") for d in deals if d.get("entry") == 0]
+            saidas = [d.get("time_msc") for d in deals if d.get("entry") == 1]
+            entradas = [t for t in entradas if t is not None]
+            saidas = [t for t in saidas if t is not None]
+            if not entradas or not saidas:
+                return None
+            # min da ENTRADA e max da SAIDA: uma posicao pode ter sido montada
+            # em fatias (`EnterLimit.split_quantities`) e desmontada em outras
+            # -- a vida dela vai do PRIMEIRO deal que a abriu ao ULTIMO que a
+            # zerou, nao do par que por acaso veio primeiro na lista.
+            vida = int(max(saidas)) - int(min(entradas))
+            return vida if vida >= 0 else None
+        except Exception:
+            # Mesmo motivo de `_exit_position_ticket`: a garantia de que a
+            # consulta nao levanta mora em OUTRA classe (`MT5Broker`), e um
+            # `Broker` novo poderia trazer excecao nova para um caminho que e'
+            # so' diagnostico. Sem o numero o diario fica como estava antes
+            # deste campo existir -- nunca pior.
+            return None
+
     # ---------- leitura -----------------------------------------------------
 
     def _read_position(self) -> Optional[dict]:

@@ -308,3 +308,123 @@ def test_resolve_exit_from_history_broker_sem_o_metodo_devolve_none():
     execu.last_entry_ref = 501
 
     assert execu._resolve_exit_from_history() is None
+
+
+# ---------- vida_da_posicao_ms (tempo de vida pelo relogio da corretora) ----
+#
+# Medido no pregao de 2026-09-08 (slot `dt-wdo_grid_reload_maker-wdo@-live`):
+# das 22 posicoes reais, 11 abriram e fecharam em MENOS DE 1 SEGUNDO -- 58 ms,
+# 62, 64, 66, 100, 109, 127, 288, 319, 342, 561 -- e somaram -R$40,50 dos
+# -R$116,00 do prejuizo (34,9%). Todas foram gravadas como
+# `exit_reason="target"`. Reconstruidos contra esses MESMOS 11 casos, os dois
+# relogios do processo acham 4 (com 1 falso positivo) e 1, respectivamente.
+# Item 4.16 de LICOES_DE_PRODUCAO.md.
+
+def _entrada_msc(price, quantity, time_msc, time=100):
+    d = _entrada(price, quantity, time=time)
+    d["time_msc"] = time_msc
+    return d
+
+
+def _saida_msc(price, quantity, time_msc, time=100):
+    d = _saida(price, quantity, time=time)
+    d["time_msc"] = time_msc
+    return d
+
+
+def test_vida_da_posicao_mede_o_round_trip_de_58ms_de_2026_09_08():
+    """O caso real das 10:47:03,155 -> 10:47:03,213: 58 ms de vida, 1 tick
+    perdido, gravado no diario como "target"."""
+    broker = _FakeBroker(deals={909: {"ok": True, "note": "", "deals": [
+        _entrada_msc(5110.5, 1, 1757340423155),
+        _saida_msc(5110.0, 1, 1757340423213),
+    ]}})
+    execu = MT5IntradayExecution(broker=broker, symbol="WDO@")
+    execu.last_entry_ref = 909
+
+    assert execu.vida_da_posicao_ms() == 58
+    assert broker.consultas_deals == [909]
+
+
+def test_vida_da_posicao_vai_do_PRIMEIRO_deal_de_entrada_ao_ULTIMO_de_saida():
+    """Posicao montada em fatias (`EnterLimit.split_quantities`) e desmontada
+    em outras: a vida vai da PRIMEIRA entrada a ULTIMA saida, nunca do par
+    que por acaso veio primeiro na lista."""
+    broker = _FakeBroker(deals={909: {"ok": True, "note": "", "deals": [
+        _saida_msc(5111.0, 1, 1_000_900),
+        _entrada_msc(5110.5, 1, 1_000_000),
+        _entrada_msc(5110.0, 1, 1_000_400),
+        _saida_msc(5111.0, 1, 1_000_300),
+    ]}})
+    execu = MT5IntradayExecution(broker=broker, symbol="WDO@")
+    execu.last_entry_ref = 909
+
+    assert execu.vida_da_posicao_ms() == 900
+
+
+def test_vida_da_posicao_sem_ticket_de_entrada_e_nao_sei():
+    """Posicao herdada por restart nunca passou por `limit_fill`, entao nao
+    ha `last_entry_ref` -- e sem ele nao ha QUAL posicao procurar. `None`, e
+    nem chega a perguntar."""
+    broker = _FakeBroker()
+    execu = MT5IntradayExecution(broker=broker, symbol="WDO@")
+
+    assert execu.vida_da_posicao_ms() is None
+    assert broker.consultas_deals == []
+
+
+def test_vida_da_posicao_consulta_que_falhou_e_None_nunca_zero():
+    """`ok=False` e' "nao consegui perguntar" (item 1.6). Zero aqui viraria
+    "round-trip instantaneo" para uma posicao que pode ter durado o dia."""
+    broker = _FakeBroker(deals={909: {"ok": False, "deals": None, "note": "terminal fora"}})
+    execu = MT5IntradayExecution(broker=broker, symbol="WDO@")
+    execu.last_entry_ref = 909
+
+    assert execu.vida_da_posicao_ms() is None
+
+
+def test_vida_da_posicao_sem_time_msc_nos_deals_e_None():
+    """Deal sem o campo (dublê antigo / pacote sem `time_msc`): "nao sei"."""
+    broker = _FakeBroker(deals={909: {"ok": True, "note": "", "deals": [
+        _entrada(9.80, 1), _saida(9.90, 1),
+    ]}})
+    execu = MT5IntradayExecution(broker=broker, symbol="WDO@")
+    execu.last_entry_ref = 909
+
+    assert execu.vida_da_posicao_ms() is None
+
+
+def test_vida_da_posicao_so_com_a_entrada_no_historico_e_None():
+    """O deal de saida ainda nao replicou -- posicao sem os dois lados nao
+    tem vida medivel. Mesma politica de "nao sei"."""
+    broker = _FakeBroker(deals={909: {"ok": True, "note": "", "deals": [
+        _entrada_msc(5110.5, 1, 1_000_000),
+    ]}})
+    execu = MT5IntradayExecution(broker=broker, symbol="WDO@")
+    execu.last_entry_ref = 909
+
+    assert execu.vida_da_posicao_ms() is None
+
+
+def test_vida_da_posicao_broker_sem_o_metodo_nao_levanta():
+    """`PaperBroker`/dublê antigo nao tem `deals_for_position`. Perder um
+    campo de DIAGNOSTICO nunca pode derrubar o fechamento da posicao, que e'
+    o caminho que mexe com dinheiro."""
+    class _Antigo:
+        pass
+
+    execu = MT5IntradayExecution(broker=_Antigo(), symbol="WDO@")
+    execu.last_entry_ref = 909
+
+    assert execu.vida_da_posicao_ms() is None
+
+
+def test_vida_da_posicao_consulta_que_LEVANTA_nao_propaga():
+    class _Explode:
+        def deals_for_position(self, position_id):
+            raise RuntimeError("terminal caiu no meio da consulta")
+
+    execu = MT5IntradayExecution(broker=_Explode(), symbol="WDO@")
+    execu.last_entry_ref = 909
+
+    assert execu.vida_da_posicao_ms() is None
