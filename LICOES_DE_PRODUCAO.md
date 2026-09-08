@@ -360,6 +360,116 @@ no momento em que o dono mais precisa confiar nele.
 > distinção que o item 1.6 faz entre "não sei" e "não há", e o item 3.13
 > entre "não consegui verificar a margem" e "a margem não cobre".
 
+### 1.17 Preenchimento que só existe ENTRE dois polls é invisível para quem só pergunta "o que eu tenho agora" — CORRIGIDO 2026-09-04
+
+Medido ao vivo no slot `dt-wdo_grid_reload_maker-wdo@-live` (WDO@, R$375
+reais), dois casos no mesmo pregão, reconstruídos pelo histórico da
+corretora (autoritativo, MT5):
+
+1. **Ciclo inteiro dentro de um poll.** 14:18:23 ordem armada; 14:18:31
+   preenchida; 14:18:32 fechada pelo alvo ATÔMICO da própria corretora — 1
+   segundo entre fill e fechamento, contra um poll de 5s do supervisor. A
+   leitura de posição nunca mostrou nada aberto: no poll seguinte já
+   estava zerada de novo. A detecção por CRESCIMENTO de posição (0 → N →
+   0 entre duas leituras) nunca via nada crescer, então o robô ficou
+   vigiando um ticket que a corretora já tinha resolvido — 6+ minutos
+   depois ainda achava que tinha ordem pendente, e não arma nova enquanto
+   acredita nisso.
+2. **Fechamento "recusado" que na verdade executou.** Uma ordem de
+   fechamento voltou com `retcode=DONE` mas sem `price`/`deal`
+   (corretamente tratado como "não confirmo fill", gap de 2026-08-28) e o
+   robô tentou de novo na barra seguinte. No meio-tempo, a tentativa
+   ANTERIOR tinha executado de verdade, a 5.151,50 (−R$5,00). Como a
+   leitura de posição já mostrava zero, o código caiu no ramo "a
+   corretora já não tem nada" e usou o ALVO TEÓRICO (5.152,50) como preço
+   de saída — registrando **+R$4,50 no lugar de −R$5,00**, erro de R$9,50
+   num único trade, na direção que MENOS chamaria atenção (o painel fica
+   bonito em vez de feio).
+
+Os dois têm a mesma causa raiz: o código só perguntava "o que eu tenho
+AGORA" (posição/ordens correntes), nunca "o que já ACONTECEU" — e um
+evento que nasce e morre inteiro dentro do intervalo entre duas perguntas
+é invisível para quem só faz a primeira.
+
+> **Regra:** quando uma ordem que a máquina vigia deixa de existir no
+> book, "não está mais lá" tem TRÊS causas possíveis (preencheu e ainda
+> está aberta; preencheu E já fechou; morreu sem preencher) — e só o
+> HISTÓRICO da corretora (ordem + deals, não a foto do momento) distingue
+> as três. Nunca aproximar o preço de um fechamento por um nível teórico
+> (stop/alvo) nem pelo último preço negociado: só um deal CONFIRMADO no
+> histórico vale como preço real. Sem esse deal, a resposta certa é
+> "ainda não sei" — mantém a vigilância e tenta de novo, nunca inventa um
+> resultado (mesma família do item 1.6, aplicada ao RESULTADO, não só ao
+> estado).
+> **Pergunte à plataforma nova:** existe uma consulta de HISTÓRICO (não
+> só o estado corrente) que devolve o desfecho definitivo de uma ordem —
+> e os deals (preço, quantidade, lucro) de uma posição já fechada,
+> buscável por um identificador estável? Sem ela, todo desfecho
+> comprimido entre dois polls é invisível, e todo fechamento "recusado"
+> que na verdade executou vira número inventado no diário.
+
+**Correção aplicada:** `MT5Broker` ganhou dois métodos de consulta
+tri-estado (nunca decidem, só traduzem) — `order_history_state` (o que
+aconteceu com um ticket que saiu do book: ainda pendente, preenchida,
+cancelada/recusada/expirada, com o `position_id` para o passo seguinte) e
+`deals_for_position` (os deals reais — entrada e saída — de uma posição,
+pelo `position_id`). `MT5IntradayExecution.resolve_orphaned_entry` usa o
+primeiro caso para reconciliar uma entrada cujo ciclo de vida terminou sem
+a máquina perceber: sem preenchimento vira "morta" (libera a vigilância,
+nenhum trade inventado); preenchida e fechada por inteiro vira os dois
+eventos (abertura + fechamento) com os números REAIS dos deals; preenchida
+e ainda aberta é deixada para o caminho normal (crescimento de posição)
+resolver — nunca antecipado. `exit_market`, quando descobre que a posição
+já não existe na corretora, agora consulta `deals_for_position` pelo
+ticket da entrada em vez de aproximar por stop/alvo/último preço — sem
+deal confirmado, levanta e tenta de novo, com a posição continuando
+aberta na máquina.
+
+### 1.18 O freio de segurança tem escala de tempo embutida — calibrado pra barra, dispara no primeiro minuto de tick
+
+Medido rodando a WDO F1 com tick real em pregões inteiros (09:00–18:29
+BRT). `src/live/intraday_runtime.py` tem `MAX_ENVIOS_POR_MINUTO = 30`
+(linha 227), janela rolante de 60s, verificado em
+`_check_cadencia_de_ordens` (linha 1979) — o próprio comentário do código
+diz que o número foi calibrado supondo "1 entrada por barra fechada (1/min
+em M1)". O WDO F1 roda com `feed_kind="tick"`: "a cada barra" virou "a
+cada NEGÓCIO", ~130 mil por pregão. 2026-03-09: 75.933 envios no pregão e
+**3.446 na pior janela de 60s** — 115x o teto. Em 5 de 5 pregões medidos, o
+freio trava — sempre no primeiro minuto de negociação (09:01 BRT).
+
+Dois agravantes que fazem isso pior que uma simples recusa:
+
+1. Estourar o teto NÃO recusa a ordem — seta `disaster_halt = True`, loga
+   erro, chama `machine.discard_resting_limit()` e o robô fica MUDO o
+   resto do pregão (só reseta no pregão seguinte). O cancelamento da ordem
+   substituída acontece na linha 3073, ANTES da checagem — travar numa
+   substituição deixa o robô sem ordem E travado ao mesmo tempo.
+2. O modo sombra não avisa: em shadow, `executor is None` e
+   `_on_limit_placed` retorna na linha 3067, antes da checagem de
+   cadência. O slot sombra do WDO rodava desde 04/09 e daria zero aviso
+   prévio do que ia acontecer em modo real.
+
+> **Regra:** um freio de segurança tem uma escala de tempo embutida na
+> calibração. Quando o robô muda de escala (barra fechada → negócio), o
+> freio não muda junto e passa de proteção a mecanismo de morte. Todo
+> limite numérico de segurança precisa dizer, no próprio código, contra
+> QUAL cadência de decisão ele foi calibrado — e quem trocar a cadência do
+> robô tem de re-medir todos eles. Corolário: um caminho de proteção que só
+> existe no modo real (e retorna cedo no modo sombra) não é testado pelo
+> modo sombra; a sombra não é ensaio geral de nada que ela pula.
+> **Pergunte à plataforma nova:** que limites de taxa/cadência a
+> plataforma impõe, e o meu robô tem algum freio interno calibrado para
+> uma frequência de decisão diferente da que ele vai rodar? Ao estourar, o
+> comportamento é recusar a ação ou parar o robô — e esse caminho é
+> exercitado pelo modo sombra, ou só pelo real?
+
+Mitigado como efeito colateral, não corrigido na origem: a correção do
+item 4.14 (reancoragem com espera mínima) baixou a cadência de envios da
+WDO F1 o bastante para nunca mais tocar este teto nos 126 pregões testados
+(pior minuto medido: 26, contra o teto de 30) — mas isso é consequência de
+outra correção. O freio em si continua sem declarar no código contra qual
+cadência foi calibrado, e o caminho de shadow continua sem exercitá-lo.
+
 ---
 
 ## Parte 2 — Estado, reinício e duplicidade
@@ -927,6 +1037,35 @@ modo de falha pelo outro sem ninguém medir passa por melhoria.
 > (preenche o que cabe) ou total? Recusa total no preenchimento é o caminho
 > mais curto para um robô inerte com ordem viva no book.
 
+### 3.16 Recusa por capital sem espera vira laço de milhares de tentativas idênticas
+
+O WDO F1 opera com R$375, exatamente o piso de 1 contrato (margem R$150 ×
+buffer 2,0 × reserva 1,25). Uma oscilação que leve o caixa abaixo disso faz
+o motor recusar toda entrada; `on_order_rejected` (item 1.14) zera
+`pending_side`; o robô arma ordem NOVA no tick seguinte; recusa de novo.
+Medido em 2026-03-04: **25.556 recusas por capital num único pregão** —
+a segunda fonte de enxurrada de envios que tropeça no freio do item 1.18
+(a primeira é a reancoragem do item 4.14), e ninguém tinha visto porque não
+aparece em pregão nenhum onde o robô tem folga de caixa.
+
+> **Regra:** operar no piso exato de capital não é "cabe justo" — é ficar
+> do lado errado de uma catraca binária, onde cada tick é um novo sorteio
+> entre "opera" e "recusa". Recusa por capital tem de ter espera antes do
+> rearme, pelo mesmo motivo que reancoragem (4.14) tem: sem espera, uma
+> condição estável de mercado vira um laço de milhares de tentativas
+> idênticas por pregão. Um contador de recusas por motivo, por pregão, com
+> teto, é o instrumento que torna isso visível — a ausência dele é o que
+> deixou o laço passar despercebido.
+> **Pergunte à plataforma nova:** quando a plataforma recusa uma ordem, o
+> meu robô espera antes de tentar de novo? Existe contador de recusas por
+> motivo e por pregão, com teto?
+
+**Correção aplicada:** o mesmo portão do item 4.14 (`reancora_min_
+segundos`, via `_pode_armar_apos_recusa`) passou a valer também para o
+rearme pós-recusa por capital — calibrado e verificado junto com a
+reancoragem, nos mesmos 126 pregões (ver 4.14 para os números completos de
+calibração e o risco residual sobre `max_trades_per_side`).
+
 ---
 
 ## Parte 4 — Preenchimento: onde o backtest e o book divergem
@@ -1010,6 +1149,338 @@ Antes de comparar simulado com real, olhe o volume que preencheu no nível na
 simulação. Um único negócio de 100 ações bastando para dar a ordem por
 preenchida é evidência fraquíssima de que a fila teria chegado.
 
+### 4.8 Alvo NATIVO amarrado na própria ordem (`sl`/`tp` atômico) também desliza — a proteção contra ficar sem stop não é garantia de preço
+
+Primeira operação real do WDO F1 (`dt-wdo_grid_reload_maker-wdo@-live`, WDO@,
+2026-09-04): entrada preenchida a 5.150,000, alvo amarrado nativamente na
+MESMA ordem de abertura (`broker_mt5.py::place_pending`, campo `tp` no
+`request`, exatamente o desenho que fecha o incidente de 2026-08-28 — posição
+nunca fica nua) em 5.150,500 (entrada + 1 tick, `profit_ticks=1`). O deal de
+saída, reconstruído pelo histórico da corretora (item 1.17), fechou a
+5.150,000 — **o mesmo preço da entrada, um tick abaixo do alvo registrado**.
+Resultado: R$0,00 bruto − R$0,50 de corretagem = **-R$0,50**, contra os
++R$4,50 líquidos que a MESMA estratégia fechou em 11 de 11 operações do gêmeo
+em sombra no mesmo pregão (preenchimento simulado, sem deslize nenhum).
+
+`sl`/`tp` atômico resolve "a posição nunca fica sem proteção registrada na
+corretora" — não resolve "o preço de saída é o preço registrado". Na prática
+esse alvo executa como gatilho convertido a mercado, não como limite
+resting: o mesmo modo de falha do item 4.3 ("trocar limite por mercado troca
+um modo de falha por outro"), só que aqui ninguém escolheu mercado — o
+código pediu um nível, a corretora entregou outro.
+
+> **Regra:** `sl`/`tp` nativos da corretora garantem que existe proteção, não
+> que o preço de saída é o nível pedido. Com `profit_ticks=1` — a borda
+> INTEIRA da estratégia — qualquer deslize do gatilho consome o lucro
+> inteiro do trade antes mesmo da corretagem entrar na conta.
+> **Pergunte à plataforma nova:** o alvo/stop que ela amarra na posição é
+> limite de verdade (entra na fila, só preenche naquele preço ou melhor) ou
+> vira ordem a mercado no toque? A resposta muda se um `profit_ticks=1`
+> (ou equivalente) sobrevive fora do backtest — o backtest mede o nível
+> pedido, não o que a corretora de fato entrega no gatilho.
+
+### 4.9 Reancoragem que só acontece ao ARMAR deixa o robô mudo pelo resto do pregão — expõe a uma FATIA do dia, não ao dia inteiro
+
+Analisado a semana de 2026-08-31 a 2026-09-04 (tick real MT5, WDO@), robô
+`wdo_grid_reload_maker` (WDO F1, `dt-wdo_grid_reload_maker-wdo@-live`/
+`-shadow`): o robô fica ATIVO (da 1ª entrada até a última saída) só numa
+fração pequena de cada pregão de ~569 minutos.
+
+| Pregão | % do pregão ativo | Trades | Pontos que o mercado andou |
+|---|---|---|---|
+| 2026-08-31 | 0,0% | 1 | 24,0 |
+| 2026-09-01 | 8,0% (45,6 min) | 41 | 64,5 |
+| 2026-09-02 | 14,3% (81,6 min) | 63 | 83,5 |
+| 2026-09-03 | 11,1% (63,4 min) | 72 | 44,0 |
+| 2026-09-04 | 0,0% | 0 | 41,5 |
+
+As 177 entradas da semana couberam em apenas 11 níveis de preço distintos
+(≤3 por dia). Em 2 dos 5 pregões (31/08 e 04/09) o robô praticamente não
+operou, mesmo o mercado tendo se movido dezenas de pontos nesses dias.
+Causa raiz, em `src/strategy/daytrade/lab/wdo_grid_reload_maker.py::on_bar`
+(~linha 707-730): no modo `rolling_last_price`, `state.anchor_price` só é
+atualizado no INSTANTE em que uma nova ordem-limite é armada — enquanto
+existe ordem pendente (`state.pending_side is not None`), o robô só espera,
+sem cancelar nem reprecificar. Se o preço se afasta do nível armado e não
+volta a tocá-lo, a ordem fica parada indefinidamente e o robô fica mudo
+pelo resto do pregão: não existe timeout nem gatilho de deriva de preço
+que cancele e rearme a ordem mais perto do preço atual.
+
+Achado ao investigar a mesma semana de dados que motivou o item 4.8
+(MFE/MAE por trade) — é um achado NOVO e independente, sobre
+atividade/exposição do robô, não sobre deslize de preço.
+
+> **Regra:** um robô do tipo "ordem-limite parada com reancoragem" só
+> reflete exposição ao pregão INTEIRO se a reancoragem for CONTÍNUA (a
+> cada rearme necessário) — reancorar só uma vez, no momento de armar, faz
+> o robô se expor a uma FATIA estreita e arbitrária do range do dia, não
+> ao dia inteiro. Backtests que rodam sobre o histórico completo sem
+> perceber isso medem um número real, mas não avisam que ele vem de
+> pouquíssimos níveis de preço tocados — o robô pode passar pregões
+> inteiros inerte sem que nenhuma métrica agregada (líquido, MaxDD, win%)
+> denuncie isso.
+> **Pergunte à plataforma nova:** a ordem-limite da plataforma reprecifica
+> sozinha (ou permite configurar cancelamento por timeout / distância de
+> deriva do preço) quando o nível armado não é tocado, ou ela fica parada
+> indefinidamente esperando um preço que pode nunca voltar?
+
+### 4.10 Trocar saída MAKER por saída decidida pela estratégia troca o TIPO de execução, não só a regra de preço — 4/4 candidatos de trailing zeraram o capital de teste
+
+Medido no `WdoGridReloadMaker` (WDO F1,
+`src/strategy/daytrade/lab/wdo_grid_reload_maker.py`), testando um mecanismo
+novo OPT-IN (`trailing_ativo`/`trailing_recuo_ticks`, default desligado,
+nunca ativado em produção): em vez do alvo estático de 2 ticks
+(`profit_ticks=2`) fechado pelo próprio motor como ordem MAKER
+(`target_fills_as_maker=True`, zero deslize), a posição continua aberta e
+monitorada tick a tick, fechando via `Exit()` da estratégia quando o preço
+recua N ticks do melhor preço alcançado desde que o piso foi batido.
+Testados 4 candidatos (recuo tolerado de N=0, 1, 2 e 4 ticks) contra o
+baseline estático já em produção (T2/S16), no motor tick completo, com o
+capital de teste REAL do WDO@ (R$375,00, mínimo com reserva — nunca um valor
+nocional), em DUAS janelas: o IS salvo inteiro (`data/raw_ticks/
+WDO_A_f1.parquet`, 72 pregões, 2.832.170 ticks, 2026-02-27 a 2026-06-12) e
+uma semana fresca de tick real MT5 (2026-08-31 a 2026-09-04, 552.860 ticks).
+
+Baseline (produção atual, nada mudou aqui): líquido **R$23.954,00** no IS
+(93,4% win, 6.322 trades) e **R$4.592,00** na semana fresca (93,8% win,
+1.156 trades) — robusto nas duas janelas. Os QUATRO candidatos de trailing
+(N=0, 1, 2 e 4) **zeraram a conta de teste de R$375,00 nas DUAS janelas**,
+em 1 a 3 pregões dos 72/5 disponíveis (o motor interrompeu cada run ao
+detectar patrimônio ≤ 0). Win rate dos 4 candidatos ficou entre **13,6% e
+38,9%**, muito abaixo do breakeven de ~88,9% que a razão risco:retorno 1:8
+(T2 de lucro / S16 de stop) exige para não perder dinheiro.
+
+Causa mecânica (não é bug de código — é característica estrutural do motor,
+`backtest/intraday/machine.py::_close_position`): `is_maker_target = reason
+== IntradayExitReason.TARGET and cfg.target_fills_as_maker` — SÓ o
+fechamento por alvo ESTÁTICO é isento de slippage. QUALQUER saída decidida
+pela própria estratégia via `Exit()` (reason SIGNAL) é SEMPRE executada a
+MERCADO, pagando o `slippage_ticks` configurado (1 tick) — a MESMA
+penalidade que stop e flatten forçado já pagavam. Substituir um alvo maker
+por uma saída dinâmica troca o TIPO de execução (maker, zero custo →
+mercado, paga o tick de slippage) mesmo quando a REGRA de preço é idêntica
+ou aparentemente melhor — um custo estrutural, não um detalhe, e ainda mais
+relevante nesta família porque o lucro por trade já é de só 1-2 ticks.
+Contribuiu também o atraso de 1 tick entre decisão e execução (anti-
+look-ahead: decisão no tick N só executa na abertura do tick N+1) — medido
+explicitamente no candidato N=0 no IS: **47 de 48 trades não-stop fecharam
+ABAIXO do piso de 2 ticks** apesar do preço TER alcançado o piso, só 1 além
+dele. Esse atraso, somado à autocorrelação lag-1 negativa do tape do WDO@
+(-0,44, achado de outra investigação na mesma sessão), devolve mais do que
+ganhou na maioria das vezes.
+
+Nenhum dos 4 candidatos foi escolhido (decisão do dono, em aberto) e o
+mecanismo continua OPT-IN, desligado por padrão no código — isto não é uma
+estratégia refutada e encerrada, é um achado de método sobre custo de
+execução que generaliza além deste candidato. Também não testado: se um
+capital de teste maior que R$375 mudaria o veredito — a inviabilidade medida
+vale para o capital de teste ATUAL.
+
+> **Regra:** antes de trocar uma saída MAKER (ordem parada, sem custo de
+> fila) por uma saída dinâmica decidida pela estratégia, verifique que tipo
+> de execução essa saída nova vai usar — se ela virar ordem A MERCADO (o
+> comportamento mais comum para "saída decidida agora", por ser urgência),
+> o custo extra (spread/slippage) tem de entrar na conta do breakeven ANTES
+> de comparar os dois desenhos, nunca depois: um mecanismo mais "esperto"
+> sobre o PREÇO pode ainda assim perder dinheiro se ele mudar o CUSTO de
+> execução por baixo. Vale para qualquer estratégia cujo lucro por trade
+> seja pequeno o bastante (poucos ticks) para o custo de execução dominar
+> o resultado.
+> **Pergunte à plataforma nova:** a saída dinâmica/trailing que esta
+> plataforma oferece fecha como ordem PARADA (maker, sem pagar o spread)
+> ou A MERCADO (paga o spread/slippage a cada fechamento)? Se a saída
+> original que ela substitui era maker, o custo extra por trade precisa
+> ser medido e somado ao breakeven antes de decidir se o trailing vale a
+> pena.
+
+### 4.11 Um gate de atividade/liquidez pré-entrada que acelera o preenchimento não virou lucro melhor — medir velocidade não é medir P&L
+
+Testado no `WdoGridReloadMaker` (WDO F1,
+`src/strategy/daytrade/lab/wdo_grid_reload_maker.py`), mecanismo novo
+OPT-IN (`gate_atividade_ativo: bool = False`, `gate_volume_min: float |
+None = None`, `gate_janela_segundos: int = 15`, nunca ligado em produção):
+quando ativo, o robô só arma uma NOVA `EnterLimit` (nunca a reancoragem de
+uma ordem já pendente) se o volume negociado nos últimos
+`gate_janela_segundos` segundos estiver ACIMA de `gate_volume_min`; senão
+espera o próximo `on_bar`. Nasceu de uma correlação REAL (Spearman,
+sobrevive correção por múltiplos testes, rho≈−0,33, p<0,002, achada por
+análise sobre `scripts/daytrade/wdof1_mfe_mae_semana_2026_09_04.py`, 177
+trades da semana 2026-08-31 a 2026-09-04): mais volume/volatilidade ANTES
+de uma entrada prevê preenchimento MAIS RÁPIDO da ordem-limite — com a
+ressalva já conhecida então de que a amostra tinha 0 stops nos 177 trades,
+ou seja a correlação era sobre VELOCIDADE de preenchimento, não sobre
+QUALIDADE do trade.
+
+Medido agora (`scripts/daytrade/wdof1_gate_atividade_sweep_2026_09_07.py`,
+motor tick completo, config de produção T2/S16/x1, capital real de teste
+R$375,00) em DUAS janelas, com 3 limiares por janela (percentil 25/50/75
+do volume observado NA PRÓPRIA janela, em janelas rolantes de 15s — nunca
+chutado):
+
+**IS completo** (`data/raw_ticks/WDO_A_f1.parquet`, 72 pregões — amostra
+GRANDE e mais confiável): baseline (sem gate) líquido R$23.954,00, MaxDD
+R$1.135,50, win 93,4%, 6.322 trades, lucro/DD 21,10, duração mediana
+9,0s. Os 3 limiares testados **pioraram o líquido e o lucro/DD nos TRÊS**,
+de forma monotonicamente pior quanto mais alto o limiar: p25 (volume_min
+373,0) R$22.661,50 (−5,4%), MaxDD pior (R$1.249,50), lucro/DD 18,14,
+6.127 trades (−195); p50 (874,0) R$21.737,00 (−9,3%), lucro/DD 16,17,
+5.856 trades (−466); p75 (1.956,0) R$14.889,50 (−37,8%), lucro/DD 11,68,
+4.291 trades (−2.031).
+
+**Semana fresca** (tick MT5 real, 2026-08-31 a 2026-09-04, 5 pregões —
+amostra PEQUENA, 1.156 trades no baseline): baseline líquido R$4.632,00,
+MaxDD R$296,50, win 93,8%, duração mediana 7,9s. p25 (volume_min 559,0)
+R$4.826,50 (**+4,2%, único ponto positivo de todo o teste**), win 94,3%,
+1.117 trades (−39); p50 (1.362,0) R$4.182,00 (−9,7%), 996 trades (−160);
+p75 (2.785,0) R$3.121,50 (−32,6%), 837 trades (−319).
+
+O mecanismo em si FUNCIONA exatamente como a correlação original previa —
+filtra por velocidade de preenchimento: na semana fresca a duração
+mediana caiu monotonicamente (7,9s→6,9s→5,1s→4,5s) e a fração de trades
+rápidos subiu (50,0%→52,5%→57,2%→60,9%) conforme o limiar sobe; no IS o
+efeito é mais fraco e não-monotônico (50,0%→51,1%→50,3%→55,3%). Mas
+acertar o eixo que a correlação media (velocidade) não fez o outro eixo
+(P&L) melhorar — na amostra grande e confiável piorou nos 3 limiares, e o
+único ponto positivo veio da amostra pequena e não sobrevive nem ao
+segundo limiar (p50) da MESMA janela pequena, então não pode pesar mais
+que o resultado do IS. Nota à parte sobre o contador `self.gate_bloqueios`
+(soma 1 a cada `on_bar` em que o robô queria armar e foi bloqueado): como
+o mesmo sinal represado é reavaliado em TODO tick seguinte até o volume
+cruzar o limiar, esse número (28.889/176.079/737.987 no IS para
+p25/p50/p75) é muito maior que a redução real de trades executados
+(−195/−466/−2.031) — são duas coisas diferentes, não confundir uma pela
+outra.
+
+Decisão de produção: o gate continua OPT-IN e DESLIGADO por padrão
+(`gate_atividade_ativo=False`) — nenhum limiar foi promovido a vencedor;
+ativar (ou não, e com qual limiar) fica com o dono, com estes números na
+mão.
+
+> **Regra:** um filtro de atividade/liquidez pré-entrada precisa ter os
+> dois eixos medidos SEPARADAMENTE — velocidade de preenchimento E
+> resultado financeiro — antes de virar produção. Um filtro pode acertar
+> por completo o eixo que a correlação original mediu e ainda assim piorar
+> o eixo que importa. E uma amostra pequena pode mostrar o efeito OPOSTO
+> de uma amostra grande no mesmo teste: o veredito é o da amostra grande e
+> confiável, nunca o da pequena só porque ela bateu positivo primeiro.
+> **Pergunte à plataforma nova:** o filtro de atividade/liquidez
+> pré-entrada que ela oferece (ou que você vai construir sobre o feed
+> dela) foi medido nos dois eixos — velocidade de preenchimento E P&L —
+> separadamente, em pelo menos duas janelas de tamanhos diferentes? Se só
+> foi medido num eixo, ou só numa janela pequena, ele não está validado
+> pra produção.
+
+### 4.12 Contar preenchimento de conta SOMBRA junto com conta REAL inverte o veredito — o filtro por conta vem ANTES de qualquer soma
+
+Investigação de 2026-09-07 sobre por que o backtest divergia da corretora no
+pregão de 2026-09-04. Cruzando `live_fills` com `live_orders.account_id`
+naquele pregão, os dois lados aparecem separados:
+
+| Conta | Preenchimentos | Idas-e-voltas | Líquido |
+|---|---|---|---|
+| REAL (`dt-wdo_grid_reload_maker-wdo@-live`) | 2 | 1 | **−R$0,50** |
+| SOMBRA (`…-shadow`, toda ordem marcada `"SHADOW — não enviada ao MT5"`) | 34 | 17 | +R$76,50 |
+
+Somados sem filtrar, os mesmos registros diziam **"R$85 bruto, 18
+idas-e-voltas, 0 perdedores"** — uma leitura que inverte o veredito por
+completo, porque a única operação que envolveu dinheiro de verdade foi
+**perdedora** (é a mesma operação do item 4.8, o alvo nativo que deslizou).
+Nada estava corrompido no diário: as duas contas estão corretamente
+identificadas em `live_orders`, e a soma é que nunca perguntou de quem era
+cada linha.
+
+O erro é atraente porque anda na direção que ninguém audita: misturar as
+contas **infla** a atividade e **melhora** a taxa de acerto, então o número
+resultante parece confirmar o backtest em vez de contradizê-lo. Um erro que
+piorasse o número teria sido investigado no mesmo dia.
+
+> **Regra:** qualquer comparação entre backtest e realidade filtra por
+> CONTA/MODO antes de contar um único preenchimento — real, sombra e papel
+> nunca entram na mesma soma, nem "só pra ter volume de amostra". E a
+> conferência é pelo campo de identidade do registro, nunca por sufixo de
+> nome ou por convenção de quem escreveu o script: nome é documentação,
+> `account_id` é fato.
+> **Pergunte à plataforma nova:** cada ordem e cada preenchimento carregam,
+> no próprio registro, a conta e o MODO (real / simulado / papel) em que
+> foram gerados, de forma que uma consulta separe os dois sem depender de
+> convenção de nomenclatura? Se a separação só existe no nome, ela vai ser
+> perdida na primeira agregação que alguém escrever com pressa.
+
+### 4.13 O gêmeo em sombra não mede fila — mede sinal. A DIFERENÇA entre ele e o real É a medida da fila
+
+O achado que a separação do item 4.12 revelou, e o mais valioso dos três da
+investigação de 2026-09-07. No **mesmo pregão** (2026-09-04), com o **mesmo
+sinal**, o mesmo instrumento e a mesma geometria, os dois gêmeos do WDO F1
+divergiram em uma ordem de grandeza no que importa: a sombra — que preenche
+no toque, sem fila real — fez **17 preenchimentos**; a conta real, que
+enfrenta fila de verdade no book, fez **1**.
+
+Essa é a primeira medida REAL da lacuna que a ficha desse robô sempre
+declarou faltar medir: a **taxa de preenchimento passivo real**. Até aqui o
+projeto só tinha o modelo teórico de fila (item 4.1) e a observação em outro
+ativo (12 ordens reais, 0 preenchimentos na PMAM3). Agora existe um número
+observado no instrumento que opera hoje — e ele diz que, se a proporção se
+sustentar, **todo número de backtest deste robô superestima a atividade real
+por cerca de uma ordem de grandeza**, porque o motor preenche no toque.
+
+A honestidade sobre o tamanho da amostra é parte do achado: **n = 1 pregão**.
+Isso não calibra um fator de correção; estabelece que a lacuna é grande e
+mensurável, e que ela se mede assim. O caminho pra transformar isso em número
+confiável é acumular pregões do par real/sombra rodando lado a lado — não
+rodar mais backtest.
+
+> **Regra:** um gêmeo em simulação/sombra **não mede fila** — ele mede o
+> sinal, com a fila desligada. Por isso ele nunca serve como estimativa do
+> real (4.7). O que ele serve, e é a única forma barata de obter isso, é
+> **medir a fila por diferença**: mesmo sinal, mesmo pregão, mesmo
+> instrumento, dois registros separáveis — e a razão entre os
+> preenchimentos dos dois É a taxa de preenchimento passivo que nenhum
+> backtest sabe estimar. Rodar o par lado a lado deixa de ser redundância e
+> vira instrumento de medida.
+> **Pergunte à plataforma nova:** dá para rodar o MESMO sinal
+> simultaneamente em conta real e em conta sombra/papel, com os registros
+> separáveis por conta (4.12)? Se der, essa diferença é a sua medida de
+> fila e ela deve começar a ser acumulada no primeiro dia — não depois de
+> alguém desconfiar do backtest.
+
+### 4.14 Reancoragem sem espera mínima persegue o preço e nunca é tocada
+
+A correção do item 4.9 (reancorar a ordem parada quando o preço anda, em
+vez de deixá-la parada pra sempre) foi medida como um salto de 10x. Ao
+instrumentar o mecanismo em pregão inteiro descobriu-se o contrário do
+esperado: reprecificar a cada tick mantém a ordem SEMPRE a 1 tick do
+preço, então ela persegue o mercado e quase nunca é tocada. Pregão
+2026-03-02, mesma geometria: **5 trades / −R$47,50 sem freio, contra 264
+trades / +R$1.078,00 com freio de 10s**. O freio não é custo pago por
+segurança — ele RESTAURA a mecânica de ordem parada, que é o robô.
+
+> **Regra:** numa estratégia maker, o que dá o preenchimento é a ordem
+> ficar PARADA enquanto o preço vem até ela. Reancorar é para o caso em
+> que o preço foi embora de vez, não para acompanhar o passo dele. Uma
+> reancoragem sem espera mínima converte silenciosamente uma estratégia
+> passiva numa que nunca executa — e o sintoma é "poucos trades", não erro
+> nenhum. Toda reancoragem por evento precisa de uma cadência mínima
+> explícita, MEDIDA contra a contagem de trades, não só contra o limite de
+> taxa (1.18).
+> **Pergunte à plataforma nova:** minha ordem em repouso é reancorada por
+> evento (a cada negócio) ou por tempo? Se for por evento, qual a cadência
+> mínima entre duas reancoragens — e ela foi medida contra a contagem de
+> trades, não só contra o limite de taxa?
+
+**Correção aplicada:** `reancora_min_segundos = 10.0` (ligado por padrão)
+em `src/strategy/daytrade/lab/wdo_grid_reload_maker.py`, portão duplo em
+`_pode_reprecar` (substituição por deriva de preço) e
+`_pode_armar_apos_recusa` (rearme pós-recusa, item 3.16); rearme pós-FILL
+não é freado, porque é a mecânica normal de reload. Calibrado rodando os
+126 pregões inteiros disponíveis: pior minuto máximo de envios = 26 contra
+o teto de 30 do item 1.18 (0 pregões travam o freio de cadência); 6s e 15s
+travam 2 pregões cada — a relação não é monotônica, porque mudar a
+cadência muda QUAIS pregões saturam, não quantos. Risco residual nomeado:
+a folga contra o teto do item 1.18 é de só 4 ordens (87% do teto usado), e
+`max_trades_per_side` deixou de ser um parâmetro folgado para virar
+load-bearing — subi-lo empurra o pico de novo acima de 30. Travado com o
+teste `test_max_trades_per_side_continua_em_200`.
+
 ---
 
 ## Parte 5 — Dados, relógio e instrumento
@@ -1051,6 +1522,13 @@ sinal", era feed cego.
 > **Regra:** quando um robô fica muito tempo sem sinal, confirme que o feed está
 > recebendo dado ANTES de suspeitar da lógica. E prefira pedir janela larga e
 > filtrar localmente a confiar que a fonte trata janela estreita corretamente.
+
+**Re-confirmado ao vivo em 2026-09-04**, 11 dias depois e em outro instrumento:
+uma janela de **2 minutos** pedida ao mesmo terminal, com o WDO negociando sem
+parar às 10h4x, devolveu **0 negócios** — enquanto a janela de 24h do mesmo
+instante devolveu 85.307. Não é bug de um dia nem de um papel ilíquido: o piso
+de janela larga continua sustentando peso, e quem for estreitá-lo tem de
+re-medir contra o instrumento real e no horário real antes (7.8).
 
 ### 5.4 Símbolo de cotação não é símbolo de negociação
 
@@ -1163,6 +1641,247 @@ teve esse bug; só "Carteira"/"Patrimônio" e a tabela de posições liam
 > ser a INVERSA exata de qual dos dois débitos/créditos a abertura realmente
 > fez — não uma convenção genérica de "venda é negativo" copiada de outro
 > instrumento.
+
+### 5.9 O custo de uma chamada escala com a GRANULARIDADE do feed — a mesma constante é barata em barra e ruinosa em tick
+
+2026-09-04, 10h: os dois slots do robô de mini-dólar (um com **R$375 reais**,
+um em sombra) ficaram fora do pregão desde o sino. Nenhum erro no log, nenhuma
+posição aberta, nenhuma ordem: o robô simplesmente não existia no pregão.
+
+A inicialização de sessão dispara **32 buscas de histórico** num único passo —
+1 da janela de volume, 15 de um laço de agregado diário, 15 de OUTRO laço
+percorrendo **as mesmas 15 sessões** de novo, e 1 do warm start. Esse número
+foi dimensionado quando o consumidor lia barra de 1 minuto: **~570 barras por
+sessão**. O robô novo lê **negócio a negócio**, e uma sessão de mini-dólar tem
+**~140.000** — 250x mais dado pela mesma linha de código. Medido: **~14s por
+busca, ~447s de inicialização**, com dois processos disputando o mesmo
+terminal.
+
+O que transforma "início lento" em robô morto é o sinal de vida: o supervisor
+toca o heartbeat **uma vez, no topo do laço**, antes de tudo isso. Quem vigia
+de fora lê "parado há 15min com o processo de pé", mata no meio do trabalho —
+e o reinício paga o custo inteiro outra vez, agora com mais sessão acumulada
+para reprocessar. Espiral: mesma assinatura já vista em 2026-09-02 com este
+mesmo robô, tratada na época como "conectividade degradada".
+
+> **Regra:** toda constante escrita "por sessão" ou "por barra" é uma medida em
+> unidades do FEED, não do código. Quando o mesmo código passa a servir uma
+> granularidade mais fina, o produto *(número de chamadas × custo por chamada)*
+> tem de ser re-medido no feed mais fino ANTES de ligar — e o mesmo vale para
+> qualquer laço que construa um objeto por barra. Duas consequências que valem
+> em qualquer plataforma: (a) trabalho de inicialização sobre **sessão
+> encerrada** é história imutável e tem de ser reaproveitado entre reinícios,
+> senão cada morte do vigia cobra o custo de novo, mais caro, e o robô nunca
+> chega a operar; (b) um sinal de vida que só cobre o TOPO do laço não
+> distingue "travado" de "trabalhando" — ou o sinal alcança o interior do
+> passo, ou o limiar do vigia tem de ser maior que o pior passo legítimo.
+
+> **Pergunte à plataforma nova:** quantas chamadas de histórico a inicialização
+> faz, e quanto custa cada uma **no feed mais fino que algum robô usa**? O
+> sinal de vida do supervisor cobre o interior de um passo ou só o topo do
+> laço? (5.9)
+
+### 5.10 Script de pesquisa que reimplementa a chamada ao terminal reintroduz o bug de fuso que a produção já corrigiu
+
+Investigação de 2026-09-07 sobre por que o backtest divergia da corretora no
+pregão de 2026-09-04. `scripts/daytrade/wdof1_mfe_mae_semana_2026_09_04.py`
+chamava `mt5.copy_ticks_range` direto e rotulava o `time_msc` cru como UTC
+(`tz_localize("UTC")`), sem o **+3h** que a rota compartilhada do projeto
+(`market_data_intraday/mt5_ticks_source.py::_ticks_to_df`, a mesma que
+`live/tick_feed.py` usa em produção) já aplica — porque o `time_msc` do
+terminal é **hora de parede do servidor**, não UTC. Resultado: os preços de
+preenchimento gravados no diário ao vivo pareciam não bater com o tape, com
+desvios de vários pontos. Com a conversão correta, **os 36 preenchimentos do
+pregão batem no mesmo milissegundo, sem uma exceção**.
+
+É a MESMA classe de bug do item 5.1 — que já custou um mecanismo de stop
+inteiro rodando desligado —, reintroduzida num script novo, não por
+regressão do código corrigido, mas por **reimplementação ao lado dele**. A
+correção de 5.1 continua intacta na rota compartilhada; o script simplesmente
+não passava por ela.
+
+Vale registrar o sinal de diagnóstico, porque ele economiza a investigação
+inteira da próxima vez: o **SINAL do desvio invertia dentro do mesmo
+pregão** — 14:08 dava preenchimento a 5.156,0 contra um "tape" de 5.151,5
+(desvio +4,5), e 16:10 dava 5.148,5 contra 5.157,5 (desvio −9,0). Deslize de
+execução tem sinal consistente: ele sempre cobra de você, nunca paga. Desvio
+que troca de sinal ao longo do dia não é execução — é **comparação contra o
+instante errado**, e o tamanho dele só acompanha o quanto o preço andou
+naquele intervalo.
+
+> **Regra:** nenhuma rotina — de pesquisa, análise ad-hoc ou produção —
+> chama a fonte de dados na mão. A conversão de fuso mora em UMA função
+> compartilhada, e todo consumidor passa por ela. **Um número de fuso
+> declarado em dois lugares é um número que vai divergir**, e a divergência
+> aparece como um bug de estratégia, nunca como um erro de relógio. E ao
+> comparar um preenchimento gravado contra o tape, o sinal do desvio é o
+> primeiro diagnóstico: sinal consistente aponta para execução, sinal que
+> inverte aponta para relógio.
+> **Pergunte à plataforma nova:** a hora que a API devolve é UTC ou hora de
+> parede do servidor — e existe UMA rota compartilhada que faz essa
+> conversão, pela qual todo script novo é obrigado a passar? Antes de
+> confiar em qualquer análise, confira se a ferramenta que a produziu usa
+> essa rota ou reimplementou a chamada.
+
+### 5.11 Rotina de pesquisa sem a defesa de janela da produção transforma "zero dado" em "zero resultado" — e isso vira a caça a um bug que não existe
+
+Mesmo script, mesma investigação, defeito independente do anterior.
+`copy_ticks_range` com `date_from` dentro do pregão do próprio dia devolve
+negócio incompleto ou **ZERO, sem levantar exceção nenhuma** — o fato já
+medido duas vezes e registrado no item 5.3. A rota de produção se defende
+disso: `live/tick_feed.py` recua o pedido para pelo menos
+`_SAFE_FETCH_LOOKBACK` (1 dia) e filtra localmente. O script de pesquisa não
+tinha defesa nenhuma.
+
+O custo não foi um número errado — foi uma investigação inteira. O CSV
+gerado em 04/09 parou em **03/09 10:04** e reportou **"zero trades em
+04/09"** num dia que teve atividade real. Esse "zero" foi tratado como
+sintoma de estratégia/motor e investigado como tal. Rodando o **mesmo
+script, sem mudar uma linha**, 3 dias depois — com o terminal já
+sincronizado —, o mesmo dia passou a mostrar **400 trades**.
+
+> **Regra:** dado vindo de terminal só é confiável depois que o pregão
+> **fechou E sincronizou** — o de hoje, durante o pregão, é resposta
+> provisória mesmo quando volta sem erro. Toda rotina de pesquisa precisa
+> da mesma defesa de piso que a rota de produção; sem ela, **"zero
+> resultado" é indistinguível de "zero dado"**, e essa ambiguidade custa
+> dias procurando um bug que não existe. Corolário barato e obrigatório:
+> toda extração confere o ÚLTIMO carimbo de tempo que voltou contra o fim
+> da janela pedida, e falha ruidosamente quando o dado para antes — é a
+> forma mais barata de nunca mais confundir os dois. Mesma família do item
+> 1.6: "não sei" nunca pode se apresentar como "não há".
+> **Pergunte à plataforma nova:** a consulta de histórico avisa quando
+> devolve MENOS do que a janela pedida, ou entrega um resultado curto em
+> silêncio? E a partir de quanto tempo depois do fechamento o dado do
+> pregão de hoje fica completo? Enquanto essas duas respostas não
+> existirem, nenhuma análise sobre o pregão corrente é conclusão — é
+> rascunho.
+
+### 5.12 Um cursor de paginação sem rótulo de fuso apagou 19,3% da base canônica de tick — em silêncio, por meses
+
+`market_data_intraday/mt5_ticks_source.py::fetch_ticks_full_history` paginava o
+histórico usando o carimbo do ÚLTIMO tick da página como cursor da página
+seguinte, convertido para um `datetime` **sem fuso** (naive). O pacote do
+terminal chama `.timestamp()` nesse limite, e um horário sem fuso é resolvido
+no fuso da MÁQUINA que executa (BRT, −3h): cada troca de página passou a pedir
+a partir de **cursor + 3 horas** em vez de cursor. Com **200.000 ticks por
+página**, cada borda engoliu até 3h de negócios — sem exceção, sem log, sem
+nada.
+
+Estrago medido na base canônica `data/raw_ticks/WDO_A_.parquet` (16.624.744
+ticks, 126 pregões, 2026-02-27→2026-08-31):
+
+- **63 lacunas de exatamente 180,00 minutos**, espaçadas por ~198.500 linhas —
+  uma por borda de página (200.000 menos o tick de sobreposição que o dedupe
+  come).
+- **13.786 de 71.316 minutos de pregão sem um único tick = 19,3% da base.**
+- **84 dos 126 pregões afetados** (42 intactos).
+- Pior pregão (2026-08-19): **75.710 ticks no parquet contra 134.439** pela
+  rota por intervalo — **43,7% do dia ausente**, faixa contínua 10:11–13:09.
+
+A prova de que é o bug e não buraco de mercado veio do confronto contra a rota
+por INTERVALO (`fetch_ticks_range`, sem paginação, portanto sem o defeito) em 6
+pregões: a rota por intervalo é superconjunto **estrito** (nunca existe minuto
+só no parquet), e nos 2 pregões de controle sem lacuna as duas rotas batem
+**exatamente** (delta 0) depois do mesmo dedupe. A assinatura de 180,00 min ao
+milissegundo, uma vez por página, fecha o caso.
+
+Dois agravantes que valem tanto quanto o número:
+
+1. **A recuperação não é rodar de novo.** A junção do backfill é UNIÃO, então
+   reexecutar por cima **preserva** os buracos em vez de corrigi-los — e como o
+   backfill parte sempre do mesmo genesis com os mesmos dados, ele reproduz
+   exatamente os mesmos buracos. Só apagar o arquivo e regenerar com o código
+   corrigido recupera, e só enquanto a retenção do terminal ainda cobrir
+   aqueles pregões.
+2. **A régua também estava torta.** Esse parquet é a base canônica de tick do
+   projeto e foi usado como REFERÊNCIA DE CORREÇÃO numa investigação da mesma
+   rodada, para provar que outro cache estava truncado. Uma base com 19,3% de
+   ausência silenciosa serviu de padrão-ouro, e ninguém tinha como saber.
+
+> **Regra:** todo limite de tempo entregue a uma API de dados de mercado carrega
+> **fuso explícito**. Um horário "sem fuso" não é neutro — ele é reinterpretado
+> no fuso de quem executa, e o mesmo código muda de comportamento ao mudar de
+> máquina. Numa chamada **PAGINADA** esse deslocamento deixa de ser um erro de
+> borda e vira **perda de dado a cada página, proporcional ao tamanho da
+> página**. Daí o corolário que é a única defesa real: toda coleta paginada
+> confere a **CONTINUIDADE entre páginas** — o começo da página N+1 encosta no
+> fim da página N? — e falha ruidosamente quando não encosta. Sem essa
+> conferência, a única evidência do defeito é uma lacuna que exceção nenhuma
+> anuncia. E quando a junção do armazenamento é união, o dado perdido não volta
+> por reexecução: a correção obriga a REGERAR do zero, dentro da janela de
+> retenção da fonte.
+> **Pergunte à plataforma nova:** a coleta paginada confere que uma página
+> encosta na seguinte, ou confia que o cursor caiu no lugar certo? Todo limite
+> de tempo que sai daqui carrega fuso explícito, ou algum deles é resolvido no
+> fuso da máquina? (5.12)
+
+### 5.13 União por linha inteira quase duplicou 639 negócios reais — a chave certa é IDENTIDADE do evento, não igualdade de linha
+
+Regeneração do parquet canônico de tick do WDO@, fechando de fato o item
+5.12 (cursor de paginação sem fuso apagando 19,3% dos minutos de pregão).
+Procedimento seguro por desenho: backup primeiro, baixar para arquivo NOVO
+em separado, comparar as duas versões, e UNIR — nunca substituir pelo novo,
+porque a retenção do terminal MT5 é limitada e irregular e o novo pode não
+ter dias que o antigo tinha. Resultado, que deu certo: 63 lacunas de ~180
+min → 0; minutos de pregão faltando 13.868 de 71.820 (19,3%) → 342 de
+74.100 (0,5%); 16.624.744 → 21.524.225 ticks; 83 pregões reparados,
+mediana de 179 min recuperados cada, maior recuperação em 2026-03-03
+(208.151 → 398.881 ticks). Zero pregões existiam só no antigo.
+
+O que quase deu errado, e é o item: a comparação apontou **639 linhas**
+que existiam "só no antigo" pelo critério de linha inteira — a união
+ingênua as teria acrescentado ao novo. Inspecionadas uma a uma, eram os
+MESMOS negócios (mesmo timestamp, mesmo preço, mesmo volume), diferindo
+APENAS no bit 256 do campo `flags` (1080 no antigo, 1336 no novo): o
+terminal revisou um metadado. Unir por linha inteira teria **duplicado
+639 negócios reais**, inflando volume e criando negócio fantasma no
+backtest — de forma invisível, sem erro nenhum, só um backtest passando a
+medir um mercado que não existiu.
+
+A união correta foi feita por **identidade de negócio** (`time, bid, ask,
+last, volume, volume_real`) com multiplicidade `count_final =
+max(count_antigo, count_novo)` — nunca soma, porque o mesmo negócio pode
+legitimamente repetir no mesmo milissegundo. Verificado relendo o arquivo
+do disco pelo caminho de PRODUÇÃO (`load_ticks("WDO@")`): 0 negócios do
+antigo ausentes ou sub-representados, 0 pregões só no antigo, 0
+duplicados por linha inteira.
+
+Resíduo honesto, não escondido: 2026-08-03 e 2026-08-04 continuam vazios
+(ausentes nas duas versões — retenção real do terminal, não perda desta
+operação); 285 dos 342 minutos residuais são de 2026-07-31, dia em que o
+terminal só tem 3.847 ticks a partir de 15:32, idêntico nas duas versões.
+Nenhuma estratégia lê `flags` (usam `last`/`volume`), então o achado em
+si é cosmético — o perigo estava só no critério de comparação.
+
+> **Regra:** unir duas versões do mesmo dado histórico exige uma CHAVE DE
+> IDENTIDADE do evento — o que faz um negócio ser aquele negócio — nunca
+> igualdade de linha inteira. A fonte revisa metadado (flags, ids
+> internos, campo derivado) sem avisar, e comparação por linha inteira
+> transforma cada revisão dessas em duplicata silenciosa. A união também
+> precisa de multiplicidade EXPLÍCITA (`max` das contagens, nunca soma),
+> porque o mesmo evento pode aparecer legitimamente mais de uma vez no
+> mesmo instante. E toda regeneração de base histórica termina com uma
+> verificação lida do DISCO pelo caminho de PRODUÇÃO — nunca das
+> estruturas em memória recém-montadas: as duas podem concordar e as duas
+> podem estar erradas.
+>
+> Vale registrar junto o procedimento que funcionou, porque ele vai ser
+> repetido: backup verificado antes de qualquer coisa → baixar para
+> arquivo NOVO em separado → comparar as duas versões e imprimir o que
+> cada uma tem de exclusivo → unir por identidade → reler do disco pelo
+> caminho de produção → só então trocar o canônico, com o backup
+> permanecendo no disco. E a rota de download escolhida importa: por
+> INTERVALO (uma chamada por dia civil, meia-noite a meia-noite no
+> relógio de parede do servidor) em vez de paginada — não porque a
+> paginada esteja errada hoje (foi corrigida no 5.12), mas porque a rota
+> por intervalo não tem borda de página onde errar. A classe de bug do
+> 5.12 não pode reincidir numa rota que não tem cursor.
+> **Pergunte à plataforma nova:** qual é a chave que identifica um evento
+> na fonte, e ela sobrevive quando a fonte revisa metadado (flags, ids
+> internos, campo derivado)? A verificação final de uma regeneração lê do
+> disco pelo caminho de produção, ou confere as estruturas que acabaram
+> de ser montadas em memória? (5.13)
 
 ---
 
@@ -1428,6 +2147,30 @@ viu o próprio stop.
 > mesmos arquivos, de outro processo, e diagnosticar suíte contaminada como bug
 > de código já custou tempo aqui (7.3).
 
+### 7.8 Hipótese de custo lida no código é hipótese — meça a chamada antes de corrigi-la
+
+2026-09-04, diagnosticando o travamento do item 5.9. A leitura do código dava
+uma explicação convincente: o laço quente aplicava um piso de janela de 24h em
+**toda** volta de 5s, então cada passo pedia um dia inteiro de negócios do
+mini-dólar. Escrevi a correção (estreitar a janela quando a marca d'água está
+fresca), com testes cobrindo os três regimes, suíte verde — e só ENTÃO medi.
+
+Duas coisas caíram de uma vez. A busca é **instantânea**: 0,05s, 0,20s e 0,07s,
+inclusive a de 196.712 negócios — o custo não estava ali, a hipótese estava
+errada e o fix não corrigia nada. E, pior, a janela estreita de 2 minutos
+devolveu **0 negócios** com o mini-dólar negociando sem parar (5.3): a
+"correção" teria deixado o robô cego em silêncio, que é o modo de falha mais
+caro deste arquivo. O código foi revertido antes de qualquer processo subir com
+ele; o custo real (32 buscas de ~14s na inicialização) só apareceu ao cronometrar
+chamada por chamada.
+
+> **Regra:** custo lido no código é hipótese, não medida — cronometre a chamada
+> suspeita isolada, no instrumento real e no horário real, antes de escrever
+> correção. E quando a correção for **estreitar uma guarda de segurança**,
+> re-meça primeiro se a guarda ainda sustenta peso: a justificativa dela pode
+> continuar viva muito depois de o incidente que a criou sair de vista. Um fix
+> que passa a suíte inteira e mede zero ganho está corrigindo a coisa errada.
+
 ---
 
 ## Parte 8 — Perguntas a responder antes da primeira ordem real na plataforma nova
@@ -1512,6 +2255,95 @@ dinheiro ou meses.
     alguém lembrou de marcar com um atributo especial? Um portão de warm
     start por allowlist nomeada é um cold-restart silencioso pra toda
     estratégia nova. (2.6)
+30. Quantas chamadas de histórico a inicialização de sessão faz, e quanto
+    custa CADA uma no feed mais fino que algum robô consome? Toda constante
+    escrita "por sessão"/"por barra" está em unidades do feed: 15 sessões
+    podem ser 570 barras num feed e 140.000 no outro, pela mesma linha de
+    código. Meça o produto *(chamadas × custo)* no feed mais fino antes de
+    ligar. (5.9)
+31. O sinal de vida que o vigia externo lê cobre o INTERIOR de um passo, ou
+    só o topo do laço? Se só o topo, o limiar dele tem de ser maior que o
+    pior passo legítimo — senão o vigia mata trabalho que ia terminar e cada
+    reinício cobra o custo de novo, mais caro. E trabalho de inicialização
+    sobre sessão ENCERRADA é reaproveitado entre reinícios, ou refeito do
+    zero a cada vez? (5.9)
+32. Existe uma consulta de HISTÓRICO (distinta da leitura de estado
+    corrente) que devolve o desfecho definitivo de uma ordem que saiu do
+    book — pendente, preenchida, cancelada/recusada/expirada — e os deals
+    reais (preço, quantidade, lucro) de uma posição já fechada, buscável
+    por um identificador estável? Sem ela, um ciclo inteiro (preenche +
+    fecha) que aconteça dentro do intervalo entre duas consultas fica
+    invisível para sempre, e todo fechamento "recusado" que na verdade
+    executou vira número inventado no diário. (1.17)
+33. O `sl`/`tp` amarrado nativamente na posição executa como limite de
+    verdade (preço pedido ou melhor) ou como gatilho convertido a mercado
+    (pode deslizar)? Com alvo de 1 tick, um único deslize do gatilho come
+    o lucro inteiro do trade. (4.8)
+34. A ordem-limite da plataforma reprecifica sozinha (ou permite configurar
+    cancelamento por timeout / distância de deriva do preço) quando o
+    nível armado não é tocado, ou ela fica parada indefinidamente esperando
+    um preço que pode nunca voltar? Reancoragem que só acontece ao ARMAR
+    expõe a uma fatia estreita do pregão, não ao pregão inteiro, e nenhuma
+    métrica agregada denuncia isso sozinha. (4.9)
+35. A saída dinâmica/trailing que esta plataforma oferece fecha como ordem
+    PARADA (maker, sem pagar o spread) ou A MERCADO (paga o spread/slippage
+    a cada fechamento)? Se a saída original que ela substitui era maker, o
+    custo extra por trade precisa ser medido e somado ao breakeven antes de
+    decidir se o trailing vale a pena. (4.10)
+36. O filtro de atividade/liquidez pré-entrada que esta plataforma oferece
+    (ou que você vai construir sobre o feed dela) foi medido nos dois
+    eixos — velocidade de preenchimento E P&L — separadamente, em pelo
+    menos duas janelas de tamanhos diferentes? Um filtro que acelera o
+    preenchimento não necessariamente melhora o resultado, e uma amostra
+    pequena pode mostrar o efeito OPOSTO de uma amostra grande no mesmo
+    teste — o veredito é sempre o da amostra grande, nunca o da pequena só
+    porque bateu positivo primeiro. (4.11)
+37. O script/ferramenta nova reimplementa a chamada ao terminal, ou usa a
+    rota compartilhada que já converte fuso? A hora que a API devolve é UTC
+    ou hora de parede do servidor? Um número de fuso declarado em dois
+    lugares é um número que vai divergir — e a divergência se apresenta
+    como bug de estratégia, nunca como erro de relógio. (5.10)
+38. A consulta de histórico avisa quando devolve MENOS do que a janela
+    pedida, ou entrega um resultado curto em silêncio? A partir de quanto
+    tempo depois do fechamento o dado do pregão de hoje fica completo? Sem
+    essas duas respostas, "zero resultado" é indistinguível de "zero
+    dado" — e toda rotina de pesquisa precisa da mesma defesa de piso que
+    a rota de produção. (5.11)
+39. Cada ordem e cada preenchimento carregam, no próprio registro, a conta
+    e o MODO (real / simulado / papel) em que foram gerados, de forma que
+    uma consulta separe os dois sem depender de convenção de nomenclatura?
+    Misturar as contas numa soma infla a atividade e melhora a taxa de
+    acerto — o erro anda na direção que ninguém audita. (4.12)
+40. Dá para rodar o MESMO sinal simultaneamente em conta real e em conta
+    sombra/papel, com os registros separáveis por conta? Se der, a razão
+    entre os preenchimentos das duas É a taxa de preenchimento passivo
+    real, que nenhum backtest sabe estimar — e ela deve começar a ser
+    acumulada no primeiro dia, não depois de alguém desconfiar do
+    backtest. (4.13)
+41. A coleta PAGINADA de histórico confere que uma página encosta na
+    seguinte, ou confia que o cursor caiu no lugar certo? E todo limite de
+    tempo entregue à API carrega fuso explícito, ou algum deles é
+    resolvido no fuso da máquina que executa? Um cursor sem fuso desloca
+    cada borda de página e apaga dado proporcional ao TAMANHO da página,
+    sem exceção nenhuma — e se a junção do armazenamento for união,
+    reexecutar preserva os buracos em vez de corrigi-los. (5.12)
+42. Que limites de taxa/cadência a plataforma impõe, e o meu robô tem
+    algum freio interno calibrado para uma frequência de decisão diferente
+    da que ele vai rodar? Ao estourar, o comportamento é recusar a ação ou
+    parar o robô — e esse caminho é exercitado pelo modo sombra, ou só
+    pelo real? (1.18)
+43. A ordem em repouso é reancorada por evento (a cada negócio) ou por
+    tempo? Se for por evento, qual a cadência mínima entre duas
+    reancoragens — e ela foi medida contra a contagem de trades, não só
+    contra o limite de taxa? (4.14)
+44. Quando a plataforma recusa uma ordem, o meu robô espera antes de
+    tentar de novo? Existe contador de recusas por motivo e por pregão,
+    com teto? (3.16)
+45. Quando eu regenerar uma base histórica, qual é a chave que identifica
+    um evento na fonte — e ela sobrevive quando a fonte revisa metadado
+    (flags, ids internos, campo derivado)? A minha verificação final lê
+    do disco pelo caminho de produção, ou confere as estruturas que
+    acabei de montar em memória? (5.13)
 
 ---
 
@@ -1534,6 +2366,18 @@ depois, eram reais e reproduzíveis. Mais uma segunda rodada de auditoria
 adversarial em 2026-09-03, focada no dimensionamento dinâmico adicionado depois
 da primeira: 3 lacunas novas (1.15, 3.13, 3.14), todas corrigidas no mesmo dia —
 e a correção de uma delas revelou outras duas que ninguém tinha procurado (1.16
-e 3.15, a segunda mais grave que a lacuna original). Mais o registro acumulado
-do projeto. Quando um item aqui contradisser o código, o código ganha — e este
+e 3.15, a segunda mais grave que a lacuna original). Mais a investigação de
+2026-09-07 sobre por que o backtest divergia da corretora no pregão de
+2026-09-04, que rendeu 5 itens (4.12, 4.13, 5.10, 5.11, 5.12): a divergência
+não era do robô — eram duas defesas que a rota de produção tem e o script de
+pesquisa não tinha, mais uma soma que misturava conta real com conta sombra,
+mais um cursor de paginação sem fuso que já tinha apagado 19,3% da base
+canônica de tick usada como referência da própria investigação. Mais uma
+rodada, mesma janela de 2026-09-07, sobre o WDO F1 perseguindo o preço e
+travando o próprio freio de segurança: 3 itens (1.18, 3.16, 4.14) — um
+freio de cadência calibrado pra barra que dispara no primeiro minuto de
+tick, uma reancoragem sem espera mínima que persegue o preço e nunca é
+tocada, e uma recusa por capital sem espera que virou 25.556 tentativas
+idênticas num único pregão.
+Mais o registro acumulado do projeto. Quando um item aqui contradisser o código, o código ganha — e este
 arquivo está desatualizado.*

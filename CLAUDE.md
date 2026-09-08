@@ -26,6 +26,8 @@ Fica de fora de propósito: hipótese de estratégia refutada (é resultado de p
 
 **Como atualizar a página.** O `.md` no repo é a FONTE; a página é a vista publicada. Depois de editar o markdown, republique **na mesma URL** — `Artifact` com `url: "https://claude.ai/code/artifact/9a682e56-04b6-4b70-8da3-c5d410076b9d"`. Publicar sem passar a `url` cria um artefato NOVO e deixa o link acima morto, que é o oposto do ponto de ele estar anotado aqui.
 
+**Delegue a atualização, não a faça inline.** Editar `LICOES_DE_PRODUCAO.md` E republicar o artefato na mesma URL é um processo lento (ler o HTML publicado por inteiro é obrigatório antes de poder republicar — ver o fluxo de `Artifact`). Sempre que for adicionar/editar um item, dispare um subagente (`Agent`, pode rodar em background) com o achado já resumido (o que aconteceu, o número real, a regra, a pergunta pra Parte 8) para fazer as DUAS pontas — editar o `.md` e republicar o artefato — enquanto o agente principal responde ao dono imediatamente com o conteúdo do achado, sem esperar a atualização do documento terminar.
+
 ## Two products in one repo
 
 The codebase is a **B3 trading robot** with two independent execution paths that share the same `strategy/` and `journal/`:
@@ -134,6 +136,7 @@ FastAPI + Jinja2 templates in `src/dashboard/templates/` (partials in `partials/
 - No TA-Lib (C dependency, painful on Windows) — indicators live in `core/indicators.py` as pure `(pd.Series, ...) -> pd.Series` functions.
 - Live ops require Windows because `MetaTrader5` Python only talks to a locally-running MT5 terminal via Windows IPC — see `DEPLOY.md`.
 - `dev.bat` explicitly cleans up port 8000 in a loop because uvicorn `--reload`'s master + spawned child both bind the socket.
+- **Saldo do MT5 (Rico) não é confiável como fonte de capital.** `MT5Broker.account_risk_state()`/`cash_balance()` chamam `mt5.account_info()` direto no terminal, mas a Rico confirmou que esse saldo não é sincronizado com o saldo real da corretora — pode aparecer um número muito menor (ou maior) que o dinheiro de verdade na conta, sem que nada esteja errado. Por isso o sizing e o gate de capital usam o valor **digitado pelo dono no painel** (`available_cash` / `capital` do slot em `db/live_process.json`), nunca o número que vem do MT5 — sincronizar é manual, 1x/dia quando o dono decide. Não trate `equity`/`balance`/`margin_free` baixos vindos do MT5 como sinal de conta zerada ou de motivo para o robô não entrar.
 
 ## What NOT to do (from AGENTS.md)
 
