@@ -1775,6 +1775,74 @@ em dinheiro.
 > está matando o robô só produz uma geometria mais bem adaptada a um mundo que
 > não existe.
 
+### 4.19 Histerese de nível: substituir a ordem sem olhar PARA ONDE ela vai gasta a mesma fila que ela acabou de conquistar
+
+Mesmo pregão de 2026-09-08, mesmo slot `dt-wdo_grid_reload_maker-wdo@-live` do
+item 1.20 (que já cobre o RELÓGIO do freio de cadência — este item não repete
+aquele, é sobre o DESTINO das ordens que aquele freio deixa passar): o robô
+emitiu **125 linhas `LIMITE` para 22 rodadas de entrada — 103 delas
+`(substitui)`**. Dessas 103: **65 moveram a ordem exatamente 1 tick**, e **49
+devolveram a ordem a um nível que a MESMA rodada já tinha ocupado**. A rodada
+#21 é o retrato, tudo no MESMO segundo de parede (15:00:44 UTC):
+
+5105,0 → 5105,5 → 5105,0 → 5105,5 → 5106,5 (preencheu só na 5ª tentativa, com
+prejuízo de R$5,50).
+
+Nenhuma dessas substituições era idêntica à IMEDIATAMENTE anterior — a guarda
+de no-op do motor (`backtest.intraday.machine._reancoragem_no_mesmo_nivel`)
+não tinha o que pegar; o desperdício era voltar a um nível recém-abandonado,
+não repetir o nível atual. E o custo não é CPU: cada substituição é um
+cancela-e-reenvia REAL na corretora que joga fora a fila já acumulada naquele
+nível — num robô maker a fila é o produto. No pior minuto de RELÓGIO DE PAREDE
+(item 1.20) essas idas e vindas somaram **64 envios**, mais que o dobro do
+teto de 30 de `MAX_ENVIOS_POR_MINUTO`, que não recusa só a ordem — liga
+`disaster_halt` e cala o robô pelo resto do pregão. Veredito do dono:
+"substituiu 3 vezes para o mesmo preço, mesmo stop e mesmo alvo, isso é uso de
+recurso desnecessário, neste caso não deve substituir".
+
+> **Regra:** robô que reposiciona ordem-limite precisa de HISTERESE com DOIS
+> pontos de referência, não um: o nível novo só vale se estiver a pelo menos N
+> ticks do nível PARADO **e** do último nível ABANDONADO na mesma rodada. Sem
+> a banda, deriva de 1 tick não é preço andando — é troca de ponta do book
+> (bid↔ask), e a ordem persegue o próprio spread. Sem a memória do nível
+> abandonado, a banda sozinha não basta: a ordem sai de A, anda a banda
+> inteira até B e volta para A, cada perna passando no portão, e o par se
+> repete para sempre. A memória é POR RODADA — morre no fill/na recusa, senão
+> proíbe o rearme pós-fechamento de voltar ao mesmo nível, que é exatamente a
+> mecânica de reload que dá nome a esse robô. Corolário: um freio de CADÊNCIA
+> (1.20, 4.14) limita QUANTAS substituições saem por minuto; a histerese de
+> NÍVEL limita PARA ONDE elas vão — são portões ortogonais, e um sem o outro
+> deixa passar exatamente o padrão que o outro não enxerga.
+
+**Correção aplicada** (2026-09-08, mesmo dia): `WdoGridReloadMaker.
+reancora_min_ticks` passou de 1 (histerese desligada) para 2, e
+`_pode_reprecar` passou a comparar o nível candidato contra os dois pontos de
+referência (nível parado e último nível abandonado na rodada). Mora em
+`strategy/` — vale idêntica no backtest e ao vivo, por construção. No replay
+da sequência de níveis registrada nesse pregão: **125 envios → 53**, e o pior
+minuto de parede **64 → 21** (30% de folga abaixo do teto de 30).
+`reancora_min_ticks=1` continua existindo só como baseline de medição, nunca
+como configuração de operação.
+
+**Risco residual nomeado dentro do próprio item:** a histerese é MITIGAÇÃO do
+problema do relógio (1.20), não fechamento — um mercado que ande em linha reta
+gera substituições legítimas na mesma velocidade do reprocessamento de fila
+atrasada, e pode reencontrar o teto de 30. As duas saídas conhecidas estão
+documentadas na docstring de `live.intraday_runtime._check_cadencia_de_ordens`:
+(a) o runtime entregar à estratégia um carimbo de parede (o que faria a
+decisão deixar de ser função só do OHLCV, exigindo relógio também do lado que
+vai ser portado para MQL5); (b) coalescer, dentro de um passo do supervisor,
+as `LimitPlaced` que a própria máquina já superou (o que muda o que a
+corretora PODE executar, porque uma ordem intermediária poderia ter preenchido
+antes de ser cancelada — isso é `live/` decidindo, não só relendo relógio).
+Nenhuma foi implementada — as duas mexem em regra estrutural e esperam decisão
+do dono.
+
+> **Pergunte à plataforma nova:** cancelar e reenviar uma ordem-limite faz
+> perder a posição na fila do book? Existe modificação de preço IN-PLACE que
+> preserve prioridade? E qual é o teto de ordens por minuto da plataforma —
+> medido em que relógio? (1.20)
+
 ---
 
 ## Parte 5 — Dados, relógio e instrumento
@@ -3073,6 +3141,17 @@ dinheiro ou meses.
     estava abaixo do breakeven antes da escada começar — a linha que
     resolveria a pergunta em uma conta só apareceu depois de gastar a escada
     inteira. (6.17, decorre de 6.16/pergunta 52)
+54. Cancelar e reenviar uma ordem-limite faz perder a posição na fila do
+    book? Existe modificação de preço IN-PLACE que preserve prioridade? E
+    qual é o teto de ordens por minuto da plataforma — medido em que
+    relógio? Reposicionar uma ordem sem histerese de DOIS pontos (contra o
+    nível PARADO e contra o último nível ABANDONADO na mesma rodada) faz o
+    robô voltar a um nível que ele mesmo acabou de abandonar: 65 de 103
+    substituições moveram 1 tick, 49 devolveram a ordem a um nível já
+    ocupado na mesma rodada, e cada uma foi um cancela-e-reenvia real que
+    jogou fora a fila já conquistada — a pergunta 42 (freio de CADÊNCIA,
+    1.20/1.18) e esta são portões ortogonais: uma limita QUANTAS
+    substituições saem, a outra PARA ONDE elas vão. (4.19, 1.20)
 
 ---
 
