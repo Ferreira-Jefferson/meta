@@ -62,7 +62,7 @@ from strategy.daytrade.base import (
     IntradayOpenPosition,
     IntradayStrategy,
     Side,
-    contracts_from_capital_com_reserva,
+    contracts_from_capital_operacional,
 )
 
 
@@ -921,11 +921,22 @@ class IntradaySessionMachine:
         return tuple(self._resting_children_qty)
 
     def _cap_capital_atual(self) -> int | None:
-        """Teto de contratos que o CAIXA CORRENTE sustenta AGORA, com a
-        reserva de seguranca ja aplicada (`strategy.daytrade.base.
-        contracts_from_capital_com_reserva`) -- `None` quando o teto por
-        capital nao esta configurado (`config.margin_per_contract_brl is
-        None`, comportamento antigo, so' `max_open_contracts` limita).
+        """Teto de contratos que o CAIXA CORRENTE sustenta AGORA
+        (`strategy.daytrade.base.contracts_from_capital_operacional`) --
+        `None` quando o teto por capital nao esta configurado
+        (`config.margin_per_contract_brl is None`, comportamento antigo,
+        so' `max_open_contracts` limita).
+
+        **A pilha de seguranca governa ESCALAR, nao SOBREVIVER** (decisao do
+        dono, 2026-09-08 -- ver a docstring de
+        `contracts_from_capital_operacional` para o bug que isto conserta):
+        o 1o contrato precisa so' da MARGEM CRUA; do 2o em diante vale
+        `margem x buffer x RESERVA_CAIXA_SEGURANCA`, que e' a protecao de
+        exposicao agregada que o incidente de 2026-08-28 motivou e que
+        continua INTACTA. O piso cheio (R$375 no WDO@) e' a INDICACAO de
+        quanto e' preciso para COMECAR, checada 1x no painel
+        (`dashboard.robot_view._capital_minimo_do_robo`) -- nunca uma
+        pre-condicao reavaliada a cada entrada.
 
         Recalculado a CADA chamada, nunca guardado em cache: o caixa muda com
         `self.realized_pnl` (P&L ja fechado, nesta sessao ou em sessoes
@@ -964,7 +975,7 @@ class IntradaySessionMachine:
         if cfg.margin_per_contract_brl is None:
             return None
         caixa_atual = cfg.initial_capital + self.realized_pnl
-        return contracts_from_capital_com_reserva(
+        return contracts_from_capital_operacional(
             caixa_atual, cfg.margin_per_contract_brl, cfg.margin_buffer,
             hard_cap=cfg.max_open_contracts,
         )

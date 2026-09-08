@@ -882,6 +882,58 @@ def contracts_from_capital_com_reserva(
     )
 
 
+def contracts_from_capital_operacional(
+    cash_brl: float,
+    margin_per_contract_brl: float,
+    buffer: float = MARGIN_BUFFER_FUTUROS,
+    reserva: float = RESERVA_CAIXA_SEGURANCA,
+    hard_cap: int | None = None,
+) -> int:
+    """Quantos contratos o caixa sustenta AGORA, num robo JA' EM OPERACAO.
+
+    Difere de `contracts_from_capital_com_reserva` em UMA coisa, e a
+    distincao e' decisao do dono (2026-09-08): a pilha de seguranca
+    (`buffer x reserva`) governa ESCALAR, nao SOBREVIVER.
+
+    - **Manter/abrir o 1o contrato** exige so' a MARGEM CRUA
+      (`margin_per_contract_brl`) -- o que a corretora de fato cobra para
+      segurar 1 contrato. Abaixo disso quem recusa e' a corretora, e nao
+      faz sentido o motor recusar antes.
+    - **Abrir o 2o, 3o, ...** exige a pilha inteira
+      (`margem x buffer x reserva`), igual a `contracts_from_capital_com_
+      reserva`. Foi exposicao AGREGADA (dois contratos simultaneos num
+      caixa de R$300) que zerou a conta em 2026-08-28, e essa protecao
+      fica INTACTA aqui.
+
+    O bug que isto conserta: a pilha inteira estava sendo cobrada TAMBEM
+    para o 1o contrato, a cada entrada, para sempre. Com WDO@ a R$375
+    (`150 x 2,0 x 1,25`, que e' exatamente o piso de partida), UM stop de
+    16 ticks (R$80) derrubava o caixa para R$299 e o motor passava a
+    recusar toda entrada com `capital_insuficiente` -- robo inerte, em
+    silencio, pelo resto do backtest ou da vida ao vivo. Medido em
+    `scripts/daytrade/wdof1_producao_is_oos_2026_09_07.py`: 2 trades em 51
+    pregoes no OOS, 50 pregoes de silencio. O piso NUNCA foi para ser
+    reavaliado a cada entrada -- ele e' a INDICACAO de quanto e' preciso
+    para COMECAR, checada 1x quando o dono manda iniciar
+    (`dashboard.robot_view._capital_minimo_do_robo`).
+
+    `hard_cap` continua sendo teto duro por cima de tudo: um `hard_cap=0`
+    devolve 0 mesmo com caixa de sobra (nao existe "sobrevivencia" acima de
+    um teto que proibe qualquer contrato)."""
+    teto = contracts_from_capital_com_reserva(
+        cash_brl, margin_per_contract_brl, buffer=buffer, reserva=reserva,
+        hard_cap=hard_cap,
+    )
+    if teto >= 1:
+        return teto
+    # Piso de SOBREVIVENCIA: a pilha de seguranca nao autoriza nem 1, mas a
+    # margem crua sim -- 1 contrato, e so' 1.
+    sobrevivencia = contracts_from_capital(
+        cash_brl, margin_per_contract_brl, buffer=1.0, hard_cap=hard_cap,
+    )
+    return min(1, sobrevivencia)
+
+
 # ---------- teto por RISCO por trade (2026-08-29, item 3.9) ----------------
 # `contracts_from_capital_com_reserva` (acima) limita ALAVANCAGEM/margem --
 # quantos contratos a CORRETORA deixa abrir sem chamada de margem. Medido no

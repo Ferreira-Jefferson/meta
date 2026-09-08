@@ -123,13 +123,20 @@ constante:
 1. REPRECIFICACAO -- o item 4.9 reancora a ordem pendente a cada barra, e
    `feed_kind="tick"` faz "cada barra" ser CADA NEGOCIO. Metade dos envios
    acima sao substituicoes (`_pode_reprecar`).
-2. REARME APOS RECUSA -- quando o caixa cai abaixo do piso de 1 contrato
-   (R$375 e' exatamente o piso; ver `RESERVA_CAIXA_SEGURANCA`), o motor
-   recusa toda entrada, `on_order_rejected` zera `pending_side`, e o robo
-   arma ordem NOVA no tick seguinte. 2026-03-04: 25.556 recusas por capital
-   num pregao so'. Esta metade NAO passa pela reprecificacao (nao ha' ordem
-   pendente para reprecar) e por isso tem portao proprio
+2. REARME APOS RECUSA -- quando o caixa cai abaixo do piso de 1 contrato, o
+   motor recusa toda entrada, `on_order_rejected` zera `pending_side`, e o
+   robo arma ordem NOVA no tick seguinte. 2026-03-04: 25.556 recusas por
+   capital num pregao so'. Esta metade NAO passa pela reprecificacao (nao
+   ha' ordem pendente para reprecar) e por isso tem portao proprio
    (`_pode_armar_apos_recusa`).
+
+   ATENCAO ao numero: esse piso e' a MARGEM CRUA (R$150 no WDO@), nao os
+   R$375 da pilha cheia -- ver `strategy.daytrade.base.
+   contracts_from_capital_operacional` (2026-09-08). Ate' aquela data o
+   motor cobrava a pilha inteira a cada entrada, e um unico stop de R$80
+   sobre um caixa que comecou nos R$375 de partida calava o robo para
+   sempre. As contagens de recusa medidas ANTES de 2026-09-08 (inclusive as
+   25.556 acima) foram tiradas sob a regra antiga.
 
 Efeito colateral que NAO era esperado e importa mais que o freio: sem o
 freio o robo quase nao NEGOCIA. Reprecar a cada tick mantem a ordem sempre a

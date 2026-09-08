@@ -1221,6 +1221,71 @@ def test_reproduz_o_incidente_segundo_filho_independente_e_recusado_por_capital(
     assert m.ordens_recusadas_por_capital == 1
 
 
+def test_caixa_entre_margem_crua_e_pilha_cheia_ainda_abre_1_contrato():
+    """2026-09-08, decisao do dono -- a pilha de seguranca governa ESCALAR,
+    nao SOBREVIVER.
+
+    R$299 no WDO@ (margem R$150): a pilha cheia (150 x 2,0 x 1,25 = 375) nao
+    autoriza nem 1 contrato, mas a corretora sustenta 1. Antes desta regra o
+    motor recusava com `capital_insuficiente` -- e como o piso era reavaliado
+    a CADA entrada, um unico stop de R$80 sobre um caixa que comecou em R$375
+    calava o robo em silencio para sempre (medido: 2 trades em 51 pregoes,
+    50 pregoes inertes, `wdof1_producao_is_oos_2026_09_07.py`)."""
+    strat = _Scripted({0: [Enter(side="long", quantity=1, reason="sobrevivencia")]})
+    m = IntradaySessionMachine(strat, _config(
+        initial_capital=299.0, margin_per_contract_brl=150.0))
+    m.begin_session(pd.Timestamp("2026-01-05").date())
+    m.on_closed_bar(_bar(0, 10.0, 10.0, 10.0, 10.0))
+    eventos = m.on_closed_bar(_bar(1, 10.0, 10.0, 10.0, 10.0))
+
+    assert [type(e) for e in eventos] == [PositionOpened]
+    assert m.open_contracts == 1
+    assert m.ordens_recusadas_por_capital == 0
+
+
+def test_sobrevivencia_nao_libera_o_2o_contrato():
+    """O contra-teste do de cima, e a garantia de que o incidente de
+    2026-08-28 continua coberto: com R$299 o robo sustenta 1 contrato, e
+    exatamente 1. A segunda entrada independente -- o mecanismo que zerou a
+    conta de verdade -- continua RECUSADA por capital."""
+    ordem = EnterLimit(side="long", limit_price=9.80, initial_stop=9.00,
+                       initial_target=99.0, quantity=2, split_quantities=(1, 1),
+                       reason="grid_dividido")
+    strat = _Scripted({0: [ordem]})
+    m = IntradaySessionMachine(strat, _config(
+        initial_capital=299.0, margin_per_contract_brl=150.0,
+        limit_fill_capped_by_volume=True,
+    ))
+    m.begin_session(pd.Timestamp("2026-01-05").date())
+    m.on_closed_bar(_bar_vol(0, 10.0, 10.0, 10.0, 10.0, volume=1_000.0))
+    eventos = m.on_closed_bar(_bar_vol(1, 10.0, 10.0, 9.50, 9.90, volume=1_000.0))
+
+    abertas = [e for e in eventos if isinstance(e, PositionOpened)]
+    recusas = [e for e in eventos if isinstance(e, OrderRejected)]
+    assert len(abertas) == 1 and len(recusas) == 1
+    assert recusas[0].reason == "capital_insuficiente"
+    assert recusas[0].cap == 1
+    assert m.open_contracts == 1
+
+
+def test_abaixo_da_margem_crua_continua_recusado_por_capital():
+    """O piso de sobrevivencia e' a margem da CORRETORA, nao 'sem piso'.
+    R$149 no WDO@ nao paga nem 1 contrato -- recusa, como sempre."""
+    strat = _Scripted({0: [Enter(side="long", quantity=1, reason="sem_caixa")]})
+    m = IntradaySessionMachine(strat, _config(
+        initial_capital=149.0, margin_per_contract_brl=150.0))
+    m.begin_session(pd.Timestamp("2026-01-05").date())
+    m.on_closed_bar(_bar(0, 10.0, 10.0, 10.0, 10.0))
+    eventos = m.on_closed_bar(_bar(1, 10.0, 10.0, 10.0, 10.0))
+
+    recusas = [e for e in eventos if isinstance(e, OrderRejected)]
+    assert len(recusas) == 1
+    assert recusas[0].reason == "capital_insuficiente"
+    assert recusas[0].cap == 0
+    assert m.open_contracts == 0
+    assert m.ordens_recusadas_por_capital == 1
+
+
 def test_entrada_a_mercado_acima_do_capital_e_recusada_por_capital():
     """Mesma garantia do teste acima, pelo caminho de `Enter` a mercado
     (`_entrar_a_mercado`) em vez de `EnterLimit` dividida -- o teto por

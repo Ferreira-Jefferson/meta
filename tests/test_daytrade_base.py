@@ -24,6 +24,7 @@ from strategy.daytrade.base import (
     capital_minimo_brl,
     contracts_from_capital,
     contracts_from_capital_com_reserva,
+    contracts_from_capital_operacional,
 )
 
 
@@ -365,3 +366,71 @@ def test_reserva_nunca_devolve_mais_contratos_que_a_versao_pura():
         crua = contracts_from_capital(cash_brl=caixa, margin_per_contract_brl=margem)
         com_reserva = contracts_from_capital_com_reserva(cash_brl=caixa, margin_per_contract_brl=margem)
         assert com_reserva <= crua
+
+
+# ---------- contracts_from_capital_operacional (2026-09-08, decisao do dono:
+# a pilha de seguranca governa ESCALAR, nao SOBREVIVER) ---------------------
+# O piso cheio (`margem x buffer x reserva` = R$375 no WDO@) e' a INDICACAO de
+# quanto e' preciso para COMECAR, checada 1x no painel. Estava sendo cobrado
+# tambem para o 1o contrato, a cada entrada, para sempre -- um stop de R$80
+# sobre R$375 derrubava o caixa para R$299 e calava o robo em silencio.
+
+def test_operacional_mantem_1_contrato_na_faixa_entre_margem_crua_e_pilha_cheia():
+    """O caso que motivou a funcao: R$299 no WDO@ (margem R$150). A pilha
+    cheia nao autoriza nem 1 contrato (piso R$375), mas a corretora sustenta
+    1 (margem crua R$150) -- e' esse contrato que mantem o robo VIVO."""
+    assert contracts_from_capital_com_reserva(cash_brl=299.0, margin_per_contract_brl=150.0) == 0
+    assert contracts_from_capital_operacional(cash_brl=299.0, margin_per_contract_brl=150.0) == 1
+
+
+def test_operacional_nunca_autoriza_o_2o_contrato_pela_margem_crua():
+    """A protecao do incidente de 2026-08-28 fica INTACTA: escalar exige a
+    pilha inteira. R$740 sustentaria 4 contratos pela margem crua e 2 pelo
+    buffer puro, mas so' 1 com buffer x reserva (375/contrato) -- e o
+    operacional tem de concordar com a pilha, nao com a margem."""
+    assert contracts_from_capital(cash_brl=740.0, margin_per_contract_brl=150.0, buffer=1.0) == 4
+    assert contracts_from_capital(cash_brl=740.0, margin_per_contract_brl=150.0) == 2
+    assert contracts_from_capital_operacional(cash_brl=740.0, margin_per_contract_brl=150.0) == 1
+    # e a partir de 2 x 375 ele libera o segundo, igual a versao com reserva
+    assert contracts_from_capital_operacional(cash_brl=750.0, margin_per_contract_brl=150.0) == 2
+
+
+def test_operacional_abaixo_da_margem_crua_devolve_zero():
+    """Abaixo da margem que a corretora cobra nao ha' sobrevivencia nenhuma
+    -- quem recusaria ali e' a propria corretora."""
+    assert contracts_from_capital_operacional(cash_brl=149.99, margin_per_contract_brl=150.0) == 0
+    assert contracts_from_capital_operacional(cash_brl=0.0, margin_per_contract_brl=150.0) == 0
+    assert contracts_from_capital_operacional(cash_brl=-50.0, margin_per_contract_brl=150.0) == 0
+    # exatamente a margem crua ja' sustenta 1 (mesma tolerancia de ponto
+    # flutuante que `contracts_from_capital` aplica)
+    assert contracts_from_capital_operacional(cash_brl=150.0, margin_per_contract_brl=150.0) == 1
+
+
+def test_operacional_respeita_hard_cap_zero():
+    """`hard_cap` e' teto duro por cima de tudo -- nao existe 'sobrevivencia'
+    acima de um teto que proibe qualquer contrato."""
+    assert contracts_from_capital_operacional(
+        cash_brl=1_000_000.0, margin_per_contract_brl=150.0, hard_cap=0,
+    ) == 0
+    assert contracts_from_capital_operacional(
+        cash_brl=299.0, margin_per_contract_brl=150.0, hard_cap=0,
+    ) == 0
+
+
+def test_operacional_e_identico_a_versao_com_reserva_sempre_que_ela_autoriza_1():
+    """A funcao so' pode DIFERIR no ponto em que a pilha cheia devolve 0.
+    Acima disso as duas tem de dar exatamente o mesmo numero, senao existiriam
+    duas regras de escala concorrentes."""
+    margem = 150.0
+    for caixa in (0.0, 100.0, 149.0, 150.0, 299.0, 375.0, 400.0, 750.0, 10_000.0):
+        com_reserva = contracts_from_capital_com_reserva(
+            cash_brl=caixa, margin_per_contract_brl=margem)
+        operacional = contracts_from_capital_operacional(
+            cash_brl=caixa, margin_per_contract_brl=margem)
+        if com_reserva >= 1:
+            assert operacional == com_reserva
+        else:
+            assert operacional in (0, 1)
+            # e nunca mais que a margem crua permite
+            assert operacional <= contracts_from_capital(
+                cash_brl=caixa, margin_per_contract_brl=margem, buffer=1.0)

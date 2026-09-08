@@ -238,7 +238,19 @@ def capital_minimo_para(is_futuro: bool, symbol: str, preco: float | None) -> fl
     robô SUBIA no painel, aparecia operando, e tinha toda ordem recusada por
     `capital_insuficiente` para sempre, em silêncio. Deadlock operacional
     criado pela própria correção do incidente. Um portão que libera o que a
-    camada seguinte recusa é pior que portão nenhum -- ele mente."""
+    camada seguinte recusa é pior que portão nenhum -- ele mente.
+
+    **Este número é uma INDICAÇÃO DE PARTIDA, checada 1x aqui, e NÃO uma
+    pré-condição reavaliada a cada entrada** (decisão do dono, 2026-09-08).
+    Depois que o robô começa, quem governa é
+    `strategy.daytrade.base.contracts_from_capital_operacional`: manter 1
+    contrato exige só a MARGEM CRUA (R$150 no WDO@); a pilha cheia volta a
+    valer para abrir o 2º em diante. O alinhamento descrito no parágrafo
+    acima continua honesto -- o portão daqui nunca libera menos do que a
+    camada seguinte exige --, ele apenas deixou de ser apertado demais do
+    outro lado. Não baixe este número para R$150 achando que "agora bate":
+    ele responde a pergunta *quanto preciso para começar com folga*, que é
+    outra pergunta."""
     from strategy.daytrade.base import (
         MARGIN_BUFFER_FUTUROS, RESERVA_CAIXA_SEGURANCA, capital_minimo_brl,
     )

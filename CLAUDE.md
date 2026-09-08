@@ -113,7 +113,27 @@ Every backtest / sweep starts from the **real** minimum cash to operate the inst
 | Mini-índice (WIN) | `margem × 2` = **R$100 × 2 = R$200** | `contracts_from_capital(cash, margin=100)` |
 | Mini-dólar (WDO) | `margem × 2` = **R$150 × 2 = R$300** | `contracts_from_capital(cash, margin=150)` |
 
-**Sizing de ENTRADA REAL usa `contracts_from_capital_com_reserva`, não `contracts_from_capital`** (2026-08-28, depois do incidente que zerou a conta). Ela empilha `RESERVA_CAIXA_SEGURANCA = 1.25` por cima do buffer — 20% do caixa nunca entra na conta de quantos contratos cabem. Consequência prática, que muda os números da tabela acima na hora de operar de verdade: **WIN precisa de >R$250 e WDO de >R$375** para abrir 1 contrato. Com o mínimo "de tabela" (R$200/R$300) os robôs ficam INERTES — e isso é informação, não bug: na medição os dois já zeravam sozinhos, o mínimo documentado nunca foi suficiente. A reserva só tornou isso visível no backtest em vez de no extrato.
+**Sizing de ENTRADA REAL usa `contracts_from_capital_com_reserva`, não `contracts_from_capital`** (2026-08-28, depois do incidente que zerou a conta). Ela empilha `RESERVA_CAIXA_SEGURANCA = 1.25` por cima do buffer — 20% do caixa nunca entra na conta de quantos contratos cabem. Na prática: **WIN R$250, WDO R$375**.
+
+### O piso de capital é indicação de PARTIDA, nunca condição de continuidade
+
+Esta é a confusão que já custou uma medição inteira, e ela reaparece toda vez que um agente novo lê a tabela acima. **Três números, três empregos diferentes — nunca os trate como um só:**
+
+| Número | WDO@ | O que é | Quando vale |
+|---|---|---|---|
+| `margem` | R$150 | O que a corretora cobra para segurar 1 contrato | **Sempre.** É o piso de SOBREVIVÊNCIA |
+| `× MARGIN_BUFFER_FUTUROS` (2,0) | R$300 | Folga para cobrir uma troca de lado em conta NETTING | Ao ESCALAR (2º contrato em diante) |
+| `× RESERVA_CAIXA_SEGURANCA` (1,25) | **R$375** | Reserva pós-incidente | Ao ESCALAR, e como indicação de PARTIDA |
+
+**A regra (decisão do dono, 2026-09-08):** a pilha de segurança governa **escalar**, não **sobreviver**.
+
+- **R$375 responde "quanto preciso para começar com folga?"** — é o que o painel mostra e checa **uma vez**, quando o dono clica em "Iniciar operação" (`dashboard.robot_view._capital_minimo_do_robo`). Depois disso não é mais observado.
+- **Manter/abrir o 1º contrato exige só a margem crua** (R$150). Abaixo dela quem recusa é a corretora, e não faz sentido o motor recusar antes.
+- **Abrir o 2º, 3º… exige a pilha inteira.** Foi exposição AGREGADA — dois contratos simultâneos num caixa de R$300 — que zerou a conta em 2026-08-28. Essa proteção fica intacta.
+
+Quem faz essa conta é `strategy.daytrade.base.contracts_from_capital_operacional`, e o motor (`IntradaySessionMachine._cap_capital_atual`) chama ela. **Não reintroduza `contracts_from_capital_com_reserva` no caminho de recusa por entrada** achando que é mais seguro: até 2026-09-08 era assim, e o efeito era que um único stop de R$80 sobre um caixa que começou nos R$375 de partida derrubava o caixa para R$299 e calava o robô **em silêncio, para sempre**.
+
+**Corolário na hora de LER um backtest — vale para qualquer robô, não só os de futuro:** antes de tratar um `líquido` como veredito, olhe **quantos trades** e **quantos pregões sem trade** a janela teve. Uma janela em que o robô parou de operar está **censurada**: ela mede a restrição que o parou, não a estratégia. O caso real: WDO F1 no OOS deu "−R$76, win 50%" — parecia edge negativo, eram 2 trades em 51 pregões e 50 pregões de silêncio depois do primeiro stop. E quando o capital inicial é exatamente o piso, comparar IS com OOS não é validação: é comparar dois sorteios sobre quais foram as primeiras operações. Ver item 6.15 de `LICOES_DE_PRODUCAO.md`.
 
 Use `config_for(..., preco_atual=preco_ref)` para ação e `contracts_from_capital(cash, margin_per_contract, buffer=2.0)` para futuro — nunca digitar o número na mão. `enforce_capital_minimo` fica no default do perfil (ligado para ação) pelo mesmo motivo: desligar mede geometria isolada do caixa, que é outra pergunta. A tabela de saída sempre mostra o capital usado (a coluna, ou implícito em `capital final − líquido R$`).
 
