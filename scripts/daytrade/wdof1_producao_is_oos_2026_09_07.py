@@ -49,14 +49,27 @@ risco arredonda pra 0 e o `max(1, ...)` da propria estrategia mantem 1
 contrato enquanto o caixa nao sobra de verdade; ver
 `wdof1_sobrevivencia_capital_baixo_2026_08_29.py`).
 
-## As duas linhas de cada tabela
+## T1 nao e' referencia -- nao meça (decisao do dono, 2026-09-08)
 
-`T2/S16 (producao atual)`: kwargs de `get_daytrade_robot(...)`, sem
-sobrescrever nada -- a config que vai operar dinheiro real.
-`T1/S16 (referencia)`: OS MESMOS kwargs, so' `profit_ticks=1` sobrescrito --
-isola o efeito da troca de alvo (o motivo real foi deslize de execucao,
-nao backtest) sem misturar com o freio de cadencia/reancoragem continua,
-que sao defaults de classe iguais nos dois lados.
+Este script MEDIU T1/S16 ao lado do T2 na primeira rodada. Nao mede mais, e
+nenhum trabalho futuro deve reintroduzi-lo "so' como baseline". A razao nao
+e' preferencia:
+
+**T1 so' existe no backtest.** O alvo de 1 tick e' menor que o deslize que o
+TP nativo sofre na corretora de verdade. Na 1a operacao real do robo
+(entrada 5150,0 / alvo 5150,5 / saida 5150,0) o TP derrapou 1 tick e apagou
+o bruto INTEIRO -- R$0,00 bruto, -R$0,50 de corretagem (item 4.8 de
+`LICOES_DE_PRODUCAO.md`). Com alvo de 1 tick, 1 tick de deslize e' 100% do
+ganho, entao a mesma geometria que o motor pinta como campea entrega
+prejuizo no extrato.
+
+**Consequencia que vale para toda a familia maker:** a varredura de 250
+celulas de `profit_ticks x stop_ticks` que consagrou T1 rodou num motor que
+NAO cobra deslize de TP. Ela nao escolheu a melhor geometria -- escolheu a
+que melhor explora a otimizacao que falta no modelo de preenchimento. Um
+otimo que mora no ponto onde o simulador e' mais otimista que a realidade
+nao e' um otimo; e' o sintoma de um modelo incompleto. Enquanto o motor nao
+cobrar esse deslize, alvo=1 nao e' candidato a nada.
 
 ## Base de dados
 
@@ -89,49 +102,43 @@ referencia) vem depois, por janela.
 
 Uso: `python -u scripts/daytrade/wdof1_producao_is_oos_2026_09_07.py`
 
-## RESULTADO MEDIDO (2026-09-08, base ja corrigida, capital R$375,00)
+## RODADA 1 (2026-09-08) -- INVALIDADA pelo portao de capital, mantida como
+## registro do bug que ela revelou
 
     janela variante         retorno    liquido R$   win%  trades trd/dia  p60  alvo  stop  flat  s/trade  qtd_max
     IS     T2 (producao)  91.961,3%    344.855,00  94,2%   19835   275,5   23 18688  1102    45        0        5
-    IS     T1 (ref.)     113.899,2%    427.122,00  98,8%   28782   399,8   36 28425   357     0        0        5
     OOS    T2 (producao)     -20,3%        -76,00  50,0%       2     0,0    6     1     1     0       50        1
-    OOS    T1 (ref.)      74.331,3%    278.742,50  98,9%   19786   388,0   39 19562   222     2        0        5
 
-LEIA ISTO ANTES DE USAR QUALQUER NUMERO ACIMA:
+A linha OOS acima NAO e' resultado negativo -- e' CENSURA. Ela fez 2 trades
+em 51 pregoes (1 alvo, 1 stop) e parou, porque o motor cobrava a pilha de
+seguranca inteira (`150 x 2,0 x 1,25 = R$375`) a CADA entrada, inclusive
+para o 1o contrato: um stop de R$80 sobre um caixa que comecou nos proprios
+R$375 de partida derrubava o caixa para R$299 e toda entrada passava a ser
+recusada com `capital_insuficiente`, em silencio, pelos 50 pregoes
+restantes.
 
-1. **A linha OOS de producao esta CENSURADA, nao e' um resultado negativo.**
-   Ela fez 2 trades em 51 pregoes -- 1 alvo e 1 stop -- e parou. Nao ha'
-   edge medido ali, nem para bem nem para mal. O mecanismo esta em
-   `wdo_grid_reload_maker` (docstring do modulo, secao "REARME APOS
-   RECUSA"): o piso para abrir 1 contrato e' `150 x 2,0 x 1,25 = R$375,00`
-   e o capital de partida e' EXATAMENTE R$375,00. Um stop custa
-   `16 x 0,5 x 10 = R$80,00`. R$375 - R$76 = R$299 < R$375, entao o motor
-   passa a recusar toda entrada com `capital_insuficiente` e o robo fica
-   inerte pelos 50 pregoes restantes (`pregoes_sem_trade = 50`, `qtd_max`
-   preso em 1 -- ele nunca teve caixa para 2 contratos).
+Isso foi corrigido em 2026-09-08 (commit `297bc6a`,
+`strategy.daytrade.base.contracts_from_capital_operacional`): o piso cheio
+e' INDICACAO DE PARTIDA, checada 1x no painel; depois disso manter 1
+contrato exige so' a margem crua (R$150), e a pilha inteira volta a valer
+para abrir o 2o em diante. **Os numeros acima sao da regra ANTIGA e nao
+descrevem a estrategia** -- a rodada 2, abaixo, e' a que vale.
 
-2. **IS e OOS aqui nao sao duas medidas da mesma coisa; sao duas amostras
-   de UMA moeda.** Comecando no piso exato, o robo precisa acumular R$80
-   de lucro antes do primeiro stop para nao morrer -- a ~R$9,50 liquidos
-   por alvo (2 ticks x R$5 menos corretagem), sao ~9 alvos. Com o win rate
-   de 94,2% medido no IS, `0,942^9 ~= 58%`. O IS ganhou esse sorteio e
-   composto ate' o teto de 5 contratos; o OOS perdeu no segundo trade. A
-   diferenca entre as duas linhas NAO mede degradacao de edge fora da
-   amostra -- mede o resultado de um Bernoulli em cada janela.
+Duas ressalvas que sobrevivem a correcao e valem para qualquer rodada
+deste script:
 
-3. **Os retornos de 4 e 5 digitos sao artefato de composicao sobre um
-   caixa minusculo, nao previsao.** R$375 -> R$345 mil em 72 pregoes sai
-   de reinvestir tudo num robo que satura `max_trades_per_side` e cujo
-   fill maker e' otimista por construcao (`target_fills_as_maker=True`).
-   Servem para comparar T1 contra T2 sob a MESMA regra, nada alem disso.
+- **Retorno de 4-5 digitos e' artefato de composicao sobre caixa minusculo,
+  nao previsao.** R$375 -> R$345 mil em 72 pregoes sai de reinvestir tudo
+  num robo que satura `max_trades_per_side` e cujo fill maker e' otimista
+  por construcao (`target_fills_as_maker=True`). Use valor absoluto por
+  pregao e contagem de trades, nunca o percentual.
+- **Partindo exatamente do piso, IS e OOS nao sao duas medidas da mesma
+  coisa** -- a sequencia das primeiras operacoes domina o resto da janela.
+  Ver item 6.15 de `LICOES_DE_PRODUCAO.md`.
 
-4. **A linha T1 e' INEXEQUIVEL ao vivo, apesar de parecer melhor.**
-   `pior_janela_60s` da' 36 (IS) e 39 (OOS), acima do teto de 30 de
-   `live.intraday_runtime.MAX_ENVIOS_POR_MINUTO` -- ela teria ligado
-   `disaster_halt` e calado o robo. T2 fica em 23 (IS) e 6 (OOS), dentro
-   do teto. A troca T1->T2 foi decidida por deslize de execucao no TP
-   nativo (item 4.8 de LICOES_DE_PRODUCAO.md), e esta medicao mostra que
-   ela ainda traz de brinde a cadencia para dentro do limite.
+## RODADA 2 (2026-09-08, apos `297bc6a`) -- so' T2, regra de capital nova
+
+    (a preencher quando a rodada fechar)
 """
 from __future__ import annotations
 
@@ -303,12 +310,13 @@ def main() -> None:
           "scripts/run_live.py::build_intraday -- ver a coluna qtd_max.\n",
           flush=True)
 
+    # T1 NAO entra (decisao do dono, 2026-09-08 -- ver "T1 nao e' referencia"
+    # no topo do modulo). Medir uma geometria que o motor sabe simular e a
+    # corretora nao sabe executar so' produz uma coluna bonita e enganosa.
     specs = []
     for janela in ("IS", "OOS"):
         specs.append(dict(janela=janela, profit_ticks_override=None,
                            rotulo=f"[{janela}] T2/S16 (producao atual)"))
-        specs.append(dict(janela=janela, profit_ticks_override=1,
-                           rotulo=f"[{janela}] T1/S16 (referencia antiga)"))
 
     n_workers = max(1, min(len(specs), os.cpu_count() or 4))
     print(f"[wdof1_producao_is_oos] capital real R${CAPITAL_REAL_BRL:.2f}, "
@@ -331,8 +339,7 @@ def main() -> None:
 
     for janela in ("IS", "OOS"):
         rotulos = [s["rotulo"] for s in specs if s["janela"] == janela]
-        print(f"\n=== tabela {janela} (producao atual primeiro, depois "
-              "referencia T1/S16) ===")
+        print(f"\n=== tabela {janela} ===")
         print(cabecalho(EXTRAS))
         for rotulo in rotulos:
             print(linha_fmt(resultados[(janela, rotulo)], EXTRAS))

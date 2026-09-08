@@ -137,6 +137,23 @@ Quem faz essa conta é `strategy.daytrade.base.contracts_from_capital_operaciona
 
 Use `config_for(..., preco_atual=preco_ref)` para ação e `contracts_from_capital(cash, margin_per_contract, buffer=2.0)` para futuro — nunca digitar o número na mão. `enforce_capital_minimo` fica no default do perfil (ligado para ação) pelo mesmo motivo: desligar mede geometria isolada do caixa, que é outra pergunta. A tabela de saída sempre mostra o capital usado (a coluna, ou implícito em `capital final − líquido R$`).
 
+## O motor não cobra deslize de TP — alvo de 1 tick está PROIBIDO
+
+**Ordem do dono, 2026-09-08: `profit_ticks=1` (T1) não entra em nenhuma medição do WDO F1 nem da família maker — nem como candidato, nem como baseline, nem como "linha de referência" numa tabela.** Não é preferência de parâmetro. É uma geometria que o motor sabe simular e a corretora não sabe executar.
+
+**O número.** 1ª operação real do robô: entrada 5150,0 → alvo 5150,5 → saída 5150,0. O TP nativo derrapou 1 tick e apagou o bruto inteiro — R$0,00 bruto, −R$0,50 de corretagem. Com alvo de 1 tick, 1 tick de deslize é **100% do ganho**. Item 4.8 de `LICOES_DE_PRODUCAO.md`.
+
+**A parte que importa para quem vai medir qualquer coisa, não só T1:** a varredura de 250 células de `profit_ticks × stop_ticks` que consagrou T1 rodou neste motor, que **não modela deslize no preenchimento do alvo nativo**. Ela não escolheu a melhor geometria — escolheu a que melhor explora a otimização que falta no modelo de preenchimento.
+
+> Um ótimo que mora exatamente no ponto onde o simulador é mais otimista que a realidade não é um ótimo. É o sintoma de um modelo incompleto.
+
+Duas consequências práticas:
+
+1. O "padrão estrutural" daquela varredura (*alvo=1 é o único regime saudável*) **descreve o motor, não o mercado** — não cite como achado de estratégia.
+2. Toda comparação T1×T2 já feita está viciada no mesmo eixo: ela cobra do T2 um custo de execução que não cobra do T1. Inclusive a de 2026-09-04, que concluiu "T2 é pior em todos os eixos".
+
+Produção é **T2/S16**. Enquanto `backtest/intraday/` não cobrar esse deslize, qualquer varredura de `profit_ticks` vai puxar para alvos pequenos pelo mesmo motivo — modelar o deslize é o pré-requisito para essa pergunta voltar a ser respondível, e é trabalho ainda não feito.
+
 ## Testes rodam em paralelo — sempre
 
 `pyproject.toml` fixa `-n auto --dist load` (pytest-xdist). Suite inteira mede 92s serial → 35s paralela nesta máquina, e o ciclo "mede → decide → mede de novo" é o trabalho: suite lenta é o gargalo do projeto. **Todo teste novo obedece duas condições, senão o paralelismo quebra em falha intermitente:**
@@ -160,6 +177,9 @@ FastAPI + Jinja2 templates in `src/dashboard/templates/` (partials in `partials/
 
 ## What NOT to do (from AGENTS.md)
 
+- Medir `profit_ticks=1` (T1) no WDO F1 / família maker — nem como baseline (ver seção do deslize de TP).
+- Ler um `líquido` de backtest sem antes conferir **trades** e **pregões sem trade**: janela onde o robô parou é censurada.
+- Tratar o piso de capital cheio (R$375 no WDO@) como condição de continuidade — ele é indicação de PARTIDA.
 - Add dependencies without justification (project weight matters).
 - Use TA-Lib.
 - Swap SQLite for another DB in this phase.
