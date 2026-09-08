@@ -5418,3 +5418,73 @@ def test_diario_mede_TEMPO_DE_VIDA_e_DESLIZE_da_saida(tmp_path, pregao_aberto):
         "alvo que nao paga o nivel tem de VIRAR alarme, nao so' campo no "
         "payload -- foi o silencio que deixou 8 de 8 passarem em 2026-09-08"
     )
+
+
+def test_alvo_e_fechado_pela_PROTECAO_da_corretora_nunca_a_mercado(tmp_path, pregao_aberto):
+    """Ordem do dono, 2026-09-08: "deve posicionar o target e o stop assim que
+    abre a posicao, nao e' para sair a mercado, a posicao deve ser fechada ou
+    quando bate no alvo, ou quando bate no stop".
+
+    Ate' este dia o motor mandava fechamento A MERCADO tambem no alvo. O custo
+    e' estrutural, nao residual: venda a mercado executa no BID e o spread do
+    WDO e' 1 tick, entao um alvo de 2 ticks entregava no MAXIMO metade -- e
+    entregava -1 tick sempre que o preco nao tinha andado. No pregao de
+    2026-09-08, 14 dos 23 contratos fecharam assim, e a distribuicao realizada
+    (+R$5 x7 / R$0 x3 / -R$5 x11) nao tinha relacao nenhuma com a geometria
+    configurada (+R$10 / -R$80): era so' onde estava o bid.
+
+    Aqui a corretora TEM o TP registrado. A barra toca o alvo, a maquina
+    decide sair -- e nao pode sair NADA para a corretora."""
+    broker = _FakeMT5Broker()
+    barras = [
+        _bar("13:00", 10.00, 10.00, 10.00, 10.00),
+        _bar("13:01", 10.00, 10.00, 9.79, 9.85),   # confirma entrada
+        _bar("13:02", 9.85, 9.95, 9.85, 9.90),     # toca o alvo (9.90)
+    ]
+    rt, _feed = _runtime_live(tmp_path, barras, broker)
+    # A corretora reporta a posicao COM protecao registrada -- e' o que
+    # `place_pending` anexa no mesmo request da entrada (`_alvo_atomico`).
+    broker.posicao = {"side": "long", "price": 9.80, "quantity": 1, "ticket": 77,
+                      "sl": 7.80, "tp": 9.90}
+
+    rt.run_once(now=_agora("13:04:00"))
+
+    assert broker.ordens_a_mercado == [], (
+        "o alvo tem de ser fechado pelo TP registrado na corretora -- mandar "
+        "ordem a mercado por cima paga o spread e entrega menos que o nivel"
+    )
+    assert broker.close_tickets == [], "nenhum fechamento pode ter sido enviado"
+    assert rt.machine.position is not None, (
+        "enquanto a corretora nao executar o TP, a posicao continua aberta na "
+        "maquina -- a proxima barra reavalia"
+    )
+    assert rt._snapshot.close_refusal_count == 0, (
+        "esperar o nivel ser tocado e' o funcionamento NORMAL; contar como "
+        "recusa travaria o robo em poucos segundos"
+    )
+    assert rt._snapshot.disaster_halt is False
+
+
+def test_posicao_SEM_protecao_registrada_ainda_fecha_a_mercado(tmp_path, pregao_aberto):
+    """A regra acima nao pode abrir o buraco do incidente de 2026-08-28, em que
+    a posicao ficou com `sl=0.0, tp=0.0` na corretora por HORAS.
+
+    Se o nivel nao esta' registrado, esperar por ele deixaria a posicao NUA
+    para sempre. Sem protecao, fecha a mercado: preco pior, mas fechado."""
+    broker = _FakeMT5Broker()
+    broker.preco_de_saida = 9.88
+    barras = [
+        _bar("13:00", 10.00, 10.00, 10.00, 10.00),
+        _bar("13:01", 10.00, 10.00, 9.79, 9.85),
+        _bar("13:02", 9.85, 9.95, 9.85, 9.90),
+    ]
+    rt, _feed = _runtime_live(tmp_path, barras, broker)
+    broker.posicao = {"side": "long", "price": 9.80, "quantity": 1, "ticket": 77,
+                      "sl": 0.0, "tp": 0.0}   # desprotegida
+
+    rt.run_once(now=_agora("13:04:00"))
+
+    assert len(broker.ordens_a_mercado) == 1, (
+        "sem nivel registrado na corretora nao ha o que esperar -- tem de fechar"
+    )
+    assert rt.machine.position is None

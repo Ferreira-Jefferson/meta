@@ -2038,7 +2038,36 @@ class IntradaySessionMachine:
             # tenham fechado por `already_filled_at`) -- coerente com `qty`
             # so' divergir de `position.quantity` quando `already_filled_at`
             # esta' setado (guarda acima).
-            exec_px = float(self.execution.exit_market(position, exit_ts, reason)["price"])
+            #
+            # 2026-09-08, ORDEM DO DONO -- o paragrafo acima descreve o que
+            # este ramo FAZIA e nao faz mais: "deve posicionar o target e o
+            # stop assim que abre a posicao, nao e' para sair a mercado, a
+            # posicao deve ser fechada ou quando bate no alvo, ou quando bate
+            # no stop". ALVO e STOP agora sao fechados pela protecao
+            # REGISTRADA NA CORRETORA (o SL/TP que viaja no mesmo request da
+            # entrada, ver `_alvo_atomico`/`_ensure_protecao` no runtime), e
+            # este metodo so' CONFIRMA o preco real -- ver a docstring de
+            # `exit_por_protecao` para o custo medido do que havia antes
+            # (spread de 1 tick em toda saida; 14 dos 23 contratos de
+            # 2026-09-08 fecharam assim).
+            #
+            # Saida DIVIDIDA (`exit_split_unit`) fica de fora: la' nao ha TP
+            # da corretora de proposito (dois fechamentos do tamanho total
+            # numa conta NETTING inverteriam o lado -- ver `_alvo_atomico`),
+            # quem posiciona as limites REAIS e' `_resolve_live_split_exit`.
+            # FORCED_FLATTEN/MANUAL/SIGNAL tambem ficam a MERCADO: para eles
+            # nao existe ordem registrada, e o flatten do fim do pregao e' o
+            # que garante que a posicao nao vira overnight.
+            fecha_pela_protecao = (
+                reason in (IntradayExitReason.TARGET, IntradayExitReason.STOP)
+                and position.exit_split_unit is None
+                and hasattr(self.execution, "exit_por_protecao")
+            )
+            if fecha_pela_protecao:
+                exec_px = float(
+                    self.execution.exit_por_protecao(position, exit_ts, reason)["price"])
+            else:
+                exec_px = float(self.execution.exit_market(position, exit_ts, reason)["price"])
         fees = fees_round_trip_brl(qty, position.entry_price, exec_px, cfg.costs)
         trade = IntradayTrade(
             symbol=self.strategy.symbol,

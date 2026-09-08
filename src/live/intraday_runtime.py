@@ -2648,9 +2648,9 @@ class IntradayLiveRuntime:
             # `_consume` para o motivo (uma divergencia de dado, `FALHA_
             # ALTO`, precisa propagar e travar o passo, nao virar retry
             # silencioso).
-            if erro.kind != BrokerExecutionError.FECHAMENTO_RECUSADO:
+            if erro.kind not in self._KINDS_QUE_REAVALIAM:
                 raise
-            self._registra_falha_de_fechamento(conn, account, session, erro)
+            self._registra_espera_ou_falha(conn, account, session, erro)
             return
         for evento in eventos:
             self._apply(conn, account, evento, bar_sintetica)
@@ -2663,6 +2663,36 @@ class IntradayLiveRuntime:
             self._aplica_cancelamento(conn, account, self.executor.cancel_stale_refs(
                 self._snapshot.pending_entry_refs, ts=agora))
         self._drena_orfas_de_saida(conn, account, agora)
+
+    #: Os dois `kind` que a maquina pode levantar sem que o passo precise
+    #: travar: a posicao continua aberta e a proxima barra reavalia. Ver
+    #: `BrokerExecutionError` para o que cada um significa -- e por que
+    #: `AGUARDANDO_PROTECAO` NAO pode contar como recusa.
+    _KINDS_QUE_REAVALIAM = (
+        BrokerExecutionError.FECHAMENTO_RECUSADO,
+        BrokerExecutionError.AGUARDANDO_PROTECAO,
+    )
+
+    def _registra_espera_ou_falha(self, conn, account: AccountState, session: date,
+                                  erro: BrokerExecutionError) -> None:
+        """Despacha entre "estou esperando o nivel ser tocado" (normal) e "a
+        corretora RECUSOU meu fechamento" (alarme).
+
+        Existe desde 2026-09-08, quando alvo e stop passaram a ser fechados
+        pela protecao registrada na corretora (`exit_por_protecao`). Antes,
+        todo `BrokerExecutionError` capturado aqui era recusa -- e recusa
+        conta para `MAX_CLOSE_REFUSALS_BEFORE_HALT`. Esperar o alvo ser
+        tocado e' o funcionamento NORMAL e acontece a cada barra enquanto a
+        posicao vive: contar isso como recusa travaria o robo em poucos
+        segundos, transformando o comportamento correto em incidente (mesmo
+        erro de categoria que `_check_atividade_estranha` evita)."""
+        if erro.kind == BrokerExecutionError.AGUARDANDO_PROTECAO:
+            # Zera a contagem de recusas: chegar aqui prova que o caminho de
+            # saida esta' funcionando -- a posicao so' nao fechou porque o
+            # nivel nao foi tocado. Sem log: seria uma linha por barra.
+            self._snapshot.close_refusal_count = 0
+            return
+        self._registra_falha_de_fechamento(conn, account, session, erro)
 
     def _registra_falha_de_fechamento(self, conn, account: AccountState, session: date,
                                       erro: BrokerExecutionError) -> None:
@@ -2815,9 +2845,9 @@ class IntradayLiveRuntime:
             # logo abaixo: se o invariante mudar um dia, este caminho ja
             # esta protegido sem precisar lembrar de voltar aqui).
             self._aplica_eventos_parciais_antes_de_falhar(conn, account, erro, ultima)
-            if erro.kind != BrokerExecutionError.FECHAMENTO_RECUSADO:
+            if erro.kind not in self._KINDS_QUE_REAVALIAM:
                 raise
-            self._registra_falha_de_fechamento(conn, account, session, erro)
+            self._registra_espera_ou_falha(conn, account, session, erro)
             self._snapshot.last_bar_ts = ultima.ts
             return StepReport("daytrade_buraco_recusa_fechamento", session,
                               detail={"parado_segundos": round(parado_ha, 1),
@@ -3162,10 +3192,10 @@ class IntradayLiveRuntime:
                 # dele nunca mais se chega aqui.
                 p_abertas, p_fechadas = self._aplica_eventos_parciais_antes_de_falhar(
                     conn, account, erro, bar)
-                if erro.kind != BrokerExecutionError.FECHAMENTO_RECUSADO:
+                if erro.kind not in self._KINDS_QUE_REAVALIAM:
                     raise
                 self._snapshot.last_bar_ts = bar.ts
-                self._registra_falha_de_fechamento(conn, account, session, erro)
+                self._registra_espera_ou_falha(conn, account, session, erro)
                 detalhe = {"barras": len(barras), "entradas": abertas + p_abertas,
                           "saidas": fechadas + p_fechadas,
                           "modo": self.execution_mode, "erro": str(erro)}

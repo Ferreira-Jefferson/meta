@@ -85,6 +85,12 @@ class BrokerExecutionError(RuntimeError):
 
     FECHAMENTO_RECUSADO = "fechamento_recusado"
     FALHA_ALTO = "falha_alto"
+    #: A maquina decidiu alvo/stop e a protecao REGISTRADA NA CORRETORA
+    #: ainda nao fechou a posicao. NAO e' recusa nem erro -- e' o estado
+    #: normal de esperar o nivel ser tocado. Quem captura mantem a posicao
+    #: aberta e reavalia na proxima barra, SEM contar como recusa (ver
+    #: `MAX_CLOSE_REFUSALS_BEFORE_HALT`) e sem alarme.
+    AGUARDANDO_PROTECAO = "aguardando_protecao"
 
     def __init__(self, *args, orphan_refs: Optional[list[str]] = None,
                 kind: str = FALHA_ALTO):
@@ -162,6 +168,11 @@ class MT5IntradayExecution:
         # agora (`None` = nenhuma posicionada) e a quantidade da posicao ANTES
         # dela ser posicionada (baseline para medir o quanto encolheu).
         self.pending_exit_order: Optional[Order] = None
+        # Setado por `exit_por_protecao` quando ela teve de cair para o
+        # fechamento a MERCADO porque a corretora nao tinha o nivel
+        # registrado. O runtime le e alarma -- posicao sem protecao e' o
+        # incidente de 2026-08-28, nao pode passar em silencio.
+        self.protecao_ausente_no_fechamento: Optional[tuple] = None
         self._exit_baseline_qty: float = 0.0
         # Recibos do ultimo fill de entrada e da ultima saida, para o runtime
         # gravar `broker_ref`/`fees` REAIS no diario em vez de `None`. A
@@ -533,6 +544,83 @@ class MT5IntradayExecution:
         self._exit_baseline_qty = qtd_atual
         preco = self.pending_exit_order.limit_price if self.pending_exit_order is not None else None
         return {"price": preco, "quantity": int(round(diminuiu))}
+
+    def exit_por_protecao(self, position, ts: pd.Timestamp,
+                          reason: IntradayExitReason) -> dict:
+        """Alvo/stop: NAO manda ordem nenhuma -- confirma que a protecao
+        REGISTRADA NA CORRETORA ja fechou a posicao, e devolve o preco que
+        ela executou.
+
+        Ordem do dono, 2026-09-08, depois do pregao que perdeu R$116,00:
+        "deve posicionar o target e o stop assim que abre a posicao, nao e'
+        para sair a mercado, a posicao deve ser fechada ou quando bate no
+        alvo, ou quando bate no stop".
+
+        O que isto substitui, e por que era errado. Ate' hoje `_close_
+        position` mandava `exit_market` tambem no ALVO (ver o comentario que
+        ficou la'), com a justificativa de que uma saida limitada poderia nao
+        preencher e deixar a posicao contra o proprio stop. Ninguem pediu
+        isso, e o custo medido e' estrutural, nao residual: venda a mercado
+        executa no BID, compra no ASK, e o spread do WDO e' 1 tick. Com alvo
+        de 2 ticks, sair a mercado entrega no MAXIMO metade do alvo -- e
+        entrega -1 tick sempre que o preco nao andou. No pregao de 2026-09-08
+        foram 14 fechamentos a mercado dos 23 contratos, e a distribuicao
+        realizada (+R$5,00 x7 / R$0,00 x3 / -R$5,00 x11) nao tem relacao
+        nenhuma com a geometria configurada (alvo +R$10,00 / stop -R$80,00):
+        era so' onde estava o bid quando a ordem saiu.
+
+        Alem do custo, era `live/` DECIDINDO -- a estrategia declarou alvo
+        maker (`EnterLimit.initial_target`, que viaja no mesmo request da
+        entrada e vira TP da corretora, ver `_alvo_atomico`), e a execucao
+        trocava por outra coisa. Regra 6 do AGENTS.md.
+
+        Quem fecha agora e' a corretora, no nivel exato que a estrategia
+        pediu. Este metodo so' OLHA:
+          - posicao ainda aberta la' -> `AGUARDANDO_PROTECAO`. A maquina
+            mantem a posicao e reavalia na proxima barra. Nao e' erro.
+          - posicao sumiu -> confirma o deal no historico
+            (`_resolve_exit_from_history`, preco REAL) e devolve.
+          - sumiu mas o deal ainda nao apareceu -> `AGUARDANDO_PROTECAO`
+            tambem: "nao sei" nunca autoriza um preco (item 1.6).
+
+        NAO cobre `FORCED_FLATTEN`/`MANUAL`/`SIGNAL`: para esses nao existe
+        ordem registrada na corretora, e o fechamento do fim do pregao
+        continua sendo `exit_market` -- e' ele que garante que a posicao
+        morre no dia mesmo que nenhum nivel seja tocado."""
+        real = self._read_position()
+        if real is not None:
+            # SO' espera se a protecao REALMENTE estiver registrada. Esperar
+            # por um nivel que a corretora nao tem deixaria a posicao NUA
+            # esperando para sempre -- e' exatamente o estado do incidente de
+            # 2026-08-28 (posicao com sl=0.0/tp=0.0 por HORAS, atravessando 3
+            # reinicios). `_ensure_protecao` tenta registrar a cada passo e
+            # grita quando nao consegue; aqui e' a segunda linha: sem nivel
+            # registrado, fecha a mercado, que e' pior preco mas e' fechado.
+            nivel = (real.get("tp") if reason == IntradayExitReason.TARGET
+                     else real.get("sl"))
+            if float(nivel or 0.0) > 0.0:
+                raise BrokerExecutionError(
+                    f"{reason.value} de {self.symbol}: a corretora ainda reporta a "
+                    f"posicao aberta ({real.get('quantity')} @ {real.get('price')}, "
+                    f"sl={real.get('sl')} tp={real.get('tp')}). Quem fecha e' a "
+                    "protecao registrada, no nivel pedido -- nao mando ordem a "
+                    "mercado por cima (ordem do dono, 2026-09-08). Reavalio na "
+                    "proxima barra.",
+                    kind=BrokerExecutionError.AGUARDANDO_PROTECAO,
+                )
+            self.protecao_ausente_no_fechamento = (reason.value, self.symbol)
+            return self.exit_market(position, ts, reason)
+        resolvido = self._resolve_exit_from_history()
+        if resolvido is not None:
+            self.last_exit_order = None
+            return resolvido
+        raise BrokerExecutionError(
+            f"{reason.value} de {self.symbol}: a corretora nao reporta mais a "
+            "posicao, mas o historico de deals ainda nao confirma o preco real "
+            "da saida -- nao vou aproximar pelo nivel teorico. Reavalio na "
+            "proxima barra.",
+            kind=BrokerExecutionError.AGUARDANDO_PROTECAO,
+        )
 
     def exit_market(self, position, ts: pd.Timestamp, reason: IntradayExitReason) -> dict:
         """Fecha a posicao A MERCADO e devolve `{"price", "order"}` -- o
