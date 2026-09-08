@@ -470,6 +470,64 @@ WDO F1 o bastante para nunca mais tocar este teto nos 126 pregões testados
 outra correção. O freio em si continua sem declarar no código contra qual
 cadência foi calibrado, e o caminho de shadow continua sem exercitá-lo.
 
+### 1.19 O freio de ruína não pode confiar num número que a própria fonte já disse não sincronizar — travou o pregão com o caixa do painel positivo — CORRIGIDO 2026-09-08
+
+Medido ao vivo em 2026-09-08, 10:06:34 BRT: robô PMAM3 (day trade, slot
+real), segunda barra do pregão, ZERO ordens enviadas.
+`IntradayLiveRuntime._check_freio_duro` — escrito depois do incidente da
+Parte 0, especificamente para impedir ruína — disparou:
+
+> `ERROR daytrade: FREIO DURO em PMAM3: equity R$ -3.60 / margem livre R$ -3.60 -- conta em risco de ruina. Parando de abrir ordem nova e tentando zerar o que estiver aberto. Nao volta sozinho -- precisa de intervencao (ver incidente 2026-08-28).`
+
+O número veio de `MetaTrader5.account_info()` (equity/margin_free). Às
+09:19:36 do MESMO dia o dono tinha digitado o caixa no painel: `caixa
+definido manualmente: 0.00 → 30.00`. O robô travou o pregão inteiro por
+causa de −R$3,60 reportados pelo terminal, numa conta cujo ledger
+declarado tinha R$30,00 — e o freio, uma vez disparado, é persistido na
+sessão e não volta sozinho (só reseta no pregão seguinte). Custo: 100% do
+pregão perdido, robô intacto.
+
+O agravante é que isso já era sabido e estava escrito. O `CLAUDE.md` do
+projeto já dizia, textualmente, que o saldo do MT5 (Rico) "não é confiável
+como fonte de capital" e que `equity`/`balance`/`margin_free` baixos não
+são "sinal de conta zerada ou motivo para o robô não entrar" — achado
+anterior a este incidente. O freio de ruína e o portão de envio por margem
+foram escritos DEPOIS dessa descoberta e mesmo assim leram esses campos,
+porque eram o único lugar do sistema que enxergava a conta AGREGADA (todos
+os slots, mesmo login MT5) — e essa qualidade real fez esquecer que a base
+do número era podre.
+
+> **Regra:** um número que a própria fonte declara não confiável não pode
+> ser GATILHO de nada — nem de freio, nem de recusa de ordem, nem de
+> dimensionamento. Ele só serve para DIAGNÓSTICO (virar linha no diário
+> dizendo que está sendo ignorado). Ao herdar um estado de conta de uma
+> plataforma, separe os campos em dois grupos ANTES de escrever qualquer
+> regra em cima deles: os que DERIVAM DO SALDO (equity, balance, margem
+> livre — herdam qualquer dessincronização com a corretora) e os que saem
+> das POSIÇÕES REAIS (margem comprometida, posições abertas, permissões de
+> negociação — não passam pelo saldo). Só o segundo grupo pode decidir.
+> "Quanto eu tenho" vem do ledger declarado pelo dono; "quanto já está
+> comprometido" vem da corretora. Corolário que vale para qualquer freio:
+> um freio de segurança que se alimenta de um número não confiável não é
+> conservador — é uma forma NOVA de falha, e uma que falha em silêncio para
+> o lado de não operar (o mesmo modo de falha do piso de capital calando o
+> robô, item 3.10).
+> **Pergunte à plataforma nova:** quais campos do estado de conta desta
+> plataforma derivam do SALDO (e portanto herdam qualquer dessincronização
+> com a corretora) e quais saem das posições/margem reais? A corretora
+> garante que o saldo exibido na plataforma é o saldo de verdade?
+
+**Correção aplicada:** `src/live/intraday_runtime.py` — o gatilho de
+ruína do freio duro passou a ser `_caixa_operacional_brl()` (o
+`initial_capital` digitado no painel + realizado + posição marcada a
+mercado — a MESMA conta que já dimensiona lote), e o portão de envio
+`_check_margem_da_conta` passou a somar a margem COMPROMETIDA da conta
+(`account_info().margin`, que não passa pelo saldo) com o que a ordem
+exige, comparando o total contra o caixa do painel, em vez de olhar
+`margin_free`. O saldo do MT5 virou uma linha `warn` de diário, uma por
+pregão: "IGNORANDO o número do terminal". Suíte inteira verde (1.721
+testes).
+
 ---
 
 ## Parte 2 — Estado, reinício e duplicidade
@@ -2604,6 +2662,16 @@ dinheiro ou meses.
     como degradação de edge, e ninguém percebe que IS e OOS deixaram de ser
     comparáveis — viraram duas amostras de um mesmo sorteio, não duas
     medidas de generalização. (6.15)
+48. Quais campos do estado de conta que a plataforma expõe derivam do
+    SALDO (e portanto herdam qualquer dessincronização entre ela e a
+    corretora) e quais saem das posições/margem reais? A corretora garante
+    que o saldo exibido na plataforma é o saldo de verdade? Um freio de
+    segurança ou portão de margem alimentado por um campo do primeiro
+    grupo não é conservador — é um modo de falha novo, que trava a
+    operação em silêncio mesmo com o caixa do dono positivo. As perguntas
+    15 (3.3, margem exigida x margem livre) e 16 (3.13, trava entre
+    processos) já assumem que o número consultado é confiável; esta
+    pergunta vem ANTES das duas — descobre se ele é. (1.19)
 
 ---
 
