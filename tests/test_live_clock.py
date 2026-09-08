@@ -7,7 +7,7 @@ futura consiga auditar sem re-derivar tudo do zero.
 """
 from __future__ import annotations
 
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timezone
 
 import pytest
 
@@ -22,6 +22,7 @@ from live.clock import (
     is_trading_day,
     next_session,
     phase,
+    phase_em_janela,
     previous_session,
     seconds_until_active_window,
     session_date,
@@ -363,3 +364,82 @@ def test_sessions_between_com_extremos_em_fim_de_semana() -> None:
     # extremos que nao sao pregao simplesmente nao entram na lista
     dias = sessions_between(date(2026, 8, 15), date(2026, 8, 16))  # sab, dom
     assert dias == []
+
+
+# ---------- phase_em_janela: o pregao do INSTRUMENTO, nao o da acao --------
+# 2026-09-08: `run_once` gateava o robo de FUTURO com `phase()`, que so'
+# conhece o calendario de ACAO. O robo ficava `idle` das 09:00 as 10:00 e
+# parava as 17:00, enquanto o backtest media 09:00..18:29 -- 149 min, 26,2%
+# do pregao, incluindo a 1a hora (pico de atividade do WDO@).
+
+_ABERTURA_FUTURO = time(12, 0)   # 09:00 BRT
+_FIM_FUTURO_WDO = time(21, 30)   # 18:30 BRT (fecho medido 18:29)
+
+
+def _utc(h: int, m: int, d: date = date(2026, 9, 8)) -> datetime:
+    return datetime(d.year, d.month, d.day, h, m, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize("h,m,esperado", [
+    (11, 40, SessionPhase.CLOSED),    # 08:40 BRT -- antes do leilao
+    (11, 46, SessionPhase.PRE_OPEN),  # 08:46 BRT -- leilao (15min de lead)
+    (12, 0, SessionPhase.OPEN),       # 09:00 BRT -- abertura do futuro
+    (16, 0, SessionPhase.OPEN),       # 13:00 BRT -- meio do pregao
+    (21, 29, SessionPhase.OPEN),      # 18:29 BRT -- ultimo minuto medido
+    (21, 31, SessionPhase.POST_CLOSE),  # 18:31 BRT -- depois do corte
+])
+def test_phase_em_janela_cobre_o_pregao_de_futuro(h, m, esperado) -> None:
+    assert phase_em_janela(_utc(h, m), _ABERTURA_FUTURO, _FIM_FUTURO_WDO) == esperado
+
+
+@pytest.mark.parametrize("h,m", [(12, 0), (12, 44), (20, 0), (21, 29)])
+def test_phase_em_janela_abre_onde_o_relogio_de_acao_diz_fechado(h, m) -> None:
+    """O bug, em forma de teste: nesses instantes o pregao de FUTURO esta
+    aberto e o de ACAO nao. Se as duas funcoes concordarem aqui, a janela
+    do futuro voltou a ser a da acao."""
+    momento = _utc(h, m)
+    assert phase_em_janela(momento, _ABERTURA_FUTURO, _FIM_FUTURO_WDO) == SessionPhase.OPEN
+    assert phase(momento) != SessionPhase.OPEN
+
+
+def test_phase_em_janela_fora_de_dia_de_pregao_e_fechado() -> None:
+    """Sabado continua fechado por mais que a hora caia dentro da janela --
+    o calendario manda antes do relogio."""
+    sabado = date(2026, 9, 5)
+    assert not is_trading_day(sabado)
+    assert phase_em_janela(_utc(16, 0, sabado), _ABERTURA_FUTURO,
+                           _FIM_FUTURO_WDO) == SessionPhase.CLOSED
+
+
+def test_phase_em_janela_nao_desloca_com_horario_de_verao_dos_eua() -> None:
+    """O motivo de a funcao existir: a acao anda 1h entre os regimes de DST
+    americano e o futuro NAO (`core.b3_session`, docstring). Comparo um dia
+    dentro do DST dos EUA (setembro) com um fora (janeiro) -- a janela do
+    futuro tem de dar a MESMA fase na mesma hora UTC."""
+    for h, m in ((12, 0), (20, 30), (21, 29)):
+        dentro = phase_em_janela(_utc(h, m, date(2026, 9, 8)),
+                                 _ABERTURA_FUTURO, _FIM_FUTURO_WDO)
+        fora = phase_em_janela(_utc(h, m, date(2027, 1, 11)),
+                               _ABERTURA_FUTURO, _FIM_FUTURO_WDO)
+        assert dentro == fora == SessionPhase.OPEN
+
+
+def test_phase_em_janela_usa_a_janela_do_perfil_do_simbolo() -> None:
+    """A janela nao pode ser digitada em `live/` -- ela vem do PERFIL, que e'
+    a mesma fonte que o backtest le (`profiles.py`: um numero declarado em
+    dois lugares e' um numero que vai divergir)."""
+    from backtest.intraday.profiles import profile_for
+
+    for simbolo in ("WDO@", "WIN@"):
+        perfil = profile_for(simbolo)
+        assert perfil.session_start_time == _ABERTURA_FUTURO, simbolo
+        assert phase_em_janela(_utc(12, 30), perfil.session_start_time,
+                               perfil.session_end_time) == SessionPhase.OPEN, simbolo
+
+
+def test_acao_nao_declara_janela_propria_e_segue_no_relogio_de_acao() -> None:
+    """Contra-teste: o caminho de ACAO nao pode ter mudado. Perfil de acao
+    nao declara `session_start_time`, entao quem consulta cai em `phase()`."""
+    from backtest.intraday.profiles import profile_for
+
+    assert profile_for("PMAM3").session_start_time is None

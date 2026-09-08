@@ -991,19 +991,23 @@ class _ScriptedDaytrade(IntradayStrategy):
         return list(self.script.get(self._i, []))
 
 
-def _runtime_live_scripted(tmp_path, broker, script: dict[int, list]):
+def _runtime_live_scripted(tmp_path, broker, script: dict[int, list],
+                           initial_capital: float = 100.0):
+    """`initial_capital` e' o LEDGER DO PAINEL do slot -- o numero que o dono
+    digitou. Desde 2026-09-08 e' ele (nunca o saldo do MT5) que decide ruina
+    no freio duro e quanto o portao de margem tem para comprometer."""
     strat = _ScriptedDaytrade(SYMBOL, script)
     feed = _ScriptedBarFeed([], [])
     rt = IntradayLiveRuntime(
         slot=SLOT, strategy=strat, config=_config(),
         bar_feed=feed, broker=broker,
         db_path=tmp_path / "live_intraday.sqlite",
-        execution_mode="live", initial_capital=100.0,
+        execution_mode="live", initial_capital=float(initial_capital),
     )
     rt.ensure_account()
     with store.live_journal(rt.db_path) as conn:
         acc = store.load_account(conn, SLOT.id)
-        acc.cash = 100.0
+        acc.cash = float(initial_capital)
         store.save_account(conn, acc)
     return rt, feed
 
@@ -3848,11 +3852,17 @@ def test_live_protecao_reenviada_apos_restart_quando_corretora_perdeu_sl_tp(
 # A conta chegou a equity NEGATIVA (-R$298,60) com o processo CONTINUANDO a
 # tentar abrir/fechar ordem, sem freio nenhum.
 
-def test_live_freio_duro_equity_negativa_bloqueia_e_tenta_zerar(tmp_path, pregao_aberto):
+def test_live_freio_duro_caixa_do_painel_zerado_bloqueia_e_tenta_zerar(tmp_path, pregao_aberto):
+    """Ruina = o CAIXA DO PAINEL acabou (o que o dono digitou + o realizado +
+    a posicao marcada a mercado), nunca o saldo do MT5 -- ver
+    `_caixa_operacional_brl`."""
     broker = _FakeMT5Broker()
     rt, feed = _abre_posicao_scriptada(tmp_path, broker)
 
-    broker.risco = {"equity": -298.60, "margin_free": -150.0}
+    # O slot tem R$100 digitados; o robo ja realizou -R$100. O teto de perda
+    # do PREGAO nao pega este caso (ele olha `session_pnl`, que segue zerado)
+    # -- e' o freio de ruina que tem de pegar.
+    rt.machine.realized_pnl = -100.0
     broker.ultimo_preco = 9.50
     passos = rt.run_once(now=_agora("13:03:00"))
 
@@ -3874,7 +3884,7 @@ def test_live_freio_duro_persiste_no_proximo_passo_sem_reabrir(tmp_path, pregao_
     tenha sido zerada."""
     broker = _FakeMT5Broker()
     rt, feed = _abre_posicao_scriptada(tmp_path, broker)
-    broker.risco = {"equity": -298.60, "margin_free": -150.0}
+    rt.machine.realized_pnl = -100.0
     rt.run_once(now=_agora("13:03:00"))
     assert rt._snapshot.disaster_halt is True
 
@@ -3885,17 +3895,53 @@ def test_live_freio_duro_persiste_no_proximo_passo_sem_reabrir(tmp_path, pregao_
     assert rt.machine.position is None
 
 
-def test_live_freio_duro_nao_dispara_com_equity_positiva(tmp_path, pregao_aberto):
-    """Regressao do caminho feliz: equity/margem positivas nao acionam nada."""
+def test_live_freio_duro_nao_dispara_com_caixa_positivo(tmp_path, pregao_aberto):
+    """Regressao do caminho feliz: caixa do painel positivo nao aciona nada."""
     broker = _FakeMT5Broker()
     rt, feed = _abre_posicao_scriptada(tmp_path, broker)
 
-    broker.risco = {"equity": 500.0, "margin_free": 200.0}
+    broker.risco = {"equity": 500.0, "margin_free": 200.0, "margin": 0.0}
     feed._barras.append(_bar("13:03", 10.00, 10.00, 10.00, 10.00))
     rt.run_once(now=_agora("13:03:00"))
 
     assert rt._snapshot.disaster_halt is False
     assert rt.machine.position is not None
+
+
+def test_live_freio_duro_ignora_saldo_negativo_do_MT5_com_caixa_no_painel(
+    tmp_path, pregao_aberto
+):
+    """REGRESSAO (2026-09-08, PMAM3): o terminal reportou `equity -3,60 /
+    margem livre -3,60` num slot com R$30,00 digitados no painel, e o freio
+    duro travou o pregao inteiro de um robo intacto -- 2a barra do dia,
+    nenhuma ordem enviada, "conta em risco de ruina".
+
+    O saldo do MT5 da Rico NAO acompanha o dinheiro real da corretora (a
+    propria corretora confirma que nao ha sincronizacao) -- ver CLAUDE.md.
+    Ele nao pode travar nada: vira UMA linha de aviso no diario e o robo
+    segue operando pelo ledger do painel."""
+    broker = _FakeMT5Broker()
+    rt, feed = _abre_posicao_scriptada(tmp_path, broker)
+
+    broker.risco = {"equity": -3.60, "margin_free": -3.60, "balance": -3.60,
+                    "margin": 0.0}
+    feed._barras.append(_bar("13:03", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:03:00"))
+    feed._barras.append(_bar("13:04", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:04:00"))
+
+    assert rt._snapshot.disaster_halt is False, (
+        "saldo do MT5 nao pode travar robo nenhum -- o caixa e' o do painel"
+    )
+    assert rt.machine.position is not None
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        eventos = [e["message"] for e in store.recent_events(conn, acc.id, limit=50)]
+    assert not any("FREIO DURO" in m for m in eventos), eventos
+    avisos = [m for m in eventos if "IGNORANDO o numero do terminal" in m]
+    assert len(avisos) == 1, ("o aviso e' UMA linha por pregao, nao uma por "
+                              f"barra: {eventos}")
 
 
 def test_live_sombra_ignora_freio_duro(tmp_path, pregao_aberto):
@@ -4084,7 +4130,7 @@ def test_freio_duro_cancela_ordem_parada_mesmo_SEM_posicao(tmp_path, pregao_aber
     assert broker.pendentes_enviadas, "ordem parada no book"
     assert rt.machine.position is None, "sem posicao -- so' a ordem"
 
-    broker.risco = {"equity": -298.60, "margin_free": -298.60, "balance": -298.60}
+    rt.machine.realized_pnl = -100.0   # caixa do painel (R$100 digitados) a zero
     feed._barras.append(_bar("13:02", 10.00, 10.00, 10.00, 10.00))
     rt.run_once(now=_agora("13:02:00"))
 
@@ -4226,25 +4272,31 @@ def test_reconciliacao_nao_toca_na_ordem_que_a_maquina_esta_vigiando(
 
 def test_entrada_e_recusada_quando_a_margem_da_CONTA_nao_cobre(tmp_path, pregao_aberto):
     """O teto de contratos e' calculado sobre `initial_capital + realized_pnl`
-    -- numeros locais a UM processo. Isso e' cego para os OUTROS slots (mesma
-    conta MT5, mesma margem fisica) e para a perda ainda ABERTA.
+    -- numeros locais a UM processo, cegos para os OUTROS slots (mesma conta
+    MT5, mesma margem fisica) e para a perda ainda ABERTA.
 
-    `margin_free` nao e' cego para nenhum dos dois: ele ja desconta tudo. O
-    portao passou a perguntar a' corretora antes de mandar."""
+    A margem JA COMPROMETIDA na corretora nao e' cega para nenhum dos dois:
+    sai das posicoes reais de todos os slots. O portao soma ela ao que esta
+    ordem exige e compara com o caixa do painel (nunca com `margin_free`, que
+    herda o saldo dessincronizado do MT5)."""
     broker = _FakeMT5Broker()
     broker.margem_por_contrato = 150.0          # WDO, margem de tabela
-    broker.risco = {"equity": 300.0, "margin_free": 150.0, "balance": 300.0}
+    # A conta ja tem 1 contrato aberto (R$150 de margem) -- exatamente o
+    # estado do incidente quando o 2o contrato foi enviado.
+    broker.risco = {"equity": 300.0, "margin_free": 150.0, "balance": 300.0,
+                    "margin": 150.0}
     script = {
         0: [EnterLimit(side="long", limit_price=10.00, initial_stop=9.00,
                        initial_target=11.00, quantity=1, reason="teste")],
     }
-    rt, feed = _runtime_live_scripted(tmp_path, broker, script)
+    rt, feed = _runtime_live_scripted(tmp_path, broker, script, initial_capital=300.0)
     rt.run_once(now=_agora("13:00:00"))
     feed._barras.append(_bar("13:01", 10.00, 10.00, 10.00, 10.00))
     rt.run_once(now=_agora("13:01:00"))
 
-    # R$150 livres, ordem exige R$150, o projeto pede 2x de folga -> recusa.
-    # E' EXATAMENTE o 2o contrato do incidente: com fator 1.0 ele passaria.
+    # Caixa R$300, R$150 ja comprometidos, ordem exige R$150 e o projeto pede
+    # 2x de folga: 150 + 300 > 300 -> recusa. E' EXATAMENTE o 2o contrato do
+    # incidente: com fator 1.0 (150 + 150 = 300) ele passaria.
     assert not broker.pendentes_enviadas, "a ordem nao pode ir para o book"
     assert rt.machine.resting_limit is None, (
         "a maquina nao pode ficar vigiando um fill que nunca vai acontecer"
@@ -4252,19 +4304,20 @@ def test_entrada_e_recusada_quando_a_margem_da_CONTA_nao_cobre(tmp_path, pregao_
     with store.live_journal(rt.db_path) as conn:
         acc = store.load_account(conn, SLOT.id)
         eventos = [e["message"] for e in store.recent_events(conn, acc.id, limit=50)]
-    assert any("margem livre da conta" in m for m in eventos), eventos
+    assert any("nao cobre a margem da conta" in m for m in eventos), eventos
 
 
 def test_entrada_passa_quando_a_conta_tem_a_folga_pedida(tmp_path, pregao_aberto):
     """Contrapeso: com folga suficiente o portao nao atrapalha nada."""
     broker = _FakeMT5Broker()
     broker.margem_por_contrato = 150.0
-    broker.risco = {"equity": 900.0, "margin_free": 400.0, "balance": 900.0}
+    broker.risco = {"equity": 900.0, "margin_free": 400.0, "balance": 900.0,
+                    "margin": 0.0}
     script = {
         0: [EnterLimit(side="long", limit_price=10.00, initial_stop=9.00,
                        initial_target=11.00, quantity=1, reason="teste")],
     }
-    rt, feed = _runtime_live_scripted(tmp_path, broker, script)
+    rt, feed = _runtime_live_scripted(tmp_path, broker, script, initial_capital=900.0)
     rt.run_once(now=_agora("13:00:00"))
     feed._barras.append(_bar("13:01", 10.00, 10.00, 10.00, 10.00))
     rt.run_once(now=_agora("13:01:00"))
@@ -4346,7 +4399,7 @@ def test_trava_de_margem_entre_processos_indisponivel_recusa_sem_mandar(
     # Nao pode ser confundida com a recusa por margem insuficiente de
     # verdade (`_recusa_por_margem`/`_check_margem_da_conta`) -- e' outra
     # causa e o dono precisa distinguir uma da outra no diario.
-    assert not any("margem livre da conta" in m for m in eventos), eventos
+    assert not any("nao cobre a margem da conta" in m for m in eventos), eventos
 
 
 def test_freio_de_perda_dispara_com_a_posicao_ainda_ABERTA(tmp_path, pregao_aberto):

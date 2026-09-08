@@ -709,15 +709,20 @@ def test_cash_balance_account_info_none_devolve_none(fake_mt5):
 
 # ---------- gap (e), incidente 2026-08-28: freio duro de equity/margem -----
 
-def test_account_risk_state_devolve_equity_margem_livre_e_balance(fake_mt5):
+def test_account_risk_state_devolve_equity_margem_livre_balance_e_margem_usada(fake_mt5):
+    """`margin` (margem JA COMPROMETIDA) entrou em 2026-09-08: e' o unico
+    campo daqui que nao deriva do saldo, e por isso o unico que o portao de
+    envio (`_check_margem_da_conta`) pode usar para decidir. Os outros tres
+    sao diagnostico -- o saldo da Rico nao acompanha o da corretora."""
     mod, calls = fake_mt5(initialize_ok=True)
     mod.account_info = lambda: types.SimpleNamespace(
-        balance=300.0, equity=-298.60, margin_free=-150.0)
+        balance=300.0, equity=-298.60, margin_free=-150.0, margin=450.0)
     broker = MT5Broker()
 
     estado = broker.account_risk_state()
 
-    assert estado == {"equity": -298.60, "margin_free": -150.0, "balance": 300.0}
+    assert estado == {"equity": -298.60, "margin_free": -150.0, "balance": 300.0,
+                      "margin": 450.0}
 
 
 def test_account_risk_state_falha_de_conexao_devolve_none_sem_excecao(fake_mt5):

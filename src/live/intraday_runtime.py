@@ -565,6 +565,11 @@ class IntradayLiveRuntime:
         # Leituras SEGUIDAS de risco que falharam (ver
         # `MAX_LEITURAS_DE_RISCO_FALHAS`). Zerado a cada leitura que volta.
         self._risco_ilegivel_seguidas = 0
+        # Pregao em que o dono ja foi avisado de que o MT5 reporta patrimonio
+        # zerado/negativo enquanto o ledger do painel tem caixa (ver
+        # `_avisa_saldo_mt5_dessincronizado`). Uma linha por pregao e por
+        # processo: e' diagnostico, nao alarme.
+        self._saldo_mt5_avisado_em: Optional[date] = None
         # Instantes (UTC) dos ultimos envios de ordem, para a janela rolante
         # de `MAX_ENVIOS_POR_MINUTO`. Em memoria: o alvo e' um laco dentro de
         # UM processo, e um restart ja quebra o laco por construcao.
@@ -1429,11 +1434,39 @@ class IntradayLiveRuntime:
 
     # ---------- passo -------------------------------------------------------
 
+    def _fase_do_instrumento(self, now: datetime) -> SessionPhase:
+        """A fase do pregao DESTE instrumento, nao a do pregao de acao.
+
+        `clock.phase()` so' conhece o calendario de ACAO (10:00 as 17:00/
+        17:55, deslocando com o horario de verao dos EUA) -- `core.
+        b3_session` declara isso na propria docstring e avisa que FUTURO nao
+        desloca. Enquanto este metodo nao existiu (ate' 2026-09-08) o robo de
+        futuro era gateado pelo relogio da acao: ficava `idle` das 09:00 as
+        10:00 e parava as 17:00, enquanto o backtest media 09:00..18:29.
+        Eram 149 minutos, 26,2% do pregao, incluindo a primeira hora, que e'
+        onde mora o pico de atividade do WDO@. Isso quebrava o invariante
+        central do `AGENTS.md` -- `live/` nao decide nada, o backtest tem de
+        descrever a producao.
+
+        A janela vem do PERFIL do simbolo, que e' a mesma fonte que o
+        backtest le'. Perfil sem `session_start_time` (toda acao) cai no
+        `clock.phase()` de sempre, entao nada muda para o caminho de acao."""
+        from backtest.intraday.profiles import profile_for
+
+        try:
+            perfil = profile_for(self.strategy.symbol)
+        except Exception:  # noqa: BLE001 -- simbolo sem perfil: relogio de acao
+            return clock.phase(now)
+        abertura = getattr(perfil, "session_start_time", None)
+        if abertura is None:
+            return clock.phase(now)
+        return clock.phase_em_janela(now, abertura, perfil.session_end_time)
+
     def run_once(self, now: Optional[datetime] = None) -> list[StepReport]:
         """Um passo. Seguro para chamar em loop, a qualquer hora — so age
         quando ha barra M1 nova FECHADA dentro de um pregao aberto."""
         now = now or datetime.now(timezone.utc)
-        fase = clock.phase(now)
+        fase = self._fase_do_instrumento(now)
         hoje = clock.intraday_session(now)
         passos: list[StepReport] = []
 
@@ -2007,30 +2040,40 @@ class IntradayLiveRuntime:
         """A CONTA aguenta esta entrada? Devolve o motivo da recusa, ou
         `None` se pode enviar.
 
-        Este e' o unico portao do sistema que ve a conta como ela e'. Todos
-        os outros tetos -- `_check_capital`, `_cabe_no_teto`,
+        Este e' o unico portao do sistema que ve a EXPOSICAO da conta como
+        ela e'. Todos os outros tetos -- `_check_capital`, `_cabe_no_teto`,
         `_cap_capital_atual` -- sao calculados a partir de
         `config.initial_capital + realized_pnl`: numeros locais a UM
-        processo. Isso e' cego para duas coisas ao mesmo tempo:
+        processo, cegos para os OUTROS slots. Todo robo de day trade conecta
+        no MESMO terminal, com o MESMO login: uma unica conta, uma unica
+        margem fisica. Dois slots em simbolos diferentes (WDO@ e WIN@) com
+        R$400 digitados em cada um comprometem margem contra uma conta que
+        tem R$400 no total, e cada um passa no proprio teto sozinho -- e' o
+        padrao do incidente 2026-08-28 (exposicao agregada nunca somada),
+        so' que a soma que faltava e' entre PROCESSOS.
 
-        1. **Os outros slots.** Todo robo de day trade conecta no MESMO
-           terminal, com o MESMO login -- uma unica conta, uma unica margem
-           fisica. Dois slots em simbolos diferentes (WDO@ e WIN@) com
-           R$400 digitados em cada um comprometem margem contra uma conta
-           que tem R$400 no total, e cada um passa no proprio teto sozinho.
-           E' o padrao do incidente 2026-08-28 -- exposicao agregada nunca
-           somada -- so' que a soma que faltava agora e' entre PROCESSOS.
-        2. **A perda ainda ABERTA.** `realized_pnl` so' anda quando a
-           posicao FECHA. Uma posicao sangrando -R$500 sem ter fechado
-           deixa o teto local otimista exatamente sob stress. `margin_free`
-           ja desconta tudo -- inclusive o que o dono abriu na mao.
+        **A conta e' feita com os dois numeros confiaveis, cada um da sua
+        fonte** (correcao de 2026-09-08):
 
-        Perguntar a' corretora resolve os dois de uma vez, sem inventar
-        ledger nenhum entre processos: ela ja e' o lugar onde a soma existe.
+        - **Quanto ja esta comprometido**: `margin` da corretora -- margem
+          das posicoes REAIS, de todos os slots e tambem do que o dono abriu
+          na mao. Nao passa pelo saldo, entao nao herda a dessincronizacao
+          do MT5.
+        - **Quanto ha para comprometer**: o LEDGER DO PAINEL
+          (`_caixa_operacional_brl`), nunca `margin_free`. `margin_free` e'
+          `equity - margin`, e `equity` sai do saldo que a Rico nao
+          sincroniza: em 2026-09-08 ele valia -R$3,60 numa conta com R$30
+          digitados no painel, o que recusaria toda ordem para sempre, em
+          silencio.
 
-        "Nao sei" (`None` de qualquer das duas consultas) NAO bloqueia --
-        mesma politica do resto do arquivo. Quem nao consegue nem ler a
-        conta ja vai falhar no envio, com erro mais especifico."""
+        A assimetria e' deliberada: cobra-se deste slot a margem da conta
+        INTEIRA contra o caixa DELE. E' conservador de proposito -- e' a
+        licao da exposicao agregada, e errar para o lado de recusar uma
+        entrada e' barato perto de repetir 2026-08-28.
+
+        "Nao sei" (`None` de qualquer das consultas) NAO bloqueia -- mesma
+        politica do resto do arquivo. Quem nao consegue nem ler a conta ja
+        vai falhar no envio, com erro mais especifico."""
         if self.executor is None:
             return None
         calc = getattr(self.broker, "margin_required", None)
@@ -2043,18 +2086,22 @@ class IntradayLiveRuntime:
         estado = ler() if ler is not None else None
         if estado is None:
             return None
-        livre = estado.get("margin_free")
-        if livre is None:
+        comprometida = estado.get("margin")
+        if comprometida is None:
+            return None
+        caixa = self._caixa_operacional_brl()
+        if caixa is None:
             return None
         minimo = exigido * MARGEM_LIVRE_MINIMA_FATOR
-        if float(livre) >= minimo:
+        if float(comprometida) + minimo <= float(caixa):
             return None
         return (
-            f"margem livre da conta R$ {float(livre):.2f} < R$ {minimo:.2f} "
-            f"(a ordem exige R$ {exigido:.2f} e o projeto pede "
-            f"{MARGEM_LIVRE_MINIMA_FATOR:.0f}x de folga). A conta e' COMPARTILHADA "
-            "entre os slots -- este numero ja desconta o que os outros robos "
-            "e o proprio dono tem aberto"
+            f"caixa do robo R$ {float(caixa):.2f} nao cobre a margem da conta: R$ "
+            f"{float(comprometida):.2f} ja comprometidos mais R$ {minimo:.2f} desta "
+            f"ordem (exige R$ {exigido:.2f} e o projeto pede "
+            f"{MARGEM_LIVRE_MINIMA_FATOR:.0f}x de folga). A margem comprometida e' da "
+            "conta COMPARTILHADA -- ja inclui o que os outros robos e o proprio dono "
+            "tem aberto"
         )
 
     def _recusa_por_margem(self, conn, account: AccountState, sessao: date,
@@ -2224,11 +2271,11 @@ class IntradayLiveRuntime:
                    "quantidade_corretora": qtd_real, "quantidade_maquina": qtd_maquina,
                    "lado": (real or {}).get("side")})
 
-    # ---------- freio duro de equity/margem (gap e/f, incidente 2026-08-28) -
+    # ---------- freio duro de caixa/margem (gap e/f, incidente 2026-08-28) --
 
     def _check_freio_duro(self, conn, account: AccountState, session: date) -> Optional[str]:
-        """Equity ou margem livre em risco de ruina? Devolve o motivo do
-        freio, ou `None` se pode operar normalmente.
+        """Este robo esta perdendo demais, ou o caixa dele acabou? Devolve
+        o motivo do freio, ou `None` se pode operar normalmente.
 
         Motivado pelo incidente 2026-08-28: a conta chegou a equity NEGATIVA
         (-R$298,60) com o processo CONTINUANDO a tentar abrir e fechar
@@ -2240,10 +2287,15 @@ class IntradayLiveRuntime:
 
         Uma vez TRIPADO (`disaster_halt=True`, persistido -- ver
         `_SessionSnapshot`), fica tripado pelo resto da SESSAO: nao ha
-        caminho automatico de "equity voltou, libera de novo" -- recuperar
+        caminho automatico de "o caixa voltou, libera de novo" -- recuperar
         de patrimonio negativo (ou perto disso) e' decisao do DONO
         (deposito, investigacao), nunca do robo (regra 6 do AGENTS.md).
         Reseta sozinho no PROXIMO pregao (sessao nova = snapshot novo).
+
+        **O caixa que decide e' o do PAINEL, nunca o do MT5** (correcao de
+        2026-09-08, depois de este freio travar um robo intacto com base em
+        equity -R$3,60 reportada pelo terminal numa conta com R$30,00
+        digitados). Ver `_caixa_operacional_brl`.
 
         `None` (nao deu pra perguntar ao terminal) NUNCA vira alarme --
         mesma politica do resto do arquivo (`_check_autotrading` etc): "nao
@@ -2257,7 +2309,7 @@ class IntradayLiveRuntime:
 
         # (1) TETO DE PERDA DO PREGAO, marcado a mercado. Vem ANTES do teste
         # de ruina de proposito: e' o freio que dispara enquanto ainda ha o
-        # que salvar. O de baixo (`equity <= 0`) so' constata o obito.
+        # que salvar. O de baixo (caixa <= 0) so' constata o obito.
         perda = self._perda_do_pregao_brl()
         if (self.perda_maxima_dia_brl > 0 and perda is not None
                 and perda >= self.perda_maxima_dia_brl):
@@ -2277,8 +2329,33 @@ class IntradayLiveRuntime:
             self._tenta_zerar_por_freio_duro(conn, account, session)
             return motivo
 
-        # (2) RUINA DA CONTA -- ultimo recurso, e da conta INTEIRA (todos os
-        # slots somados), nao so' deste robo.
+        # (2) RUINA -- ultimo recurso: o caixa deste robo acabou. Quem
+        # responde e' o LEDGER DO PAINEL (`_caixa_operacional_brl`), nunca o
+        # saldo do MT5 -- por isso este teste vem ANTES de falar com o
+        # terminal, e continua valendo mesmo com o terminal mudo.
+        caixa = self._caixa_operacional_brl()
+        if caixa is not None and caixa <= 0.0:
+            motivo = (
+                f"caixa do robo R$ {caixa:.2f}, marcado a mercado (ledger do painel: "
+                f"R$ {self.config.initial_capital:.2f} digitados, "
+                f"{self.machine.realized_pnl:+.2f} realizados) -- robo em risco de ruina"
+            )
+            self._snapshot.disaster_halt = True
+            self._snapshot.disaster_reason = motivo
+            self._log(conn, account.id, "error",
+                      f"FREIO DURO em {self.strategy.symbol}: {motivo}. Parando de abrir "
+                      "ordem nova e tentando zerar o que estiver aberto. Nao volta "
+                      "sozinho -- precisa de intervencao (ver incidente 2026-08-28).",
+                      {"sessao": session.isoformat(), "caixa_brl": round(caixa, 2),
+                       "capital_painel": float(self.config.initial_capital),
+                       "realizado_brl": float(self.machine.realized_pnl or 0.0)})
+            self._tenta_zerar_por_freio_duro(conn, account, session)
+            return motivo
+
+        # (3) TERMINAL MUDO. A leitura do MT5 nao decide mais ruina nenhuma
+        # (ver acima); serve para dois fins: detectar que o terminal parou de
+        # responder, e registrar no diario quando o saldo dele contradiz o
+        # painel (`_avisa_saldo_mt5_dessincronizado`).
         ler = getattr(self.broker, "account_risk_state", None)
         if ler is None:
             return None
@@ -2306,28 +2383,8 @@ class IntradayLiveRuntime:
             self._tenta_zerar_por_freio_duro(conn, account, session)
             return motivo
         self._risco_ilegivel_seguidas = 0
-        equity = estado.get("equity")
-        margem_livre = estado.get("margin_free")
-        equity_ruim = equity is not None and equity <= 0.0
-        margem_ruim = margem_livre is not None and margem_livre <= 0.0
-        if not (equity_ruim or margem_ruim):
-            return None
-
-        motivo = (
-            f"equity R$ {equity:.2f}" if equity is not None else "equity desconhecida"
-        ) + " / " + (
-            f"margem livre R$ {margem_livre:.2f}" if margem_livre is not None
-            else "margem livre desconhecida"
-        ) + " -- conta em risco de ruina"
-        self._snapshot.disaster_halt = True
-        self._snapshot.disaster_reason = motivo
-        self._log(conn, account.id, "error",
-                  f"FREIO DURO em {self.strategy.symbol}: {motivo}. Parando de abrir "
-                  "ordem nova e tentando zerar o que estiver aberto. Nao volta sozinho "
-                  "-- precisa de intervencao (ver incidente 2026-08-28).",
-                  {"sessao": session.isoformat(), "equity": equity, "margem_livre": margem_livre})
-        self._tenta_zerar_por_freio_duro(conn, account, session)
-        return motivo
+        self._avisa_saldo_mt5_dessincronizado(conn, account, session, estado, caixa)
+        return None
 
     def _perda_do_pregao_brl(self) -> Optional[float]:
         """Quanto ESTE robo perdeu hoje, marcado a mercado, em R$ positivos
@@ -2353,6 +2410,66 @@ class IntradayLiveRuntime:
         if preco is None:
             return None
         return -(realizado + self.machine.unrealized_brl(float(preco)))
+
+    def _caixa_operacional_brl(self) -> Optional[float]:
+        """Quanto este robo tem de caixa AGORA, marcado a mercado, em R$.
+        `None` = nao da' para dizer (nunca "esta zerado").
+
+        Conta: `config.initial_capital` -- o numero que o DONO digitou no
+        painel, reposto a cada pregao por `_resincroniza_capital` -- mais o
+        que a maquina ja realizou (`machine.realized_pnl`), mais o que a
+        posicao aberta vale agora. E' exatamente a mesma conta que dimensiona
+        lote e teto de contratos (`_cap_capital_atual`), entao freio, portao
+        de margem e dimensionamento passam a olhar para o MESMO caixa.
+
+        **Por que nao o saldo do MT5.** `account_info().balance/equity/
+        margin_free` da conta Rico NAO acompanha o dinheiro real da corretora
+        -- a propria corretora confirma que nao existe sincronizacao (ver
+        CLAUDE.md, "Saldo do MT5 (Rico) nao e' confiavel como fonte de
+        capital"). Em 2026-09-08 o terminal reportou equity -R$3,60 num slot
+        cujo ledger tinha R$30,00 digitados, e o freio duro declarou "conta em
+        risco de ruina" e travou o pregao de um robo intacto, na primeira
+        barra, sem nenhuma ordem enviada. Numero de corretora que a propria
+        corretora diz nao ser confiavel nao pode ser gatilho de nada -- so'
+        de diagnostico (`_avisa_saldo_mt5_dessincronizado`).
+
+        Com posicao aberta e sem cotacao devolve `None`: "nao sei" nunca vira
+        "esta zerado", mesma politica do resto do arquivo."""
+        caixa = float(self.config.initial_capital) + float(self.machine.realized_pnl or 0.0)
+        if not self.machine.positions:
+            return caixa
+        ultimo = getattr(self.broker, "last_price", None)
+        preco = ultimo(self.strategy.symbol) if ultimo is not None else None
+        if preco is None:
+            return None
+        return caixa + float(self.machine.unrealized_brl(float(preco)))
+
+    def _avisa_saldo_mt5_dessincronizado(self, conn, account: AccountState, session: date,
+                                         estado: dict, caixa: Optional[float]) -> None:
+        """UMA linha por pregao quando o terminal reporta patrimonio zerado
+        ou negativo e o ledger do painel diz que ha caixa.
+
+        Nao freia, nao recusa, nao dimensiona nada -- ver
+        `_caixa_operacional_brl`. Existe por dois motivos: o dono ve a
+        dessincronizacao no diario em vez de ela virar misterio, e a proxima
+        pessoa (ou IA) que ler "o MT5 diz que a conta esta zerada" ja
+        encontra escrito, no mesmo lugar, que isso NAO quer dizer que a conta
+        esta zerada."""
+        if self._saldo_mt5_avisado_em == session or caixa is None or caixa <= 0.0:
+            return
+        equity = estado.get("equity")
+        margem_livre = estado.get("margin_free")
+        if not [v for v in (equity, margem_livre) if v is not None and float(v) <= 0.0]:
+            return
+        self._saldo_mt5_avisado_em = session
+        self._log(conn, account.id, "warn",
+                  f"MT5 reporta patrimonio zerado/negativo em {self.strategy.symbol} "
+                  f"(equity R$ {equity}, margem livre R$ {margem_livre}), mas o caixa "
+                  f"deste robo no painel e' R$ {caixa:.2f} -- IGNORANDO o numero do "
+                  "terminal: a Rico nao sincroniza o saldo com o MT5. Sigo operando "
+                  "pelo ledger digitado no painel.",
+                  {"sessao": session.isoformat(), "caixa_brl": round(caixa, 2),
+                   "mt5_equity": equity, "mt5_margem_livre": margem_livre})
 
     def _tenta_zerar_por_freio_duro(self, conn, account: AccountState, session: date) -> None:
         """Tenta fechar A MERCADO o que estiver aberto, sob o freio duro.
@@ -3821,7 +3938,13 @@ class IntradayLiveRuntime:
             "robo_investimento": account.investment_robot,
             "robo_saque": "",
             "pregao": session.isoformat(),
-            "fase": clock.phase().value,
+            # Fase DO INSTRUMENTO, nao a do pregao de acao (2026-09-08): com
+            # `clock.phase()` cru o painel mostrava "fechado" das 09:00 as
+            # 10:00 e a partir das 17:00 enquanto o robo de futuro estava
+            # operando -- painel que contradiz o robo e' pior que painel
+            # nenhum. Mesma funcao que gateia `run_once`, para os dois nao
+            # poderem divergir.
+            "fase": self._fase_do_instrumento(datetime.now(timezone.utc)).value,
             "decisao_pendente": [],
             "notificador": type(self.notifier).__name__,
             # `atraso_s` vem do FEED, nao de um 60.0 fixo: era verdade so' para

@@ -55,6 +55,22 @@ class SymbolProfile:
     # horario proprio (futuro, por exemplo, cujo fechamento medido NAO desloca
     # com o horario de verao dos EUA) e para relogio sintetico de teste.
     session_end_policy: Literal["fixed", "b3_equities"] = "b3_equities"
+    # ABERTURA do pregao do instrumento, em UTC -- o par de
+    # `session_end_time`, e existe pelo MESMO motivo dele (ver a docstring
+    # do modulo: "um numero declarado em dois lugares e' um numero que vai
+    # divergir"). `None` (default, toda acao) = a abertura vem do calendario
+    # de ACAO em `core.b3_session` (10:00 de Brasilia).
+    #
+    # Existe porque a ausencia dele custou 26,2% do pregao (2026-09-08): o
+    # portao de `live.intraday_runtime.IntradayLiveRuntime.run_once` chamava
+    # `live.clock.phase()`, que so' conhece o pregao de ACAO, e o robo de
+    # FUTURO ficava `idle` das 09:00 as 10:00 e parava as 17:00 -- enquanto
+    # o backtest media 09:00..18:29 com o `session_end_time` acima. Toda
+    # validacao do WDO F1 descrevia um pregao 26% maior do que o robo jamais
+    # operou, o que e' exatamente o que o invariante "live/ nao decide nada"
+    # existe para impedir. `core.b3_session` ja avisava, na propria
+    # docstring, que futuro NAO desloca e que aquele modulo "fala de ACAO".
+    session_start_time: time | None = None
     # Tamanho do TICK DE PRECO do instrumento, quando o simbolo de onde a
     # economia e' lida reporta um valor que nao serve para posicionar ordem.
     # `None` (default) = usa o que o terminal devolveu, o caso de toda acao.
@@ -240,6 +256,14 @@ def _futures_profile(
         exchange_fee_pct_per_leg=0.0,
         session_end_time=session_end_time,
         session_end_policy="fixed",
+        # 09:00 de Brasilia. Igual para WIN e WDO, e NAO desloca com o
+        # horario de verao dos EUA -- e' o mesmo fato que
+        # `core.b3_session` ja declara na docstring ("Futuro (WIN) NAO
+        # desloca: 09:00..18:24 cru nos dois lados das duas viradas") e que
+        # a base de tick confirma (mediana de inicio de pregao 09:00 nos 130
+        # pregoes de `WDO_A_.parquet`). Fica em UTC como `session_end_time`,
+        # pelo mesmo motivo: e' assim que as barras salvas sao indexadas.
+        session_start_time=time(12, 0),
         default_quantity=1,  # 1 CONTRATO -- futuro nao tem lote de 100
         price_tick_size=price_tick_size,
         max_open_contracts=max_open_contracts,

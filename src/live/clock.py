@@ -38,7 +38,7 @@ real com base nestes numeros.
 """
 from __future__ import annotations
 
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from functools import lru_cache
 
 from core.b3_session import (  # noqa: F401 (reexport: API historica deste modulo)
@@ -212,6 +212,49 @@ def phase(now: datetime | None = None) -> SessionPhase:
         return SessionPhase.CLOSING_AUCTION
     if now < after_hours_end_dt:
         return SessionPhase.AFTER_HOURS
+    return SessionPhase.POST_CLOSE
+
+
+def phase_em_janela(now: datetime | None, abertura_utc: time,
+                    fim_utc: time) -> SessionPhase:
+    """`phase()` para um instrumento com pregao PROPRIO, dado em UTC.
+
+    `phase()` acima so' conhece o pregao de ACAO -- `core.b3_session` diz
+    isso na propria docstring, e avisa que FUTURO nao desloca com o horario
+    de verao dos EUA. Quem opera futuro tem de perguntar por esta funcao,
+    passando a janela do PERFIL do simbolo
+    (`backtest.intraday.profiles.SymbolProfile.session_start_time` /
+    `session_end_time`) -- a MESMA janela que o backtest usa, para o robo ao
+    vivo nao operar um pregao diferente do que foi validado.
+
+    2026-09-08: nao existia, e a falta custou 26,2% do pregao do WDO@ -- o
+    robo ficava `idle` das 09:00 as 10:00 (justamente o pico de atividade do
+    instrumento) e parava as 17:00, contra as 18:29 que o backtest media.
+
+    O dia de pregao vem de `intraday_session(now)` (data em Brasilia) e os
+    horarios sao combinados com ele DIRETO em UTC. So' vale porque a janela
+    de futuro da B3 (12:00..21:30 UTC) nao cruza a meia-noite UTC em nenhum
+    dos dois extremos -- se algum instrumento futuro passar a cruzar, esta
+    funcao para de servir e tem de ganhar a data explicita.
+
+    Fases devolvidas: `CLOSED` fora de dia de pregao e antes do leilao;
+    `PRE_OPEN` no leilao (mesmo `PRE_OPEN_LEAD` da acao); `OPEN` dentro da
+    janela; `POST_CLOSE` depois. Nao devolve `CLOSING_AUCTION` nem
+    `AFTER_HOURS` -- o corte de futuro e' um instante so', ja embutido em
+    `fim_utc` (o `session_end_time` medido do perfil)."""
+    now = _normalize(now)
+    d = intraday_session(now)
+    if not is_trading_day(d):
+        return SessionPhase.CLOSED
+    abertura = datetime.combine(d, abertura_utc, tzinfo=timezone.utc)
+    fim = datetime.combine(d, fim_utc, tzinfo=timezone.utc)
+    agora = now.astimezone(timezone.utc)
+    if agora < abertura - _PRE_OPEN_LEAD:
+        return SessionPhase.CLOSED
+    if agora < abertura:
+        return SessionPhase.PRE_OPEN
+    if agora < fim:
+        return SessionPhase.OPEN
     return SessionPhase.POST_CLOSE
 
 

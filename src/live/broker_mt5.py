@@ -1331,18 +1331,31 @@ class MT5Broker(Broker):
                     "note": f"erro inesperado ao registrar protecao: {exc}"}
 
     def account_risk_state(self) -> Optional[dict]:
-        """Equity/margem livre da conta AGORA -- o freio duro de ruina (gap
-        fechado depois do incidente 2026-08-28: a conta chegou a equity
-        NEGATIVA, -R$298,60, com o processo CONTINUANDO a tentar abrir e
-        fechar ordem, sem nenhum freio; o motor de BACKTEST ja tem
-        `wiped_out_at` para isto, o lado ao vivo nao tinha equivalente).
+        """Estado de risco da conta AGORA. Devolve `{"equity", "margin_free",
+        "balance", "margin"}` (todos em R$) ou `None` se nao deu para
+        perguntar (terminal fechado, pacote ausente) -- mesma politica de
+        erro do resto da classe: "nao sei" nunca vira "esta zerado" nem
+        "esta seguro".
 
-        Devolve `{"equity", "margin_free", "balance"}` (todos em R$) ou
-        `None` se nao deu para perguntar (terminal fechado, pacote ausente)
-        -- mesma politica de erro do resto da classe: "nao sei" nunca vira
-        "esta zerado" nem "esta seguro". Quem chama (`IntradayLiveRuntime.
-        _check_freio_duro`) so' trava a operacao quando o numero volta e ele
-        e' realmente ruim."""
+        **Os quatro campos NAO tem o mesmo grau de confianca, e confundi-los
+        ja travou um robo intacto por um pregao inteiro (2026-09-08).**
+
+        - `balance` / `equity` / `margin_free` sao derivados do SALDO, e o
+          saldo desta corretora (Rico) nao e' sincronizado com o dinheiro
+          real da conta -- a propria corretora confirma que nao ha como
+          igualar os dois. Servem para DIAGNOSTICO e para o diario, nunca
+          como fonte de capital nem como gatilho de freio. Ver CLAUDE.md
+          ("Saldo do MT5 (Rico) nao e' confiavel como fonte de capital") e
+          `IntradayLiveRuntime._caixa_operacional_brl`.
+        - `margin` (margem JA COMPROMETIDA) e' outra coisa: sai das posicoes
+          abertas de verdade e da margem que a B3 cobra hoje, sem passar
+          pelo saldo. E' o unico numero daqui que ve a exposicao AGREGADA da
+          conta (todos os slots, mais o que o dono abriu na mao) e o unico
+          que o portao de envio (`_check_margem_da_conta`) usa para decidir.
+
+        O quanto isso importa: em 2026-09-08 o terminal reportou equity
+        -R$3,60 num slot cujo ledger do painel tinha R$30,00, e o freio duro
+        declarou "conta em risco de ruina" e travou o pregao."""
         try:
             import MetaTrader5 as mt5  # lazy: ver docstring do modulo
         except Exception:
@@ -1357,6 +1370,9 @@ class MT5Broker(Broker):
                 "equity": float(getattr(info, "equity", 0.0) or 0.0),
                 "margin_free": float(getattr(info, "margin_free", 0.0) or 0.0),
                 "balance": float(getattr(info, "balance", 0.0) or 0.0),
+                # Margem COMPROMETIDA -- ver a docstring: e' o unico campo
+                # daqui que nao depende do saldo dessincronizado.
+                "margin": float(getattr(info, "margin", 0.0) or 0.0),
             }
         except Exception:
             return None
