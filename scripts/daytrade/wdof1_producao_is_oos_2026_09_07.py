@@ -138,7 +138,39 @@ deste script:
 
 ## RODADA 2 (2026-09-08, apos `297bc6a`) -- so' T2, regra de capital nova
 
-    (a preencher quando a rodada fechar)
+    janela  liquido R$   MaxDD R$  win%  trades trd/dia  p60  alvo stop flat s/trade qtd_max  zerou  caixa_min
+    OOS     135.618,50   2.650,00 94,4%    9446   185,2   42  8918  485   43       0       5    NAO     290,00
+    IS      (rodando)
+
+O que a correcao do portao de capital mudou no OOS: de 2 trades / -R$76 /
+50 pregoes inertes para 9.446 trades / 0 pregoes inertes. **`caixa_min =
+R$290,00` e' a prova direta**: e' o ponto mais fundo da curva, uma queda de
+R$85 (um stop de R$80 + corretagem) sobre os R$375 de partida. R$290 caia
+exatamente na faixa que a regra antiga matava (< R$375) e que a nova
+sustenta (> R$150 de margem crua). A janela inteira pendurou nessa
+diferenca.
+
+`zerou = NAO` (`IntradayBacktestResult.wiped_out_at is None`): o patrimonio
+nunca cruzou o zero. Note que ZERAR e PARALISAR sao modos de falha
+diferentes, e a esta capitalizacao e' o segundo que morde -- no fundo da
+curva a folga sobre o piso de sobrevivencia era de R$140, ~1,75 stops.
+
+### BLOQUEIO DE PRODUCAO encontrado nesta rodada
+
+`pior_janela_60s = 42`, contra `MAX_ENVIOS_POR_MINUTO = 30` de
+`live.intraday_runtime` -- ao vivo isso liga `disaster_halt` e cala o robo.
+
+A causa NAO e' o freio: `reancora_min_segundos` cobre reprecificacao e
+rearme pos-RECUSA, e por desenho NAO cobre o rearme pos-FILL (ver a
+docstring de `reancora_min_segundos` em `wdo_grid_reload_maker`: freia-lo
+"seria trocar o desenho"). Os dois caminhos freados somam no maximo 12
+envios/min a 10s; o resto vem dos fills. **A calibracao de
+`reancora_min_segundos=10` foi feita num robo que quase nao preenchia** --
+sob a regra de capital antiga ele morria no 1o stop e passava o pregao
+rearmando 1x a cada 10s, que e' exatamente o `pior_janela_60s = 6` da
+RODADA 1. Nenhum valor da grade 6-20s resolve um caminho que o freio nao
+percorre; varrer de novo seria queimar CPU. A decisao (contar so' envios
+improdutivos no detector, subir o teto, ou frear o pos-fill) e' do dono.
 """
 from __future__ import annotations
 
@@ -178,7 +210,7 @@ CAMPOS_KWARGS = (
 )
 
 EXTRAS = ("pior_janela_60s", "saida_alvo", "saida_stop", "saida_flatten",
-          "pregoes_sem_trade", "qtd_max")
+          "pregoes_sem_trade", "qtd_max", "zerou", "caixa_min")
 
 #: Kwargs que o REGISTRY liga por cima dos defaults de classe -- a
 #: divergencia frente a lista do pedido (ver docstring do modulo).
@@ -270,6 +302,15 @@ def _roda_uma(spec: dict):
     dias_com_trade = {pd.Timestamp(t.entry_ts).date() for t in trades}
     qtd_max = max((t.quantity for t in trades), default=0)
 
+    # "o caixa chegou a zerar?" -- `wiped_out_at` e' o campo AUTORITATIVO
+    # (patrimonio realizado + mark-to-market <= 0; o motor PARA de simular a
+    # partir dai). `caixa_min` complementa: o menor ponto da curva de
+    # patrimonio, para saber a que distancia do zero a coisa passou, e nao
+    # so' se cruzou. Os dois juntos respondem a pergunta -- `wiped_out_at`
+    # sozinho nao diz se passou perto.
+    equity = resultado.equity_curve
+    caixa_min = float(equity.min()) if len(equity) else float("nan")
+
     extras = {
         "pior_janela_60s": str(_pior_janela_60s(strat.envios_ts)),
         "saida_alvo": str(contagem.get("target", 0)),
@@ -277,6 +318,9 @@ def _roda_uma(spec: dict):
         "saida_flatten": str(contagem.get("forced_flatten", 0)),
         "pregoes_sem_trade": str(len(dias_janela - dias_com_trade)),
         "qtd_max": str(qtd_max),
+        "zerou": ("NAO" if resultado.wiped_out_at is None
+                  else str(resultado.wiped_out_at)),
+        "caixa_min": f"{caixa_min:,.2f}".replace(",", "@").replace(".", ",").replace("@", "."),
     }
     item = linha_de_resultado(spec["rotulo"], resultado, CAPITAL_REAL_BRL,
                               capital_nocional=False, extras=extras)
