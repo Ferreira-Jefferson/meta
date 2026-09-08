@@ -47,8 +47,96 @@ acerto pra empatar; 65,7% fica abaixo disso), nao so' "medida numa amostra
 diferente". Ver `scripts/daytrade/wdof1_stress_capital_real_historico_
 completo.py` (achou o travamento) e a memoria `wdof1-stop-ticks-4-
 producao-2026-08-28` (atualizada com a reversao). A confirmacao OOS citada
-no paragrafo anterior (R$148,89/pregao, 89% de retencao) volta a descrever
-o default ATUAL.
+no paragrafo anterior (R$148,89/pregao, 89% de retencao) descreve T1 S16 --
+default de `stop_ticks` desde entao, mas ver a nota abaixo sobre
+`profit_ticks`.
+
+2026-09-04, decisao do dono: `profit_ticks` mudou de 1 (T1) para 2 (T2) em
+producao, mantendo `stop_ticks=16`. Motivo (item 4.8 de
+`LICOES_DE_PRODUCAO.md`): a 1a operacao real deste robo derrapou 1 tick na
+saida do alvo nativo -- com `profit_ticks=1` isso zera o bruto do trade por
+inteiro (1 tick de deslize sobre 1 tick de alvo). Com `profit_ticks=2` o
+mesmo deslize de 1 tick ainda deixa lucro (2-1=1 tick), sem mudar o stop
+nem a mecanica de rearme. Efeito colateral conhecido: a razao risco:retorno
+piora de 1:16 (T1/S16, breakeven ~94,1%) para 2:16 = 1:8 (T2/S16, breakeven
+~88,9%) -- exige menos acerto pra empatar, mas cada acerto individual
+tambem so' compensa metade dos erros que compensava antes. Ver
+`scripts/daytrade/wdof1_alvo2_stop16_2026_09_04.py` (T2/S16 vs baseline no
+IS, motor tick) e `scripts/daytrade/wdof1_alvo2_caixa_real_2026_09_04.py`
+(ponto mais baixo do caixa acumulado contra os caixas reais R$300/R$375)
+para a medicao que acompanhou a decisao.
+
+2026-09-04, CORRIGIDO bug real (item 4.9 de `LICOES_DE_PRODUCAO.md`): no
+modo `reanchor_mode="rolling_last_price"` (o DEFAULT), `on_bar` recalculava
+a ancora SO' no instante em que a `EnterLimit` era armada -- depois disso,
+enquanto a ordem ficava pendente (sem preencher), a funcao devolvia cedo
+(`if state.pending_side is not None: return actions`) e a ordem ficava
+ESTACIONADA pelo resto do pregao se o preco se afastasse e nao voltasse a
+tocar nela: nunca era reprecificada, nunca era cancelada. Medido com dado
+real de tick MT5 na semana de 2026-08-31 a 2026-09-04: o robo ficou
+"ativo" (1a entrada ate' ultima saida) so' 0%/8,0%/14,3%/11,1%/0% de cada
+um dos 5 pregoes -- em 2 desses 5 dias (31/08 e 04/09) operou 1 vez ou
+NENHUMA vez, apesar do mercado andar 24 e 41,5 pontos nesses dias; as 177
+entradas da semana inteira couberam em so' 11 niveis de preco. Pedido do
+dono: "se nao bater no preco e surgir outro sinal, a [ordem] pendente deve
+ser cancelada e a do novo sinal deve ser aberta" -- como este robo nao tem
+logica direcional separada da ancora (o "sinal" E' o nivel derivado dela),
+o fix e' reancorar em TODA barra (nao so' no instante de armar), MESMO com
+ordem pendente, e reemitir a `EnterLimit` no nivel atualizado para o MESMO
+lado que ja estava pendente (o lado nunca muda, so' o preco da ordem). O
+motor (`backtest.intraday.machine.IntradaySessionMachine`) ja' trata isso
+como cancela-e-substitui (`LimitPlaced(replaced=...)`/`LimitCancelled(...,
+reason="superseded")`) quando o nivel recalculado difere do que esta'
+parado, e como NO-OP (`_reancoragem_no_mesmo_nivel`, preserva fila/TTL
+acumulados) quando bate no mesmo nivel -- MESMO mecanismo que o rearme por
+tempo de `Gremah` (`rolling_reanchor_after_bars`) ja' usa, nenhum evento
+novo foi criado. Escopo do fix e' so' o modo `rolling_last_price` --
+`fixed_session_open` continua devolvendo cedo por desenho (ancora fixa a
+vida toda da sessao). Sem timeout/limiar de distancia minima novo (nao foi
+pedido) -- ver o relatorio desta rodada para a contagem de reprecificacoes
+por pregao medida com dado tick, que e' a informacao que falta para o dono
+decidir se um limiar faz sentido depois.
+
+2026-09-07, FREIO DE CADENCIA (`reancora_min_segundos`, ver `__init__`): a
+contagem que o paragrafo acima deixou pendente foi medida, e ela BLOQUEAVA o
+deploy do item 4.9 como estava. Motor tick, capital real R$375, pregoes
+INTEIROS (09:00-18:29 BRT, cache `data/raw_ticks/WDO_A_.parquet`):
+
+    pregao      envios/pregao   pior janela de 60s   trava o robo?
+    2026-03-02       45.309             1.406             SIM
+    2026-03-04       51.142             1.020             SIM
+    2026-03-06       72.852             1.458             SIM
+    2026-03-09       75.933             3.446             SIM
+    2026-08-28       38.260             1.162             SIM
+
+Cada `LimitPlaced` e' um `place_limit` ao vivo, e
+`live.intraday_runtime.MAX_ENVIOS_POR_MINUTO` e' 30 numa janela ROLANTE de
+60s. Estourar esse teto NAO recusa so' a ordem que estourou:
+`_check_cadencia_de_ordens` devolve motivo, o runtime liga `disaster_halt`,
+chama `machine.discard_resting_limit()` e PARA o robo pelo resto do pregao
+(so' volta no pregao seguinte). Nos pregoes medidos isso acontecia no
+PRIMEIRO minuto de negociacao (12:01 UTC = 09:01 BRT).
+
+Sao DUAS fontes de enxurrada, nao uma, e o freio tapa as duas com a mesma
+constante:
+
+1. REPRECIFICACAO -- o item 4.9 reancora a ordem pendente a cada barra, e
+   `feed_kind="tick"` faz "cada barra" ser CADA NEGOCIO. Metade dos envios
+   acima sao substituicoes (`_pode_reprecar`).
+2. REARME APOS RECUSA -- quando o caixa cai abaixo do piso de 1 contrato
+   (R$375 e' exatamente o piso; ver `RESERVA_CAIXA_SEGURANCA`), o motor
+   recusa toda entrada, `on_order_rejected` zera `pending_side`, e o robo
+   arma ordem NOVA no tick seguinte. 2026-03-04: 25.556 recusas por capital
+   num pregao so'. Esta metade NAO passa pela reprecificacao (nao ha' ordem
+   pendente para reprecar) e por isso tem portao proprio
+   (`_pode_armar_apos_recusa`).
+
+Efeito colateral que NAO era esperado e importa mais que o freio: sem o
+freio o robo quase nao NEGOCIA. Reprecar a cada tick mantem a ordem sempre a
+1 tick do preco corrente, entao ela persegue o mercado e quase nunca e'
+tocada -- 2026-03-02 fecha com 5 trades e R$-47,50 sem freio, contra 264
+trades e R$+1.078,00 com o freio de 6s. O freio nao e' um custo pago pela
+seguranca: ele RESTAURA a mecanica de ordem parada que da' nome ao robo.
 
 `tick_size` NAO tem default de instrumento nenhum
 embutido aqui (fica 0.5, o `price_tick_size` do WDO@ documentado em
@@ -86,6 +174,17 @@ Tres diferencas deliberadas frente ao original de acao:
    um teto de sessao passa o valor explicito, e o proprio teste de
    sensibilidade a pedagio desta frente NUNCA precisa dele.
 3. `max_trades_per_side` default bem mais alto (200 contra 15 na acao) --
+   ATENCAO (2026-09-07): este teto DEIXOU DE SER FOLGADO. Ver a nota de
+   2026-09-07 abaixo e a docstring de `reancora_min_segundos` -- depois do
+   item 4.9 ele morde de verdade (6 de 43 pregoes medidos fecham exatamente
+   200+200 = 400 trades) e, mais importante, e' ele que limita quantos
+   REARMES pos-fill o robo manda por minuto. O pior minuto medido no
+   default do freio (26 envios) e' 100% rearme pos-fill num pregao
+   saturado, contra o teto de 30 de `MAX_ENVIOS_POR_MINUTO`: subir
+   `max_trades_per_side` empurra esse pico por cima do teto e volta a
+   travar o robo. Nao suba sem re-medir o pior minuto. O texto original
+   abaixo (calibrado quando o robo fazia ~41 trades/dia) fica por
+   historico --
    o WDO@ tem ~570 barras M1/pregao (perfil medido) e, no modo rolante,
    rearma com muito mais frequencia que a acao (~41 trades/dia medidos
    contra ~14 na PMAM3) -- um teto baixo herdado apertaria essa frequencia
@@ -172,6 +271,7 @@ o motor de fato deixa abrir -- mas quem tem a palavra final sobre recusar
 uma entrada por capital insuficiente e' sempre o MOTOR, nao esta classe."""
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 from typing import Literal
 
@@ -209,6 +309,18 @@ class _SessionState:
     long_fills: int = 0
     short_fills: int = 0
     last_closed_side: str | None = None  # qual lado acabou de fechar (pra decidir o proximo a recarregar)
+    # Freio de reprecificacao (2026-09-07) -- ver `reancora_min_segundos`/
+    # `reancora_min_ticks` em `__init__`. `pending_level` e' o preco da
+    # `EnterLimit` que esta' de fato parada no book agora (a ULTIMA emitida);
+    # `pending_level_ts` e' quando ela foi emitida. Os dois so' fazem sentido
+    # juntos com `pending_side` -- zerados no mesmo lugar que ele.
+    pending_level: float | None = None
+    pending_level_ts: pd.Timestamp | None = None
+    # Quando a ULTIMA `EnterLimit` foi RECUSADA (motor: teto de capital;
+    # ao vivo: margem/corretora). Existe para o freio segurar o REARME
+    # depois de uma recusa -- ver `_pode_armar_apos_recusa`. `None` quando a
+    # ultima coisa que aconteceu com uma ordem foi um FILL, nao uma recusa.
+    ultima_recusa_ts: pd.Timestamp | None = None
 
 
 #: Duas formas de ancorar o nivel do grid -- ver a checagem de sanidade em
@@ -261,7 +373,7 @@ class WdoGridReloadMaker(IntradayStrategy):
     # posicao -- nunca so' o numero bonito sem o que falta medir.
     tagline = (
         "Uma ordem parada 1 tick do preco de abertura, dos dois lados, no "
-        "mini-dolar. Quando um lado toca, sai com alvo de 1 tick e stop de "
+        "mini-dolar. Quando um lado toca, sai com alvo de 2 ticks e stop de "
         "16 -- e rearma no mesmo lugar. O lucro de cada ida e volta e' de "
         "centavos; o numero medido depende de quanto disso e' fila real, "
         "nao so' de o sinal existir."
@@ -270,7 +382,7 @@ class WdoGridReloadMaker(IntradayStrategy):
         "Assim que o pregao abre, o robo deixa uma ordem de compra parada 1 "
         "tick abaixo do preco de abertura e uma de venda 1 tick acima -- as "
         "duas ao mesmo tempo, sem escolher lado. Quando uma delas e' tocada, "
-        "ele sai com um alvo pequeno (1 tick de lucro) ou um stop mais largo "
+        "ele sai com um alvo pequeno (2 ticks de lucro) ou um stop mais largo "
         "(16 ticks de perda) se o mercado virar contra. Fechada a posicao, "
         "rearma no MESMO nivel -- nunca persegue o preco para um nivel mais "
         "distante que pode nunca ser tocado.",
@@ -310,18 +422,18 @@ class WdoGridReloadMaker(IntradayStrategy):
         "duas ordens paradas: compra a R$ 5.078,50 (1 tick abaixo) e venda "
         "a R$ 5.079,50 (1 tick acima).",
         "O preco cai e toca R$ 5.078,50 -- a compra e' preenchida. Na hora, "
-        "o robo pendura a venda de saida em R$ 5.079,00 (alvo de 1 tick de "
-        "lucro) e um stop a mercado em R$ 5.071,00 (16 ticks abaixo).",
-        "Se o preco sobe de volta a R$ 5.079,00 antes de cair mais, a venda "
-        "de saida e' tocada: ganhou R$5,00 (1 tick x R$5,00 x 1 contrato), "
+        "o robo pendura a venda de saida em R$ 5.079,50 (alvo de 2 ticks de "
+        "lucro) e um stop a mercado em R$ 5.070,50 (16 ticks abaixo).",
+        "Se o preco sobe de volta a R$ 5.079,50 antes de cair mais, a venda "
+        "de saida e' tocada: ganhou R$10,00 (2 ticks x R$5,00 x 1 contrato), "
         "menos a tarifa. O robo rearma IMEDIATAMENTE as duas ordens no "
         "mesmo nivel de antes (R$ 5.078,50 / R$ 5.079,50) -- nao persegue "
         "o novo preco.",
         "Se em vez disso o preco despenca 16 ticks sem voltar, o stop "
-        "dispara: perde R$80,00 (16 x R$5,00), dezesseis vezes o ganho de "
-        "um acerto. E' por isso que a taxa de acerto tem de ficar perto de "
-        "94% para o resultado ficar positivo -- uma unica perda apaga "
-        "cerca de dezesseis ganhos.",
+        "dispara: perde R$80,00 (16 x R$5,00), oito vezes o ganho de um "
+        "acerto. E' por isso que a taxa de acerto tem de ficar perto de "
+        "88,9% para o resultado ficar positivo -- uma unica perda apaga "
+        "cerca de oito ganhos.",
     )
 
     #: Descricoes curtas para a ficha do robo (`dashboard/robot_view.py` via
@@ -331,6 +443,19 @@ class WdoGridReloadMaker(IntradayStrategy):
     #: so' tem prosa no docstring do `__init__`) -- comeca aqui so' com os 3
     #: novos (2026-09-03), sem retrofitar os demais fora do escopo pedido.
     param_docs = {
+        "reancora_min_segundos": "Espera minima (segundos) entre duas ordens "
+                                 "que a corretora ve: reprecificar a pendente, "
+                                 "ou rearmar depois de uma RECUSA. Ao vivo cada "
+                                 "uma e' um cancela+reenvia, entao isto e' o "
+                                 "teto duro de ordens por minuto (60/valor por "
+                                 "cada um dos dois casos). Nao atrasa o rearme "
+                                 "depois de um FILL (a mecanica de reload). "
+                                 "0 desliga (indeployavel -- ver a docstring).",
+        "reancora_min_ticks": "Deriva minima (em ticks) entre o nivel parado "
+                              "e o recalculado para valer uma "
+                              "reprecificacao. 1 (default) reprecifica em "
+                              "qualquer mudanca de nivel; >1 exige que o "
+                              "preco tenha andado de verdade.",
         "defesa_ativa": "Liga a saida defensiva de recuo (default desligado -- "
                         "comportamento identico ao de antes).",
         "defesa_gatilho_stop_pct": "Fracao do stop (em ticks) que a posicao "
@@ -339,6 +464,28 @@ class WdoGridReloadMaker(IntradayStrategy):
                                        "RESTANTE ate o alvo (0% = ainda longe, "
                                        "100% = ja bateria o alvo) abaixo da qual "
                                        "a posicao fecha antecipada.",
+        "trailing_ativo": "Liga o alvo DINAMICO (trailing sobre o lucro): "
+                          "profit_ticks vira PISO minimo, nao teto -- a posicao "
+                          "continua monitorada tick a tick depois de bater o piso "
+                          "(default desligado -- alvo estatico de sempre).",
+        "trailing_recuo_ticks": "Quantos ticks o preco pode recuar do melhor "
+                                "preco alcancado (depois do piso batido) antes "
+                                "de fechar -- 0 fecha no primeiro tick contra, "
+                                "sem folga nenhuma. So' importa com "
+                                "trailing_ativo=True.",
+        "gate_atividade_ativo": "Liga o gate de atividade pre-entrada: so' "
+                                "arma uma NOVA ordem se o volume recente "
+                                "(janela de gate_janela_segundos) estiver "
+                                "acima de gate_volume_min (default desligado "
+                                "-- arma sempre, como antes).",
+        "gate_volume_min": "Limiar de volume (mesma unidade de Bar.volume) "
+                           "abaixo do qual o robo NAO arma uma nova entrada. "
+                           "Obrigatorio quando gate_atividade_ativo=True -- "
+                           "sem default 'vencedor', decisao do dono depois "
+                           "de medir.",
+        "gate_janela_segundos": "Tamanho da janela (segundos) usada para "
+                                "somar o volume recente e comparar contra "
+                                "gate_volume_min.",
     }
 
     def __init__(
@@ -346,9 +493,11 @@ class WdoGridReloadMaker(IntradayStrategy):
         symbol: str = "WDO@",
         tick_size: float = WDO_TICK_SIZE,
         level_spacing_ticks: int = 1,   # "x1"
-        profit_ticks: int = 1,          # "T1"
+        profit_ticks: int = 2,          # "T2" -- ver nota 2026-09-04 no topo do modulo (mudou de T1)
         stop_ticks: int | None = 16,    # "S16" -- ver nota 2026-08-29 no topo do modulo (S4 revertido)
         reanchor_mode: ReanchorMode = "rolling_last_price",
+        reancora_min_segundos: float = 10.0,
+        reancora_min_ticks: int = 1,
         max_trades_per_side: int = 200,
         session_stop_brl: float | None = None,
         quantity: int | None = None,
@@ -360,6 +509,11 @@ class WdoGridReloadMaker(IntradayStrategy):
         defesa_ativa: bool = False,
         defesa_gatilho_stop_pct: float = 0.0,
         defesa_alvo_proximidade_pct: float = 0.0,
+        trailing_ativo: bool = False,
+        trailing_recuo_ticks: int | None = None,
+        gate_atividade_ativo: bool = False,
+        gate_volume_min: float | None = None,
+        gate_janela_segundos: int = 15,
     ):
         """Ver a docstring do modulo para a mecanica completa e para os
         parametros existentes acima (`tick_size`, `level_spacing_ticks`,
@@ -440,19 +594,25 @@ class WdoGridReloadMaker(IntradayStrategy):
            chamada (a defesa tem prioridade -- mesmo padrao ja usado por
            `session_stop_brl` acima, que tambem devolve `Exit` sozinho).
 
-        DEGENERESCENCIA CONHECIDA com a config de PRODUCAO (`profit_ticks=1`):
-        o preco so' se move em ticks inteiros, entao nao existe estado
-        intermediario entre "0% do alvo" (nunca tocou) e "100% do alvo"
-        (bateu, ja fechado pelo motor ANTES desta funcao rodar -- ver o
-        passo 2 acima). Ou seja, para QUALQUER `defesa_alvo_proximidade_pct
-        < 100%`, a condicao de fechar so' poderia bater exatamente quando o
-        alvo JA foi tocado -- o que este `on_bar` nunca chega a ver. Com a
-        config de producao, esta defesa pode portanto NUNCA disparar antes
-        da saida normal por alvo ja ter fechado a posicao -- hipotese a
-        CONFIRMAR empiricamente (ver `scripts/daytrade/wdof1_defesa_recuo_
-        sweep_2026_09_03.py`), nao assumida corrigida aqui: a mecanica acima
-        e' implementada corretamente e independente de `profit_ticks`,
-        e o numero medido e' quem decide se ela dispara.
+        DEGENERESCENCIA CONHECIDA quando `profit_ticks=1` (o default de
+        producao ATE 2026-09-04, ver a nota no topo do modulo -- o default
+        ATUAL e' `profit_ticks=2`): o preco so' se move em ticks inteiros,
+        entao com alvo de 1 tick nao existe estado intermediario entre "0%
+        do alvo" (nunca tocou) e "100% do alvo" (bateu, ja fechado pelo motor
+        ANTES desta funcao rodar -- ver o passo 2 acima). Ou seja, para
+        QUALQUER `defesa_alvo_proximidade_pct < 100%` com `profit_ticks=1`,
+        a condicao de fechar so' poderia bater exatamente quando o alvo JA
+        foi tocado -- o que este `on_bar` nunca chega a ver: a defesa
+        NUNCA dispara antes da saida normal por alvo ja ter fechado a
+        posicao. Com `profit_ticks=2` (producao atual) ja existe UM estado
+        intermediario (50% do alvo, 1 de 2 ticks percorridos), entao a
+        degenerescencia acima NAO se aplica mais por construcao -- mas se a
+        defesa dispara de forma UTIL com essa unica leitura intermediaria e'
+        pergunta empirica em aberto, nao assumida aqui (ver
+        `scripts/daytrade/wdof1_defesa_recuo_sweep_2026_09_03.py`, medido
+        com `profit_ticks=1`, precisa remedir se for reusar com o alvo
+        novo). A mecanica em si e' implementada corretamente e independente
+        de `profit_ticks` em qualquer caso.
 
         Estado de armada mora em `self._defesa_armada` (dict, chave
         `(side, entry_ts)`), NUNCA em `IntradayOpenPosition.metadata` --
@@ -462,12 +622,291 @@ class WdoGridReloadMaker(IntradayStrategy):
         persistente por ali. `(side, entry_ts)` basta porque este robo nunca
         usa `EnterLimit.split_quantities` (uma unica posicao por vez) --
         resetado em `on_session_start`, mesmo lugar que ja reseta `self.
-        _state` (sem memoria entre pregoes)."""
+        _state` (sem memoria entre pregoes).
+
+        `trailing_ativo`/`trailing_recuo_ticks` (2026-09-04, pedido do dono
+        depois do item 4.8 de LICOES_DE_PRODUCAO.md -- a 1a operacao real
+        derrapou 1 tick no alvo nativo de 1 tick e zerou o lucro do trade):
+        "o target inicial deve ser de 2, depois tem que monitorar de um em
+        um [tick] pra ver ate onde foi". ADITIVO e OPT-IN -- `trailing_
+        ativo=False` (default) preserva o comportamento BYTE A BYTE de
+        antes: `initial_target` continua sendo a ordem-limite ESTATICA de
+        sempre (`profit_ticks` ticks do nivel), fechada pelo MOTOR no
+        instante em que e' tocada (prioridade "(1) stop/target automatico"
+        em `machine.py`), sem este `on_bar` nunca ser consultado sobre o
+        alvo.
+
+        Setado, `profit_ticks` muda de TETO para PISO: a posicao nunca
+        fecha por lucro antes de alcancar `profit_ticks` ticks a favor, mas
+        TAMBEM nao fecha automaticamente ao alcancar -- continua aberta,
+        monitorada tick a tick (`feed_kind="tick"`, ver o atributo de
+        classe: cada `on_bar` e' um NEGOCIO, nao um minuto), ate o preco
+        RECUAR `trailing_recuo_ticks` ticks do MELHOR preco alcancado desde
+        a entrada. Mecanicamente isto exige que a `EnterLimit` desta
+        entrada NAO carregue mais um `initial_target` estatico (fica `None`
+        -- ver o fim de `on_bar`): um alvo estatico no piso faria o MOTOR
+        fechar a posicao no exato instante em que ele e' tocado, ANTES
+        desta funcao rodar (mesmo mecanismo que fecha o alvo de sempre),
+        impedindo por construcao qualquer monitoramento POSTERIOR ao piso.
+        O STOP nao muda em nada -- `initial_stop`/`current_stop` continuam
+        exatamente como sempre, geridos pelo motor; so' o ALVO vira
+        dinamico. Investigado (nao so assumido) contra a alternativa de
+        usar `AdjustTarget` (existe, `strategy.daytrade.base.AdjustTarget`,
+        aplicado imediatamente pelo motor, sem restricao de direcao -- ver
+        `machine.py::_on_closed_bar_core` passo 5): o toque automatico de
+        alvo e' um teste de "preco SUBIU ate um nivel" (`bar.high >=
+        current_target` para compra) -- a MESMA forma de teste de um STOP,
+        nunca de "preco CAIU abaixo de um nivel que vinha subindo", que e' o
+        que um recuo desde o pico precisa. Empurrar `current_target` para
+        baixo do pico via `AdjustTarget` fecharia a posicao no PROXIMO
+        toque (o preco ainda esta acima do novo alvo, mais baixo, entao
+        "toca" de imediato) em vez de esperar uma reversao de verdade --
+        directionally errado para este pedido. Por isso a saida usa `Exit`
+        explicito desta classe (mesmo padrao ja usado por `session_stop_
+        brl`/`defesa_ativa` acima), nunca `AdjustTarget`.
+
+        Formula exata, avaliada a CADA `on_bar` com posicao aberta (mesma
+        prioridade de `defesa_ativa`: roda DEPOIS da confirmacao de fill,
+        ANTES do `return []` de sempre):
+        1. `preco_favoravel = bar.high` (comprado) ou `bar.low` (vendido) --
+           o melhor preco desta barra/tick. Pico (`self._trailing_pico`,
+           por posicao, chave `(side, entry_ts)`, mesmo padrao de `self.
+           _defesa_armada`) vira `max(pico_anterior, preco_favoravel)`
+           (comprado) ou `min(...)` (vendido); comeca implicitamente em
+           `entry_price` (nenhum pico registrado ainda).
+        2. Se `abs(pico - entry_price) / tick_size < profit_ticks` (piso
+           AINDA nao alcancado pelo pico): nunca fecha, `False` direto --
+           e' o que garante "nunca fecha antes do piso a favor", mesmo se
+           esta barra sozinha for desfavoravel.
+        3. Piso ja alcancado (em QUALQUER barra anterior ou nesta): calcula
+           `recuo_ticks = (pico - preco_adverso) / tick_size` (comprado) ou
+           o espelho (vendido), com `preco_adverso = bar.low` (comprado) ou
+           `bar.high` (vendido) -- pessimista de proposito, mesmo espirito
+           de `_defesa_deve_fechar` (usa o lado ADVERSO da barra para
+           decidir fechar, o lado FAVORAVEL para decidir se fez novo pico).
+           Fecha (`Exit(reason="trailing_lucro")`) quando `recuo_ticks >
+           trailing_recuo_ticks` -- estritamente MAIOR, nao >=: com
+           `trailing_recuo_ticks=0` isto fecha no PRIMEIRO tick que nao fizer
+           novo pico (recuo_ticks vira >0 assim que o preco nao acompanha o
+           pico), nao no proprio tick que acabou de tocar o piso (ali
+           `recuo_ticks=0`, ja que aquele preco VIROU o pico) -- "fecha no
+           primeiro tick contra, sem folga nenhuma", nao "fecha exatamente
+           no piso". Com `trailing_recuo_ticks=N>0`, tolera ate N ticks de
+           recuo desde o pico antes de fechar.
+        Como no' `feed_kind="tick"` `bar.high==bar.low==bar.close` quase
+        sempre (ver a nota no atributo de classe), a distincao favoravel/
+        adverso acima raramente muda o numero na pratica -- fica pela MESMA
+        razao de robustez/consistencia que `_defesa_deve_fechar` ja usa (se
+        este robo um dia rodar em M1, o calculo continua correto).
+
+        `trailing_recuo_ticks` e' OBRIGATORIO (sem default "vencedor" --
+        decisao de producao em aberto, o dono quer medir os candidatos
+        antes) quando `trailing_ativo=True`: `ValueError` se vier `None`
+        junto. Os DOIS sao independentes de `defesa_ativa` (podem, em tese,
+        ligar ao mesmo tempo, mas com `trailing_ativo=True` o alvo vira
+        `None` e `_defesa_deve_fechar` sempre devolve `False` no passo de
+        proximidade-ao-alvo -- "armada, mas sem alvo declarado" -- entao
+        combinar os dois nao foi medido e nao e' o caminho recomendado).
+
+        Estado do pico mora em `self._trailing_pico`, resetado em
+        `on_session_start` -- mesmo padrao/mesmo motivo de `self.
+        _defesa_armada` (chave `(side, entry_ts)`, nunca desarma dentro do
+        mesmo trade, sem memoria entre pregoes).
+
+        `gate_atividade_ativo`/`gate_volume_min`/`gate_janela_segundos`
+        (2026-09-07, pedido do dono -- gate de atividade PRE-entrada,
+        ADITIVO e OPT-IN): `scripts/daytrade/wdof1_mfe_mae_semana_2026_09_
+        04.py` gravou volume/volatilidade de 15s/60s ANTES de cada entrada
+        da semana real (2026-08-31 a 2026-09-04, 177 trades T1/S16); uma
+        analise (Opus 5) achou correlacao REAL (Spearman, sobrevive
+        correcao por multiplos testes, rho~=-0,33, p<0,002) entre
+        volume_15s_antes/volume_60s_antes/volatilidade_ticks_15s_antes/
+        volatilidade_ticks_60s_antes e a DURACAO do trade que se seguiu --
+        mais atividade ANTES da entrada prevê preenchimento MAIS RAPIDO da
+        ordem-limite. RESSALVA que a propria analise levantou, e que este
+        gate NAO resolve por conta propria: a correlacao e' sobre
+        VELOCIDADE de preenchimento, nao QUALIDADE do trade -- a amostra
+        tinha 0 stops em 177 trades, entao ninguem sabe se atividade alta
+        tambem prevê MAIS risco (e' exatamente onde os stops poderiam morar,
+        sem dado pra confirmar ou refutar). Este parametro so' MECANIZA a
+        pergunta para poder ser MEDIDA (ver os scripts desta rodada) -- nao
+        assume que o gate melhora o resultado.
+
+        Por que so' VOLUME (nao volatilidade, nao um "score" combinando os
+        dois): as duas variaveis tiveram forca de correlacao
+        estatisticamente indistinguivel na mesma analise (rho~=-0,33 as
+        duas) e sao naturalmente correlacionadas entre si (janela com mais
+        negocios tende a ter mais range de preco tambem) -- combinar as
+        duas num "score" exigiria calibrar um PESO relativo que ninguem
+        pediu ainda, o que viola o espirito de nao criar mais parametro que
+        o necessario para medir a pergunta em aberto. Volume tambem e' a
+        MESMA grandeza que o motor ja usa para gatear PREENCHIMENTO
+        (`IntradayBacktestConfig.limit_fill_capped_by_volume`) -- reusar o
+        mesmo eixo para gatear ARMAMENTO mantem o modelo mental consistente
+        com o resto do motor, em vez de introduzir uma segunda nocao de
+        "atividade" so' para este robo.
+
+        Mecanica, avaliada em TODA chamada de `on_bar` (nao so' quando ha'
+        sinal de entrada):
+        1. `self._historico_recente` (deque de `(ts, volume)`) acumula CADA
+           barra/tick recebido, recortado para os ultimos
+           `gate_janela_segundos` segundos a cada chamada (mesmo espirito de
+           recorte de `RollingVolumeWindow.registrar`,
+           `strategy.daytrade.base` -- reimplementado aqui, nao reusado,
+           porque a granularidade e' outra -- segundos fixos, nao minutos
+           medios -- e este gate nao precisa de cauda do pregao anterior:
+           comeca do zero a cada sessao, mesmo padrao de `self.
+           _defesa_armada`/`self._trailing_pico`). Resetado em
+           `on_session_start`.
+        2. So' quando o robo esta' decidindo o PRIMEIRO armamento de uma
+           nova `EnterLimit` (`_next_side_to_arm()` devolveu um lado e NAO
+           havia ordem pendente -- o ramo que REANCORA uma ordem ja'
+           pendente, ver o fix do item 4.9 acima, NUNCA passa por este gate:
+           reancorar nao e' "uma nova entrada", e' a MESMA ordem seguindo o
+           preco): soma o volume em `self._historico_recente` (inclui a
+           barra/tick ATUAL -- diferente da janela do script de medicao,
+           que exclui o proprio tick de entrada, porque ali `entry_ts` e' o
+           instante de PREENCHIMENTO, nao de ARMAMENTO; aqui o gate decide
+           ANTES de a ordem sequer existir, entao o "agora" ja' faz parte do
+           que aconteceu). Se a soma ficar `<= gate_volume_min`, esta
+           chamada de `on_bar` NAO arma nada (devolve `[]`, mesmo espirito
+           de "espera a proxima chamada" que `max_trades_per_side` esgotado
+           ja' usa acima) -- tenta de novo na proxima barra/tick, com a
+           janela recalculada.
+        3. `self.gate_bloqueios` (contador simples, NUNCA resetado em
+           `on_session_start` -- soma a vida INTEIRA do backtest/sessao ao
+           vivo, nao por pregao) conta quantas vezes o passo 2 bloqueou um
+           armamento que `_next_side_to_arm()` ja' tinha decidido -- e' o
+           numero que os scripts de medicao desta rodada leem para reportar
+           "quantas entradas o gate impediu".
+
+        `gate_volume_min` e' OBRIGATORIO (sem default "vencedor", mesmo
+        padrao de `trailing_recuo_ticks`) quando `gate_atividade_ativo=True`:
+        `ValueError` se vier `None` junto -- e' justamente a decisao que os
+        scripts de medicao desta rodada existem para informar, nao para
+        assumir aqui.
+
+        `reancora_min_segundos` / `reancora_min_ticks` (2026-09-07) -- FREIO
+        DE CADENCIA DE ORDENS. Diferente de `defesa_ativa`/`trailing_ativo`/
+        `gate_atividade_ativo`, este NAO e' opt-in: vem LIGADO por padrao,
+        porque sem ele o comportamento default do robo e' indeployavel. Ver a
+        nota datada de 2026-09-07 no topo do modulo para a medicao que
+        motivou (dezenas de milhares de envios por pregao, ate' 3.446 numa
+        unica janela de 60s, contra o teto de 30 de
+        `live.intraday_runtime.MAX_ENVIOS_POR_MINUTO`).
+
+        `reancora_min_segundos` e' a espera minima entre duas ordens que a
+        CORRETORA ve, e vale para os dois caminhos que produziam enxurrada:
+        reprecificar a pendente (`_pode_reprecar`) e rearmar depois de uma
+        RECUSA (`_pode_armar_apos_recusa`). Nao vale para o rearme depois de
+        um FILL -- a mecanica de reload (fecha -> rearma no mesmo nivel) e' o
+        robo, e freia-la seria trocar o desenho, nao proteger a execucao.
+
+        E' o portao que da' a GARANTIA, e por isso carrega o default: limita
+        cada um dos dois caminhos a `60/valor` ordens por minuto por
+        CONSTRUCAO, faca o mercado o que fizer. Um limiar de DERIVA sozinho
+        nao garante nada -- reduz a frequencia media, mas numa arrancada o
+        preco cruza o limiar quantas vezes quiser dentro do mesmo minuto
+        (medido em 2026-08-31: `reancora_min_ticks=4` sem freio de tempo
+        ainda deu 74 envios no pior minuto, e travaria o robo).
+
+        Default `10.0`s escolhido por MEDICAO. Grade 6/10/15s no motor tick,
+        capital real R$375, 126 pregoes INTEIROS de WDO@ (`WDO_A_.parquet`),
+        distribuicao do PIOR minuto de cada pregao contra o teto de 30:
+
+            valor    p50   p90   p95   p99   MAX   pregoes que TRAVAM
+             6s       11    19    22    30    33        2 / 126
+            10s        9    18    22    24    26        0 / 126
+            15s        9    17    18    32    36        2 / 126
+
+        `10s` e' o UNICO da grade que nunca trava em 126 pregoes -- e o
+        criterio nao e' a media, e' o pior caso, porque UMA travada custa o
+        pregao inteiro. Repare que a relacao NAO e' monotonica: 15s freia
+        mais e mesmo assim trava (2026-08-07 e 2026-08-12, pico de 34 e 36),
+        porque mudar a cadencia muda QUAIS pregoes saturam e a rajada de
+        rearme pos-fill (que este freio nao toca) e' o que sobra no pico.
+        Nao extrapole "mais freio = mais seguro" sem re-medir.
+
+        LIQUIDO ficou FORA da escolha de proposito: com R$375 o robo opera no
+        proprio piso de capital, e mudar o freio em 1 segundo flipa o pregao
+        inteiro entre "opera 400 trades" e "cai no laco de recusa por caixa"
+        (2026-04-02: R$+2.945 com 6s, R$-47,50 com 10s; 2026-04-01 inverte o
+        sinal). Isso e' o piso de capital falando, nao o freio -- escolher
+        default por esse numero seria ler ruido. Os totais dos 126 pregoes
+        ficam dentro da mesma faixa nos tres (R$66k-79k), o que confirma que
+        a diferenca e' ruido, nao sinal.
+
+        RESIDUAL conhecido, e e' o numero que o dono precisa ver antes de
+        subir isto: mesmo no default, o pior minuto medido chega a 26 de 30
+        (~87% do teto) -- a folga e' de 4 ordens. Esse pico e' 100% rearme
+        POS-FILL num pregao que satura `max_trades_per_side` (2026-03-23:
+        400 trades, 400 armamentos, ZERO recusa por capital) -- nao ha'
+        freio a aplicar ali sem mudar o robo.
+        E' o motivo pelo qual `max_trades_per_side` deixou de ser um teto
+        folgado e passou a ser LOAD-BEARING para a cadencia: subi-lo empurra
+        esse pico por cima de 30. Ver a docstring daquele parametro.
+
+        E o pico mora na PRIMEIRA HORA. Pior janela de 60s por hora BRT nos
+        pregoes que saturam (default 10s): 2026-03-23 = 26 as 09:01 (contra
+        13 na hora seguinte); 2026-03-26 = 18 as 09:00 (12 na seguinte);
+        2026-03-12 = 17 as 11:46. Quem for re-medir isto com outro cache de
+        tick precisa garantir que o cache TEM a manha: `WDO_A_f1.parquet`
+        cobre so' ~14:58-18:29 (janela pedida ao MT5 saiu deslocada) e
+        subestimaria o pico por construcao. Os numeros desta docstring vem de
+        `WDO_A_.parquet`, que cobre 12:00-21:29 UTC = 09:00-18:29 BRT.
+
+        `0.0` restaura o comportamento sem freio (so' para medir o baseline;
+        nunca para operar).
+
+        `reancora_min_ticks` fica em `1` (nao filtra nada) por medicao, nao
+        por omissao: o portao de tempo ja' resolve, e a deriva sozinha nao
+        garante teto nenhum (numero acima). Fica exposto porque e' o botao
+        certo caso o custo de fila (`queue_ahead_qty`) passe a ser
+        modelado -- ai reprecar pouco tem valor proprio."""
         if (risco_pct_por_trade is None) != (point_value_brl is None):
             raise ValueError(
                 "wdo_grid_reload_maker: passe `risco_pct_por_trade` e "
                 "`point_value_brl` JUNTOS (um sem o outro nao computa nada) "
                 "ou nenhum dos dois."
+            )
+        if trailing_ativo and trailing_recuo_ticks is None:
+            raise ValueError(
+                "wdo_grid_reload_maker: trailing_ativo=True exige "
+                "trailing_recuo_ticks explicito (quantos ticks de recuo desde "
+                "o pico fecham a posicao) -- None nao e' uma regra, e' decisao "
+                "que ainda falta tomar."
+            )
+        if trailing_recuo_ticks is not None and trailing_recuo_ticks < 0:
+            raise ValueError(
+                "wdo_grid_reload_maker: trailing_recuo_ticks nao pode ser "
+                "negativo."
+            )
+        if gate_atividade_ativo and gate_volume_min is None:
+            raise ValueError(
+                "wdo_grid_reload_maker: gate_atividade_ativo=True exige "
+                "gate_volume_min explicito (limiar de volume abaixo do qual "
+                "o robo NAO arma uma nova entrada) -- None nao e' uma regra, "
+                "e' decisao que ainda falta tomar (medir antes)."
+            )
+        if gate_volume_min is not None and gate_volume_min < 0:
+            raise ValueError(
+                "wdo_grid_reload_maker: gate_volume_min nao pode ser "
+                "negativo."
+            )
+        if gate_janela_segundos <= 0:
+            raise ValueError(
+                "wdo_grid_reload_maker: gate_janela_segundos deve ser "
+                "positivo."
+            )
+        if reancora_min_segundos < 0:
+            raise ValueError(
+                "wdo_grid_reload_maker: reancora_min_segundos nao pode ser "
+                "negativo (0 desliga o freio -- ver a docstring)."
+            )
+        if reancora_min_ticks < 1:
+            raise ValueError(
+                "wdo_grid_reload_maker: reancora_min_ticks deve ser >= 1 -- "
+                "abaixo de 1 tick nao existe nivel diferente para reprecar."
             )
         self.symbol = symbol
         self.tick_size = tick_size
@@ -475,6 +914,8 @@ class WdoGridReloadMaker(IntradayStrategy):
         self.profit_ticks = profit_ticks
         self.stop_ticks = stop_ticks
         self.reanchor_mode = reanchor_mode
+        self.reancora_min_segundos = float(reancora_min_segundos)
+        self.reancora_min_ticks = int(reancora_min_ticks)
         self.max_trades_per_side = max_trades_per_side
         self.session_stop_brl = None if session_stop_brl is None else abs(session_stop_brl)
         self.quantity = quantity
@@ -490,6 +931,13 @@ class WdoGridReloadMaker(IntradayStrategy):
         self.defesa_ativa = bool(defesa_ativa)
         self.defesa_gatilho_stop_pct = float(defesa_gatilho_stop_pct)
         self.defesa_alvo_proximidade_pct = float(defesa_alvo_proximidade_pct)
+        self.trailing_ativo = bool(trailing_ativo)
+        self.trailing_recuo_ticks = (
+            None if trailing_recuo_ticks is None else int(trailing_recuo_ticks)
+        )
+        self.gate_atividade_ativo = bool(gate_atividade_ativo)
+        self.gate_volume_min = None if gate_volume_min is None else float(gate_volume_min)
+        self.gate_janela_segundos = int(gate_janela_segundos)
 
         self._state = _SessionState()
         # Estado de "ja armou a defesa de recuo" por POSICAO -- chave
@@ -499,6 +947,28 @@ class WdoGridReloadMaker(IntradayStrategy):
         # _state`. So' cresce (nunca desarma dentro do mesmo trade) -- e' zerado
         # inteiro a cada pregao, entao nunca acumula alem do que a sessao usou.
         self._defesa_armada: dict[tuple[str, pd.Timestamp], bool] = {}
+        # Melhor preco favoravel alcancado desde a entrada, por POSICAO --
+        # mesma chave/mesmo motivo de `self._defesa_armada` (snapshot
+        # read-only de `IntradayOpenPosition`, sem onde escrever de volta um
+        # estado persistente). So' importa quando `self.trailing_ativo` e'
+        # `True` -- ver a docstring do parametro `trailing_ativo` acima para
+        # a formula exata. Resetado em `on_session_start`.
+        self._trailing_pico: dict[tuple[str, pd.Timestamp], float] = {}
+        # Buffer do gate de atividade (`gate_atividade_ativo`) -- deque de
+        # `(ts, volume)` de CADA barra/tick recebido, recortado para os
+        # ultimos `gate_janela_segundos` segundos a cada `on_bar`. Resetado
+        # em `on_session_start`, mesmo padrao de `self._defesa_armada`/
+        # `self._trailing_pico`. So' importa quando `self.gate_atividade_
+        # ativo` e' `True`. Ver a docstring do parametro `gate_atividade_
+        # ativo` em `__init__` para a mecanica completa.
+        self._historico_recente: deque[tuple[pd.Timestamp, float]] = deque()
+        # Contador de quantos armamentos o gate BLOQUEOU -- NUNCA resetado
+        # em `on_session_start` (soma a vida INTEIRA do backtest/sessao ao
+        # vivo, nao por pregao, diferente do resto do estado acima): e' o
+        # numero que os scripts de medicao desta rodada leem para reportar
+        # "quantas entradas o gate impediu". So' cresce quando `self.
+        # gate_atividade_ativo` e' `True`.
+        self.gate_bloqueios = 0
         # Atualizado por `on_capital_update`, chamado pelo motor logo antes
         # de cada `on_bar` -- 0.0 so' antes da primeira barra real. Desde
         # 2026-09-03 (LICOES_DE_PRODUCAO.md item 3.14) o warm start (replay
@@ -512,6 +982,8 @@ class WdoGridReloadMaker(IntradayStrategy):
     def on_session_start(self, session_date) -> None:
         self._state = _SessionState()
         self._defesa_armada = {}
+        self._trailing_pico = {}
+        self._historico_recente = deque()
 
     def on_capital_update(self, cash_brl: float) -> None:
         """Guarda o caixa acumulado para a proxima `EnterLimit` usar -- so'
@@ -528,6 +1000,20 @@ class WdoGridReloadMaker(IntradayStrategy):
         PRODUCAO.md`, item 1.14): 20/20 recusas por capital amostradas
         deixavam o robo mudo pelo resto do pregao antes deste hook existir."""
         self._state.pending_side = None
+        # Mesma razao do fill confirmado em `on_bar`: sem ordem parada o
+        # freio de reprecificacao nao tem referencia, e uma recusa nao pode
+        # herdar a espera da ordem que nao existe mais.
+        self._state.pending_level = None
+        self._state.pending_level_ts = None
+        # ... mas a RECUSA em si vira o relogio do freio de rearme (ver
+        # `_pode_armar_apos_recusa`): zerar `pending_side` sem isto devolve o
+        # robo ao ramo de ARMAR, que nao passa pelo freio de reprecificacao
+        # -- e uma recusa que se repete a cada tick (capital abaixo do piso)
+        # vira uma enxurrada de ordens NOVAS. Medido no motor tick,
+        # 2026-03-04: 2.866 recusas por capital num pregao so', 2.874
+        # armamentos, pico de 29 envios em 60s com o freio de
+        # reprecificacao JA' ligado -- o teto ao vivo e' 30.
+        self._state.ultima_recusa_ts = pd.Timestamp(ts)
 
     def _quantidade_da_entrada(self) -> int | None:
         """`self.quantity` intacto (pode ser `None`) por default -- o motor
@@ -587,6 +1073,69 @@ class WdoGridReloadMaker(IntradayStrategy):
         offset = self.stop_ticks * self.tick_size
         return level_price - offset if side == "long" else level_price + offset
 
+    def _pode_reprecar(self, bar: Bar, state: _SessionState) -> bool:
+        """A ordem pendente pode ser SUBSTITUIDA nesta barra?
+
+        Os dois portoes do freio de reprecificacao (ver `reancora_min_
+        segundos`/`reancora_min_ticks` em `__init__`). Ambos precisam passar:
+        o de TEMPO e' o que da' o teto duro de envios por minuto (no maximo
+        `60/reancora_min_segundos` substituicoes por minuto, seja qual for o
+        que o mercado faca); o de DERIVA e' o que evita gastar essa cota
+        numa ordem que mal saiu do lugar.
+
+        Estado ausente (`pending_level`/`pending_level_ts` em `None`) devolve
+        `True` -- e' o caso de uma sessao restaurada por `warm_start_
+        calibration` onde a ordem pendente veio de um processo anterior: sem
+        saber quando ela foi armada, o freio nao tem contra o que medir, e
+        travar a reancoragem por prudencia reintroduziria exatamente a ordem
+        estacionada que o item 4.9 corrigiu. O teto de 30/60s do
+        `live.intraday_runtime` continua valendo como rede.
+
+        `bar.ts` (nao relogio de parede) de proposito: e' o mesmo carimbo que
+        `_check_cadencia_de_ordens` usa ao vivo (`evento.ts`), e o unico que
+        existe no backtest -- medir com dois relogios diferentes faria o
+        numero calibrado aqui nao descrever o que acontece la'."""
+        if state.pending_level_ts is not None and self.reancora_min_segundos > 0:
+            espera = (bar.ts - state.pending_level_ts).total_seconds()
+            if espera < self.reancora_min_segundos:
+                return False
+        if state.pending_level is not None and self.reancora_min_ticks > 1:
+            # Nivel que ESTE tick produziria, contra o que esta' parado. Nao
+            # usa `_level_price` porque `state.anchor_price` so' e' atualizado
+            # depois deste portao -- o deslocamento `level_spacing_ticks` e'
+            # o mesmo nos dois lados da subtracao e se cancela, entao comparar
+            # as ANCORAS mede exatamente a mesma deriva.
+            nivel_agora = no_tick(bar.close, self.tick_size)
+            ancora_parada = (state.pending_level
+                             + self.level_spacing_ticks * self.tick_size
+                             * (1 if state.pending_side == "long" else -1))
+            deriva_ticks = abs(nivel_agora - ancora_parada) / self.tick_size
+            if deriva_ticks < self.reancora_min_ticks - 1e-9:
+                return False
+        return True
+
+    def _pode_armar_apos_recusa(self, bar: Bar, state: _SessionState) -> bool:
+        """Ja' passou a espera desde a ULTIMA recusa? (`True` se nunca houve.)
+
+        Simetrico de `_pode_reprecar`, com a mesma constante
+        (`reancora_min_segundos`) e pelo mesmo motivo -- o que interessa e' o
+        numero de ORDENS por minuto que chegam a' corretora, e tanto faz se
+        cada uma e' substituicao ou ordem nova: `_check_cadencia_de_ordens`
+        conta as duas no mesmo balde.
+
+        NAO segura o rearme depois de um FILL: `ultima_recusa_ts` e' apagado
+        quando a posicao abre (ver `on_bar`), entao a mecanica de reload
+        (fecha -> rearma no mesmo nivel) continua saindo no tick seguinte,
+        sem atraso. O freio so' morde a repeticao do que ACABOU DE FALHAR.
+
+        Nao substitui `on_order_rejected` nem o desfaz (item 1.14): o robo
+        continua rearmando sozinho depois de uma recusa -- so' que a cada
+        `reancora_min_segundos`, em vez de a cada tick."""
+        if state.ultima_recusa_ts is None or self.reancora_min_segundos <= 0:
+            return True
+        return ((bar.ts - state.ultima_recusa_ts).total_seconds()
+                >= self.reancora_min_segundos)
+
     def _fills_of(self, side: str) -> int:
         return self._state.long_fills if side == "long" else self._state.short_fills
 
@@ -603,6 +1152,24 @@ class WdoGridReloadMaker(IntradayStrategy):
             if self._fills_of(side) < self.max_trades_per_side:
                 return side
         return None
+
+    def _registrar_atividade(self, ts: pd.Timestamp, bar: Bar) -> None:
+        """Empilha `(ts, bar.volume)` em `self._historico_recente` e
+        descarta o que ja' saiu da janela de `gate_janela_segundos` -- mesmo
+        padrao de recorte de `RollingVolumeWindow.registrar` (`strategy.
+        daytrade.base`), reimplementado aqui (nao reusado) porque a
+        granularidade e' outra (segundos fixos, nao minutos medios) e este
+        gate nao precisa de cauda do pregao anterior. So' chamada quando
+        `self.gate_atividade_ativo` ja e' `True`."""
+        self._historico_recente.append((ts, bar.volume))
+        limite = ts - pd.Timedelta(seconds=self.gate_janela_segundos)
+        while self._historico_recente and self._historico_recente[0][0] <= limite:
+            self._historico_recente.popleft()
+
+    def _volume_recente(self) -> float:
+        """Soma do volume em `self._historico_recente` -- ja' vem recortado
+        para a janela de `gate_janela_segundos` por `_registrar_atividade`."""
+        return sum(v for _, v in self._historico_recente)
 
     def _defesa_deve_fechar(self, pos: IntradayOpenPosition, bar: Bar) -> bool:
         """`True` se a defesa de recuo (`defesa_ativa`) manda fechar `pos`
@@ -644,6 +1211,34 @@ class WdoGridReloadMaker(IntradayStrategy):
         fracao_restante = dist_restante_ticks / dist_total_ticks
         return fracao_restante <= self.defesa_alvo_proximidade_pct + eps
 
+    def _trailing_deve_fechar(self, pos: IntradayOpenPosition, bar: Bar) -> bool:
+        """`True` se o trailing sobre o lucro (`trailing_ativo`) manda fechar
+        `pos` AGORA -- ver a docstring do parametro `trailing_ativo` em
+        `__init__` para a mecanica completa e a formula exata. So' chamada
+        quando `self.trailing_ativo` ja e' `True` (e, por construcao de
+        `on_bar`, `pos.current_target` e' sempre `None` neste caminho --
+        quem carrega o piso e' `self.profit_ticks`, nao o alvo da posicao)."""
+        if self.tick_size <= 0:
+            return False  # sem grade de preco, nada a derivar
+        eps = 1e-9
+        chave = (pos.side, pos.entry_ts)
+        preco_favoravel = bar.high if pos.side == "long" else bar.low
+        pico_anterior = self._trailing_pico.get(chave, pos.entry_price)
+        pico = (max(pico_anterior, preco_favoravel) if pos.side == "long"
+                else min(pico_anterior, preco_favoravel))
+        self._trailing_pico[chave] = pico
+
+        ticks_do_pico = abs(pico - pos.entry_price) / self.tick_size
+        if ticks_do_pico + eps < self.profit_ticks:
+            return False  # piso ainda nao alcancado -- nunca fecha antes disso a favor
+
+        preco_adverso = bar.low if pos.side == "long" else bar.high
+        recuo_ticks = (
+            (pico - preco_adverso) if pos.side == "long" else (preco_adverso - pico)
+        ) / self.tick_size
+        recuo_ticks = max(0.0, recuo_ticks)
+        return recuo_ticks > (self.trailing_recuo_ticks or 0) + eps
+
     def on_bar(
         self,
         ts: pd.Timestamp,
@@ -653,6 +1248,14 @@ class WdoGridReloadMaker(IntradayStrategy):
     ) -> list[IntradayAction]:
         state = self._state
         actions: list[IntradayAction] = []
+
+        if self.gate_atividade_ativo:
+            # Atualiza o buffer de atividade em TODA chamada -- nao so'
+            # quando ha' sinal de entrada -- para a janela de
+            # `gate_janela_segundos` estar sempre corrente quando o robo
+            # precisar consulta-la mais abaixo. Ver a docstring do
+            # parametro `gate_atividade_ativo` em `__init__`.
+            self._registrar_atividade(ts, bar)
 
         if state.open_price is None:
             # `no_tick`: a serie CONTINUA do MT5 (`WDO@`) reporta preco fora
@@ -686,6 +1289,15 @@ class WdoGridReloadMaker(IntradayStrategy):
                     state.short_fills += 1
                 state.open_side = state.pending_side
                 state.pending_side = None
+                # Nao ha' mais ordem parada: o freio de reprecificacao nao
+                # tem contra o que medir, e deixar o rastro da anterior faria
+                # o proximo armamento herdar uma espera que nao e' dele.
+                state.pending_level = None
+                state.pending_level_ts = None
+                # PREENCHEU -- o caminho normal do robo. Apaga o relogio de
+                # recusa para o rearme pos-fechamento (a mecanica de reload,
+                # o coracao desta estrategia) sair na hora, sem freio nenhum.
+                state.ultima_recusa_ts = None
             if self.defesa_ativa:
                 # Prioridade da defesa sobre a logica normal desta chamada
                 # (que aqui e' so' "nao faca nada, alvo/stop ja sao geridos
@@ -693,6 +1305,16 @@ class WdoGridReloadMaker(IntradayStrategy):
                 for pos in positions:
                     if self._defesa_deve_fechar(pos, bar):
                         return [Exit(reason="defesa_recuo")]
+            if self.trailing_ativo:
+                # `initial_target=None` nesta entrada (ver o fim desta funcao)
+                # -- o alvo estatico de sempre NUNCA existiu para esta
+                # posicao, entao e' este `on_bar`, e so' ele, quem decide
+                # quando o lucro fecha. Ver a docstring do parametro
+                # `trailing_ativo` para a formula exata.
+                for pos in positions:
+                    if self._trailing_deve_fechar(pos, bar):
+                        return [Exit(reason="trailing_lucro")]
+                return []
             return []  # alvo e stop ja sao geridos pelo motor (initial_target/initial_stop)
 
         # Sem posicao. Se `open_side` ainda estava marcado, a posicao que
@@ -705,29 +1327,103 @@ class WdoGridReloadMaker(IntradayStrategy):
             state.open_side = None
 
         if state.pending_side is not None:
-            return actions  # ja ha ordem-limite pendente (entrada ainda nao preenchida), so' espera
-
-        next_side = self._next_side_to_arm()
-        if next_side is None:
-            return actions  # os dois lados esgotaram max_trades_per_side nesta sessao
+            if self.reanchor_mode != "rolling_last_price":
+                return actions  # "fixed_session_open": ancora nunca muda, nada a reprecar
+            # 2026-09-04 (bug real, LICOES_DE_PRODUCAO.md item 4.9): ate' aqui
+            # esta funcao devolvia cedo SEMPRE que ja havia uma EnterLimit
+            # pendente, entao uma ordem que nao tocava ficava ESTACIONADA pelo
+            # resto do pregao se o preco se afastasse e nao voltasse -- medido
+            # em producao: 0%/8,0%/14,3%/11,1%/0% do pregao ATIVO (1a entrada
+            # ate' ultima saida) na semana de 2026-08-31 a 2026-09-04, com o
+            # robo chegando a NAO OPERAR em 2 dos 5 pregoes apesar do mercado
+            # andar dezenas de pontos. Pedido do dono: "se nao bater no preco
+            # e surgir outro sinal, a [ordem] pendente deve ser cancelada e a
+            # do novo sinal deve ser aberta" -- este robo nao tem sinal
+            # direcional separado da ancora, entao o "outro sinal" e' o
+            # proprio nivel recalculado a cada barra. Reancora AQUI tambem
+            # (mesmo com ordem pendente), para o MESMO lado que ja estava
+            # pendente -- so' o preco da ordem pode mudar, nunca o lado.
+            #
+            # FREIO DE REPRECIFICACAO (2026-09-07) -- ver `reancora_min_
+            # segundos`/`reancora_min_ticks` em `__init__`. Sem ele este ramo
+            # emite uma `EnterLimit` nova a cada TICK em que o nivel muda, e
+            # ao vivo cada uma delas vira cancelar+reenviar na corretora:
+            # medido no motor tick, ate' 38.260 envios num unico pregao e
+            # 1.162 numa unica janela de 60s -- contra o teto de 30/60s de
+            # `live.intraday_runtime.MAX_ENVIOS_POR_MINUTO`, que NAO recusa
+            # so' aquela ordem: liga `disaster_halt` e para o robo pelo resto
+            # do pregao. O freio mora AQUI (na estrategia), nunca no `live/`:
+            # regra do projeto e' que `live/` nao decide nada, e um freio que
+            # so' existisse ao vivo faria o backtest deixar de descrever a
+            # producao.
+            if not self._pode_reprecar(bar, state):
+                return actions
+            next_side = state.pending_side
+        else:
+            # FREIO DE REARME APOS RECUSA (2026-09-07) -- o segundo lado do
+            # mesmo problema. Uma `EnterLimit` recusada (motor: teto de
+            # capital; ao vivo: margem) zera `pending_side`, e sem este
+            # portao o robo cai AQUI e arma de novo no tick seguinte, com o
+            # mesmo caixa que acabou de ser recusado -- laco que so' para
+            # quando o pregao acaba. Nao passa pelo freio de reprecificacao
+            # acima porque nao ha' ordem pendente para reprecar: sao ordens
+            # NOVAS. Medido no motor tick (2026-03-04, capital real R$375):
+            # 2.874 armamentos para 7 trades, 2.866 deles recusados por
+            # capital, pico de 29 envios/60s com o freio de reprecificacao
+            # ja' ligado -- o teto ao vivo e' 30.
+            if not self._pode_armar_apos_recusa(bar, state):
+                return actions
+            next_side = self._next_side_to_arm()
+            if next_side is None:
+                return actions  # os dois lados esgotaram max_trades_per_side nesta sessao
+            if self.gate_atividade_ativo and self._volume_recente() <= self.gate_volume_min:
+                # Gate de atividade (`gate_atividade_ativo`): so' se aplica
+                # ao PRIMEIRO armamento de uma entrada (este ramo -- nunca ao
+                # ramo de REANCORAGEM de ordem ja' pendente, acima). Volume
+                # recente insuficiente -- nao arma nada nesta chamada, mesmo
+                # espirito de "espera a proxima" que `max_trades_per_side`
+                # esgotado ja' usa. Ver a docstring do parametro em
+                # `__init__` para a mecanica completa.
+                self.gate_bloqueios += 1
+                return actions
 
         if self.reanchor_mode == "rolling_last_price":
             # Rearma seguindo o preco -- a ancora vira o FECHAMENTO da barra
             # que acabou de fechar (`bar`, ja conhecida, sem look-ahead: a
-            # ordem so' executa em barra FUTURA). Mesmo espirito do modo
-            # "rolling" de `Gremah` (`gremah.py::on_bar`, `anchor = bar.
-            # close`) -- ver `ReanchorMode` para o porque de nao usar
-            # "fixed_session_open" por default.
+            # ordem so' executa em barra FUTURA -- ver `_on_closed_bar_core`
+            # em `backtest.intraday.machine`, passo (3b) resolve o fill da
+            # ordem pendente ANTES de chamar `on_bar` da barra corrente,
+            # entao a EnterLimit devolvida aqui so' pode ser tocada a partir
+            # da PROXIMA barra). Mesmo espirito do modo "rolling" de `Gremah`
+            # (`gremah.py::on_bar`, `anchor = bar.close`) -- ver
+            # `ReanchorMode` para o porque de nao usar "fixed_session_open"
+            # por default.
             state.anchor_price = no_tick(bar.close, self.tick_size)
         # "fixed_session_open": `state.anchor_price` ja' foi fixado em
         # `state.open_price` na primeira barra da sessao e nunca muda.
 
         state.pending_side = next_side
         level_price = self._level_price(next_side)
+        # Marca a ordem que passa a estar parada no book: o freio de
+        # reprecificacao mede DERIVA (contra `pending_level`) e ESPERA
+        # (contra `pending_level_ts`) a partir da ULTIMA emissao -- tanto de
+        # um armamento novo quanto de uma substituicao. Marcar so' nas
+        # substituicoes deixaria a 1a reprecificacao de cada rodada passar
+        # livre, que e' justamente o instante de maior rajada (logo apos o
+        # fill anterior).
+        state.pending_level = level_price
+        state.pending_level_ts = bar.ts
         return [EnterLimit(
             side=next_side,
             limit_price=level_price,
-            initial_target=self._target_price(next_side, level_price),
+            # `trailing_ativo`: SEM alvo estatico -- o motor fecharia a
+            # posicao no instante em que `profit_ticks` fosse tocado (mesma
+            # prioridade "(1) stop/target automatico" de sempre), o que
+            # impediria por construcao qualquer monitoramento POSTERIOR ao
+            # piso. Ver a docstring do parametro `trailing_ativo` em
+            # `__init__`. `False` (default): comportamento IDENTICO a antes.
+            initial_target=(None if self.trailing_ativo
+                             else self._target_price(next_side, level_price)),
             initial_stop=self._stop_price(next_side, level_price),
             quantity=self._quantidade_da_entrada(),
             reason="wdo_grid_reload_" + next_side,
