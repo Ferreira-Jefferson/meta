@@ -286,3 +286,59 @@ def test_session_bars_until_sem_dado_devolve_vazio(monkeypatch):
     feed = _feed(monkeypatch, pd.DataFrame(), "2026-08-21 13:10:00")
     assert feed.session_bars_until(
         date(2026, 8, 21), pd.Timestamp("2026-08-21 13:05", tz="UTC")) == []
+
+
+# ---------- "nada novo" vs. "nao consegui ler" (incidente 2026-09-08) -------
+
+def _feed_com_falha(monkeypatch, agora: str, falhar: list[bool]):
+    """Feed cujo `fetch_ticks_range` chama `on_error` (e devolve vazio) nas
+    leituras marcadas em `falhar` -- exatamente o que
+    `mt5_ticks_source._falha_de_leitura` passou a fazer quando o terminal
+    devolve `None`/vazio-com-erro."""
+    passos = {"n": 0}
+
+    def _fake(symbol, start, end, on_error=None, **kw):
+        i = passos["n"]
+        passos["n"] += 1
+        if i < len(falhar) and falhar[i] and on_error is not None:
+            on_error(symbol, RuntimeError("copy_ticks_range devolveu None (last_error=(-4, 'x'))"))
+        return pd.DataFrame()
+
+    monkeypatch.setattr(tick_feed_mod, "fetch_ticks_range", _fake)
+    return MT5TickFeed(
+        "WDO@",
+        now_fn=lambda: datetime.fromisoformat(agora).replace(tzinfo=timezone.utc),
+    )
+
+
+def test_leitura_falhada_fica_visivel_apesar_da_lista_vazia(monkeypatch):
+    """O buraco de 44,8 min de 2026-09-08 foi invisivel porque
+    `closed_bars_since` devolve lista vazia nos DOIS casos -- papel parado e
+    terminal cego. O contrato "vazio, nunca excecao" nao mudou; a falha agora
+    viaja por fora dele."""
+    feed = _feed_com_falha(monkeypatch, "2026-09-08 14:20:00", [True])
+
+    assert feed.closed_bars_since(None) == []
+    assert feed.falha_de_leitura is not None
+    assert "copy_ticks_range" in feed.falha_de_leitura
+
+
+def test_janela_legitimamente_vazia_nao_marca_falha(monkeypatch):
+    """A outra metade: mercado sem negocio novo devolve vazio SEM falha. Se
+    esta assercao cair, o alarme dispara todo passo de papel parado e vira
+    ruido -- que e' o modo de falha do item 6.15."""
+    feed = _feed_com_falha(monkeypatch, "2026-09-08 14:20:00", [False])
+
+    assert feed.closed_bars_since(None) == []
+    assert feed.falha_de_leitura is None
+
+
+def test_falha_apaga_sozinha_na_leitura_seguinte(monkeypatch):
+    """Alarme que nao apaga sozinho e' alarme que ninguem le: a marca vale
+    pela leitura ATUAL, nunca por uma de cinco minutos atras."""
+    feed = _feed_com_falha(monkeypatch, "2026-09-08 14:20:00", [True, False])
+
+    feed.closed_bars_since(None)
+    assert feed.falha_de_leitura is not None
+    feed.closed_bars_since(None)
+    assert feed.falha_de_leitura is None

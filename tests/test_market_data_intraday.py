@@ -370,3 +370,85 @@ def test_merge_m1_resgata_barra_antiga_ausente_do_fetch_novo(tmp_path):
 
 def test_load_m1_sem_parquet_devolve_vazio(tmp_path):
     assert storage.load_m1("PMAM3", data_dir=tmp_path).empty
+
+
+# ---------- "nada novo" vs. "nao consegui ler" (incidente 2026-09-08) -------
+#
+# 44,8 min de cegueira do terminal ficaram indistinguiveis de um papel parado
+# porque `resultado is None or len(resultado) == 0 -> DataFrame()` engolia os
+# dois casos no mesmo `return`, sem chamar `on_error`. Os tres testes abaixo
+# fixam a fronteira MEDIDA no terminal real (Rico-PRD build 6182, 2026-09-08):
+# `None` e vazio-com-`last_error`-negativo sao FALHA; vazio com
+# `last_error() == (1, 'Success')` e' o caso NORMAL e nao pode virar alarme.
+
+def _fake_mt5_ticks_com_erro(resultado, last_error):
+    mod = types.ModuleType("MetaTrader5")
+    mod.COPY_TICKS_TRADE = 2
+    mod.initialize = lambda **kwargs: True
+    mod.last_error = lambda: last_error
+    mod.symbol_select = lambda symbol, enable=True: True
+    mod.copy_ticks_range = lambda symbol, start, end, flags: resultado
+    return mod
+
+
+def test_fetch_ticks_range_reporta_quando_o_terminal_devolve_none(monkeypatch):
+    """`copy_ticks_range` -> `None` e' o sinal INEQUIVOCO de leitura falhada
+    (medido: simbolo inexistente devolve None com last_error (-4, 'Not
+    found')). Antes de 2026-09-08 virava DataFrame vazio silencioso."""
+    monkeypatch.setitem(sys.modules, "MetaTrader5",
+                        _fake_mt5_ticks_com_erro(None, (-4, "Terminal: Not found")))
+    erros = []
+
+    df = mt5_ticks_source.fetch_ticks_range(
+        "WDO@", object(), object(), on_error=lambda k, e: erros.append((k, str(e))))
+
+    assert df.empty
+    assert len(erros) == 1
+    assert erros[0][0] == "WDO@"
+    assert "copy_ticks_range" in erros[0][1] and "-4" in erros[0][1]
+
+
+def test_fetch_ticks_range_reporta_vazio_com_last_error_negativo(monkeypatch):
+    """Vazio NAO e' prova de mercado parado: se o pacote deixou codigo de erro
+    negativo em `last_error()`, a leitura falhou."""
+    monkeypatch.setitem(sys.modules, "MetaTrader5",
+                        _fake_mt5_ticks_com_erro(_ticks_array([]), (-10000, "Internal fail")))
+    erros = []
+
+    df = mt5_ticks_source.fetch_ticks_range(
+        "WDO@", object(), object(), on_error=lambda k, e: erros.append((k, str(e))))
+
+    assert df.empty
+    assert len(erros) == 1
+    assert "-10000" in erros[0][1]
+
+
+def test_fetch_ticks_range_nao_alarma_com_janela_legitimamente_vazia(monkeypatch):
+    """A outra metade da fronteira, e a mais importante: madrugada sem
+    negocio devolve array vazio com `last_error() == (1, 'Success')`. Alarmar
+    aqui transformaria papel parado em erro e o alarme viraria ruido."""
+    monkeypatch.setitem(sys.modules, "MetaTrader5",
+                        _fake_mt5_ticks_com_erro(_ticks_array([]), (1, "Success")))
+    erros = []
+
+    df = mt5_ticks_source.fetch_ticks_range(
+        "WDO@", object(), object(), on_error=lambda k, e: erros.append((k, str(e))))
+
+    assert df.empty
+    assert erros == []
+
+
+def test_fetch_m1_recent_reporta_quando_o_terminal_devolve_none(monkeypatch):
+    """Mesma fronteira no caminho M1. Nunca foi visto cegar, mas o `return`
+    que engolia era identico -- ver `feedback_audit_all_instances_of_pattern`
+    na memoria do projeto."""
+    mod = _make_fake_mt5_module(last_error=(-1, "Terminal: fail"))
+    mod.copy_rates_from_pos = lambda symbol, timeframe, start_pos, count: None
+    monkeypatch.setitem(sys.modules, "MetaTrader5", mod)
+    erros = []
+
+    df = mt5_source.fetch_m1_recent("WIN@", on_error=lambda k, e: erros.append((k, str(e))))
+
+    assert df.empty
+    assert len(erros) == 1
+    assert "copy_rates_from_pos" in erros[0][1]

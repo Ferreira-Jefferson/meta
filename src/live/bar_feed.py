@@ -59,6 +59,7 @@ import pandas as pd
 
 from backtest.intraday.engine import bar_from_row
 from core.b3_session import server_utc_offset_hours, utc_to_server_wall_clock
+from live.feed_health import RegistroDeLeitura
 from market_data_intraday.mt5_source import fetch_m1_range, fetch_m1_recent
 from strategy.daytrade.base import Bar
 
@@ -123,6 +124,22 @@ class MT5BarFeed:
         self._on_error = on_error
         self._now_fn = now_fn
         self._credentials = dict(login=login, password=password, server=server, path=path)
+        self._leitura = RegistroDeLeitura(on_error)
+
+    # ---------- saude da leitura -------------------------------------------
+
+    @property
+    def falha_de_leitura(self) -> Optional[str]:
+        """Falha da ULTIMA leitura, ou `None` se ela deu certo — inclusive
+        quando devolveu zero barra FECHADA, que e' o caso normal (o lote de
+        uma barra so' e' a barra em formacao).
+
+        Gemea de `MT5TickFeed.falha_de_leitura`, e presente aqui mesmo sem
+        incidente medido neste feed: o buraco de 2026-09-08 apareceu no feed
+        de tick, mas o `on_error` deste tambem nao ia a lugar nenhum, e
+        corrigir so' a instancia que mordeu e' como se perde a lembranca (ver
+        `live/feed_health.py`)."""
+        return self._leitura.falha
 
     # ---------- offset -----------------------------------------------------
 
@@ -155,8 +172,9 @@ class MT5BarFeed:
         """Barras M1 FECHADAS com `ts > after_ts`, em ordem cronologica.
         Lista vazia (nunca excecao) se o terminal falhar — mesmo contrato de
         `MT5Feed.quotes`."""
+        self._leitura.reset()
         df = fetch_m1_recent(
-            self.symbol, count=_RECENT_BARS, on_error=self._on_error,
+            self.symbol, count=_RECENT_BARS, on_error=self._leitura.callback,
             **self._credentials,
         )
         return self._closed(df, after_ts)
@@ -186,11 +204,12 @@ class MT5BarFeed:
         errada (mesmo raciocinio das defesas mantidas em
         `live/tick_feed.py`)."""
         meia_noite = datetime.combine(session, time(0, 0), tzinfo=timezone.utc)
+        self._leitura.reset()
         df = fetch_m1_range(
             self.symbol,
             _limite_servidor(meia_noite - timedelta(days=1)),
             _limite_servidor(meia_noite + timedelta(days=2)),
-            on_error=self._on_error,
+            on_error=self._leitura.callback,
             **self._credentials,
         )
         if df.empty:

@@ -548,6 +548,13 @@ class IntradayLiveRuntime:
             perda_maxima_dia_brl = FRACAO_PERDA_MAXIMA_DIA * self.initial_capital
         self.perda_maxima_dia_brl = float(perda_maxima_dia_brl)
         self.bar_feed = bar_feed
+        # Quantos passos SEGUIDOS o feed vem falhando a leitura do terminal.
+        # So em memoria, e nao no snapshot, de proposito: e' propriedade da
+        # SESSAO DE PROCESSO (um restart reconecta ao terminal e a contagem
+        # tem de recomecar do zero), e persistir faria o robo voltar do
+        # restart ja' gritando por uma cegueira que pode nao existir mais.
+        # Ver `_vigia_leitura_do_feed`.
+        self._falhas_de_leitura_seguidas = 0
         self.broker = broker
         self.notifier = notifier if notifier is not None else NullNotifier()
         self.execution_mode = execution_mode
@@ -903,6 +910,43 @@ class IntradayLiveRuntime:
         return resultado
 
     # ---------- log + alerta (mesma regra do lado diario) -----------------
+
+    def _vigia_leitura_do_feed(self, conn, account) -> None:
+        """Grava no diario quando o feed NAO CONSEGUE LER o terminal, e quando
+        volta a conseguir. Nao decide nada â€” so' tira o silencio.
+
+        Por que existe (2026-09-08, item 5.17 do `LICOES_DE_PRODUCAO.md`): o
+        terminal parou de entregar tick NOVO de WDO@ por 44,8 minutos e
+        `closed_bars_since` devolveu lista vazia em 538 passos seguidos, sem
+        UMA linha em lugar nenhum. Lista vazia e' o caso normal de um papel
+        parado, entao o proprio contrato do feed apagava o sintoma; a falha de
+        LEITURA, que e' outra coisa, agora viaja por fora
+        (`MT5TickFeed.falha_de_leitura`, ver `live/feed_health.py`).
+
+        Uma linha por TRANSICAO, nunca uma por passo: a 5s por passo, um
+        buraco de 45 min viraria 538 linhas iguais e o diario do dono ficaria
+        ilegivel justamente no pregao que ele mais precisa ler. A contagem de
+        passos entra na mensagem de recuperacao, que e' onde ela informa
+        quanto tempo o robo ficou cego.
+
+        Isto NAO e' o portao que impede a ordem velha â€” esse e'
+        `MAX_ATRASO_PARA_ORDEM_SEGUNDOS`, e ele continua sendo a unica
+        protecao. Aqui so' se registra, porque a causa do congelamento de
+        2026-09-08 segue desconhecida e a proxima vez precisa deixar rastro.
+        """
+        falha = getattr(self.bar_feed, "falha_de_leitura", None)
+        if falha:
+            self._falhas_de_leitura_seguidas += 1
+            if self._falhas_de_leitura_seguidas == 1:
+                self._log(conn, account.id, "error",
+                          f"feed nao conseguiu LER o terminal ({self.strategy.symbol}): {falha}"
+                          " -- nao e' 'sem negocio novo', e' leitura falhada")
+            return
+        if self._falhas_de_leitura_seguidas:
+            self._log(conn, account.id, "info",
+                      f"feed voltou a ler o terminal ({self.strategy.symbol}) apos "
+                      f"{self._falhas_de_leitura_seguidas} passo(s) de falha")
+            self._falhas_de_leitura_seguidas = 0
 
     def _log(self, conn, account_id, level: str, message: str, payload: Optional[dict] = None) -> None:
         store.log_event(conn, account_id, level, "daytrade", message, payload)
@@ -1648,6 +1692,7 @@ class IntradayLiveRuntime:
             self._snapshot.last_poll_at = pd.Timestamp(now)
 
             barras = self.bar_feed.closed_bars_since(self._snapshot.last_bar_ts)
+            self._vigia_leitura_do_feed(conn, account)
             if not barras:
                 self._persist(conn, account)
                 return passos + [StepReport("daytrade_espera", hoje, phase=fase,

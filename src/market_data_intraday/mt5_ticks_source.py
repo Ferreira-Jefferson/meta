@@ -127,6 +127,40 @@ def _report_error(on_error: Optional[Callable[[str, Exception], None]], key: str
         on_error(key, exc)
 
 
+def _falha_de_leitura(mt5, resultado, chamada: str) -> Optional[RuntimeError]:
+    """Distingue "NAO HA negocio novo" de "NAO CONSEGUI ler" -- devolve o erro
+    da segunda, `None` na primeira.
+
+    A distincao que FALTOU em 2026-09-08. O terminal parou de entregar tick
+    NOVO de WDO@ por 44,8 minutos e este modulo devolveu DataFrame vazio em
+    538 chamadas seguidas sem chamar `on_error` uma unica vez -- `resultado is
+    None or len(resultado) == 0 -> DataFrame()` engolia os dois casos no mesmo
+    `return`. Sem sintoma nenhum, 45 minutos de cegueira ficaram
+    indistinguiveis de um papel parado (item 5.17 do `LICOES_DE_PRODUCAO.md`).
+
+    Os dois sinais que o pacote `MetaTrader5` DA e que estavam sendo jogados
+    fora, medidos no terminal real (Rico-PRD, build 6182, 2026-09-08):
+
+      - `copy_ticks_range` de simbolo inexistente -> `None`, e
+        `last_error() == (-4, 'Terminal: Not found')`;
+      - janela de madrugada, sem negocio nenhum -> array VAZIO, e
+        `last_error() == (1, 'Success')`.
+
+    Ou seja: vazio+`last_error` OK e' o caso normal (papel parado, janela sem
+    negocio); `None`, ou vazio com codigo NEGATIVO, e' falha de leitura. O
+    corte em `< 0` e' de proposito: todo codigo de erro do pacote e' negativo
+    (`RES_E_*`), `1` e' `RES_S_OK` e `0` e' "nenhum erro registrado ainda" --
+    tratar `0` como falha faria o feed gritar em processo recem-subido.
+    """
+    if resultado is None:
+        return RuntimeError(f"{chamada} devolveu None (last_error={mt5.last_error()})")
+    if len(resultado) == 0:
+        erro = mt5.last_error()
+        if isinstance(erro, (tuple, list)) and erro and int(erro[0]) < 0:
+            return RuntimeError(f"{chamada} devolveu vazio com last_error={erro}")
+    return None
+
+
 def _ticks_to_df(ticks, server_utc_offset_hours: Optional[float]) -> pd.DataFrame:
     """Index em UTC de verdade (com milissegundo), a partir de `time_msc`
     (hora de parede do servidor, mesmo aviso de fuso de
@@ -184,7 +218,11 @@ def fetch_ticks_range(
         _report_error(on_error, symbol, exc)
         return pd.DataFrame()
 
-    if ticks is None or len(ticks) == 0:
+    falha = _falha_de_leitura(mt5, ticks, "copy_ticks_range")
+    if falha is not None:
+        _report_error(on_error, symbol, falha)
+        return pd.DataFrame()
+    if len(ticks) == 0:
         return pd.DataFrame()
     return _ticks_to_df(ticks, server_utc_offset_hours)
 
@@ -230,7 +268,11 @@ def fetch_ticks_full_history(
         except Exception as exc:
             _report_error(on_error, symbol, exc)
             break
-        if ticks is None or len(ticks) == 0:
+        falha = _falha_de_leitura(mt5, ticks, "copy_ticks_from")
+        if falha is not None:
+            _report_error(on_error, symbol, falha)
+            break
+        if len(ticks) == 0:
             break
         chunks.append(_ticks_to_df(ticks, server_utc_offset_hours))
         if len(ticks) < MAX_TICKS_PER_REQUEST:

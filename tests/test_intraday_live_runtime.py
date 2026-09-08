@@ -20,6 +20,8 @@ O que esta em jogo, em ordem de importancia:
 """
 from __future__ import annotations
 
+import re
+
 from dataclasses import replace
 from datetime import date, datetime, time, timezone
 
@@ -5684,3 +5686,104 @@ def test_limite_de_atraso_soma_o_atraso_ESTRUTURAL_do_feed(tmp_path, pregao_aber
     feed.nominal_delay_seconds = 60.0            # como o `MT5BarFeed` declara
     assert rt._limite_de_atraso() == pytest.approx(
         60.0 + itr_mod.MAX_ATRASO_PARA_ORDEM_SEGUNDOS)
+
+
+# ---------- feed CEGO deixa rastro no diario (incidente 2026-09-08) ---------
+
+class _FeedQueNaoConsegueLer:
+    """Reproduz o terminal MT5 de 2026-09-08 no slot
+    `dt-wdo_grid_reload_maker-wdo@-live`: `closed_bars_since` devolve lista
+    VAZIA passo apos passo, mas por FALHA de leitura, nao por falta de
+    negocio. `falha_de_leitura` e' o unico jeito de distinguir os dois --
+    ver `live/feed_health.py`.
+
+    `cego` e' uma lista de bool, uma entrada por passo."""
+
+    name = "fake_bars_cego"
+    nominal_delay_seconds = 0.0
+
+    def __init__(self, cego: list[bool], semente: list[Bar] | None = None):
+        self._cego = list(cego)
+        self._semente = list(semente or [])
+        self.passos = 0
+        #: quantas leituras deste dube' de fato devolveram FALHA -- o teste
+        #: compara a contagem da mensagem de recuperacao com esta, em vez de
+        #: com o numero de `run_once`: nem todo passo do runtime chega a
+        #: consultar o feed (a fase, o freio e o warm start podem sair antes).
+        self.cegos = 0
+        self.falha_de_leitura = None
+
+    @property
+    def offset_hours(self):
+        return 3.0
+
+    def closed_bars_since(self, after_ts=None):
+        i = self.passos
+        self.passos += 1
+        esta_cego = self._cego[i] if i < len(self._cego) else False
+        self.falha_de_leitura = (
+            "WDO@: copy_ticks_range devolveu None (last_error=(-4, 'Terminal: Not found'))"
+            if esta_cego else None
+        )
+        self.cegos += int(esta_cego)
+        return []
+
+    def session_bars_until(self, session, until_ts):
+        return list(self._semente)
+
+
+def test_feed_cego_grava_uma_linha_no_diario_e_outra_ao_voltar(tmp_path, pregao_aberto):
+    """2026-09-08: 538 passos seguidos de lista vazia, marca d'agua congelada
+    em 14:14:20.804, e NENHUMA linha em lugar nenhum -- 44,8 min de cegueira
+    do terminal indistinguiveis de um papel parado (item 5.17 do
+    `LICOES_DE_PRODUCAO.md`). Isto nao impede a ordem velha (quem faz isso e'
+    `MAX_ATRASO_PARA_ORDEM_SEGUNDOS`); so' tira o silencio, para a proxima vez
+    deixar rastro."""
+    barras = [_bar("13:00:00", 10, 10, 10, 10)]
+    feed = _FeedQueNaoConsegueLer([True, True, True, False], semente=barras)
+    rt, _ = _runtime(tmp_path, barras, feed=feed)
+
+    for _ in range(4):
+        rt.run_once()
+    assert feed.cegos >= 2  # o roteiro de fato cegou o robo
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        eventos = [(r[0], r[1]) for r in conn.execute(
+            "SELECT level, message FROM live_events WHERE account_id = ? ORDER BY id",
+            (acc.id,))]
+
+    falhas = [m for lv, m in eventos if "nao conseguiu LER" in m]
+    voltas = [m for lv, m in eventos if "voltou a ler" in m]
+    # UMA linha por transicao, nunca uma por passo: a 5s/passo, 45 min de
+    # cegueira viraria 538 linhas iguais e o diario ficaria ilegivel
+    # justamente no pregao que o dono mais precisa ler.
+    assert len(falhas) == 1, falhas
+    assert "leitura falhada" in falhas[0]
+    assert [lv for lv, m in eventos if "nao conseguiu LER" in m] == ["error"]
+    assert len(voltas) == 1
+    # A contagem e' de passos do LACO PRINCIPAL, e o robo tambem le o feed no
+    # comeco a frio (`closed_bars_since(None)`, outro ponto de chamada): por
+    # isso ela pode ser menor que `feed.cegos`, nunca maior nem zero.
+    n = int(re.search(r"apos (\d+) passo", voltas[0]).group(1))
+    assert 1 <= n <= feed.cegos
+
+
+def test_feed_vazio_SEM_falha_nao_gera_alarme(tmp_path, pregao_aberto):
+    """A outra metade da fronteira: papel sem negocio novo devolve vazio o dia
+    inteiro e isso e' NORMAL. Se alarmasse aqui, o alarme viraria ruido e o
+    dono pararia de ler -- que e' como o sintoma de 08/09 volta a passar
+    despercebido."""
+    barras = [_bar("13:00:00", 10, 10, 10, 10)]
+    feed = _FeedQueNaoConsegueLer([False, False, False], semente=barras)
+    rt, _ = _runtime(tmp_path, barras, feed=feed)
+
+    for _ in range(3):
+        rt.run_once()
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        eventos = [r[0] for r in conn.execute(
+            "SELECT message FROM live_events WHERE account_id = ? ORDER BY id", (acc.id,))]
+
+    assert not any("nao conseguiu LER" in m or "voltou a ler" in m for m in eventos)

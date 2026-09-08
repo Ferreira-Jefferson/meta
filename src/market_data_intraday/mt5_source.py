@@ -81,6 +81,28 @@ def _report_error(on_error: Optional[Callable[[str, Exception], None]], key: str
         on_error(key, exc)
 
 
+def _falha_de_leitura(mt5, resultado, chamada: str) -> Optional[RuntimeError]:
+    """Distingue "NAO HA barra nova" de "NAO CONSEGUI ler" -- devolve o erro
+    da segunda, `None` na primeira.
+
+    Gemeo de `mt5_ticks_source._falha_de_leitura`, duplicado pelo mesmo motivo
+    de `_connect` (ver a docstring de la'): sao dois arquivos da mesma feature,
+    e o pedaco e' pequeno demais para valer acoplamento. A docstring COMPLETA,
+    com a medicao no terminal real que sustenta o corte em `< 0`, esta em
+    `mt5_ticks_source.py` -- este caminho M1 nunca foi visto cegar, mas o
+    `resultado is None or len(...) == 0 -> DataFrame()` era identico, e
+    corrigir so' a instancia que mordeu e' como este repo perde a lembranca
+    (2026-09-08, item 5.17 do `LICOES_DE_PRODUCAO.md`).
+    """
+    if resultado is None:
+        return RuntimeError(f"{chamada} devolveu None (last_error={mt5.last_error()})")
+    if len(resultado) == 0:
+        erro = mt5.last_error()
+        if isinstance(erro, (tuple, list)) and erro and int(erro[0]) < 0:
+            return RuntimeError(f"{chamada} devolveu vazio com last_error={erro}")
+    return None
+
+
 def _bars_to_df(rates, server_utc_offset_hours: Optional[float]) -> pd.DataFrame:
     """Index em UTC de verdade, a partir da hora de parede do servidor.
 
@@ -138,7 +160,11 @@ def fetch_m1_range(
         _report_error(on_error, symbol, exc)
         return pd.DataFrame()
 
-    if rates is None or len(rates) == 0:
+    falha = _falha_de_leitura(mt5, rates, "copy_rates_range")
+    if falha is not None:
+        _report_error(on_error, symbol, falha)
+        return pd.DataFrame()
+    if len(rates) == 0:
         return pd.DataFrame()
     return _bars_to_df(rates, server_utc_offset_hours)
 
@@ -173,7 +199,11 @@ def fetch_m1_recent(
         _report_error(on_error, symbol, exc)
         return pd.DataFrame()
 
-    if rates is None or len(rates) == 0:
+    falha = _falha_de_leitura(mt5, rates, "copy_rates_from_pos")
+    if falha is not None:
+        _report_error(on_error, symbol, falha)
+        return pd.DataFrame()
+    if len(rates) == 0:
         return pd.DataFrame()
     return _bars_to_df(rates, server_utc_offset_hours)
 
@@ -216,7 +246,11 @@ def fetch_m1_full_history(
         except Exception as exc:
             _report_error(on_error, symbol, exc)
             break
-        if rates is None or len(rates) == 0:
+        falha = _falha_de_leitura(mt5, rates, "copy_rates_from_pos")
+        if falha is not None:
+            _report_error(on_error, symbol, falha)
+            break
+        if len(rates) == 0:
             break
         chunks.append(_bars_to_df(rates, server_utc_offset_hours))
         if len(rates) < MAX_BARS_PER_REQUEST:

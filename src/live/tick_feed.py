@@ -59,6 +59,7 @@ import pandas as pd
 
 from backtest.intraday.engine import bar_from_row
 from core.b3_session import server_utc_offset_hours, utc_to_server_wall_clock
+from live.feed_health import RegistroDeLeitura
 from market_data_intraday.mt5_ticks_source import fetch_ticks_range
 from market_data_intraday.tick_bars import ticks_to_degenerate_bars
 from strategy.daytrade.base import Bar
@@ -154,6 +155,21 @@ class MT5TickFeed:
         self._on_error = on_error
         self._now_fn = now_fn
         self._credentials = dict(login=login, password=password, server=server, path=path)
+        self._leitura = RegistroDeLeitura(on_error)
+
+    # ---------- saude da leitura -------------------------------------------
+
+    @property
+    def falha_de_leitura(self) -> Optional[str]:
+        """Falha da ULTIMA leitura, ou `None` se ela deu certo — inclusive
+        quando devolveu zero negocio, que e' o caso normal.
+
+        Existe porque `closed_bars_since` devolve lista vazia nos DOIS casos
+        (contrato que nao pode mudar, ver `live/feed_health.py`), e em
+        2026-09-08 isso deixou 44,8 minutos de cegueira do terminal
+        indistinguiveis de um papel parado. Quem le e' o
+        `IntradayLiveRuntime`, depois de cada passo."""
+        return self._leitura.falha
 
     # ---------- offset -----------------------------------------------------
 
@@ -169,11 +185,12 @@ class MT5TickFeed:
         """Ticks de negocio da janela, com o index ja' em UTC. Converte os
         limites para o relogio do servidor na ida (ver `_limite_servidor` e a
         docstring do modulo)."""
+        self._leitura.reset()
         return fetch_ticks_range(
             self.symbol,
             _limite_servidor(start_utc),
             _limite_servidor(end_utc),
-            on_error=self._on_error,
+            on_error=self._leitura.callback,
             **self._credentials,
         )
 
