@@ -997,6 +997,36 @@ class WdoGridReloadMaker(IntradayStrategy):
         `return` sai antes), entao ticks que o freio de tempo tinha barrado
         podem virar candidatos -- 53 e' PISO, nao previsao exata.
 
+        MEDIDO no IS/OOS congelado DEPOIS de aplicar (motor tick, base
+        `WDO_A_f1.parquet` corrigida, capital real R$375, config de producao
+        via `get_daytrade_robot` -- `scripts/daytrade/wdof1_histerese_pingue_
+        pongue_2026_09_08.py`, 1.321s em 4 processos). A histerese nao custa
+        resultado: ganha ou empata em toda coluna que importa, nas DUAS
+        janelas.
+
+            janela  hist   liquido R$   MaxDD R$  lucro/DD  trades   envios
+            IS        1    344.855,00   2.905,00    118,71  19.835   33.984
+            IS        2    347.548,50   2.547,50    136,43  19.893   27.979
+            OOS       1    135.618,50   2.650,00     51,18   9.446   18.131
+            OOS       2    143.214,50   2.540,00     56,38   9.635   14.020
+
+        Envios caem 17,7% (IS) e 22,7% (OOS) com MAIS trades nas duas -- a
+        leitura e' a mesma do freio de tempo: ordem que persegue o preco quase
+        nao e' tocada, ordem parada e' preenchida. Win rate nao se mexe (94,2%
+        no IS, 94,4% -> 94,5% no OOS). A unica coluna que piora e' `MaxDD %`
+        no IS (-21,2% -> -27,5%) enquanto o `MaxDD R$` MELHORA (2.905,00 ->
+        2.547,50): o recuo em reais e' MENOR, so' aconteceu num ponto mais
+        baixo da curva.
+
+        O que esta medicao NAO diz, e importa: `pior_janela_60s` sai IDENTICO
+        nos dois (23 no IS, 42 no OOS), porque no backtest essa janela e' de
+        tempo de TICK e o pico e' 100% rearme POS-FILL, que a histerese nao
+        toca por desenho. O ganho de 64 -> 21 e' de relogio de PAREDE, que so'
+        existe ao vivo. E repare de passagem que 42 > 30: a saturacao de
+        `max_trades_per_side` ja' estoura o teto ao vivo por conta propria na
+        janela OOS, com ou sem histerese -- residual ja' conhecido, ver a
+        docstring de `max_trades_per_side`.
+
         `1` desliga a histerese inteira (banda E memoria) e restaura o
         comportamento anterior byte a byte -- serve de baseline de medicao,
         como `reancora_min_segundos=0.0`, nunca de configuracao de operacao.
