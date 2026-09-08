@@ -1,6 +1,55 @@
 {
   "version": 2,
   "slots": {
+    "dt-wdo_grid_reload_maker-wdo@-live": {
+      "pid": null,
+      "started_at": null,
+      "config": {
+        "mode": "mt5",
+        "capital": 375.0,
+        "strategy": "wdo_grid_reload_maker",
+        "slot": "dt-wdo_grid_reload_maker-wdo@-live",
+        "execution_mode": "live",
+        "notify_min_level": "warn",
+        "mt5_shares_per_lot": 1.0,
+        "mt5_fractional_map": null,
+        "mt5_symbol_map": {
+          "WDO@": "WDOV26"
+        }
+      }
+    },
+    "dt-wdo_grid_reload_maker-wdo@-shadow": {
+      "pid": null,
+      "started_at": null,
+      "config": {
+        "mode": "mt5",
+        "capital": 244.0,
+        "strategy": "wdo_grid_reload_maker",
+        "slot": "dt-wdo_grid_reload_maker-wdo@-shadow",
+        "execution_mode": "shadow",
+        "notify_min_level": "warn",
+        "mt5_shares_per_lot": 1.0,
+        "mt5_fractional_map": null,
+        "mt5_symbol_map": {
+          "WDO@": "WDOV26"
+        }
+      }
+    },
+    "dt-gremah-pmam3-shadow": {
+      "pid": null,
+      "started_at": null,
+      "config": {
+        "mode": "mt5",
+        "capital": 30.0,
+        "strategy": "gremah",
+        "slot": "dt-gremah-pmam3-shadow",
+        "execution_mode": "shadow",
+        "notify_min_level": "warn",
+        "mt5_shares_per_lot": 1.0,
+        "mt5_fractional_map": null,
+        "mt5_symbol_map": {}
+      }
+    },
     "dt-gremah-pmam3-live": {
       "pid": null,
       "started_at": null,
@@ -21,7 +70,7 @@
       "started_at": null,
       "config": {
         "mode": "mt5",
-        "capital": 250.0,
+        "capital": 150.0,
         "strategy": "copa_win",
         "slot": "dt-copa_win-win@-shadow",
         "execution_mode": "shadow",
@@ -30,40 +79,6 @@
         "mt5_fractional_map": null,
         "mt5_symbol_map": {
           "WIN@": "WINV26"
-        }
-      }
-    },
-    "dt-wdo_grid_reload_maker-wdo@-shadow": {
-      "pid": null,
-      "started_at": null,
-      "config": {
-        "mode": "mt5",
-        "capital": 415.5,
-        "strategy": "wdo_grid_reload_maker",
-        "slot": "dt-wdo_grid_reload_maker-wdo@-shadow",
-        "execution_mode": "shadow",
-        "notify_min_level": "warn",
-        "mt5_shares_per_lot": 1.0,
-        "mt5_fractional_map": null,
-        "mt5_symbol_map": {
-          "WDO@": "WDOV26"
-        }
-      }
-    },
-    "dt-wdo_grid_reload_maker-wdo@-live": {
-      "pid": null,
-      "started_at": null,
-      "config": {
-        "mode": "mt5",
-        "capital": 375.0,
-        "strategy": "wdo_grid_reload_maker",
-        "slot": "dt-wdo_grid_reload_maker-wdo@-live",
-        "execution_mode": "live",
-        "notify_min_level": "warn",
-        "mt5_shares_per_lot": 1.0,
-        "mt5_fractional_map": null,
-        "mt5_symbol_map": {
-          "WDO@": "WDOV26"
         }
       }
     }
