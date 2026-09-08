@@ -698,7 +698,10 @@ def test_freio_de_reprecificacao_vem_ligado_por_padrao():
     passar despercebida: ela muda o pior minuto do robo em producao."""
     strat = WdoGridReloadMaker(tick_size=0.5, profit_ticks=2, stop_ticks=16)
     assert strat.reancora_min_segundos == 10.0
-    assert strat.reancora_min_ticks == 1  # deriva nao filtra nada por default
+    # 2026-09-08: era 1 (histerese desligada). Ver `test_histerese_*` abaixo
+    # e a tabela na docstring de `reancora_min_ticks` -- 1 virou baseline de
+    # medicao, nao configuracao de operacao.
+    assert strat.reancora_min_ticks == 2
 
 
 def test_max_trades_per_side_continua_em_200():
@@ -969,3 +972,149 @@ def test_reancora_min_ticks_abaixo_de_1_levanta_erro():
     with pytest.raises(ValueError):
         WdoGridReloadMaker(tick_size=0.5, profit_ticks=2, stop_ticks=16,
                            reancora_min_ticks=0)
+
+
+# ---------------------------------------------------------------------------
+# Histerese anti-pingue-pongue (2026-09-08) -- ver `reancora_min_ticks` em
+# `WdoGridReloadMaker.__init__`.
+#
+# Achado do dono no 1o pregao com o item 4.9 ao vivo (slot
+# `dt-wdo_grid_reload_maker-wdo@-live`, `live_events`): 125 linhas `LIMITE`
+# para 22 rodadas, 103 delas `(substitui)`. Nenhuma era identica a'
+# IMEDIATAMENTE anterior (a guarda de no-op do motor,
+# `machine._reancoragem_no_mesmo_nivel`, nao tinha o que pegar) -- o
+# desperdicio era VOLTAR a um nivel recem-abandonado: 65 das 103 moveram a
+# ordem 1 tick, 49 devolveram a ordem a um nivel que a MESMA rodada ja' tinha
+# ocupado. Cada volta e' um cancela+reenvia real que joga fora a fila
+# acumulada, que num robo maker e' o produto.
+#
+# Os `bar.ts` espacados de 30s nos testes abaixo NAO sao licenca poetica:
+# reproduzem a condicao real. A rodada #21 saiu inteira no MESMO segundo de
+# parede (2026-09-08 15:00:44 UTC) porque a maquina reprocessava fila
+# atrasada -- em tempo de TICK aquelas substituicoes estavam a minutos uma da
+# outra, e o freio de `reancora_min_segundos=10.0` (que mede `bar.ts`, por
+# ser regra de estrategia) achou que estava segurando. Ver a docstring de
+# `live.intraday_runtime._check_cadencia_de_ordens`.
+# ---------------------------------------------------------------------------
+
+#: A rodada #21 do pregao de 2026-09-08, nivel por nivel, como o diario
+#: registrou. `close` do tick -> nivel da ordem long (`close - 1 tick`):
+#:   5105,5 -> @5105,0 | 5106,0 -> @5105,5 | 5105,5 -> @5105,0
+#:   5106,0 -> @5105,5 | 5107,0 -> @5106,5  (este ultimo preencheu)
+_RODADA_21 = [5105.5, 5106.0, 5105.5, 5106.0, 5107.0]
+
+
+def _replay(strat: WdoGridReloadMaker, closes, passo_segundos: int = 30):
+    """Roda `closes` como ticks espacados de `passo_segundos` (folgado sobre
+    `reancora_min_segundos`, para o portao de TEMPO nunca ser quem decide) e
+    devolve os precos-limite de cada `EnterLimit` emitida."""
+    strat.on_session_start(None)
+    ts0 = pd.Timestamp("2026-09-08 15:00:44", tz="UTC")
+    precos = []
+    for i, preco in enumerate(closes):
+        for acao in _tick(strat, ts0 + pd.Timedelta(seconds=passo_segundos * i), preco):
+            precos.append(acao.limit_price)
+    return precos
+
+
+def test_histerese_nao_devolve_a_ordem_ao_nivel_recem_abandonado():
+    """O pedido direto do dono, com a sequencia REAL da rodada #21:
+    "substituiu 3 vezes para o mesmo preco, mesmo stop e mesmo alvo, isso e'
+    uso de recurso desnecessario, neste caso nao deve substituir".
+
+    5105,0 -> 5105,5 -> 5105,0 -> 5105,5 -> 5106,5 tem de produzir SO' a
+    primeira ordem e a movida final para 5106,5. As tres do meio sao
+    vai-e-vem entre duas pontas do book -- deriva de 1 tick nao e' preco
+    andando.
+
+    FALHA no codigo antigo (`reancora_min_ticks=1`): as 5 saem, que e'
+    exatamente o que a corretora recebeu em 2026-09-08."""
+    strat = WdoGridReloadMaker(tick_size=0.5, level_spacing_ticks=1, profit_ticks=2,
+                               stop_ticks=16)
+    assert _replay(strat, _RODADA_21) == pytest.approx([5105.0, 5106.5])
+
+
+def test_histerese_desligada_reproduz_o_desperdicio_de_2026_09_08():
+    """`reancora_min_ticks=1` restaura o comportamento anterior byte a byte
+    -- baseline de medicao, nunca configuracao de operacao. Fixa aqui o
+    numero que o pregao real produziu (5 ordens para 1 entrada), para a
+    diferenca contra o teste acima ser o valor da correcao, e nao uma
+    afirmacao sobre um codigo que ninguem mais roda."""
+    strat = WdoGridReloadMaker(tick_size=0.5, level_spacing_ticks=1, profit_ticks=2,
+                               stop_ticks=16, reancora_min_ticks=1)
+    assert _replay(strat, _RODADA_21) == pytest.approx(
+        [5105.0, 5105.5, 5105.0, 5105.5, 5106.5])
+
+
+def test_histerese_barra_a_volta_larga_que_a_banda_sozinha_deixaria_passar():
+    """A memoria do nivel ABANDONADO nao e' redundante com a banda: sem ela,
+    a ordem sai de A, anda a banda inteira ate B e volta para A -- cada
+    perna passa no portao de deriva e o par se repete indefinidamente.
+
+    5099,5 -> 5101,0 (3 ticks, vale) -> 5099,5 de volta (3 ticks da parada,
+    mas e' EXATAMENTE o nivel abandonado: recusa) -> 5102,5 (longe das
+    duas: vale)."""
+    strat = WdoGridReloadMaker(tick_size=0.5, level_spacing_ticks=1, profit_ticks=2,
+                               stop_ticks=16)
+    # closes 5100,0 / 5101,5 / 5100,0 / 5103,0 -> niveis 5099,5 / 5101,0 / 5099,5 / 5102,5
+    assert _replay(strat, [5100.0, 5101.5, 5100.0, 5103.0]) == pytest.approx(
+        [5099.5, 5101.0, 5102.5])
+
+
+def test_histerese_nao_prende_a_ordem_quando_o_preco_anda_de_verdade():
+    """O contrapeso: a histerese nao pode virar a ordem estacionada que o
+    item 4.9 corrigiu. Preco subindo 1 tick por tick (nunca volta) -- a
+    ordem acompanha, so' que de 2 em 2 ticks em vez de 1 em 1."""
+    strat = WdoGridReloadMaker(tick_size=0.5, level_spacing_ticks=1, profit_ticks=2,
+                               stop_ticks=16)
+    closes = [5100.0 + 0.5 * i for i in range(9)]        # 5100,0 ... 5104,0
+    assert _replay(strat, closes) == pytest.approx(
+        [5099.5, 5100.5, 5101.5, 5102.5, 5103.5])
+
+
+def test_histerese_e_por_rodada_o_rearme_nao_herda_a_proibicao():
+    """A memoria morre com a rodada. Se sobrevivesse ao fill, o robo ficaria
+    proibido de reprecar para um nivel que a rodada ANTERIOR abandonou --
+    e voltar ao mesmo nivel depois de fechar e' a mecanica de reload que da'
+    nome ao robo."""
+    strat = WdoGridReloadMaker(tick_size=0.5, level_spacing_ticks=1, profit_ticks=2,
+                               stop_ticks=16)
+    strat.on_session_start(None)
+    ts0 = pd.Timestamp("2026-09-08 15:00:44", tz="UTC")
+
+    assert _tick(strat, ts0, 5100.0)[0].limit_price == pytest.approx(5099.5)
+    ts1 = ts0 + pd.Timedelta(seconds=30)
+    assert _tick(strat, ts1, 5101.5)[0].limit_price == pytest.approx(5101.0)
+    assert strat._state.nivel_abandonado == pytest.approx(5099.5)
+
+    # a ordem em 5101,0 PREENCHE -- fim da rodada
+    ts2 = ts1 + pd.Timedelta(seconds=30)
+    pos = _posicao_long(ts2, 5101.0, 5093.0)
+    bar2 = Bar(ts=ts2, open=5101.0, high=5101.0, low=5101.0, close=5101.0, volume=10)
+    strat.on_bar(ts2, bar2, positions=[pos], session_pnl_brl=0.0)
+    assert strat._state.nivel_abandonado is None
+
+    # posicao fechou -- rodada NOVA (lado alterna para short, nivel = close + 1 tick)
+    ts3 = ts2 + pd.Timedelta(seconds=30)
+    nova = _tick(strat, ts3, 5101.0)
+    assert nova[0].side == "short" and nova[0].limit_price == pytest.approx(5101.5)
+
+    # reprecifica para 5099,5 -- o nivel que a rodada ANTERIOR abandonou.
+    # 4 ticks da ordem parada: passa na banda, e nao pode ser barrado por
+    # memoria velha.
+    ts4 = ts3 + pd.Timedelta(seconds=30)
+    volta = _tick(strat, ts4, 5099.0)
+    assert len(volta) == 1
+    assert volta[0].limit_price == pytest.approx(5099.5)
+
+
+def test_histerese_nao_conta_reancoragem_no_mesmo_nivel_como_abandono():
+    """Reancorar no MESMO nivel e' no-op no motor
+    (`machine._reancoragem_no_mesmo_nivel`): a ordem nunca sai do book, a
+    fila acumulada continua de pe' -- entao nao ha' nivel "abandonado" para
+    lembrar. So' verificavel com a histerese desligada, que e' o unico modo
+    em que uma reancoragem no mesmo nivel chega a ser emitida."""
+    strat = WdoGridReloadMaker(tick_size=0.5, level_spacing_ticks=1, profit_ticks=2,
+                               stop_ticks=16, reancora_min_ticks=1)
+    assert _replay(strat, [5100.0, 5100.0]) == pytest.approx([5099.5, 5099.5])
+    assert strat._state.nivel_abandonado is None

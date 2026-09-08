@@ -145,6 +145,51 @@ tocada -- 2026-03-02 fecha com 5 trades e R$-47,50 sem freio, contra 264
 trades e R$+1.078,00 com o freio de 6s. O freio nao e' um custo pago pela
 seguranca: ele RESTAURA a mecanica de ordem parada que da' nome ao robo.
 
+2026-09-08, HISTERESE ANTI-PINGUE-PONGUE (`reancora_min_ticks`, default
+1 -> 2): o freio de cadencia acima limita QUANTAS substituicoes saem por
+minuto, mas nada olhava PARA ONDE elas iam. No 1o pregao com o item 4.9 ao
+vivo (slot `dt-wdo_grid_reload_maker-wdo@-live`, `live_events`), o robo
+emitiu 125 linhas `LIMITE` para 22 rodadas -- 103 delas `(substitui)`. A
+rodada #21 e' o retrato:
+
+    LIMITE LONG #21 ... @ 5105,0 (stop 5097,0 / alvo 5106,0)
+    LIMITE LONG #21 ... @ 5105,5 ... (substitui)
+    LIMITE LONG #21 ... @ 5105,0 ... (substitui)
+    LIMITE LONG #21 ... @ 5105,5 ... (substitui)
+    LIMITE LONG #21 ... @ 5106,5 ... (substitui)
+    LONG #21 1 lote WDO@ @ 5106,5
+
+Tudo isso no MESMO segundo de parede (15:00:44 UTC). O par 5105,0/5105,5 se
+repete: a ordem volta para um nivel que ela mesma acabou de abandonar, e
+cada volta e' um cancela+reenvia real que joga fora a fila ja' acumulada --
+num robo MAKER a fila e' o produto (ver `queue_ahead_qty` em `backtest.
+intraday.machine` e o comentario de `_reancoragem_no_mesmo_nivel`). Nenhuma
+das 103 era identica a' IMEDIATAMENTE anterior, entao a guarda de no-op do
+motor nao tinha o que pegar. Veredito do dono: "substituiu 3 vezes para o
+mesmo preco, mesmo stop e mesmo alvo, isso e' uso de recurso desnecessario,
+neste caso nao deve substituir".
+
+Dois motivos, e o segundo e' o que a histerese conserta:
+  1. o freio de 10s mede `bar.ts`, e a maquina estava reprocessando fila
+     atrasada -- no relogio do TICK aquelas 4 substituicoes estavam a
+     minutos uma da outra. Quem passou a ler o relogio de PAREDE foi o
+     contador de envios do runtime (`live.intraday_runtime.
+     _check_cadencia_de_ordens`, mesmo dia), que protege a corretora. O
+     freio da estrategia segue em `bar.ts` de proposito -- e' regra de
+     ESTRATEGIA e tem de valer identica no backtest.
+  2. deriva de 1 tick nao e' preco andando, e' troca de ponta do book. 65
+     das 103 substituicoes moveram a ordem exatamente 1 tick; 49 devolveram
+     a ordem a um nivel que a MESMA rodada ja' tinha ocupado.
+
+A regra nova (`_pode_reprecar`): o nivel candidato tem de estar a pelo menos
+`reancora_min_ticks` ticks do nivel PARADO **e** do ultimo nivel ABANDONADO
+na rodada. Sobre a sequencia registrada nesse pregao isso derruba 125 envios
+para 53, e o pior minuto de PAREDE de 64 para 21 -- de mais que o dobro do
+teto de `MAX_ENVIOS_POR_MINUTO` (30, que para o robo pelo pregao inteiro)
+para 30% de folga. Nao mexe em geometria (T2/S16 intacto) nem no rearme
+pos-fill. Vale nos DOIS motores por construcao: a regra e' da estrategia,
+que e' o mesmo objeto no backtest e ao vivo.
+
 `tick_size` NAO tem default de instrumento nenhum
 embutido aqui (fica 0.5, o `price_tick_size` do WDO@ documentado em
 `backtest.intraday.profiles`, so' como conveniencia) -- quem instancia
@@ -323,6 +368,15 @@ class _SessionState:
     # juntos com `pending_side` -- zerados no mesmo lugar que ele.
     pending_level: float | None = None
     pending_level_ts: pd.Timestamp | None = None
+    # Nivel que a ULTIMA substituicao desta rodada TIROU do book (2026-09-08,
+    # histerese anti-pingue-pongue -- ver `reancora_min_ticks` em `__init__`).
+    # E' a memoria que impede a ordem de VOLTAR para um nivel que ela acabou
+    # de abandonar: cada volta dessas e' um cancela+reenvia real que joga
+    # fora a fila ja acumulada no nivel novo para reentrar no FIM da fila de
+    # um nivel velho. `None` enquanto a rodada nunca substituiu nada --
+    # zerado junto com `pending_level` (fill/recusa: rodada nova nao herda
+    # memoria de rodada velha).
+    nivel_abandonado: float | None = None
     # Quando a ULTIMA `EnterLimit` foi RECUSADA (motor: teto de capital;
     # ao vivo: margem/corretora). Existe para o freio segurar o REARME
     # depois de uma recusa -- ver `_pode_armar_apos_recusa`. `None` quando a
@@ -458,11 +512,14 @@ class WdoGridReloadMaker(IntradayStrategy):
                                  "cada um dos dois casos). Nao atrasa o rearme "
                                  "depois de um FILL (a mecanica de reload). "
                                  "0 desliga (indeployavel -- ver a docstring).",
-        "reancora_min_ticks": "Deriva minima (em ticks) entre o nivel parado "
-                              "e o recalculado para valer uma "
-                              "reprecificacao. 1 (default) reprecifica em "
-                              "qualquer mudanca de nivel; >1 exige que o "
-                              "preco tenha andado de verdade.",
+        "reancora_min_ticks": "Histerese (em ticks): o nivel novo tem de "
+                              "estar a esta distancia TANTO do nivel parado "
+                              "QUANTO do ultimo nivel abandonado, senao a "
+                              "substituicao nao sai. 2 (default) ignora o "
+                              "vai-e-vem de 1 tick entre compra e venda e "
+                              "impede a ordem de voltar para o nivel que "
+                              "acabou de deixar; 1 desliga a histerese "
+                              "inteira (baseline de medicao).",
         "defesa_ativa": "Liga a saida defensiva de recuo (default desligado -- "
                         "comportamento identico ao de antes).",
         "defesa_gatilho_stop_pct": "Fracao do stop (em ticks) que a posicao "
@@ -504,7 +561,7 @@ class WdoGridReloadMaker(IntradayStrategy):
         stop_ticks: int | None = 16,    # "S16" -- ver nota 2026-08-29 no topo do modulo (S4 revertido)
         reanchor_mode: ReanchorMode = "rolling_last_price",
         reancora_min_segundos: float = 10.0,
-        reancora_min_ticks: int = 1,
+        reancora_min_ticks: int = 2,   # histerese anti-pingue-pongue -- ver 2026-09-08 no topo
         max_trades_per_side: int = 200,
         session_stop_brl: float | None = None,
         quantity: int | None = None,
@@ -878,11 +935,75 @@ class WdoGridReloadMaker(IntradayStrategy):
         `0.0` restaura o comportamento sem freio (so' para medir o baseline;
         nunca para operar).
 
-        `reancora_min_ticks` fica em `1` (nao filtra nada) por medicao, nao
-        por omissao: o portao de tempo ja' resolve, e a deriva sozinha nao
-        garante teto nenhum (numero acima). Fica exposto porque e' o botao
-        certo caso o custo de fila (`queue_ahead_qty`) passe a ser
-        modelado -- ai reprecar pouco tem valor proprio."""
+        `reancora_min_ticks` -- HISTERESE. Ate' 2026-09-08 valia `1` (nao
+        filtrava nada) "porque o portao de tempo ja' resolve". Nao resolve, e
+        o pregao de 2026-09-08 mostrou as duas razoes de uma vez (slot
+        `dt-wdo_grid_reload_maker-wdo@-live`, `live_events`, 22 rodadas):
+
+        1. O portao de tempo mede `bar.ts`, e num passo do supervisor que
+           reprocessa fila atrasada o tempo de TICK anda muito mais rapido
+           que o de parede -- a rodada #21 emitiu 5 ordens (1 armamento + 4
+           substituicoes) no MESMO segundo de parede, todas legitimas para o
+           freio de 10s porque em tempo de tick estavam a minutos uma da
+           outra. Ver a docstring de `live.intraday_runtime.
+           _check_cadencia_de_ordens`.
+        2. Mesmo com o relogio certo, a DERIVA de 1 tick nao e' preco
+           andando: e' o vai-e-vem entre a ponta de compra e a de venda. Na
+           rodada #21 a ordem foi 5105,0 -> 5105,5 -> 5105,0 -> 5105,5 ->
+           5106,5 -- o par se repete, e cada volta e' um cancela+reenvia
+           REAL que joga fora a fila ja acumulada. Veredito do dono no mesmo
+           dia: "substituiu 3 vezes para o mesmo preco, mesmo stop e mesmo
+           alvo, isso e' uso de recurso desnecessario, neste caso nao deve
+           substituir".
+
+        A regra passou a ter DOIS pontos de referencia, com a mesma
+        constante (ver `_pode_reprecar`): o nivel novo tem de estar a pelo
+        menos `reancora_min_ticks` ticks do nivel PARADO **e** do ultimo
+        nivel ABANDONADO nesta rodada. O primeiro portao mata o vai-e-vem
+        adjacente; o segundo mata o pingue-pongue mais largo, que uma banda
+        sozinha deixa passar (sai de A, anda 2 ticks ate B, volta para A --
+        cada perna passa na banda, e o par se repete indefinidamente).
+
+        A histerese nao consegue PRENDER a ordem, e isso e' propriedade da
+        forma, nao sorte de calibracao: com `N=2` ela proibe exatamente uma
+        janela de 3 niveis em volta do parado e outra de 3 em volta do
+        abandonado -- qualquer nivel a 2 ticks ou mais dos dois passa. Preco
+        que anda de verdade sempre encontra nivel livre; no pior caso a
+        ordem para 1 tick ao lado do ideal em vez de em cima dele. E' o
+        contrapeso que impede esta correcao de reintroduzir a ordem
+        ESTACIONADA que o item 4.9 corrigiu.
+
+        Medido sobre o proprio pregao de 2026-09-08 (replay da sequencia de
+        niveis registrada no diario, 125 `LIMITE` das quais 103
+        `(substitui)`):
+
+            regra                                envios   pior 60s de PAREDE
+            hoje (`reancora_min_ticks=1`)          125            64
+            so' memoria do abandonado (=1)         100            --
+            so' banda de 2 ticks                    60            --
+            banda 2 + memoria (DEFAULT novo)        53            21
+
+        Duas leituras do numero. Primeira: 65 das 103 substituicoes moveram
+        a ordem 1 tick e 49 devolveram a ordem a um nivel que a MESMA rodada
+        ja' tinha ocupado -- e' desperdicio puro, sem contraparte. Segunda,
+        e e' a que importa para o deploy: o pior minuto de PAREDE cai de 64
+        para 21, ou seja, de mais que o DOBRO do teto de
+        `live.intraday_runtime.MAX_ENVIOS_POR_MINUTO` (30, que nao recusa so'
+        a ordem -- para o robo pelo resto do pregao) para 30% de folga.
+
+        RESSALVA do numero: e' um replay das ordens que o diario REGISTROU,
+        nao de todos os ticks do pregao. Quando a histerese recusa uma
+        substituicao, o relogio de `pending_level_ts` nao e' reiniciado (o
+        `return` sai antes), entao ticks que o freio de tempo tinha barrado
+        podem virar candidatos -- 53 e' PISO, nao previsao exata.
+
+        `1` desliga a histerese inteira (banda E memoria) e restaura o
+        comportamento anterior byte a byte -- serve de baseline de medicao,
+        como `reancora_min_segundos=0.0`, nunca de configuracao de operacao.
+        Valores maiores que 2 nao foram medidos: 2 e' o menor valor que
+        distingue "o preco andou" de "trocou de ponta do book", e mexer nele
+        muda quantas vezes a ordem persegue o mercado -- ver a nota do freio
+        de tempo sobre reprecar demais fazer o robo quase nao NEGOCIAR."""
         if (risco_pct_por_trade is None) != (point_value_brl is None):
             raise ValueError(
                 "wdo_grid_reload_maker: passe `risco_pct_por_trade` e "
@@ -1025,6 +1146,9 @@ class WdoGridReloadMaker(IntradayStrategy):
         # herdar a espera da ordem que nao existe mais.
         self._state.pending_level = None
         self._state.pending_level_ts = None
+        # Mesma razao: a memoria de histerese e' por RODADA, e uma ordem
+        # recusada nao deixou nivel nenhum no book para "abandonar".
+        self._state.nivel_abandonado = None
         # ... mas a RECUSA em si vira o relogio do freio de rearme (ver
         # `_pode_armar_apos_recusa`): zerar `pending_side` sem isto devolve o
         # robo ao ramo de ARMAR, que nao passa pelo freio de reprecificacao
@@ -1100,8 +1224,17 @@ class WdoGridReloadMaker(IntradayStrategy):
         segundos`/`reancora_min_ticks` em `__init__`). Ambos precisam passar:
         o de TEMPO e' o que da' o teto duro de envios por minuto (no maximo
         `60/reancora_min_segundos` substituicoes por minuto, seja qual for o
-        que o mercado faca); o de DERIVA e' o que evita gastar essa cota
-        numa ordem que mal saiu do lugar.
+        que o mercado faca); o de HISTERESE e' o que evita gastar essa cota
+        indo e voltando entre dois niveis vizinhos.
+
+        A HISTERESE (2026-09-08) tem DOIS pontos de referencia, nao um: o
+        nivel candidato precisa estar a `reancora_min_ticks` ticks tanto do
+        nivel PARADO quanto do ultimo nivel ABANDONADO nesta rodada. Sem o
+        segundo, a ordem sai de A, anda a banda inteira ate B, e volta para A
+        -- cada perna passa no portao e o par se repete para sempre, que e'
+        exatamente o desperdicio que o dono apontou na rodada #21 de
+        2026-09-08 (5105,0 -> 5105,5 -> 5105,0 -> 5105,5 -> 5106,5, tudo no
+        mesmo segundo de parede). Ver a tabela de medicao em `__init__`.
 
         Estado ausente (`pending_level`/`pending_level_ts` em `None`) devolve
         `True` -- e' o caso de uma sessao restaurada por `warm_start_
@@ -1132,18 +1265,18 @@ class WdoGridReloadMaker(IntradayStrategy):
             espera = (bar.ts - state.pending_level_ts).total_seconds()
             if espera < self.reancora_min_segundos:
                 return False
-        if state.pending_level is not None and self.reancora_min_ticks > 1:
-            # Nivel que ESTE tick produziria, contra o que esta' parado. Nao
-            # usa `_level_price` porque `state.anchor_price` so' e' atualizado
-            # depois deste portao -- o deslocamento `level_spacing_ticks` e'
-            # o mesmo nos dois lados da subtracao e se cancela, entao comparar
-            # as ANCORAS mede exatamente a mesma deriva.
-            nivel_agora = no_tick(bar.close, self.tick_size)
-            ancora_parada = (state.pending_level
-                             + self.level_spacing_ticks * self.tick_size
-                             * (1 if state.pending_side == "long" else -1))
-            deriva_ticks = abs(nivel_agora - ancora_parada) / self.tick_size
-            if deriva_ticks < self.reancora_min_ticks - 1e-9:
+        if self.reancora_min_ticks <= 1:
+            return True  # histerese desligada -- baseline de medicao, ver `__init__`
+        # Nivel que ESTE tick produziria. Nao usa `_level_price` porque
+        # `state.anchor_price` so' e' atualizado DEPOIS deste portao.
+        offset = self.level_spacing_ticks * self.tick_size
+        ancora_agora = no_tick(bar.close, self.tick_size)
+        nivel_candidato = (ancora_agora - offset if state.pending_side == "long"
+                           else ancora_agora + offset)
+        for referencia in (state.pending_level, state.nivel_abandonado):
+            if referencia is None:
+                continue
+            if abs(nivel_candidato - referencia) / self.tick_size < self.reancora_min_ticks - 1e-9:
                 return False
         return True
 
@@ -1327,6 +1460,12 @@ class WdoGridReloadMaker(IntradayStrategy):
                 # o proximo armamento herdar uma espera que nao e' dele.
                 state.pending_level = None
                 state.pending_level_ts = None
+                # A rodada acabou aqui: a memoria de histerese e' POR RODADA
+                # (`nivel_abandonado`), senao o rearme pos-fechamento herdaria
+                # a proibicao de um nivel que a rodada ANTERIOR abandonou --
+                # e rearmar no mesmo nivel de antes e' justamente a mecanica
+                # de reload que da' nome ao robo.
+                state.nivel_abandonado = None
                 # PREENCHEU -- o caminho normal do robo. Apaga o relogio de
                 # recusa para o rearme pos-fechamento (a mecanica de reload,
                 # o coracao desta estrategia) sair na hora, sem freio nenhum.
@@ -1444,6 +1583,15 @@ class WdoGridReloadMaker(IntradayStrategy):
         # substituicoes deixaria a 1a reprecificacao de cada rodada passar
         # livre, que e' justamente o instante de maior rajada (logo apos o
         # fill anterior).
+        #
+        # ...e, quando o nivel MUDA de verdade, guarda o que esta' saindo do
+        # book como `nivel_abandonado`: e' a memoria que impede a proxima
+        # reancoragem de devolver a ordem para ca' (histerese, ver
+        # `_pode_reprecar`). Nivel IGUAL nao abandona nada -- o motor trata
+        # isso como no-op (`machine._reancoragem_no_mesmo_nivel`) e a ordem
+        # nunca sai do book, entao a fila acumulada continua de pe'.
+        if state.pending_level is not None and abs(state.pending_level - level_price) > 1e-9:
+            state.nivel_abandonado = state.pending_level
         state.pending_level = level_price
         state.pending_level_ts = bar.ts
         return [EnterLimit(

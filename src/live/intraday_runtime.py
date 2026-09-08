@@ -2151,7 +2151,35 @@ class IntradayLiveRuntime:
 
         Janela ROLANTE, nao contador de sessao: um teto por pregao ou e'
         alto demais pra pegar o laco, ou baixo demais e mata operacao
-        legitima num dia movimentado. Ver `MAX_ENVIOS_POR_MINUTO`."""
+        legitima num dia movimentado. Ver `MAX_ENVIOS_POR_MINUTO`.
+
+        RESIDUAL EM ABERTO (2026-09-08) -- este contador PARA a rajada, nao
+        a EVITA, e parar custa o pregao inteiro. Enquanto o freio da
+        estrategia medir `bar.ts` (e tem de medir: e' regra de estrategia),
+        um passo do supervisor que reprocessa fila atrasada continua podendo
+        mandar ate' `MAX_ENVIOS_POR_MINUTO` ordens em segundos de parede
+        antes de este portao fechar -- e quando fecha, o robo perde o dia.
+        A histerese de nivel (`WdoGridReloadMaker.reancora_min_ticks`, mesmo
+        dia) reduz muito a rajada (no replay do pregao de 2026-09-08 o pior
+        minuto de parede cai de 64 para 21, sob o teto de 30), mas e'
+        mitigacao, nao fechamento: um mercado que ande em linha reta gera
+        substituicoes legitimas na mesma velocidade do reprocessamento.
+
+        As duas saidas conhecidas, NENHUMA implementada -- ficam registradas
+        para o dono decidir, porque as duas mexem em regra estrutural:
+          (a) o motor/runtime passar a' estrategia um carimbo que em
+              backtest e' o da barra e ao vivo e' o de parede. `live/` cuida
+              de relogio (AGENTS.md, regra 6), entao ENTREGAR o numero nao e'
+              decidir -- mas a decisao da estrategia deixa de ser funcao so'
+              do OHLCV, e portar para MQL5 passa a exigir relogio la' dentro.
+          (b) COALESCER, dentro de um mesmo passo do supervisor, as
+              `LimitPlaced` que a propria maquina ja' superou: das N
+              substituicoes de um lote so' a ULTIMA chega ao book. Parece
+              deduplicacao, mas nao e' equivalente -- uma ordem intermediaria
+              PODERIA ter preenchido antes de ser cancelada, entao suprimi-la
+              muda o que a corretora pode executar, e isso e' `live/`
+              decidindo. Precisa de aprovacao explicita, nao de julgamento
+              de agente."""
         agora = pd.Timestamp(agora_wall)
         corte = agora - pd.Timedelta(seconds=60)
         self._envios_recentes = [t for t in self._envios_recentes if t > corte]
@@ -3400,11 +3428,6 @@ class IntradayLiveRuntime:
                     # porque e' checagem local em memoria (sem I/O) --
                     # solta-la so' para pega-la de volta duas linhas depois
                     # nao reduziria o tempo segurado.
-                    # RELOGIO DE PAREDE, nao `evento.ts` -- ver a
-                    # docstring de `_check_cadencia_de_ordens`
-                    # (pregao de 2026-09-08: 45 envios em 13s de
-                    # parede passaram batido porque o carimbo do
-                    # tick dizia que eram 7,5 minutos).
                     # RELOGIO DE PAREDE, nao `evento.ts` -- ver a
                     # docstring de `_check_cadencia_de_ordens`
                     # (pregao de 2026-09-08: 45 envios em 13s de
