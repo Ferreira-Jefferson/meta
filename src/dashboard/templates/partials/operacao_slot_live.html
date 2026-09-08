@@ -19,7 +19,8 @@
 {{ r.resumo(slot.id, caixa_ledger, proc, caixa_minima, caixa_ok, oob=True,
             preenchidas=((s.daytrade.posicoes_compra + s.daytrade.posicoes_venda) if s.daytrade else none),
             posicionadas=((s.daytrade.ordem_em_pe.ordens if s.daytrade.ordem_em_pe else 0) if s.daytrade else none),
-            impedimento=(s.daytrade.impedimento if s.daytrade else none)) }}
+            impedimento=(s.daytrade.impedimento if s.daytrade else none),
+            caixa_minima_origem=caixa_minima_origem) }}
 {% endif %}
 {# A barra de controle (iniciar/parar) mudou de lugar: agora divide a linha
    com o campo de caixa em `operacao_body.html`, FORA deste nó. Aqui só sai o

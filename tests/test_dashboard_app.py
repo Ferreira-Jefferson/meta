@@ -1348,3 +1348,48 @@ def test_console_de_eventos_mostra_hora_de_brasilia(isolated_journal, client):
 
     assert "[2026-08-25 16:55:14] INFO daytrade:" in html
     assert "2026-08-25 19:55:14" not in html
+
+
+# ---------- idade do preco que gerou o piso (2026-09-08) -------------------
+
+def test_piso_calculado_sobre_preco_velho_mostra_a_data_na_tela(
+    isolated_journal, client, monkeypatch
+):
+    """O piso de uma ACAO e' `preco x 100 x 2`, entao ele so' vale o quanto o
+    preco vale -- e o preco de retaguarda vem de um parquet que nada atualiza
+    sozinho (`live_control.preco_de_referencia`).
+
+    Em 2026-09-08 o painel disse "min. R$30" com um preco de 24/08 enquanto
+    PMAM3 ja custava R$0,33 (minimo real R$66): o dono depositou R$30 e o robo
+    recusou todo pregao. Um piso de caixa e' instrucao de quanto depositar, e
+    instrucao sem data e' instrucao errada com cara de certa."""
+    monkeypatch.setattr(live_control, "credential_status",
+                        lambda: {"telegram": False, "smtp": False, "mt5": True})
+    monkeypatch.setattr(live_control, "min_cash_for", lambda slot, robot_key=None: 30.0)
+    monkeypatch.setattr(live_control, "origem_do_preco_do_piso",
+                        lambda slot, robot_key=None: "2026-08-24")
+    _create_mt5_account(isolated_journal, capital=0.0, slot=DAYTRADE)
+
+    html = client.get("/operacao").text
+
+    assert "2026-08-24" in html, "a data do preco tem de aparecer ao lado do minimo"
+    assert "o terminal MT5 n\u00e3o respondeu" in html
+
+
+def test_piso_calculado_sobre_a_cotacao_de_agora_nao_polui_a_tela_com_data(
+    isolated_journal, client, monkeypatch
+):
+    """Caminho feliz: terminal respondeu, o numero e' de agora e nao ha idade
+    a marcar. O `title` continua dizendo de onde veio, para o dono poder
+    conferir sem adivinhar."""
+    monkeypatch.setattr(live_control, "credential_status",
+                        lambda: {"telegram": False, "smtp": False, "mt5": True})
+    monkeypatch.setattr(live_control, "min_cash_for", lambda slot, robot_key=None: 66.0)
+    monkeypatch.setattr(live_control, "origem_do_preco_do_piso",
+                        lambda slot, robot_key=None: "agora")
+    _create_mt5_account(isolated_journal, capital=0.0, slot=DAYTRADE)
+
+    html = client.get("/operacao").text
+
+    assert "cota\u00e7\u00e3o de agora" in html
+    assert "o terminal MT5 n\u00e3o respondeu" not in html

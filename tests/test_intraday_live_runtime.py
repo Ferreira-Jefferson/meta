@@ -5243,3 +5243,73 @@ def test_fechamento_sem_posicao_e_sem_deal_no_historico_ainda_nao_confirma_nada(
     assert passo, "recusa de fechamento -- posicao continua aberta, tenta de novo depois"
     assert rt.machine.position is not None, "a maquina NAO pode ter fechado sem deal confirmado"
     assert rt.machine.realized_pnl == pytest.approx(0.0)
+
+
+# ---------- o impedimento diz o NUMERO (2026-09-08) -------------------------
+
+def test_impedimento_por_caixa_diz_quanto_falta_e_de_onde_vem_o_minimo(
+    tmp_path, pregao_aberto
+):
+    """Queixa do dono, 2026-09-08: PMAM3 subiu 175% em tres semanas, o custo
+    do lote passou de R$30 para R$33, e o painel so' dizia "impedido" com o
+    texto fixo "caixa abaixo do minimo do dia" -- para descobrir que faltavam
+    R$3,00 era preciso abrir o log do processo.
+
+    O texto e' de TELA (decimal BR) e tem de carregar as tres coisas que
+    respondem "e agora?": quanto falta, de onde sai o minimo, e quanto ha."""
+    barras = [
+        _bar("13:00", 10.00, 10.00, 10.00, 10.00),
+        _bar("13:01", 10.00, 10.00, 9.79, 9.85),
+    ]
+    rt, _feed = _runtime(tmp_path, barras)
+    _set_cash(rt, 7.50)
+
+    rt.run_once(now=_agora("13:02:30"))
+
+    # O gate cobra o preco da ULTIMA barra fechada (9,85), nao o da primeira.
+    impedimento = rt.status()["daytrade"]["impedimento"]
+    assert impedimento is not None
+    assert "faltam R$ 2,35" in impedimento, impedimento
+    assert "a R$ 9,85" in impedimento, impedimento   # de onde sai o minimo
+    assert "R$ 7,50" in impedimento, impedimento     # o caixa
+    assert SYMBOL in impedimento, impedimento
+
+
+def test_impedimento_por_caixa_some_quando_o_dono_completa_o_caixa(
+    tmp_path, pregao_aberto
+):
+    """O piso do dia nao e' sentenca: reposto o caixa, o robo volta no MESMO
+    pregao (mesma regra ja provada para o AutoTrading em
+    `test_pregao_recusado_grava_impedimento_e_o_painel_o_enxerga`)."""
+    barras = [
+        _bar("13:00", 10.00, 10.00, 10.00, 10.00),
+        _bar("13:01", 10.00, 10.00, 9.79, 9.85),
+    ]
+    rt, feed = _runtime(tmp_path, barras)
+    _set_cash(rt, 7.50)
+    rt.run_once(now=_agora("13:02:30"))
+    assert rt.status()["daytrade"]["impedimento"] is not None
+
+    _set_cash(rt, 500.00)
+    rt._capital_checked_for = None  # novo pregao/reavaliacao: releia o caixa
+    feed._barras.append(_bar("13:02", 9.85, 9.90, 9.85, 9.88))
+    rt.run_once(now=_agora("13:03:00"))
+
+    assert rt.status()["daytrade"]["impedimento"] is None
+
+
+def test_texto_de_falta_de_caixa_em_FUTURO_fala_de_margem_nao_de_lote(
+    tmp_path, pregao_aberto
+):
+    """Futuro nao tem "lote de 100 a R$ X": o minimo e' MARGEM por contrato.
+    Citar preco x lote ali daria a entender que o robo precisa do nocional
+    inteiro no caixa -- o bug de ~R$1 milhao que `capital_minimo_para` ja
+    documenta, so' que escrito na tela do dono."""
+    rt, _feed = _runtime(tmp_path, [_bar("13:00", 10.00, 10.00, 10.00, 10.00)])
+    rt.strategy.is_futuro = True
+
+    texto = rt._texto_de_falta_de_caixa(saldo=120.0, minimo=150.0, preco=5112.5)
+
+    assert "faltam R$ 30,00" in texto, texto
+    assert "margem" in texto, texto
+    assert "5.112,50" not in texto, f"nao pode citar o preco do contrato: {texto}"

@@ -884,9 +884,94 @@ def available_cash(slot_id: str, execution_mode: str = "live") -> Optional[float
     return None if conta is None else round(conta.cash_for(execution_mode), 2)
 
 
+#: Quanto tempo uma cotação lida do terminal vale antes de ser relida. O
+#: painel repinta a cada poucos segundos e o piso de caixa aparece em vários
+#: cartões ao mesmo tempo — sem o TTL, cada repintura abriria uma consulta por
+#: símbolo no MT5. 30s é curto o bastante para o número acompanhar o pregão e
+#: longo o bastante para o poll não pagar I/O de corretora.
+_PRECO_TTL_SEGUNDOS = 30.0
+_preco_cache: dict[str, tuple[float, Optional[float], str]] = {}
+_preco_lock = threading.Lock()
+#: UM `MT5Broker` reusado para todas as leituras de cotação do painel. A
+#: ficha da `gremah` lista 9 ativos calibrados: com um broker novo por
+#: símbolo, uma repintura chamaria `mt5.initialize()` nove vezes — que a
+#: docstring de `MT5Broker.connect` desaconselha explicitamente ("chamar de
+#: novo sem necessidade é, na prática de alguns terminais, um jeito de perder
+#: estado de ordens em voo à toa"). Instância só de CONSULTA, sem `magic`:
+#: nunca manda ordem. `connect()` é idempotente e retenta sozinho enquanto
+#: `_connected` for `False`, então guardar a instância não congela um
+#: terminal que ainda vai abrir.
+_preco_broker = None
+
+
+def _cotacao_do_terminal(symbol: str) -> Optional[float]:
+    """Último preço negociado que o MT5 reporta, ou `None` se não deu.
+
+    Função separada de propósito, e não inline em `preco_de_referencia`: é a
+    ÚNICA porta de I/O de corretora naquele caminho, e é ela que
+    `tests/conftest.py::_cotacao_do_terminal_desligada` desliga para a suíte
+    inteira. Toda leitura de preço do painel cai no parquet nos testes, o que
+    os mantém determinísticos (o preço de mercado muda a cada minuto) e sem
+    tocar no terminal do dono enquanto ele opera.
+
+    Nunca levanta: terminal fechado, credencial ausente ou símbolo
+    desconhecido devolvem `None` e quem chama usa a retaguarda."""
+    global _preco_broker
+    try:
+        with _preco_lock:
+            if _preco_broker is None:
+                _preco_broker = _broker_for_detection()
+            broker = _preco_broker
+        if not broker.connect():
+            return None
+        preco = broker.last_price(symbol)
+        return float(preco) if preco else None
+    except Exception:  # noqa: BLE001 -- terminal fechado/sem credencial: retaguarda
+        return None
+
+
+def preco_de_referencia(symbol: str) -> tuple[Optional[float], str]:
+    """`(preço, origem)` do ativo AGORA — cotação ao vivo do terminal
+    primeiro, parquet local como retaguarda. `(None, "")` se nenhum dos dois
+    responder. `origem` é `"agora"` (veio do terminal) ou a data ISO da última
+    barra salva (veio do parquet, e pode estar velha).
+
+    **Por que existe (2026-09-08, achado com dinheiro real).** O piso de caixa
+    de uma AÇÃO é `preço x 100 x 2`, então ele só vale o quanto o preço vale.
+    O único preço que o painel conhecia era `market_data_intraday.storage.
+    last_close` — o último minuto SALVO em parquet. Mas nada salva esse
+    parquet sozinho: o robô ao vivo lê barra direto do terminal (`MT5Feed`),
+    nunca escreve ali, e o download é script manual. Resultado medido: o
+    parquet de PMAM3 estava parado em R$0,15 de 24/08 enquanto o papel
+    negociava a R$0,33 — 15 dias e +120% de defasagem. O painel disse ao dono
+    "mín. R$30", ele depositou R$30, e o robô então recusou TODO pregão contra
+    o preço de verdade (`IntradayLiveRuntime._check_capital`, que lê o feed ao
+    vivo e cobrava R$33). Painel e robô olhando preços diferentes é a mesma
+    família de erro de `live/` decidir por conta própria: o número que o dono
+    lê tem de ser o número que o robô aplica.
+
+    Nunca levanta e nunca bloqueia por falta de terminal: sem MT5 (ou com o
+    terminal fechado) cai no parquet e diz de onde veio, para quem desenha
+    poder mostrar a idade em vez de fingir que o número é de agora."""
+    from dashboard.robot_view import _ultimo_preco
+
+    agora = time.monotonic()
+    with _preco_lock:
+        em_cache = _preco_cache.get(symbol)
+        if em_cache is not None and (agora - em_cache[0]) < _PRECO_TTL_SEGUNDOS:
+            return (em_cache[1], em_cache[2])
+
+    preco = _cotacao_do_terminal(symbol)
+    resultado = (float(preco), "agora") if preco else _ultimo_preco(symbol)
+    with _preco_lock:
+        _preco_cache[symbol] = (agora, resultado[0], resultado[1])
+    return resultado
+
+
 def _intraday_capital_minimo(robot_key: str, symbol: Optional[str] = None) -> Optional[float]:
     """Piso de caixa para operar HOJE — `capital_minimo_para`
-    (`dashboard.robot_view`) de `symbol`, no último preço salvo localmente.
+    (`dashboard.robot_view`) de `symbol`, no preço de AGORA
+    (`preco_de_referencia`: terminal primeiro, parquet como retaguarda).
     `symbol` omitido usa o ativo default do robô.
 
     Ramifica por `IntradayStrategy.is_futuro` (2026-08-28, corrige o mesmo
@@ -904,7 +989,7 @@ def _intraday_capital_minimo(robot_key: str, symbol: Optional[str] = None) -> Op
     (parquet ausente) — quem chama decide o degrade, nunca bloqueia por falta
     de dado que não é culpa do dono."""
     from backtest.intraday.profiles import PROFILES
-    from dashboard.robot_view import _ultimo_preco, capital_minimo_para
+    from dashboard.robot_view import capital_minimo_para
     from strategy.daytrade.base import capital_minimo_brl
     from strategy.daytrade.registry import get_daytrade_robot
 
@@ -914,11 +999,14 @@ def _intraday_capital_minimo(robot_key: str, symbol: Optional[str] = None) -> Op
         return None
     symbol = symbol or robo.symbol
     if getattr(robo, "is_futuro", False):
+        # Futuro não consulta preço nenhum: o piso é margem por contrato, que
+        # a corretora fixa (ver `capital_minimo_para`). Sair antes evita uma
+        # ida ao terminal que não mudaria a resposta.
         return capital_minimo_para(True, symbol, None)
     perfil = PROFILES.get(symbol)
     if perfil is None:
         return None
-    preco, _data = _ultimo_preco(symbol)
+    preco, _origem = preco_de_referencia(symbol)
     if preco is None:
         return None
     return capital_minimo_brl(preco, perfil.default_quantity)
@@ -945,6 +1033,34 @@ def min_cash_for(slot, robot_key: Optional[str] = None) -> float:
         return slot.min_cash_brl
     minimo = _intraday_capital_minimo(robot_key or slot.robot_key, slot.symbol or None)
     return slot.min_cash_brl if minimo is None else minimo
+
+
+def origem_do_preco_do_piso(slot, robot_key: Optional[str] = None) -> str:
+    """De onde veio o preço que gerou `min_cash_for` deste slot: `"agora"`
+    (cotação do terminal), uma data ISO (parquet local, PODE estar velho) ou
+    `""` quando o piso não depende de preço nenhum — swing (piso fixo do
+    slot) e futuro (margem por contrato).
+
+    Existe só para o painel poder mostrar a IDADE do número. Um piso de caixa
+    é uma instrução de quanto depositar; sem dizer de quando é o preço, um
+    parquet parado há 15 dias vira uma instrução errada com cara de certa —
+    foi o que aconteceu em 2026-09-08 (`preco_de_referencia`). Barato: o
+    preço já está no cache de `preco_de_referencia` quando `min_cash_for`
+    rodou no mesmo request."""
+    if not slot.is_intraday:
+        return ""
+    from strategy.daytrade.registry import get_daytrade_robot
+
+    try:
+        robo = get_daytrade_robot(robot_key or slot.robot_key)
+    except KeyError:
+        return ""
+    if getattr(robo, "is_futuro", False):
+        return ""
+    symbol = slot.symbol or robo.symbol
+    if not symbol:
+        return ""
+    return preco_de_referencia(symbol)[1]
 
 
 def start(config: ProcessConfig) -> dict:

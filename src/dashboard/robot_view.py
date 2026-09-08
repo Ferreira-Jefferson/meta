@@ -212,8 +212,23 @@ def _ultimo_preco_cached(key: tuple[str, float, int]) -> tuple[float | None, str
 
 
 def _ultimo_preco(symbol: str) -> tuple[float | None, str]:
-    """(último fechamento de minuto salvo, data) — `(None, "")` se não houver."""
+    """(último fechamento de minuto salvo, data) — `(None, "")` se não houver.
+
+    RETAGUARDA, não a fonte preferida: quem quer o preço para calcular piso de
+    caixa deve chamar `dashboard.live_control.preco_de_referencia`, que tenta
+    a cotação ao vivo do terminal antes de cair aqui. Ver a docstring de lá
+    para o porquê (parquet de PMAM3 parado 15 dias, piso de caixa errado em
+    120%)."""
     return _ultimo_preco_cached(_preco_key(symbol))
+
+
+def _preco_agora(symbol: str) -> tuple[float | None, str]:
+    """`preco_de_referencia` do `live_control` — cotação ao vivo primeiro,
+    parquet depois. Import tardio porque `live_control` importa este módulo
+    (as duas pontas resolvem dentro da função, nunca no topo)."""
+    from dashboard.live_control import preco_de_referencia
+
+    return preco_de_referencia(symbol)
 
 
 def capital_minimo_para(is_futuro: bool, symbol: str, preco: float | None) -> float | None:
@@ -277,7 +292,7 @@ def _daytrade_assets(cls, robo) -> tuple[RobotAsset, ...]:
         symbol = getattr(robo, "symbol", "")
         if not symbol:
             return ()
-        preco, data = _ultimo_preco(symbol)
+        preco, data = _preco_agora(symbol)
         return (_asset(symbol, getattr(robo, "profit_pct", 0.0),
                        getattr(robo, "stop_multiplier", 0.0),
                        getattr(robo, "alvo_por_volatilidade", False),
@@ -289,7 +304,7 @@ def _daytrade_assets(cls, robo) -> tuple[RobotAsset, ...]:
     ativos = tuple(
         _asset(s.symbol, s.profit_pct, s.stop_multiplier,
                s.alvo_por_volatilidade, s.alvo_vol_mult, s.stop_vol_mult,
-               *_ultimo_preco(s.symbol), is_futuro, None, None)
+               *_preco_agora(s.symbol), is_futuro, None, None)
         for s in setups()
     )
     # Ordenado pelo CAIXA MÍNIMO, do mais barato ao mais caro. A ordem antiga

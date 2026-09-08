@@ -1190,3 +1190,83 @@ def test_detect_futures_symbol_map_falha_de_conexao_devolve_none(monkeypatch):
                         lambda **kwargs: _FakeFuturesBroker(None, [], **kwargs))
 
     assert live_control.detect_futures_symbol_map(DAYTRADE) is None
+
+
+# ---------- preco de referencia / piso de caixa (2026-09-08) ---------------
+# O piso de caixa de uma ACAO e' `preco x 100 x 2`, entao ele so' vale o
+# quanto o preco vale. Achado com dinheiro real: o parquet de PMAM3 estava
+# parado em R$0,15 de 24/08 enquanto o papel negociava a R$0,33 -- o painel
+# disse "min. R$30", o dono depositou R$30, e o robo recusou todo pregao
+# contra o preco de verdade (R$33 pelo lote). Ver `preco_de_referencia`.
+#
+# `_cotacao_do_terminal` chega DESLIGADA em todo teste
+# (`conftest._cotacao_do_terminal_desligada`); quem quer o caminho ao vivo
+# repatcha, como os testes abaixo fazem.
+
+def test_preco_de_referencia_prefere_a_cotacao_do_terminal(monkeypatch):
+    """Terminal respondeu: e' esse o preco, e a origem diz "agora"."""
+    monkeypatch.setattr(live_control, "_cotacao_do_terminal", lambda s: 0.33)
+    monkeypatch.setattr("dashboard.robot_view._ultimo_preco",
+                        lambda s: (0.15, "2026-08-24"))
+
+    assert live_control.preco_de_referencia("PMAM3") == (0.33, "agora")
+
+
+def test_preco_de_referencia_cai_no_parquet_quando_o_terminal_cala(monkeypatch):
+    """Terminal fechado/sem credencial nao pode virar "sem preco": cai no
+    parquet E DIZ A DATA, para quem desenha poder mostrar a idade em vez de
+    fingir que o numero e' de agora."""
+    monkeypatch.setattr(live_control, "_cotacao_do_terminal", lambda s: None)
+    monkeypatch.setattr("dashboard.robot_view._ultimo_preco",
+                        lambda s: (0.15, "2026-08-24"))
+
+    assert live_control.preco_de_referencia("PMAM3") == (0.15, "2026-08-24")
+
+
+def test_preco_de_referencia_sem_terminal_e_sem_parquet_nao_inventa(monkeypatch):
+    monkeypatch.setattr(live_control, "_cotacao_do_terminal", lambda s: None)
+    monkeypatch.setattr("dashboard.robot_view._ultimo_preco", lambda s: (None, ""))
+
+    assert live_control.preco_de_referencia("PMAM3") == (None, "")
+
+
+def test_preco_de_referencia_nao_consulta_o_terminal_duas_vezes_no_TTL(monkeypatch):
+    """O painel repinta a cada poucos segundos e o piso aparece em varios
+    cartoes -- sem o cache, cada repintura abriria uma consulta por simbolo no
+    terminal que esta operando dinheiro real ao lado."""
+    chamadas = []
+    monkeypatch.setattr(live_control, "_cotacao_do_terminal",
+                        lambda s: chamadas.append(s) or 0.33)
+
+    for _ in range(5):
+        live_control.preco_de_referencia("PMAM3")
+
+    assert chamadas == ["PMAM3"]
+
+
+def test_piso_de_caixa_de_acao_acompanha_o_preco_de_agora(monkeypatch):
+    """O caso real de 2026-09-08, ponta a ponta: mesmo parquet velho, o piso
+    sai do preco ao vivo. R$0,15 dava R$30; R$0,33 da' R$66."""
+    monkeypatch.setattr("dashboard.robot_view._ultimo_preco",
+                        lambda s: (0.15, "2026-08-24"))
+
+    monkeypatch.setattr(live_control, "_cotacao_do_terminal", lambda s: None)
+    live_control._preco_cache.clear()
+    assert live_control._intraday_capital_minimo("gremah", "PMAM3") == 30.0
+
+    monkeypatch.setattr(live_control, "_cotacao_do_terminal", lambda s: 0.33)
+    live_control._preco_cache.clear()
+    assert live_control._intraday_capital_minimo("gremah", "PMAM3") == 66.0
+
+
+def test_piso_de_caixa_de_FUTURO_nunca_pergunta_preco_ao_terminal(monkeypatch):
+    """Futuro e' margem por contrato, que a corretora fixa -- preco nao entra
+    na conta. Ir ao terminal ali seria I/O que nao muda a resposta (e, pior,
+    convidaria alguem a aplicar `preco x 100 x 2` a um preco de futuro, o bug
+    de ~R$1 milhao que `capital_minimo_para` ja documenta)."""
+    def _explode(symbol):
+        raise AssertionError(f"consultou o terminal para o futuro {symbol}")
+
+    monkeypatch.setattr(live_control, "_cotacao_do_terminal", _explode)
+
+    assert live_control._intraday_capital_minimo("wdo_grid_reload_maker", "WDO@") == 375.0

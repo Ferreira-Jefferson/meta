@@ -535,6 +535,9 @@ class IntradayLiveRuntime:
         self._capital_checked_for: Optional[date] = None
         self._capital_alarm: Optional[str] = None
         self._capital_minimo_hoje: Optional[float] = None
+        #: Versao do alarme acima escrita PARA O DONO LER NO PAINEL, com o
+        #: quanto falta em reais. Ver `_check_capital`.
+        self._capital_impedimento: Optional[str] = None
         # Aviso de capital disponivel (`_avaliar_sugestao_de_capital`), tambem
         # 1x por pregao e pelo mesmo motivo: a regra depende do preco do dia.
         # A deduplicacao POR ATIVO e' do banco (`UNIQUE` em
@@ -1590,7 +1593,10 @@ class IntradayLiveRuntime:
                 # passou enquanto ele estava barrado, e decidir contra precos
                 # que ja foram.
                 self._snapshot.last_bar_ts = barras[-1].ts
-                self._gravar_impedimento(conn, account, "caixa abaixo do mínimo do dia", hoje)
+                self._gravar_impedimento(
+                    conn, account,
+                    self._capital_impedimento or "caixa abaixo do mínimo do dia",
+                    hoje)
                 self._persist(conn, account)
                 return passos + [StepReport("daytrade_skip", hoje, phase=fase,
                                             detail={"motivo": "caixa abaixo do minimo",
@@ -1777,18 +1783,54 @@ class IntradayLiveRuntime:
 
         if saldo >= minimo:
             self._capital_alarm = None
+            self._capital_impedimento = None
             return None
 
         self._capital_alarm = (
             f"caixa R$ {saldo:.2f} nao cobre o minimo de R$ {minimo:.2f} "
             f"({self.strategy.symbol})"
         )
+        # Texto do PAINEL (o log fica com o de cima, sem acento, como o resto
+        # do arquivo). Diz o quanto FALTA e de onde sai o minimo -- "caixa
+        # abaixo do minimo do dia", o texto anterior, obrigava o dono a abrir
+        # o log do processo para descobrir de quanto era a diferenca. Foi a
+        # queixa de 2026-09-08: PMAM3 subiu 175% em tres semanas, o piso do
+        # lote passou de R$30 para R$33, e o painel so' dizia "impedido".
+        self._capital_impedimento = self._texto_de_falta_de_caixa(saldo, minimo, preco)
         self._log(conn, account.id, "error",
                   f"nao vou operar: {self._capital_alarm}",
                   {"pregao": session.isoformat(), "caixa": round(saldo, 2),
                    "minimo": round(minimo, 2), "preco": preco,
+                   "falta": round(minimo - saldo, 2),
                    "quantidade": self.config.default_quantity})
         return self._capital_alarm
+
+    def _texto_de_falta_de_caixa(self, saldo: float, minimo: float,
+                                 preco: float) -> str:
+        """"faltam R$ 3,00 -- 100 PMAM3 a R$ 0,33 custam R$ 33,00 e o caixa
+        tem R$ 30,00", em decimal BR (e' texto de tela).
+
+        Diz a QUANTIDADE em vez de "1 lote" porque o tamanho do lote e' o que
+        muda o numero, e escondê-lo atras da palavra "lote" e' o que fez o
+        dono precisar abrir o log para entender de onde saia o minimo.
+
+        Ramifica igual a `_check_capital`: em FUTURO o minimo e' margem por
+        contrato, nao preco x lote, e citar o preco do contrato ali daria a
+        entender que ele precisa do nocional inteiro no caixa."""
+        def br(v: float) -> str:
+            return f"{v:,.2f}".replace(",", "_").replace(".", ",").replace("_", ".")
+
+        sym = self.strategy.symbol
+        qtd = self.config.default_quantity
+        plural = qtd != 1
+        if getattr(self.strategy, "is_futuro", False):
+            origem = (f"{qtd} contrato{'s' if plural else ''} de {sym} "
+                      f"exige{'m' if plural else ''} R$ {br(minimo)} de margem")
+        else:
+            origem = (f"{qtd} {sym} a R$ {br(preco)} "
+                      f"custa{'m' if plural else ''} R$ {br(minimo)}")
+        return (f"faltam R$ {br(minimo - saldo)} — {origem} e o caixa tem "
+                f"R$ {br(saldo)}")
 
     def _check_atividade_estranha(self, conn, account: AccountState, session: date) -> None:
         """Ha' posicao/ordem de OUTRO `magic` neste papel agora? So' avisa

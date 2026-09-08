@@ -11,7 +11,7 @@
    nunca seria trocado pelo refresh de fundo. Sem isto, um cartão recolhido
    continuaria escrito "operando" depois de o robô parar — e um painel que
    mente sobre dinheiro é pior que um painel que não resume. #}
-{% macro resumo(slot_id, caixa, proc, caixa_minima=none, caixa_ok=True, oob=False, preenchidas=none, posicionadas=none, impedimento=none) %}
+{% macro resumo(slot_id, caixa, proc, caixa_minima=none, caixa_ok=True, oob=False, preenchidas=none, posicionadas=none, impedimento=none, caixa_minima_origem=none) %}
 <span id="ops-sum-{{ slot_id }}" class="ops-sum"{% if oob %} hx-swap-oob="true"{% endif %}>
   <span class="ops-sum-cash num">R$ {{ caixa | num_br }}</span>
   {# O mínimo mudou de lugar (dono, 2026-08-22): ficava ao lado do campo de
@@ -29,8 +29,21 @@
      `IntradayLiveRuntime._check_capital`, que muda todo pregão). Mostrar o
      número de abertura ao lado do caixa de um robô já operando sugeria um
      limite que não existe mais pra ele. #}
+  {# A IDADE do preço que gerou o mínimo (2026-09-08). O piso de uma ação é
+     `preço x 100 x 2`, então ele só vale o quanto o preço vale — e o preço
+     de retaguarda vem de um parquet que nada atualiza sozinho. Em 08/09 o
+     painel disse "mín. R$30" com um preço de 24/08 enquanto o papel já
+     custava R$0,33 (mínimo real R$66): o dono depositou os R$30 e o robô
+     recusou todo pregão. Um piso de caixa é instrução de quanto depositar;
+     instrução sem data é instrução errada com cara de certa.
+     `caixa_minima_origem` é `"agora"` (terminal respondeu — nada a marcar),
+     uma data ISO (parquet, marcada na tela) ou vazio/`none` (piso que não
+     vem de preço: swing e futuro). #}
   {% if caixa_minima is not none and not proc %}
-  <span class="ops-sum-hint{% if not caixa_ok %} is-blocked{% endif %}">mín. R$ {{ caixa_minima | num_br }}</span>
+  <span class="ops-sum-hint{% if not caixa_ok %} is-blocked{% endif %}"
+        {%- if caixa_minima_origem and caixa_minima_origem != "agora" %}
+        title="calculado sobre o último preço salvo ({{ caixa_minima_origem }}), não sobre a cotação de agora — o terminal MT5 não respondeu"
+        {%- elif caixa_minima_origem == "agora" %} title="calculado sobre a cotação de agora"{% endif %}>mín. R$ {{ caixa_minima | num_br }}{% if caixa_minima_origem and caixa_minima_origem != "agora" %} <span class="dim">({{ caixa_minima_origem }})</span>{% endif %}</span>
   {% endif %}
   {# Ordens do robô (só day trade — `preenchidas`/`posicionadas` vêm `none`
      pro swing, que não tem o conceito de ordem-limite em pé): PREENCHIDA é a

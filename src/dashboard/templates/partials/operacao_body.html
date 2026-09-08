@@ -135,6 +135,7 @@
   {% with slot = slot, status = bloco.status, proc = bloco.proc,
           config_anterior = bloco.config_anterior, caixa_ok = bloco.caixa_ok,
           caixa_minima = bloco.caixa_minima, caixa_ledger = bloco.caixa_ledger,
+          caixa_minima_origem = bloco.caixa_minima_origem,
           robot_options = bloco.robot_options, creds_status = creds_status,
           poll_seconds = poll_seconds %}
     {% include "partials/operacao_slot_live.html" %}
@@ -314,7 +315,8 @@
 {% for bloco in swing %}
 {% call secao("slot:" ~ bloco.slot.id, 2, bloco.slot.label,
               r.resumo(bloco.slot.id, bloco.caixa_ledger, bloco.proc,
-                      bloco.caixa_minima, bloco.caixa_ok),
+                      bloco.caixa_minima, bloco.caixa_ok,
+                      caixa_minima_origem=bloco.caixa_minima_origem),
               aberta=bloco.proc is not none) %}
   {{ slot_body(bloco, creds_status, poll_seconds) }}
 {% endcall %}
@@ -570,7 +572,8 @@
                     bloco.caixa_minima, bloco.caixa_ok,
                     preenchidas=((dt.posicoes_compra + dt.posicoes_venda) if dt else none),
                     posicionadas=((dt.ordem_em_pe.ordens if dt.ordem_em_pe else 0) if dt else none),
-                    impedimento=(dt.impedimento if dt else none)) }}
+                    impedimento=(dt.impedimento if dt else none),
+                    caixa_minima_origem=bloco.caixa_minima_origem) }}
         <span class="ops-sec-caret" aria-hidden="true"></span>
       </summary>
       <div class="ops-slot-body">

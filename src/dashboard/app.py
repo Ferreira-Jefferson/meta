@@ -629,6 +629,11 @@ def _slot_ctx(slot, posicoes_limit: int = OPS_PAGINA, eventos_full: bool = False
     # robô, não um número cego ao símbolo (ver docstring de `min_cash_for`).
     robo_previsto = status_payload.get("robo_investimento") or None
     piso = live_control.min_cash_for(slot, robo_previsto)
+    # De quando é o preço que gerou o piso. `""` quando o piso não vem de
+    # preço (swing, futuro). O painel mostra isso porque um piso calculado
+    # sobre parquet velho é uma instrução de depósito errada com cara de
+    # certa -- ver `live_control.origem_do_preco_do_piso`.
+    piso_origem = live_control.origem_do_preco_do_piso(slot, robo_previsto)
     # Posições cortadas AQUI (e não no SQL como os eventos): elas vêm da conta
     # já carregada em memória e são poucas por construção — o teto de posições
     # do robô. O corte existe para o cartão ter um comportamento só, não
@@ -646,6 +651,7 @@ def _slot_ctx(slot, posicoes_limit: int = OPS_PAGINA, eventos_full: bool = False
         "config_anterior": config_anterior,
         "caixa_ledger": caixa,
         "caixa_minima": piso,
+        "caixa_minima_origem": piso_origem,
         "caixa_ok": caixa >= piso,
         "erro_slot": erro,
     }
@@ -726,7 +732,7 @@ def _novo_robo_ctx(conn) -> dict:
     """
     from core.config import slot_by_id
     from dashboard import slots as slots_mod
-    from dashboard.robot_view import _ultimo_preco, capital_minimo_para
+    from dashboard.robot_view import _preco_agora, capital_minimo_para
     from journal import live_store
     from strategy.daytrade.registry import list_daytrade_robots, symbols_for_robot
 
@@ -759,7 +765,11 @@ def _novo_robo_ctx(conn) -> dict:
     for info in list_daytrade_robots():
         ativos = []
         for symbol in symbols_for_robot(info.key):
-            preco, data = _ultimo_preco(symbol)
+            # `_preco_agora` (não `_ultimo_preco`): o mínimo oferecido no form
+            # de "novo robô" é o que o dono vai depositar, e um preço de
+            # parquet velho fazia esse número nascer errado -- ver
+            # `live_control.preco_de_referencia`.
+            preco, data = _preco_agora(symbol)
             minimo = capital_minimo_para(info.is_futuro, symbol, preco)
             modos = slots_por_robo_ativo.get((info.key, symbol), {})
             modos_usados = sorted(modos)

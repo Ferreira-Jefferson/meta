@@ -53,6 +53,38 @@ def _travas_de_slot_isoladas(tmp_path_factory, monkeypatch):
 
     monkeypatch.setattr(slot_lock, "LOCK_DIR", tmp_path_factory.mktemp("locks"))
 
+
+@pytest.fixture(autouse=True)
+def _cotacao_do_terminal_desligada(monkeypatch):
+    """Nenhum teste pergunta o preço ao terminal MT5 do dono.
+
+    `dashboard.live_control.preco_de_referencia` (2026-09-08) passou a ler a
+    cotação AO VIVO antes de cair no parquet, porque o piso de caixa de uma
+    ação é `preço x 100 x 2` e o parquet pode estar dias atrasado. Ótimo em
+    produção, veneno na suíte, por três motivos:
+
+    1. **Não-determinismo.** O preço muda a cada minuto. Um teste que afirma
+       "mín. R$30 para PMAM3" passaria de manhã e falharia à tarde.
+    2. **I/O de corretora dentro do teste.** A ficha da `gremah` lista 9
+       ativos; renderizá-la abriria 9 consultas no terminal que está operando
+       dinheiro real ao lado. Mesmo espírito de `_travas_de_slot_isoladas`
+       acima: a suíte não pode competir com a operação.
+    3. **Cache de módulo vazando entre testes.** `_preco_cache` é global e
+       tem TTL de 30s — sem limpar, o preço lido num teste apareceria no
+       seguinte, e sob `--dist load` a ordem de coleta não é a de execução.
+       Isso é exatamente a dependência de ordem que o `AGENTS.md` proíbe.
+
+    Desligar aqui devolve o comportamento anterior (parquet, fixo no repo) a
+    TODO teste que não peça outra coisa. Um teste que queira exercitar o
+    caminho ao vivo repatcha `_cotacao_do_terminal` com o valor que quiser --
+    é a única porta de I/O daquele caminho, de propósito."""
+    from dashboard import live_control
+
+    monkeypatch.setattr(live_control, "_cotacao_do_terminal", lambda symbol: None)
+    live_control._preco_cache.clear()
+    yield
+    live_control._preco_cache.clear()
+
 # Caminho -> dica de qual patch falta, para a mensagem de falha apontar
 # direto pro que esquecer causa (em vez de só dizer "algo vazou").
 _CAMINHOS_REAIS_PROIBIDOS = {
