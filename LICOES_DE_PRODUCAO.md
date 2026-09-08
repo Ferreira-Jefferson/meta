@@ -874,6 +874,14 @@ R$3.000). Múltiplo sobre o piso de tabela (R$250): **3x** — bem menor que o
 mecanismo/calibração de cada robô, não uma constante universal — vale medir
 caso a caso, nunca supor.
 
+**Confirmado de novo em 2026-09-08, agora em TICK real e na geometria de
+produção ATUAL (T2/S16, base já corrigida 5.12-5.14):** a mesma catraca de
+ruína bateu de novo, desta vez dentro de uma janela OOS de validação inteira
+(2 trades e trava por 50 dos 51 pregões) em vez de um backtest contínuo — e
+o achado adicional é que isso também invalida a comparação IS/OOS nesse
+capital, não só o número isolado. Ver item 6.15 para os dois números e a
+regra de método.
+
 ### 3.12 O % de risco não atravessa de um robô pro outro — o tipo de stop muda o que o % vira em contratos
 
 Pedido do dono depois do item 3.11: já que o CopaWin escala contratos com o
@@ -2197,6 +2205,82 @@ negativas).
 > Nesse regime, todo mecanismo que reduz a cauda de risco corta exatamente a
 > cauda que sustenta o resultado.
 
+### 6.15 Janela censurada perto do piso de capital não é resultado negativo — e IS/OOS vira sorteio, não validação
+
+Medido em `scripts/daytrade/wdof1_producao_is_oos_2026_09_07.py` (commit
+`80c1f2f`, 2026-09-08), rodando a config REAL de produção do WDO F1 (T2/S16,
+via `strategy.daytrade.registry.get_daytrade_robot` — o mesmo caminho que
+`run_live.py` usa, nunca uma reconstrução manual dos parâmetros) no capital
+mínimo real (R$375,00, item 3.4/3.11) sobre a base de tick já corrigida
+(5.12-5.14):
+
+| janela | líquido R$ | win% | trades | pregões sem trade | qtd_max |
+|---|---|---|---|---|---|
+| IS (72 pregões) | +344.855,00 | 94,2% | 19.835 | 0 | 5 |
+| OOS (51 pregões) | −76,00 | 50,0% | 2 | 50 | 1 |
+
+À primeira vista, "degradou de +344 mil pra −76 fora da amostra" seria a
+leitura padrão de overfitting IS/OOS (item 6.4). É a leitura ERRADA aqui, por
+dois motivos que só aparecem nas colunas EXTRAS, não no líquido:
+
+1. **A linha OOS está CENSURADA, não é um resultado negativo.** Ela fez
+   exatamente 2 trades — 1 alvo, 1 stop — e parou; `pregoes_sem_trade=50` de
+   51 e `qtd_max` preso em 1 confirmam que o caixa nunca destravou 2
+   contratos. Aritmética fechada: piso de 1 contrato = `150 × 2,0 × 1,25 =
+   R$375,00` (item 3.4), capital de partida = EXATAMENTE R$375,00, um stop
+   custa `16 × 0,5 × R$10 = R$80,00`. R$375 − R$76 ≈ R$299 < R$375 → toda
+   entrada seguinte é recusada por `capital_insuficiente` e o robô fica
+   inerte pelos 50 pregões restantes — a mesma catraca de ruína do item
+   6.1/3.10, agora vista pelo lado de uma janela OOS inteira, não de um
+   backtest contínuo com portão ligado.
+2. **Partindo do piso exato, IS e OOS não são duas medidas da mesma coisa —
+   são duas amostras de UMA moeda.** O robô precisa acumular R$80 de lucro
+   antes do primeiro stop pra sobreviver; a ~R$9,50 líquidos por alvo (2
+   ticks × R$5 menos corretagem), isso são ~9 alvos seguidos, e ao win rate
+   de 94,2% medido no IS isso dá `0,942^9 ≈ 58%` de chance de sobreviver até
+   lá. O IS ganhou esse sorteio e compôs até o teto de 5 contratos; o OOS
+   perdeu no segundo trade. A diferença entre as duas linhas não mede
+   degradação de edge fora da amostra — mede o resultado de um Bernoulli em
+   cada janela. Os retornos de 4-5 dígitos (91.961%/113.899%/74.331%) são o
+   mesmo artefato por outro ângulo: compor tudo sobre um caixa minúsculo faz
+   a mesma moeda virar duas ordens de grandeza de diferença dependendo só de
+   QUANDO a sequência ruim chega.
+
+De brinde, uma confirmação independente do item 4.8: a mesma medição rodou
+T1/S16 como referência (mesmo motivo pelo qual a produção trocou pra T2 foi
+deslize do TP nativo, nunca backtest) e deu pior janela de 60s = 36 (IS) e 39
+(OOS), acima do teto de 30 de `MAX_ENVIOS_POR_MINUTO` (item 1.18/5.16) — T1 é
+INEXEQUÍVEL ao vivo apesar de parecer melhor na tabela bruta (retorno maior,
+win% maior, líquido maior). T2 fica em 23 e 6, dentro do teto.
+
+> **Regra:** antes de interpretar qualquer diferença entre janelas de
+> backtest, confira se a janela mais fraca foi CENSURADA — conte pregões sem
+> trade e o total de trades daquela janela. Um robô que parou de operar não
+> produz veredito sobre a estratégia; produz veredito sobre a restrição que o
+> parou. E quando o capital de partida é EXATAMENTE o piso de 1 unidade do
+> instrumento (item 3.10/3.11), IS-vs-OOS deixa de validar generalização: o
+> resultado da janela inteira pode depender de um único Bernoulli early (a
+> estratégia sobrevive ou não à primeira sequência ruim antes de compor), e
+> comparar duas janelas nesse regime é comparar dois sorteios, não duas
+> medidas de edge. A saída correta é dar folga de capital acima do piso de
+> sobrevivência já medido (3.10) antes de comparar IS/OOS, ou medir por
+> sessão com caixa reposto a cada pregão — nunca reinvestir sobre um caixa
+> mínimo contínuo e depois ler a diferença como sinal. Retorno percentual
+> sobre caixa mínimo com reinvestimento também não é comparável a nada nesse
+> regime (o mesmo edge, com sorte diferente na largada, produz ordens de
+> grandeza de diferença) — use valor absoluto por pregão e contagem de trades
+> como métricas primárias.
+> **Pergunte à plataforma nova:** meu BACKTEST expõe, como coluna de saída,
+> quantos pregões de uma janela ficaram sem nenhum trade e por qual motivo a
+> última tentativa de entrada foi recusada — ou só o líquido agregado? Sem
+> essa contagem, uma janela fraca perto do piso de capital (3.10/3.11) é lida
+> como falha de sinal quando pode ser só a restrição de capital calada, e
+> ninguém percebe que IS e OOS deixaram de ser comparáveis. (Pergunta 20/23
+> já cobrem, respectivamente, varrer o piso de sobrevivência contra a
+> estratégia e a plataforma AO VIVO recusar total/parcial no preenchimento —
+> esta acrescenta que o próprio BACKTEST precisa expor a contagem, não só a
+> operação real.)
+
 ---
 
 ## Parte 7 — Disciplina de trabalho
@@ -2509,6 +2593,17 @@ dinheiro ou meses.
     remedição que devolve o MESMO valor não dispensa checar quais casos
     individuais mudaram de lado — coincidência de número não é reprodução
     de medição. (5.15, 5.16)
+47. Meu BACKTEST expõe, como coluna de saída, quantos pregões de uma janela
+    ficaram sem nenhum trade e por qual motivo a última tentativa de entrada
+    foi recusada — ou só o líquido agregado? As perguntas 20 (3.11, varrer o
+    piso de sobrevivência contra o parâmetro) e 23 (3.15, a plataforma AO
+    VIVO recusar total ou parcial no preenchimento) já cobrem a lacuna do
+    lado do capital e da execução real; esta acrescenta que o próprio
+    BACKTEST precisa expor a contagem de pregões sem trade e o motivo da
+    recusa, senão uma janela OOS censurada perto do piso de capital é lida
+    como degradação de edge, e ninguém percebe que IS e OOS deixaram de ser
+    comparáveis — viraram duas amostras de um mesmo sorteio, não duas
+    medidas de generalização. (6.15)
 
 ---
 
@@ -2556,5 +2651,10 @@ sobre a base já corrigida (5.16) — o valor de produção sobreviveu (10s,
 0/130 pregões travados), mas o conjunto de pregões que travam mudou por
 completo e a relação com o parâmetro se confirmou não monotônica, o que
 por si só derruba a ideia de que "mesmo número" bastasse como confirmação.
-Mais o registro acumulado do projeto. Quando um item aqui contradisser o código, o código ganha — e este
+Mais 1 item em 2026-09-08, fechando a primeira medição IS/OOS da config REAL
+de produção (T2/S16) sobre a base de tick já corrigida: a janela OOS fez 2
+trades e travou por 50 dos 51 pregões — à primeira vista overfitting
+clássico, mas é censura pelo mesmo piso de capital dos itens 3.10/3.11, e o
+achado de método é que perto desse piso IS-vs-OOS deixa de validar
+generalização e passa a comparar dois sorteios (6.15). Mais o registro acumulado do projeto. Quando um item aqui contradisser o código, o código ganha — e este
 arquivo está desatualizado.*
