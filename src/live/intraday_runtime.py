@@ -243,6 +243,32 @@ MAX_LEITURAS_DE_RISCO_FALHAS = 20
 #: 2026-08-28 martelou ~24 ordens em poucos minutos sem nada contar.
 MAX_ENVIOS_POR_MINUTO = 30
 
+#: TEMPO DE VIDA DA POSICAO -- gravado no diario, NAO alarmado. Ler a
+#: ressalva antes de usar este numero para qualquer decisao.
+#:
+#: Motivacao: no pregao de 2026-09-08 (`dt-wdo_grid_reload_maker-wdo@-live`)
+#: 10 das 22 posicoes abriram e fecharam em MENOS DE 1 SEGUNDO segundo o
+#: historico de deals da CORRETORA (58ms, 62ms, 64ms, 66ms, 100ms, 109ms,
+#: 127ms, 319ms, 342ms, 561ms), cada uma perdendo 1 tick -- R$40,00 dos
+#: R$116,00 do prejuizo. Todas foram gravadas como `exit_reason="target"`,
+#: e nada no diario as distinguia de um alvo de verdade.
+#:
+#: RESSALVA que impede o alarme automatico, e e' a MESMA licao do relogio que
+#: `_check_cadencia_de_ordens` aprendeu no mesmo pregao: nenhum dos dois
+#: relogios que este processo tem mede o que a frase acima mede.
+#:   - `duracao_s` sai de `IntradayTrade.entry_ts/exit_ts`, que sao carimbos
+#:     de TICK. Com a maquina 24 min atrasada, 58ms reais podem aparecer como
+#:     dezenas de segundos de tick -- nao teria pego nenhum dos 10.
+#:   - `duracao_parede_s` sai do relogio deste processo entre `_on_opened` e
+#:     `_on_closed`. Quando os dois eventos caem no MESMO passo do supervisor
+#:     (o caso comum na rajada, e SEMPRE no caminho de reconciliacao por
+#:     historico) ele mede a latencia do nosso laco, nao a vida da posicao.
+#: O unico relogio que responde a pergunta e' o da corretora (`time_msc` dos
+#: deals). Enquanto isso nao estiver plumbado ate' aqui, os dois campos sao
+#: DIAGNOSTICO -- ver a pergunta da Parte 8 sobre tempo de vida de posicao em
+#: `LICOES_DE_PRODUCAO.md`. Quem alarma sozinho hoje e' `deslize_vs_alvo_brl`,
+#: que nao depende de relogio nenhum e pegaria as 22 saidas daquele pregao.
+
 
 def _unanime(valores):
     """O valor que TODOS os itens compartilham, ou `None` se divergem (ou se
@@ -594,6 +620,15 @@ class IntradayLiveRuntime:
         # de `MAX_ENVIOS_POR_MINUTO`. Em memoria: o alvo e' um laco dentro de
         # UM processo, e um restart ja quebra o laco por construcao.
         self._envios_recentes: list = []
+        # Alvo que a estrategia DECLAROU na entrada da posicao aberta agora.
+        # Guardado aqui porque `PositionClosed` so' carrega o `IntradayTrade`
+        # (preco de saida REAL) e o nivel pedido some junto com a posicao --
+        # sem ele nao da' pra' medir deslize de saida nenhum, que e' o item
+        # 4.8 e o que escondeu R$45,00 no pregao de 2026-09-08.
+        self._alvo_declarado: Optional[float] = None
+        # Relogio de PAREDE da abertura -- ver `DURACAO_MINIMA_DE_TRADE_S`
+        # para o que este numero mede de verdade (e o que ele NAO mede).
+        self._abertura_wall: Optional[datetime] = None
 
     def _numero_ordem_atual(self) -> int:
         """Numero de rodada em uso agora -- ver o campo `trade_num` em
@@ -2068,8 +2103,42 @@ class IntradayLiveRuntime:
                   {"pregao": session.isoformat(), "antes": round(antes, 2),
                    "agora": round(saldo, 2)})
 
-    def _check_cadencia_de_ordens(self, ts) -> Optional[str]:
-        """Envios demais numa janela de 60s? Devolve o motivo, ou `None`.
+    def _check_cadencia_de_ordens(self, agora_wall) -> Optional[str]:
+        """Envios demais numa janela de 60s de RELOGIO DE PAREDE? Devolve o
+        motivo, ou `None`.
+
+        `agora_wall` e' o relogio de PAREDE (`datetime.now(timezone.utc)` no
+        ponto de chamada), NUNCA o carimbo da barra/tick que produziu a
+        decisao -- e essa distincao e' a razao de este contador existir.
+
+        Ate' 2026-09-08 o ponto de chamada passava `evento.ts` (tempo de
+        TICK). Parece equivalente e nao e': um passo do supervisor processa
+        TODO o atraso acumulado do feed de uma vez (ver a docstring de
+        `_aplica_barras`: "`barras` pode trazer MAIS de uma barra fechada
+        neste UNICO passo"), entao a maquina reproduz minutos de historico em
+        milissegundos de parede, mandando uma ordem REAL por tick replicado.
+        Medido no pregao de 2026-09-08 (slot `dt-wdo_grid_reload_maker-wdo@-
+        live`, maquina 24 min atras do mercado -- `last_bar_ts` 14:36:21
+        contra `last_poll_at` 15:00:57): 45 ordens-limite enviadas e
+        canceladas em 13 SEGUNDOS de parede (09:00:09 -> 09:00:22 no
+        terminal), perseguindo o preco de 5117,5 ate' 5107,0; 82 dos 124
+        intervalos entre envios do pregao ficaram abaixo de 0,5s, contra 125
+        ordens para 22 trades. Em tempo de TICK aquelas 45 estavam a
+        `reancora_min_segundos=10.0` uma da outra -- o freio da estrategia
+        achou que estava segurando, e este contador tambem: a janela de 60s
+        media ~7,5 MINUTOS de tick, nunca chegou a 30, e nada disparou. Quem
+        sofre o teto de envios e' a CORRETORA, e a corretora vive em tempo de
+        parede; medir a protecao no outro relogio e' nao ter protecao.
+
+        O freio da propria estrategia (`WdoGridReloadMaker.reancora_min_
+        segundos`) continua e DEVE continuar em `bar.ts`: la' o carimbo do
+        tick e' o unico que existe no backtest, e medir com dois relogios
+        faria o numero calibrado nao descrever a producao. Sao papeis
+        diferentes -- a estrategia limita a cadencia da DECISAO, este
+        contador limita a cadencia do ENVIO. So' o segundo protege a
+        corretora, e so' ele pode ler o relogio de parede sem quebrar a
+        equivalencia backtest/producao (`live/` nao decide nada aqui: ele
+        conta o que ja' foi decidido e para tudo quando a conta e' absurda).
 
         Nenhum contador existia: o unico teto de repeticao era o de RECUSAS
         DE FECHAMENTO (`MAX_CLOSE_REFUSALS_BEFORE_HALT`). Reancoragem de
@@ -2083,7 +2152,7 @@ class IntradayLiveRuntime:
         Janela ROLANTE, nao contador de sessao: um teto por pregao ou e'
         alto demais pra pegar o laco, ou baixo demais e mata operacao
         legitima num dia movimentado. Ver `MAX_ENVIOS_POR_MINUTO`."""
-        agora = pd.Timestamp(ts)
+        agora = pd.Timestamp(agora_wall)
         corte = agora - pd.Timedelta(seconds=60)
         self._envios_recentes = [t for t in self._envios_recentes if t > corte]
         if len(self._envios_recentes) < MAX_ENVIOS_POR_MINUTO:
@@ -3301,7 +3370,18 @@ class IntradayLiveRuntime:
                     # porque e' checagem local em memoria (sem I/O) --
                     # solta-la so' para pega-la de volta duas linhas depois
                     # nao reduziria o tempo segurado.
-                    em_laco = self._check_cadencia_de_ordens(evento.ts)
+                    # RELOGIO DE PAREDE, nao `evento.ts` -- ver a
+                    # docstring de `_check_cadencia_de_ordens`
+                    # (pregao de 2026-09-08: 45 envios em 13s de
+                    # parede passaram batido porque o carimbo do
+                    # tick dizia que eram 7,5 minutos).
+                    # RELOGIO DE PAREDE, nao `evento.ts` -- ver a
+                    # docstring de `_check_cadencia_de_ordens`
+                    # (pregao de 2026-09-08: 45 envios em 13s de
+                    # parede passaram batido porque o carimbo do
+                    # tick dizia que eram 7,5 minutos).
+                    em_laco = self._check_cadencia_de_ordens(
+                        datetime.now(timezone.utc))
                     if em_laco is None:
                         # Um filho REAL por elemento de
                         # `EnterLimit.split_quantities` (ver a docstring de
@@ -3665,6 +3745,12 @@ class IntradayLiveRuntime:
         else:
             account.cash -= custo
 
+        # O nivel PEDIDO, para `_on_closed` poder comparar com o EXECUTADO
+        # (item 4.8: 8 de 8 alvos nativos sairam pior que o nivel em
+        # 2026-09-08, e nada media isso).
+        self._alvo_declarado = evento.target
+        self._abertura_wall = datetime.now(timezone.utc)
+
         numero = self._numero_ordem_atual()
         # Sem "SOMBRA" na frente (pedido do dono, 2026-08-25): o modo e' fixo
         # no SLOT e ja aparece na etiqueta do cartao ("real"/"simulacao", ver
@@ -3848,6 +3934,21 @@ class IntradayLiveRuntime:
         # antes ficava enterrado num parentese no fim da linha.
         motivo = self._MOTIVO_SAIDA_TXT.get(trade.exit_reason.value,
                                             trade.exit_reason.value.upper())
+        # TEMPO DE VIDA e DESLIZE CONTRA O NIVEL PEDIDO -- as duas medidas
+        # que faltavam no diario em 2026-09-08 e sem as quais 10 round-trips
+        # de menos de 1s e 8 alvos deslizados passaram como "target" normal.
+        duracao_s = (trade.exit_ts - trade.entry_ts).total_seconds()
+        duracao_parede_s = (
+            None if self._abertura_wall is None
+            else round((datetime.now(timezone.utc) - self._abertura_wall).total_seconds(), 3))
+        self._abertura_wall = None
+        alvo = self._alvo_declarado
+        self._alvo_declarado = None
+        deslize = None
+        if alvo is not None:
+            faltou = ((alvo - trade.exit_price) if trade.side == "long"
+                      else (trade.exit_price - alvo))
+            deslize = round(faltou * trade.point_value_brl * trade.quantity, 4)
         self._log(conn, account.id, "info",
                   f"{motivo} {trade.side.upper()} #{numero:02d} "
                   f"{self._lotes_txt(trade.quantity)} {self.strategy.symbol} "
@@ -3857,7 +3958,23 @@ class IntradayLiveRuntime:
                    "pnl_brl": round(evento.pnl_brl, 4), "entry_price": trade.entry_price,
                    "exit_price": trade.exit_price, "execution_mode": self.execution_mode,
                    "assinado_saida": assinado_saida,
+                   # Os tres campos que faltavam para o diario denunciar
+                   # execucao ruim sozinho (2026-09-08) -- ver
+                   # `DURACAO_MINIMA_DE_TRADE_S` e o item 4.8.
+                   "duracao_s": duracao_s,
+                   "duracao_parede_s": duracao_parede_s,
+                   "alvo_declarado": alvo,
+                   "deslize_vs_alvo_brl": deslize,
                    "sessao": self._snapshot.session.isoformat()})
+        if deslize is not None and deslize > 0:
+            self._log(conn, account.id, "warn",
+                      f"DESLIZE DE SAIDA em {self.strategy.symbol}: alvo pedido "
+                      f"{alvo:.4f}, executado {trade.exit_price:.4f} -- R$ "
+                      f"{deslize:+.2f} a menos do que o nivel pagaria (item 4.8).",
+                      {"sessao": self._snapshot.session.isoformat(),
+                       "numero_ordem": numero, "alvo_declarado": alvo,
+                       "exit_price": trade.exit_price,
+                       "deslize_vs_alvo_brl": deslize})
 
     def _on_closed_partial(self, conn, account: AccountState, evento: PositionClosed) -> None:
         """Uma FATIA da posicao fechou (saida dividida, `EnterLimit.

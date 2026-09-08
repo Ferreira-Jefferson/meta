@@ -528,6 +528,73 @@ exige, comparando o total contra o caixa do painel, em vez de olhar
 pregão: "IGNORANDO o número do terminal". Suíte inteira verde (1.721
 testes).
 
+### 1.20 Freio de cadência que cobre a reprecificação mas não o rearme pós-preenchimento não é freio — 125 ordens para 22 trades
+
+Auditoria do pregão real de 2026-09-08 (WDO F1, slot
+`dt-wdo_grid_reload_maker-wdo@-live`, tick, caixa R$375): **125 ordens-limite
+de entrada enviadas para produzir 22 idas-e-voltas**. Dos 124 intervalos entre
+envios consecutivos, **82 ficaram abaixo de 0,5 segundo** e só 21 respeitaram
+os ~10s que o freio promete. O pior trecho: **45 ordens de venda enviadas e
+canceladas em 13 segundos**, entre 09:00:09 e 09:00:22, perseguindo o preço de
+5.117,5 até 5.107,0.
+
+O freio funciona — e é essa a parte instrutiva. Na janela calma do MESMO
+pregão (07:41–07:51) os intervalos medidos foram 10,198s / 10,471s / 10,203s /
+10,265s, colados no default `reancora_min_segundos = 10,0`; e é exatamente
+essa janela que gerou os 8 alvos positivos do dia (item 4.8). O freio cobre
+dois caminhos de envio — substituição por deriva de preço e rearme pós-recusa
+(itens 4.14 e 3.16) — e deixa de fora o terceiro, o rearme depois de um
+preenchimento, "porque é a mecânica normal de reload". A docstring do próprio
+módulo já dizia, por escrito, que "a rajada de rearme pós-fill (que este freio
+não toca) é o que sobra no pico". A lacuna estava nomeada, medida e
+documentada. E aberta.
+
+> **Regra:** um freio de cadência protege pelo pior caminho, não pelo caminho
+> médio. Se existem N fontes de envio de ordem (reprecificar por deriva,
+> rearmar depois de recusa, rearmar depois de preenchimento), TODAS passam
+> pelo mesmo teto — senão o robô opera no regime rápido justamente depois de
+> cada preenchimento, que é quando ele mais manda ordem. Uma isenção
+> justificada por "esse caminho é a mecânica normal" é a que vai dominar o
+> pico, porque é a mais frequente. Corolário de medição: conferir um freio não
+> é ler o parâmetro nem contar quantas vezes ele barrou — é medir a
+> DISTRIBUIÇÃO dos intervalos reais entre envios num pregão inteiro. Aqui o
+> parâmetro estava certo, a janela calma o respeitava tick a tick, e ainda
+> assim 66% dos intervalos do dia ficaram abaixo de meio segundo.
+> **Pergunte à plataforma nova:** existe teto de cadência de envio/cancelamento
+> de ordens imposto pela plataforma, e o freio do meu robô conta o rearme
+> pós-preenchimento junto com a reprecificação, ou só a segunda? (ver 1.18)
+
+### 1.21 Dois preenchimentos com 83 ms de diferença viraram UM contrato no diário — divergência de contagem é evento de ruína, não de contabilidade
+
+Mesmo pregão de 2026-09-08, 09:00:52: duas ordens de venda limitadas
+preencheram com **83 milissegundos de diferença** na MESMA posição — **2
+contratos vendidos numa conta de R$375**, dimensionada para 1. Foram fechadas
+separadamente, a −R$5,00 e −R$15,00. O diário registrou **um** contrato e
+−R$15,50. No fim do dia o bruto da corretora era **−R$110,00** contra
+**−R$105,00** do diário: os R$5,00 de diferença são o contrato que o robô
+nunca soube que tinha. No total do pregão, **23 contratos negociados contra 22
+registrados**.
+
+É o mecanismo do incidente da Parte 0 em miniatura — exposição AGREGADA que
+nenhuma checagem por ordem enxerga —, e vale reparar no que NÃO o impediu: o
+teto agregado existe desde então (item 3.2), mas ele decide sobre o que a
+máquina acredita ter, e aqui os dois preenchimentos couberam inteiros dentro
+do mesmo intervalo entre duas leituras (o cego do item 1.17). O que salvou o
+dia foi o tamanho da perda, não o desenho.
+
+> **Regra:** o número de contratos que a corretora tem é a VERDADE; o número
+> que o diário tem é uma crença. Divergência entre os dois é evento de RUÍNA
+> em potencial — a exposição real pode ser o dobro da acreditada, e todo teto
+> de risco a jusante está calculado sobre o número errado —, não uma diferença
+> de contabilidade para conciliar depois do pregão. A conciliação é por
+> CONTAGEM DE CONTRATOS e por SOMA DOS DEALS do histórico, feita DURANTE o
+> pregão, e a divergência trava a abertura de ordem nova (item 1.7) em vez de
+> virar linha de log. Corolário: quando duas ordens do mesmo lado podem
+> preencher dentro do mesmo intervalo de leitura, esse intervalo não é uma
+> escolha de desempenho — é o tamanho da exposição que você aceitou não
+> enxergar. A pergunta 32 da Parte 8 é a que dá a ferramenta (consulta de
+> histórico, não foto do momento); esta regra é o uso obrigatório dela.
+
 ---
 
 ## Parte 2 — Estado, reinício e duplicidade
@@ -1215,7 +1282,7 @@ Antes de comparar simulado com real, olhe o volume que preencheu no nível na
 simulação. Um único negócio de 100 ações bastando para dar a ordem por
 preenchida é evidência fraquíssima de que a fila teria chegado.
 
-### 4.8 Alvo NATIVO amarrado na própria ordem (`sl`/`tp` atômico) também desliza — a proteção contra ficar sem stop não é garantia de preço
+### 4.8 Alvo NATIVO amarrado na própria ordem (`sl`/`tp` atômico) também desliza — 8 de 8 saíram PIOR que o nível pedido, sempre contra a posição
 
 Primeira operação real do WDO F1 (`dt-wdo_grid_reload_maker-wdo@-live`, WDO@,
 2026-09-04): entrada preenchida a 5.150,000, alvo amarrado nativamente na
@@ -1235,15 +1302,38 @@ resting: o mesmo modo de falha do item 4.3 ("trocar limite por mercado troca
 um modo de falha por outro"), só que aqui ninguém escolheu mercado — o
 código pediu um nível, a corretora entregou outro.
 
+**Não era evento — é a regra da corretora. Medido de novo em 2026-09-08, com
+n=8.** Auditoria do pregão inteiro do mesmo slot (WDO F1, T2/S16, caixa R$375,
+1 contrato), cruzando o histórico de ORDENS e de DEALS do terminal contra
+`db/live.sqlite`: das 22 idas-e-voltas do dia, **8 saíram pelo alvo nativo — e
+8 de 8 executaram PIOR que o nível pedido**, 7 delas por 1 tick e 1 por 2
+ticks. Três exemplos, nível pedido → preço executado: 5.112,500 → 5.112,0;
+5.111,000 → 5.111,5; 5.109,500 → 5.108,5. Se as 8 tivessem pago o nível
+registrado, o bruto delas seria **+R$80,00**; foi **+R$35,00**. O deslize
+cobrou **R$45,00** — 56% do bruto dos trades vencedores do dia.
+
+Duas coisas que o caso de n=1 não conseguia mostrar. Primeira: o deslize é
+**direcional**, não ruído em torno do nível — em 8 de 8 ele foi contra a
+posição, então nenhuma média o compensa. Segunda: ele muda o parâmetro de
+produção. Depois do caso acima, T1 foi proibido e a produção passou a rodar
+**T2** (alvo de 2 ticks = R$10,00 por contrato). Com 1 tick de deslize
+sistemático, **T2 é pago como T1** — metade do alvo desaparece antes de a
+corretagem entrar na conta. Alvo pequeno não é "agressivo demais": é
+inexequível, porque a menor unidade que a corretora erra é a mesma unidade em
+que o alvo está escrito.
+
 > **Regra:** `sl`/`tp` nativos da corretora garantem que existe proteção, não
-> que o preço de saída é o nível pedido. Com `profit_ticks=1` — a borda
-> INTEIRA da estratégia — qualquer deslize do gatilho consome o lucro
-> inteiro do trade antes mesmo da corretagem entrar na conta.
-> **Pergunte à plataforma nova:** o alvo/stop que ela amarra na posição é
-> limite de verdade (entra na fila, só preenche naquele preço ou melhor) ou
-> vira ordem a mercado no toque? A resposta muda se um `profit_ticks=1`
-> (ou equivalente) sobrevive fora do backtest — o backtest mede o nível
-> pedido, não o que a corretora de fato entrega no gatilho.
+> que o preço de saída é o nível pedido — e o erro é sistemático e contra
+> você, não aleatório. Meça o preço EXECUTADO contra o nível PEDIDO em pelo
+> menos 10 saídas antes de aceitar qualquer alvo pequeno; o alvo mínimo viável
+> é o deslize observado mais o custo por ida-e-volta, nunca 1 tick. Com alvo
+> de 1 tick o deslize consome o lucro inteiro do trade antes da corretagem;
+> com 2 ticks, metade dele.
+> **Pergunte à plataforma nova:** o alvo/stop que ela amarra na posição fica
+> RESTING no livro como limite de verdade (entra na fila, só preenche naquele
+> preço ou melhor) ou é gatilho varrido a mercado no toque? A resposta muda se
+> um alvo pequeno sobrevive fora do backtest — o backtest mede o nível pedido,
+> não o que a corretora de fato entrega no gatilho.
 
 ### 4.9 Reancoragem que só acontece ao ARMAR deixa o robô mudo pelo resto do pregão — expõe a uma FATIA do dia, não ao dia inteiro
 
@@ -1546,6 +1636,144 @@ a folga contra o teto do item 1.18 é de só 4 ordens (87% do teto usado), e
 `max_trades_per_side` deixou de ser um parâmetro folgado para virar
 load-bearing — subi-lo empurra o pico de novo acima de 30. Travado com o
 teste `test_max_trades_per_side_continua_em_200`.
+
+**A isenção do rearme pós-fill cobrou em 2026-09-08:** a frase acima ("rearme
+pós-FILL não é freado, porque é a mecânica normal de reload") é uma decisão de
+desenho que o pregão real desmentiu — 125 ordens para 22 trades, 82 de 124
+intervalos abaixo de meio segundo, com o freio de 10s funcionando tick a tick
+na janela calma do mesmo dia. Ver item 1.20.
+
+### 4.15 O diário chamava de "alvo" o que a máquina PEDIU, não o que o book ENTREGOU — rótulo por intenção esconde o deslize
+
+Ainda no pregão de 2026-09-08, das 22 saídas do WDO F1: **8 pelo alvo nativo
+da corretora** (item 4.8) e **13 fechadas pelo próprio robô a mercado**
+(`exit_market` — o desenho adotado depois do incidente de 2026-08-28, que
+fecha a mercado inclusive quando o gatilho é o alvo, para nunca depender de
+uma ordem que talvez não exista mais). As 13 somaram **−R$70,00** de bruto.
+As 22 foram gravadas no diário com o mesmo rótulo: `exit_reason: "target"`.
+
+O rótulo é honesto sobre a INTENÇÃO e mudo sobre o RESULTADO — e nenhuma das
+saídas rotuladas "alvo" pagou o nível do alvo: 8 deslizaram (4.8) e 13 saíram
+a mercado num preço que ninguém comparou com nada. Enquanto o diário chama
+tudo de alvo, a taxa de acerto sobe, o custo de execução some, e o único
+número que denunciaria o problema — quanto o preço executado difere do nível
+pedido — nunca chega a ser calculado, porque não existe campo onde ele
+caberia.
+
+> **Regra:** uma saída só é "alvo" se o preço executado for o nível pedido.
+> Todo registro de saída guarda os DOIS — o motivo pretendido e o preço
+> realizado contra o nível —, e a diferença tem contagem própria no relatório
+> do dia: quantas de quantas saídas deslizaram, quantos ticks cada uma, quanto
+> somou em dinheiro. Rotular pelo motivo pretendido em vez do resultado
+> observado não é imprecisão de nomenclatura: é o mecanismo pelo qual um custo
+> de execução recorrente fica invisível para sempre, porque nenhuma soma o
+> procura. Vale igual para o stop — "stop" que executou 3 ticks além do nível
+> é stop MAIS deslize, e o segundo pedaço é seu, não do mercado.
+
+### 4.16 Dez posições viveram menos de 1 segundo e entraram no diário como trades — round-trip de execução não é trade
+
+Das 13 saídas a mercado do item anterior, **10 fecharam em menos de 1 segundo
+depois de abrir**: 58 ms, 62 ms, 64 ms, 66 ms, 100 ms, 109 ms, 127 ms, 319 ms,
+342 ms e 561 ms. Cada uma perdeu **exatamente 1 tick**; juntas, **−R$40,00** —
+36% do prejuízo bruto do dia. Todas rotuladas `exit_reason: "target"` (item
+4.15): o diário chama de "alvo atingido" um ciclo de 58 milissegundos que
+nunca chegou perto do alvo.
+
+Uma posição que abre e fecha em 58 ms não expressou tese nenhuma sobre preço —
+o preço não teve tempo de andar. O que ela mede é a distância entre o preço
+que a máquina achava ter e o preço que o book tinha: é **round-trip de
+execução**, e o resultado dela é o custo de estar errado sobre o book, não o
+resultado de um trade. Somada junto com os trades de verdade, contamina tudo o
+que se olha depois — taxa de acerto, R$/trade, contagem de trades, e a
+comparação com o backtest, onde esse objeto simplesmente não existe.
+
+> **Regra:** todo diário registra a DURAÇÃO da posição (abertura →
+> fechamento), e existe um piso abaixo do qual ela não é contada como trade, e
+> sim como round-trip de execução — reportado em linha separada, com o custo
+> próprio somado. Onde fica o piso é da estratégia (aqui, qualquer coisa muito
+> abaixo do tempo típico entre dois negócios do instrumento), mas ele precisa
+> EXISTIR: sem a duração no registro, a métrica que denuncia o problema nem
+> pode ser calculada, e o sintoma chega disfarçado de "a taxa de acerto caiu
+> um pouco". Um pico de posições ultracurtas é alarme de execução, nunca
+> resultado de estratégia.
+> **Pergunte à plataforma nova:** o histórico expõe o tempo de vida da posição
+> (abertura → fechamento, em milissegundos), ou só deals soltos com carimbo de
+> tempo? Sem isso não dá para separar trade de round-trip de execução — e o
+> segundo entra na sua taxa de acerto sem pedir licença.
+
+### 4.17 Ordem-limite ancorada em preço defasado é ordem a mercado disfarçada — o maker virou taker na ENTRADA
+
+09:00:02 do pregão de 2026-09-08: o robô mandou uma compra LIMITADA a 5.116,0
+com o mercado em 5.107 — um limite ACIMA do mercado não fica no livro
+esperando, executa na hora como agressor. Preencheu a 5.107,0. A máquina
+estava rodando atrasada: a última barra consumida tinha carimbo 14:36:21 UTC
+contra um último poll às 15:00:57 — **24 minutos de defasagem** — e ancorou a
+ordem num preço que já não existia.
+
+O estrago é maior que a diferença de preço da entrada. Este robô é maker: o
+edge inteiro dele, medido em ticks (4.5), é ser preenchido passivamente no
+toque enquanto o outro lado cruza o spread. Uma entrada que cruza o spread não
+é o mesmo robô com um preço um pouco pior — é o robô SEM o edge, pagando na
+entrada exatamente aquilo que a estratégia existe para capturar. E não sobra
+sintoma: a ordem foi registrada como limitada, preencheu, e nenhum campo do
+diário diz que ela executou como agressora.
+
+> **Regra:** antes de enviar uma ordem-limite, compare o nível dela com o topo
+> de livro ATUAL — compra acima da melhor oferta e venda abaixo do melhor
+> lance são marketable, e a plataforma vai executá-las a mercado sem
+> reclamar. Ordem marketable é recusada ou reancorada, nunca enviada em
+> silêncio. E a âncora tem prazo de validade: preço lido minutos atrás não
+> ancora ordem nenhuma. Corolário para qualquer estratégia passiva: "fui
+> preenchido" não é sucesso — o sucesso é ter sido preenchido SEM cruzar o
+> spread, e isso se verifica no registro, não se presume pelo tipo da ordem.
+> **Pergunte à plataforma nova:** dá para consultar o topo de livro no
+> instante do envio, para recusar um limite marketable antes que ele vire
+> ordem a mercado? E o registro do preenchimento diz se a minha ordem foi
+> AGRESSORA ou PASSIVA? Sem essa marca, contar preenchimentos conta os dois
+> tipos juntos e a taxa de preenchimento passivo real (4.13) não é medível.
+
+### 4.18 Mesmo sinal, mesmo minuto: sombra +R$171,00, real −R$116,00 — R$430,00 de gap de execução num pregão só
+
+Fechamento do pregão de 2026-09-08, WDO F1, os dois gêmeos rodando lado a lado
+no mesmo instrumento e nos mesmos minutos:
+
+| Conta | Trades | Líquido |
+|---|---|---|
+| SOMBRA (preenche NO nível, modelo do backtest) | 48 | **+R$171,00** |
+| REAL (fila, deslize e spread de verdade) | 22 | **−R$116,00** |
+
+E o contrafactual sobre os MESMOS 22 trades reais, refeito saída a saída com o
+preço que a máquina PEDIU em cada uma: **+R$314,00**, no lugar de −R$116,00.
+**R$430,00 de diferença num único pregão, com o sinal idêntico.** O dia bateu
+o freio duro de perda (teto R$112,50) e parou.
+
+E não foi um dia ruim isolado. O histórico REAL completo do WDO no terminal
+são três pregões, **3 de 3 negativos**: 2026-08-28 −R$300,00 (o incidente da
+Parte 0), 2026-09-04 −R$25,00 e 2026-09-08 −R$110,00 de bruto — **−R$435,00**.
+No mesmo período, o backtest e a sombra desse robô nunca deixaram de ser
+positivos.
+
+Isto fecha com número o que o item 4.13 tinha aberto com n=1 pregão e uma
+dimensão só (contagem de preenchimentos). Agora são duas: a sombra preenche
+MAIS (48 contra 22) **e** preenche MELHOR (no nível, contra 1 a 2 ticks pior).
+A segunda dimensão é a que o projeto não estava medindo, e é a maior das duas
+em dinheiro.
+
+> **Regra:** uma estratégia cujo edge É a execução passiva não pode ser
+> validada por um backtest que preenche no nível — ele responde uma pergunta
+> diferente da que está sendo feita (4.1, 4.7). O único teste que separa
+> estratégia de execução é rodar real e sombra com o MESMO sinal, no mesmo
+> instrumento e no mesmo minuto, com os registros separáveis por conta (4.12),
+> medindo a diferença em DUAS dimensões: quantos preenchimentos cada um teve,
+> e a que preço cada preenchimento saiu contra o nível pedido. Enquanto essa
+> diferença for da ordem do lucro bruto esperado, nenhum número de backtest é
+> evidência sobre o robô — é evidência sobre o sinal, e o sinal não é o que
+> está perdendo dinheiro. Corolário de decisão, o mais caro de aprender aqui:
+> quando o gêmeo simulado é positivo e o real é negativo pregão após pregão, o
+> que precisa mudar é a EXECUÇÃO (ou o instrumento), nunca o parâmetro da
+> estratégia — recalibrar geometria contra um backtest que ignora o custo que
+> está matando o robô só produz uma geometria mais bem adaptada a um mundo que
+> não existe.
 
 ---
 
@@ -2567,10 +2795,13 @@ dinheiro ou meses.
     fecha) que aconteça dentro do intervalo entre duas consultas fica
     invisível para sempre, e todo fechamento "recusado" que na verdade
     executou vira número inventado no diário. (1.17)
-33. O `sl`/`tp` amarrado nativamente na posição executa como limite de
-    verdade (preço pedido ou melhor) ou como gatilho convertido a mercado
-    (pode deslizar)? Com alvo de 1 tick, um único deslize do gatilho come
-    o lucro inteiro do trade. (4.8)
+33. A ordem de take-profit fica RESTING no livro como limite de verdade
+    (preço pedido ou melhor) ou é gatilho varrido a mercado no toque (pode
+    deslizar)? Meça o preço EXECUTADO contra o nível PEDIDO em pelo menos 10
+    saídas antes de confiar em qualquer alvo pequeno — aqui foram 8 de 8 pior
+    que o nível, 7 delas por 1 tick, e o erro foi sempre CONTRA a posição, o
+    que faz um alvo de 2 ticks ser pago como 1. O alvo mínimo viável é o
+    deslize observado mais o custo por ida-e-volta. (4.8)
 34. A ordem-limite da plataforma reprecifica sozinha (ou permite configurar
     cancelamento por timeout / distância de deriva do preço) quando o
     nível armado não é tocado, ou ela fica parada indefinidamente esperando
@@ -2672,18 +2903,43 @@ dinheiro ou meses.
     15 (3.3, margem exigida x margem livre) e 16 (3.13, trava entre
     processos) já assumem que o número consultado é confiável; esta
     pergunta vem ANTES das duas — descobre se ele é. (1.19)
+49. O histórico expõe o TEMPO DE VIDA da posição (abertura → fechamento, em
+    milissegundos), ou só deals soltos com carimbo de tempo? Sem essa medida
+    não dá para separar um trade de um round-trip de execução: 10 posições de
+    menos de 1 segundo entraram no diário como trades rotulados "alvo", cada
+    uma perdendo 1 tick, e o sintoma chegou disfarçado de taxa de acerto um
+    pouco pior. (4.16)
+50. Existe teto de cadência de envio/cancelamento de ordens — imposto pela
+    plataforma e/ou construído por mim — e ele conta o rearme pós-PREENCHIMENTO
+    junto com a reprecificação por deriva de preço? Um freio com uma fonte de
+    envio isenta deixa o robô no regime rápido exatamente depois de cada
+    preenchimento: 125 ordens para 22 trades, 82 de 124 intervalos abaixo de
+    meio segundo, com o freio funcionando tick a tick na janela calma do mesmo
+    pregão. A conferência é a DISTRIBUIÇÃO dos intervalos reais num pregão
+    inteiro, nunca o valor do parâmetro. (1.20, 1.18, 4.14)
+51. Dá para consultar o topo de livro no instante do envio, para recusar uma
+    ordem-limite marketable (compra acima da melhor oferta, venda abaixo do
+    melhor lance) antes que a plataforma a execute a mercado sem avisar? E o
+    registro do preenchimento diz se a minha ordem foi AGRESSORA ou PASSIVA?
+    Sem a primeira resposta, uma âncora defasada converte a estratégia maker
+    em taker na entrada; sem a segunda, a taxa de preenchimento passivo real
+    (pergunta 40) não é medível. (4.17, 4.13)
 
 ---
 
 ## O resumo, se sobrar só um parágrafo
 
 **Backtest positivo é evidência sobre o sinal e sobre nada mais.** Toda a
-diferença entre o número do backtest e o extrato da corretora mora em quatro
-lugares: a fila (sua ordem não preenche só porque o preço tocou), o
-dimensionamento (o stop cabe no capital?), o estado (o que acontece quando o
-processo morre no pior instante?) e a proteção (ela existe na corretora ou só no
-seu laço?). O robô que zerou a conta era TOP-1 do pódio, com 89% de retenção fora
-da amostra, e morreu no primeiro dia sem nunca ter errado um sinal.
+diferença entre o número do backtest e o extrato da corretora mora em cinco
+lugares: a fila (sua ordem não preenche só porque o preço tocou), o PREÇO (o
+preenchimento saiu no nível que você pediu, ou um tick pior, sempre contra
+você?), o dimensionamento (o stop cabe no capital?), o estado (o que acontece
+quando o processo morre no pior instante?) e a proteção (ela existe na corretora
+ou só no seu laço?). O robô que zerou a conta era TOP-1 do pódio, com 89% de
+retenção fora da amostra, e morreu no primeiro dia sem nunca ter errado um
+sinal. O robô seguinte também não errou sinal nenhum: no mesmo pregão em que o
+gêmeo em sombra fez +R$171,00, ele fez −R$116,00 — e a diferença inteira era
+execução.
 
 ---
 
@@ -2719,7 +2975,18 @@ sobre a base já corrigida (5.16) — o valor de produção sobreviveu (10s,
 0/130 pregões travados), mas o conjunto de pregões que travam mudou por
 completo e a relação com o parâmetro se confirmou não monotônica, o que
 por si só derruba a ideia de que "mesmo número" bastasse como confirmação.
-Mais 1 item em 2026-09-08, fechando a primeira medição IS/OOS da config REAL
+Mais 6 itens e 1 reescrita em 2026-09-08, da auditoria do pregão real inteiro
+do WDO F1 (−R$116,00 líquidos, freio duro disparado), lida do histórico de
+DEALS e de ORDENS do terminal e cruzada com `db/live.sqlite`: o item 4.8 saiu
+de n=1 para n=8 (8 de 8 alvos nativos pior que o nível pedido, sempre contra a
+posição, R$45,00 de deslize num dia), mais 1.20 (o freio de cadência não cobre
+o rearme pós-fill: 125 ordens para 22 trades), 1.21 (2 contratos preenchidos
+com 83 ms de diferença viraram 1 no diário), 4.15 (21 saídas rotuladas "alvo"
+sem que nenhuma tenha pago o alvo), 4.16 (10 posições de menos de 1 segundo
+contadas como trades), 4.17 (limite ancorado em preço de 24 minutos atrás
+executando como agressor) e 4.18 (sombra +R$171,00 contra real −R$116,00 no
+mesmo minuto; R$430,00 de gap de execução, e 3 de 3 pregões reais negativos,
+−R$435,00 acumulados). Mais 1 item em 2026-09-08, fechando a primeira medição IS/OOS da config REAL
 de produção (T2/S16) sobre a base de tick já corrigida: a janela OOS fez 2
 trades e travou por 50 dos 51 pregões — à primeira vista overfitting
 clássico, mas é censura pelo mesmo piso de capital dos itens 3.10/3.11, e o

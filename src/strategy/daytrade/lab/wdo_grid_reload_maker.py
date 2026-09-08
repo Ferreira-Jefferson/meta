@@ -1111,10 +1111,23 @@ class WdoGridReloadMaker(IntradayStrategy):
         estacionada que o item 4.9 corrigiu. O teto de 30/60s do
         `live.intraday_runtime` continua valendo como rede.
 
-        `bar.ts` (nao relogio de parede) de proposito: e' o mesmo carimbo que
-        `_check_cadencia_de_ordens` usa ao vivo (`evento.ts`), e o unico que
-        existe no backtest -- medir com dois relogios diferentes faria o
-        numero calibrado aqui nao descrever o que acontece la'."""
+        `bar.ts` (nao relogio de parede) de proposito: e' o unico carimbo
+        que existe no backtest -- medir com dois relogios diferentes faria o
+        numero calibrado aqui nao descrever o que acontece la'.
+
+        CORRECAO 2026-09-08: ate' este dia a frase acima dizia tambem que
+        `live.intraday_runtime._check_cadencia_de_ordens` usava o MESMO
+        carimbo ao vivo (`evento.ts`). Usava, e era um furo -- nao um
+        alinhamento. Um passo do supervisor processa todo o atraso do feed de
+        uma vez, entao este portao pode estar corretamente segurando 10s de
+        tempo de TICK enquanto a corretora recebe a rajada inteira em
+        milissegundos de parede: 45 envios em 13s reais no pregao de
+        2026-09-08, com a maquina 24 min atrasada. Este freio segue em
+        `bar.ts` (e' regra de ESTRATEGIA, tem de valer identica no backtest);
+        quem passou a ler o relogio de parede foi o contador de ENVIOS do
+        runtime, que protege a corretora e por isso tem de viver no relogio
+        dela. Os dois nao sao redundantes e nao medem a mesma coisa -- ver a
+        docstring de `_check_cadencia_de_ordens`."""
         if state.pending_level_ts is not None and self.reancora_min_segundos > 0:
             espera = (bar.ts - state.pending_level_ts).total_seconds()
             if espera < self.reancora_min_segundos:

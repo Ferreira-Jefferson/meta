@@ -5313,3 +5313,108 @@ def test_texto_de_falta_de_caixa_em_FUTURO_fala_de_margem_nao_de_lote(
     assert "faltam R$ 30,00" in texto, texto
     assert "margem" in texto, texto
     assert "5.112,50" not in texto, f"nao pode citar o preco do contrato: {texto}"
+
+
+def test_cadencia_conta_RELOGIO_DE_PAREDE_nao_carimbo_do_tick(tmp_path, pregao_aberto):
+    """O contador de envios tem de morder quando a CORRETORA leva a rajada,
+    e a corretora vive no relogio de parede.
+
+    Regressao do pregao real de 2026-09-08 (slot `dt-wdo_grid_reload_maker-
+    wdo@-live`): um passo do supervisor processa TODO o atraso acumulado do
+    feed de uma vez (ver `_aplica_barras`), e a maquina estava 24 min atras
+    do mercado. Ela reproduziu minutos de historico em milissegundos de
+    parede, mandando uma ordem REAL por tick replicado -- 45 ordens em 13
+    SEGUNDOS reais, 125 ordens para 22 trades. Nada disparou porque o
+    contador recebia `evento.ts`: em tempo de TICK aqueles envios estavam
+    minutos um do outro, entao a janela de 60s nunca acumulava 30.
+
+    Aqui o lote inteiro chega num unico `run_once`, com carimbos de tick a
+    1 minuto de distancia -- espacamento em que a versao antiga NUNCA
+    acumulava dois envios na mesma janela e deixava passar todos."""
+    from live.intraday_runtime import MAX_ENVIOS_POR_MINUTO
+
+    envios = MAX_ENVIOS_POR_MINUTO + 5
+    broker = _FakeMT5Broker()
+    script = {
+        i: [EnterLimit(side="long", limit_price=10.00 + i * 0.01,
+                       initial_stop=9.00, initial_target=11.00, quantity=1,
+                       reason="rajada")]
+        for i in range(envios)
+    }
+    rt, feed = _runtime_live_scripted(tmp_path, broker, script)
+    rt.run_once(now=_agora("13:00:00"))   # passo de abertura da sessao
+
+    # O ATRASO: todo o lote chega de uma vez, como quando o supervisor volta
+    # de um buraco (2026-09-08: "buraco de 35 min sem rodar; 14704 barras
+    # puladas"). Carimbos a 1 min de distancia -- espacamento em que a versao
+    # antiga nunca acumulava dois envios na mesma janela de 60s.
+    for i in range(envios):
+        feed._barras.append(_bar(f"13:{i:02d}", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:01:00"))
+    assert len(broker.pendentes_enviadas) <= MAX_ENVIOS_POR_MINUTO, (
+        f"a corretora recebeu {len(broker.pendentes_enviadas)} ordens num unico "
+        f"passo de parede -- o teto de {MAX_ENVIOS_POR_MINUTO}/60s tem de morder "
+        "mesmo quando os carimbos de tick estao minutos um do outro"
+    )
+    assert rt._snapshot.disaster_halt is True, (
+        "estourar o teto de envios e' laco, nao operacao: tem de parar o robo"
+    )
+
+
+def test_diario_mede_TEMPO_DE_VIDA_e_DESLIZE_da_saida(tmp_path, pregao_aberto):
+    """Reproduz o que o diario nao sabia dizer em 2026-09-08.
+
+    Naquele pregao, 10 das 22 posicoes do WDO abriram e fecharam em menos de
+    1 segundo (58ms a 561ms), cada uma perdendo 1 tick, e 8 alvos nativos
+    executaram PIOR que o nivel pedido. Todas as 22 sairam no diario com
+    `exit_reason="target"` e mais nada -- sem duracao, sem o nivel pedido.
+    Nem o painel nem o dono tinham como ver que "alvo" ali significava
+    round-trip de execucao: o que separa os dois nao e' o motivo declarado,
+    e' o TEMPO DE VIDA e o preco contra o NIVEL.
+
+    Aqui a barra TOCA o alvo (9,90) mas a corretora executa o fechamento a
+    mercado a 9,88 -- o caso real, em que a saida rotulada "target" nao paga
+    o nivel."""
+    import json
+
+    broker = _FakeMT5Broker()
+    broker.preco_de_saida = 9.88
+    barras = [
+        _bar("13:00", 10.00, 10.00, 10.00, 10.00),
+        _bar("13:01", 10.00, 10.00, 9.79, 9.85),   # confirma entrada
+        _bar("13:02", 9.85, 9.95, 9.85, 9.90),     # toca o alvo (9.90)
+    ]
+    rt, _feed = _runtime_live(tmp_path, barras, broker)
+    broker.posicao = {"side": "long", "price": 9.80, "quantity": 1, "ticket": 77}
+
+    rt.run_once(now=_agora("13:04:00"))
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        linhas = list(conn.execute(
+            "SELECT level, message, payload FROM live_events "
+            "WHERE account_id = ? ORDER BY id", (acc.id,)))
+
+    saidas = [json.loads(p) for _l, _m, p in linhas
+              if p and '"exit_reason"' in p]
+    assert saidas, "nenhuma saida foi jornalizada"
+    saida = saidas[-1]
+    assert saida["exit_reason"] == "target"
+    assert "duracao_s" in saida, (
+        "sem o TEMPO DE VIDA no diario, round-trip de execucao e alvo de "
+        "verdade sao indistinguiveis -- foi o que escondeu R$40,00 em 2026-09-08"
+    )
+    assert saida["alvo_declarado"] == pytest.approx(9.90), (
+        "o nivel PEDIDO tem de sobreviver ate' o fechamento; sem ele nao ha "
+        "como medir deslize de saida (item 4.8)"
+    )
+    # alvo 9,90 executado a 9,88, point_value 1,0, 1 lote
+    assert saida["deslize_vs_alvo_brl"] == pytest.approx(0.02), (
+        "o diario tem de registrar o quanto o nivel deixou de pagar, nao so' "
+        "o pnl (item 4.8)"
+    )
+    avisos = [m for l, m, _p in linhas if l == "warn"]
+    assert any("DESLIZE DE SAIDA" in m for m in avisos), (
+        "alvo que nao paga o nivel tem de VIRAR alarme, nao so' campo no "
+        "payload -- foi o silencio que deixou 8 de 8 passarem em 2026-09-08"
+    )
