@@ -881,6 +881,172 @@ class MT5Broker(Broker):
                           f"{exc} -- NAO confirmada morta, segue vigiada")
             return order
 
+    def order_history_state(self, ticket) -> dict:
+        """Desfecho de uma ordem que deixou de estar no book -- tri-estado
+        `{"ok": bool, "state": Optional[str], "position_id": Optional[int],
+        "note": str}`.
+
+        Existe para o gap medido ao vivo em 2026-09-04 (slot
+        `dt-wdo_grid_reload_maker-wdo@-live`): uma ordem-limite pode
+        preencher E a posicao pode ser fechada pela protecao SL/TP atomica
+        da propria corretora, as DUAS coisas dentro do MESMO intervalo de
+        poll do supervisor (5s) -- `orders_get`/`positions_get` sozinhos nao
+        contam essa historia, porque no proximo poll a ordem ja nao esta no
+        book (preencheu) E a posicao ja nao existe (fechou). So' o
+        HISTORICO (`history_orders_get`) guarda o desfecho de uma ordem que
+        ja saiu do book -- `mt5.history_orders_get` so' devolve algo para
+        ordens que JA chegaram a estado terminal (por definicao do proprio
+        pacote: uma ordem ainda pendente mora em `orders_get`, nunca em
+        `history_orders_get`).
+
+        `state` (nunca um codigo numerico -- traduzido aqui, unica vez, na
+        mesma politica do resto do modulo de nao vazar tipo do pacote MT5
+        pra fora): `"pending"` (ainda no book), `"filled"`, `"partial"`,
+        `"canceled"`, `"rejected"`, `"expired"`, ou `"unknown"` (achou no
+        historico mas o codigo de estado nao bate nenhum dos conhecidos --
+        nunca inventa um dos nomes acima). `position_id` (so' presente para
+        `"filled"`/`"partial"`) e' a chave para `deals_for_position` --
+        numa posicao NETTING recem aberta e' o mesmo numero do ticket que a
+        abriu, mas lido do proprio historico, nunca assumido.
+
+        `ok=False` e' SEMPRE "nao consegui perguntar" (pacote ausente, sem
+        conexao, consulta que devolveu `None`) -- nunca "a ordem morreu sem
+        preencher". Quem chama trata `ok=False` como "fica tudo como
+        esta" (item 1.6 de LICOES_DE_PRODUCAO.md): nunca declara uma ordem
+        cancelada ou uma entrada perdida so' porque a consulta falhou."""
+        try:
+            import MetaTrader5 as mt5  # lazy: ver docstring do modulo
+        except Exception as exc:  # pragma: no cover - ambiente sem o pacote
+            return {"ok": False, "state": None, "position_id": None,
+                    "note": f"pacote MetaTrader5 indisponivel: {exc}"}
+        try:
+            if not self.connect():
+                code, desc = self._last_error(mt5)
+                return {"ok": False, "state": None, "position_id": None,
+                        "note": f"falha ao conectar ao terminal MT5 (last_error={code}: {desc})"}
+            try:
+                ticket_int = int(ticket)
+            except (TypeError, ValueError):
+                return {"ok": False, "state": None, "position_id": None,
+                        "note": f"ticket invalido: {ticket!r}"}
+
+            # Caminho RAPIDO primeiro (`orders_get`, um ticket so'): e' o
+            # caso comum -- ordem ainda pendente, poll apos poll, enquanto
+            # espera o preco chegar -- e evita pagar `history_orders_get`
+            # (consulta mais cara) em toda chamada normal. So' cai para o
+            # historico quando o book confirma que a ordem NAO esta mais
+            # la' (ou quando nem essa confirmacao deu certo).
+            vivo = self._pending_order_alive(mt5, ticket_int)
+            if vivo is True:
+                return {"ok": True, "state": "pending", "position_id": None, "note": ""}
+
+            historico = mt5.history_orders_get(ticket=ticket_int)
+            if historico is None:
+                code, desc = self._last_error(mt5)
+                return {"ok": False, "state": None, "position_id": None,
+                        "note": (f"history_orders_get(ticket={ticket_int}) devolveu None "
+                                 f"(last_error={code}: {desc})")}
+            if historico:
+                registro = historico[0]
+                nomes = {
+                    getattr(mt5, "ORDER_STATE_FILLED", 4): "filled",
+                    getattr(mt5, "ORDER_STATE_PARTIAL", 3): "partial",
+                    getattr(mt5, "ORDER_STATE_CANCELED", 2): "canceled",
+                    getattr(mt5, "ORDER_STATE_REJECTED", 5): "rejected",
+                    getattr(mt5, "ORDER_STATE_EXPIRED", 6): "expired",
+                }
+                estado = nomes.get(getattr(registro, "state", None), "unknown")
+                position_id = getattr(registro, "position_id", None)
+                return {"ok": True, "state": estado,
+                        "position_id": (int(position_id) if position_id else None),
+                        "note": ""}
+
+            # Nem no book (`orders_get`) nem no historico. Se a checagem
+            # rapida tinha CONFIRMADO ausencia (`vivo is False`), o ticket e'
+            # mesmo desconhecido -- nunca aconteceu, ou o historico ainda nao
+            # tem (raro, mas nao inventa "cancelada"). Se a checagem rapida
+            # nem tinha dado certo (`vivo is None`), a resposta e' "nao sei".
+            if vivo is False:
+                return {"ok": True, "state": "unknown", "position_id": None,
+                        "note": (f"ordem {ticket_int} nao esta no book nem no historico "
+                                 "-- desfecho desconhecido")}
+            code, desc = self._last_error(mt5)
+            return {"ok": False, "state": None, "position_id": None,
+                    "note": (f"orders_get(ticket={ticket_int}) falhou (last_error={code}: "
+                             f"{desc}) e a ordem nao esta no historico -- nao consegui "
+                             "confirmar se ainda esta pendente")}
+        except Exception as exc:
+            return {"ok": False, "state": None, "position_id": None,
+                    "note": f"erro inesperado ao consultar historico da ordem {ticket}: {exc}"}
+
+    def deals_for_position(self, position_id) -> dict:
+        """Todos os deals (entrada E saida) de uma posicao, pela CORRETORA
+        -- tri-estado `{"ok": bool, "deals": Optional[list[dict]], "note":
+        str}`.
+
+        Cada deal: `{"ticket", "order", "entry" (0=IN, 1=OUT, 2=INOUT,
+        3=OUT_BY), "type" (0=compra, 1=venda), "price", "quantity" (JA
+        convertida de lote para acoes/contratos via `shares_per_lot`, a
+        mesma unidade de `Order.quantity` no resto do modulo), "profit",
+        "commission", "swap", "fee", "time" (epoch, segundos), "comment"}`.
+
+        `position_id`, numa conta NETTING, e' o identificador ESTAVEL da
+        posicao -- sobrevive do deal de entrada ao de saida mesmo que sejam
+        ordens/tickets diferentes (ver `order_history_state`). E' a chave
+        certa para reconstruir o ciclo de vida inteiro de uma posicao que
+        ja fechou, quando `positions_get`/`open_position` nao tem mais nada
+        para mostrar (ver `MT5IntradayExecution.resolve_orphaned_entry` e
+        `exit_market`, gap medido ao vivo 2026-09-04).
+
+        `ok=False` e' "nao consegui perguntar" (pacote ausente, sem
+        conexao, `history_deals_get` devolveu `None`) -- NUNCA "nao ha
+        deals". Uma lista vazia com `ok=True` e' a resposta "perguntei e
+        nao ha nada" -- quem chama nunca pode inventar um preco de saida
+        quando a resposta e' `ok=False`; a unica acao segura e' tratar como
+        'ainda nao sei' e tentar de novo depois (item 1.6)."""
+        try:
+            import MetaTrader5 as mt5  # lazy: ver docstring do modulo
+        except Exception as exc:  # pragma: no cover - ambiente sem o pacote
+            return {"ok": False, "deals": None, "note": f"pacote MetaTrader5 indisponivel: {exc}"}
+        try:
+            if not self.connect():
+                code, desc = self._last_error(mt5)
+                return {"ok": False, "deals": None,
+                        "note": f"falha ao conectar ao terminal MT5 (last_error={code}: {desc})"}
+            try:
+                pos_id = int(position_id)
+            except (TypeError, ValueError):
+                return {"ok": False, "deals": None,
+                        "note": f"position_id invalido: {position_id!r}"}
+
+            deals = mt5.history_deals_get(position=pos_id)
+            if deals is None:
+                code, desc = self._last_error(mt5)
+                return {"ok": False, "deals": None,
+                        "note": (f"history_deals_get(position={pos_id}) devolveu None "
+                                 f"(last_error={code}: {desc})")}
+            saida = []
+            for d in deals:
+                volume = float(getattr(d, "volume", 0.0) or 0.0)
+                saida.append({
+                    "ticket": getattr(d, "ticket", None),
+                    "order": getattr(d, "order", None),
+                    "entry": getattr(d, "entry", None),
+                    "type": getattr(d, "type", None),
+                    "price": float(getattr(d, "price", 0.0) or 0.0),
+                    "quantity": int(round(volume * self._shares_per_lot)),
+                    "profit": float(getattr(d, "profit", 0.0) or 0.0),
+                    "commission": float(getattr(d, "commission", 0.0) or 0.0),
+                    "swap": float(getattr(d, "swap", 0.0) or 0.0),
+                    "fee": float(getattr(d, "fee", 0.0) or 0.0),
+                    "time": getattr(d, "time", None),
+                    "comment": str(getattr(d, "comment", "") or ""),
+                })
+            return {"ok": True, "deals": saida, "note": ""}
+        except Exception as exc:
+            return {"ok": False, "deals": None,
+                    "note": f"erro inesperado ao consultar deals da posicao {position_id}: {exc}"}
+
     def open_position(self, ticker: str) -> Optional[dict]:
         """O que a CORRETORA diz que esta aberto neste papel para ESTE robo
         (`magic`) -- a fonte de verdade de "a ordem-limite preencheu ou nao".
@@ -1592,8 +1758,10 @@ class MT5Broker(Broker):
         simbolo -- retcode 10017 `TRADE_DISABLED`, achado ao vivo em
         2026-08-28 no slot do WDO F1: `mt5.symbol_info("WDO@").trade_mode`
         veio desligado enquanto a cotacao seguia chegando normal). O contrato
-        que de fato negocia tem codigo de vencimento explicito (ex.
-        `"WDOU26"` = setembro/2026).
+        que de fato negocia tem codigo de vencimento explicito -- raiz +
+        LETRA DO MES + ANO (ver `_PADRAO_CONTRATO_VENCIMENTO` abaixo pra
+        tabela letra->mes; a letra/ano exatos dependem so' de QUANDO isto
+        roda, nunca fixos aqui).
 
         Estrategia de deteccao: lista todo simbolo do terminal que comeca com
         a RAIZ do ticker (`mt5.symbols_get(raiz + "*")`), filtra pelos que
@@ -1613,7 +1781,7 @@ class MT5Broker(Broker):
         Exigir BOOK DE DOIS LADOS (`bid > 0` E `ask > 0`) e' o gap fechado
         depois do incidente 2026-08-28: num restart, esta funcao escolheu
         `WDOQ27` (maior volume no criterio antigo, de TICK UNICO) em vez do
-        `WDOU26` correto -- confirmado depois, na mao, que `WDOQ27` tinha
+        contrato corrente correto -- confirmado depois, na mao, que `WDOQ27` tinha
         `bid=0.0` (sem mercado real; o "volume" veio de um negocio velho
         preso no ultimo tick). Um contrato sem book de dois lados e' um
         contrato MORTO, mesmo com `trade_mode` habilitado e um numero de

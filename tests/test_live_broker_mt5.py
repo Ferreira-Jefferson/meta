@@ -78,13 +78,31 @@ def _make_fake_mt5(
     orders=None,
     positions_get_none: bool = False,
     orders_by_ticket=None,
+    # ---- gap medido ao vivo 2026-09-04 (`order_history_state`/
+    # `deals_for_position`) -- ver a docstring dos dois metodos.
+    #
+    # `history_orders_by_ticket`: dict ticket -> lista de registros
+    # (`history_orders_get(ticket=...)`) — `None` (default) imita "ticket
+    # nao esta no historico" (lista vazia), igual ao pacote real quando a
+    # ordem ainda esta pendente. `history_orders_get_none` imita a FALHA de
+    # consulta (devolve `None`), distinta de "perguntei e nao ha nada".
+    history_orders_by_ticket=None,
+    history_orders_get_none: bool = False,
+    # `history_deals_by_position`: dict position_id -> lista de deals
+    # (`history_deals_get(position=...)`) -- SEPARADO de `history_deals`
+    # (que so' responde a `ticket=`, usado por `MT5Broker._resolve_fees`).
+    # `history_deals_get_position_none` imita a FALHA de consulta desse
+    # lado (`position=`).
+    history_deals_by_position=None,
+    history_deals_get_position_none: bool = False,
 ):
     """Monta um `types.ModuleType` que imita a superficie do pacote
     `MetaTrader5` usada por `MT5Broker`, com constantes arbitrarias (o
     codigo sob teste nunca deveria depender do VALOR numerico delas, so de
     igualdade/desigualdade) e um registro de chamadas (`calls`) para
     verificar, por exemplo, que `order_send` nunca e chamado com volume 0."""
-    calls = {"order_send": [], "initialize": 0, "initialize_kwargs": [], "history_deals_get": []}
+    calls = {"order_send": [], "initialize": 0, "initialize_kwargs": [], "history_deals_get": [],
+             "history_orders_get": [], "history_deals_get_by_position": []}
 
     mod = types.ModuleType("MetaTrader5")
     mod.TRADE_ACTION_DEAL = 101
@@ -114,11 +132,28 @@ def _make_fake_mt5(
             return order_send_result(request)
         return order_send_result
 
-    def history_deals_get(ticket=None):
+    def history_deals_get(ticket=None, position=None):
+        if position is not None:
+            calls["history_deals_get_by_position"].append(position)
+            if history_deals_raises:
+                raise RuntimeError("falha simulada ao consultar historico")
+            if history_deals_get_position_none:
+                return None
+            if history_deals_by_position is None:
+                return []
+            return history_deals_by_position.get(position, [])
         calls["history_deals_get"].append(ticket)
         if history_deals_raises:
             raise RuntimeError("falha simulada ao consultar historico")
         return history_deals if history_deals is not None else []
+
+    def history_orders_get(ticket=None):
+        calls["history_orders_get"].append(ticket)
+        if history_orders_get_none:
+            return None
+        if history_orders_by_ticket is None:
+            return []
+        return history_orders_by_ticket.get(ticket, [])
 
     mod.initialize = initialize
     mod.last_error = lambda: last_error
@@ -127,6 +162,12 @@ def _make_fake_mt5(
     mod.symbol_info_tick = lambda symbol: tick
     mod.order_send = order_send
     mod.history_deals_get = history_deals_get
+    mod.history_orders_get = history_orders_get
+    mod.ORDER_STATE_FILLED = 4
+    mod.ORDER_STATE_PARTIAL = 3
+    mod.ORDER_STATE_CANCELED = 2
+    mod.ORDER_STATE_REJECTED = 5
+    mod.ORDER_STATE_EXPIRED = 6
     mod.TRADE_ACTION_REMOVE = 108
     mod.TRADE_ACTION_PENDING = 109
     mod.ORDER_TYPE_BUY_LIMIT = 110
@@ -1673,3 +1714,200 @@ def test_detect_futures_symbol_map_cai_para_tick_unico_quando_barras_indisponive
     broker = MT5Broker()
 
     assert broker.detect_futures_symbol_map(["WDO@"]) == {"WDO@": "WDOV26"}
+
+
+# ---------- order_history_state / deals_for_position (gap medido ao vivo ---
+# 2026-09-04, slot `dt-wdo_grid_reload_maker-wdo@-live`): a ordem preencheu E
+# a posicao fechou pelo alvo ATOMICO da corretora dentro do MESMO intervalo
+# de poll do supervisor -- so' o historico sabe o desfecho de uma ordem que
+# ja saiu do book.
+
+def test_order_history_state_ainda_pendente_nao_consulta_historico(fake_mt5):
+    """Caminho RAPIDO: se `orders_get(ticket=...)` confirma que a ordem
+    ainda esta no book, nem chega a chamar `history_orders_get` -- e' o
+    caso comum (ordem esperando o preco chegar), e nao deve pagar a
+    consulta mais cara em toda chamada normal."""
+    mod, calls = fake_mt5(orders_by_ticket={555: [types.SimpleNamespace(ticket=555)]})
+    broker = MT5Broker()
+
+    resp = broker.order_history_state(555)
+
+    assert resp == {"ok": True, "state": "pending", "position_id": None, "note": ""}
+    assert calls["history_orders_get"] == []
+
+
+def test_order_history_state_preenchida_devolve_position_id(fake_mt5):
+    mod, calls = fake_mt5(
+        orders_by_ticket={},  # nao esta mais no book
+        history_orders_by_ticket={555: [types.SimpleNamespace(state=4, position_id=555)]},
+    )
+    broker = MT5Broker()
+
+    resp = broker.order_history_state(555)
+
+    assert resp == {"ok": True, "state": "filled", "position_id": 555, "note": ""}
+    assert calls["history_orders_get"] == [555]
+
+
+def test_order_history_state_parcial_cancelada_rejeitada_expirada(fake_mt5):
+    """As 4 traducoes de estado, uma por chamada -- nunca um codigo
+    numerico vazando pra fora do broker."""
+    casos = [(3, "partial"), (2, "canceled"), (5, "rejected"), (6, "expired")]
+    for codigo, esperado in casos:
+        mod, calls = fake_mt5(
+            orders_by_ticket={},
+            history_orders_by_ticket={555: [types.SimpleNamespace(state=codigo, position_id=None)]},
+        )
+        broker = MT5Broker()
+        resp = broker.order_history_state(555)
+        assert resp["state"] == esperado, f"codigo {codigo} devia mapear para {esperado!r}"
+        assert resp["ok"] is True
+        assert resp["position_id"] is None
+
+
+def test_order_history_state_codigo_desconhecido_vira_unknown_nunca_inventa_nome(fake_mt5):
+    mod, calls = fake_mt5(
+        orders_by_ticket={},
+        history_orders_by_ticket={555: [types.SimpleNamespace(state=999, position_id=None)]},
+    )
+    broker = MT5Broker()
+
+    resp = broker.order_history_state(555)
+
+    assert resp == {"ok": True, "state": "unknown", "position_id": None, "note": ""}
+
+
+def test_order_history_state_nem_no_book_nem_no_historico_vira_unknown(fake_mt5):
+    """Ticket confirmadamente ausente dos dois lugares -- desfecho
+    desconhecido, mas a CONSULTA em si funcionou (`ok=True`)."""
+    mod, calls = fake_mt5(orders_by_ticket={}, history_orders_by_ticket={})
+    broker = MT5Broker()
+
+    resp = broker.order_history_state(555)
+
+    assert resp["ok"] is True
+    assert resp["state"] == "unknown"
+
+
+def test_order_history_state_falha_de_consulta_nunca_vira_desfecho(fake_mt5):
+    """`orders_get` falhou (devolveu `None`) E o ticket nao esta no
+    historico -- "nao sei", nunca "cancelada" nem "desconhecida com
+    certeza" (item 1.6 de LICOES_DE_PRODUCAO.md).
+
+    `orders_by_ticket={555: None}` (nao `orders_by_ticket=None`, que imita
+    "perguntei e nao ha nada", sucesso vazio): a CHAVE precisa existir e
+    mapear para `None`, o jeito que este dublê imita `orders_get` devolvendo
+    `None` de verdade (ver a docstring de `_make_fake_mt5`)."""
+    mod, calls = fake_mt5(orders_by_ticket={555: None}, history_orders_by_ticket={})
+    broker = MT5Broker()
+
+    resp = broker.order_history_state(555)
+
+    assert resp["ok"] is False
+    assert resp["state"] is None
+
+
+def test_order_history_state_history_orders_get_none_e_falha(fake_mt5):
+    mod, calls = fake_mt5(orders_by_ticket={}, history_orders_get_none=True)
+    broker = MT5Broker()
+
+    resp = broker.order_history_state(555)
+
+    assert resp["ok"] is False
+    assert resp["state"] is None
+
+
+def test_order_history_state_ticket_invalido_e_falha_sem_excecao(fake_mt5):
+    mod, calls = fake_mt5()
+    broker = MT5Broker()
+
+    resp = broker.order_history_state("nao-e-um-numero")
+
+    assert resp["ok"] is False
+
+
+def test_order_history_state_sem_conexao_e_falha(fake_mt5):
+    mod, calls = fake_mt5(initialize_ok=False)
+    broker = MT5Broker()
+
+    resp = broker.order_history_state(555)
+
+    assert resp["ok"] is False
+    assert resp["state"] is None
+
+
+def test_deals_for_position_traduz_e_converte_quantidade_por_shares_per_lot(fake_mt5):
+    """`quantity` no dict de saida ja vem em ACOES/CONTRATOS (`volume *
+    shares_per_lot`), a mesma unidade do resto do modulo -- nunca em LOTE
+    cru do MT5."""
+    mod, calls = fake_mt5(history_deals_by_position={
+        909: [
+            types.SimpleNamespace(ticket=1, order=10, entry=0, type=0, price=9.80,
+                                  volume=2.0, profit=0.0, commission=-1.5, swap=0.0,
+                                  fee=0.0, time=100, comment=""),
+            types.SimpleNamespace(ticket=2, order=11, entry=1, type=1, price=9.89,
+                                  volume=2.0, profit=18.0, commission=-1.5, swap=0.0,
+                                  fee=0.0, time=101, comment="[tp 9.9000]"),
+        ],
+    })
+    broker = MT5Broker(shares_per_lot=100.0)
+
+    resp = broker.deals_for_position(909)
+
+    assert resp["ok"] is True
+    entrada, saida = resp["deals"]
+    assert entrada["entry"] == 0 and entrada["quantity"] == 200 and entrada["price"] == 9.80
+    assert saida["entry"] == 1 and saida["quantity"] == 200 and saida["price"] == 9.89
+    assert saida["comment"] == "[tp 9.9000]"
+    assert calls["history_deals_get_by_position"] == [909]
+
+
+def test_deals_for_position_sem_deals_devolve_lista_vazia_ok_true(fake_mt5):
+    mod, calls = fake_mt5(history_deals_by_position={})
+    broker = MT5Broker()
+
+    resp = broker.deals_for_position(909)
+
+    assert resp == {"ok": True, "deals": [], "note": ""}
+
+
+def test_deals_for_position_none_e_falha_nunca_lista_vazia(fake_mt5):
+    """`history_deals_get(position=...)` devolvendo `None` (falha de
+    consulta) nunca pode virar `{"ok": True, "deals": []}` -- as duas
+    respostas tem consequencias opostas para quem chama (ver
+    `MT5IntradayExecution.resolve_orphaned_entry`)."""
+    mod, calls = fake_mt5(history_deals_get_position_none=True)
+    broker = MT5Broker()
+
+    resp = broker.deals_for_position(909)
+
+    assert resp["ok"] is False
+    assert resp["deals"] is None
+
+
+def test_deals_for_position_excecao_na_consulta_e_falha_sem_propagar(fake_mt5):
+    mod, calls = fake_mt5(history_deals_raises=True, history_deals_by_position={})
+    broker = MT5Broker()
+
+    resp = broker.deals_for_position(909)
+
+    assert resp["ok"] is False
+
+
+def test_deals_for_position_position_id_invalido_e_falha_sem_excecao(fake_mt5):
+    mod, calls = fake_mt5()
+    broker = MT5Broker()
+
+    resp = broker.deals_for_position("nao-e-um-numero")
+
+    assert resp["ok"] is False
+
+
+def test_deals_for_position_sem_conexao_e_falha(fake_mt5):
+    mod, calls = fake_mt5(initialize_ok=False)
+    broker = MT5Broker()
+
+    resp = broker.deals_for_position(909)
+
+    assert resp["ok"] is False
+    assert resp["deals"] is None

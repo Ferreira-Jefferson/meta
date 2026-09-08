@@ -87,10 +87,12 @@ from typing import Optional
 
 import pandas as pd
 
+from backtest.intraday.costs import fees_round_trip_brl
 from backtest.intraday.machine import (
     EntradaAMercadoNaoSuportada,
     IntradayBacktestConfig,
     IntradaySessionMachine,
+    IntradayTrade,
     LimitCancelled,
     LimitPlaced,
     PositionClosed,
@@ -113,6 +115,7 @@ from core.live_models import (
     RobotRole,
     SessionPhase,
 )
+from core.models import IntradayExitReason
 from journal import live_store as store
 from live import clock
 from live.bar_feed import MT5BarFeed
@@ -124,6 +127,7 @@ from live.runtime import StepReport
 from strategy.daytrade.base import (
     Bar,
     EnterLimit,
+    IntradayStrategy,
     barra_diaria,
     mediana_negocio_diario,
     warm_start_calibration,
@@ -1011,12 +1015,36 @@ class IntradayLiveRuntime:
             return False
         return now.astimezone(timezone.utc).time() < corte
 
+    def _consome(self, nome_do_hook: str) -> bool:
+        """`True` so' se a ESTRATEGIA (nao a base) sobrescreve o hook
+        `nome_do_hook` -- os tres hooks de seed (`seed_volume_window`/
+        `seed_daily_volatility`/`seed_typical_trade_size`) sao NO-OP PURO em
+        `IntradayStrategy` (so' docstring, sem corpo -- ver `strategy.
+        daytrade.base`), entao alimentar um hook que ninguem sobrescreveu e'
+        indistinguivel, pra' quem observa de fora, de nunca te-lo chamado.
+
+        Existe pra' nao pagar a busca ao feed de um historico que vai ser
+        jogado fora. Achado de 2026-09-04 (item 5.9 do LICOES_DE_PRODUCAO.md):
+        `WdoGridReloadMaker`/`CopaWin` nao sobrescrevem NENHUM dos tres, e
+        `_start_session` buscava as mesmas sessoes assim mesmo -- 31
+        chamadas de `session_bars_until` por passo, ~14s cada contra o feed
+        de TICK (~140.000 "barras" degeneradas por sessao de WDO), ~430s
+        so' alimentando metodos vazios. `Gremah`, que sobrescreve os tres e
+        le M1 (barato), continua recebendo tudo igual.
+
+        Compara pela FUNCAO na CLASSE, nunca por `hasattr` ou por chamar e
+        comparar o resultado: toda estrategia TEM o atributo (herdado da
+        base), o que importa e' se foi SOBRESCRITO."""
+        return (getattr(type(self.strategy), nome_do_hook)
+                is not getattr(IntradayStrategy, nome_do_hook))
+
     def _seed_volume_window(self, session: date) -> None:
         """Busca a CAUDA do pregao anterior e repassa para
         `IntradayStrategy.seed_volume_window` -- so' um robo com teto de
         posicao por volume rolante (`Gremah`/`GremahTick`, ver
         `strategy.daytrade.base.RollingVolumeWindow`) usa isto; os outros
-        recebem uma lista que nunca consultam (default no-op na base).
+        NEM CHEGAM a disparar a busca (ver `_consome`, item 5.9 do
+        LICOES_DE_PRODUCAO.md).
 
         Chamado a CADA `_start_session` (inclusive num restart no meio do
         pregao, mesmo espirito do warm start) -- refazer a busca e' uma
@@ -1024,6 +1052,8 @@ class IntradayLiveRuntime:
         levanta excecao (lista vazia se o terminal falhar, ver
         `MT5BarFeed`/`MT5TickFeed`), entao o pior caso e' o robo operar sem
         cauda, igual a um pregao sem historico anterior disponivel."""
+        if not self._consome("seed_volume_window"):
+            return
         anterior = clock.previous_session(session)
         cauda = self.bar_feed.session_bars_until(anterior, _FIM_DE_PREGAO_QUALQUER)
         if cauda:
@@ -1031,53 +1061,70 @@ class IntradayLiveRuntime:
             cauda = [b for b in cauda if b.ts > corte]
         self.strategy.seed_volume_window(cauda)
 
-    def _seed_daily_volatility(self, session: date) -> None:
-        """Busca as `_CAUDA_VOL_DIAS` sessoes ANTERIORES, agrega cada uma
-        numa barra diaria (`strategy.daytrade.base.barra_diaria`) e repassa
-        para `IntradayStrategy.seed_daily_volatility` -- so' um robo com
-        alvo dimensionado por volatilidade (`Gremah`/`GremahTick`, ver
-        `strategy.daytrade.base.JanelaVolatilidadeDiaria`) usa isto; os
-        outros recebem uma lista que nunca consultam (default no-op na
-        base).
+    def _seed_daily_aggregates(self, session: date) -> None:
+        """Busca as `_CAUDA_VOL_DIAS` sessoes ANTERIORES e repassa os dois
+        agregados diarios que dependem dela -- `barra_diaria` (para
+        `IntradayStrategy.seed_daily_volatility`, so' consultado por robo
+        com alvo dimensionado por volatilidade, `strategy.daytrade.base.
+        JanelaVolatilidadeDiaria`) e `mediana_negocio_diario` (para
+        `seed_typical_trade_size`, so' consultado pelo teto de CAPACIDADE de
+        caixa, `JanelaNegocioTipicoDiaria`). Os outros robos NEM CHEGAM a
+        disparar a busca (ver `_consome`).
+
+        Duas correcoes de 2026-09-04 (item 5.9 do LICOES_DE_PRODUCAO.md),
+        as duas preservando o QUE cada hook recebe (nunca a ORDEM nem o
+        CONTEUDO -- so' quando/quantas vezes o feed e' consultado):
+
+        1. **Nao busca o que a estrategia nao consome.** Se NENHUM dos dois
+           hooks foi sobrescrito (`WdoGridReloadMaker`/`CopaWin`), o laco
+           inteiro e' pulado -- 15 buscas que alimentavam metodos vazios
+           somem. Se so' um dos dois for consumido, o laco roda (a barra
+           ja' esta em mao mesmo assim) mas so' chama o hook consumido.
+        2. **Uma so' busca por sessao, nao duas.** Antes, dois lacos
+           separados perguntavam as MESMAS `_CAUDA_VOL_DIAS` sessoes ao
+           feed -- um pra' `barra_diaria`, outro pra' `mediana_negocio_
+           diario` -- 30 chamadas para dois numeros vindos das MESMAS
+           barras. As duas metricas NAO sao a mesma coisa em resolucao
+           diferente (`mediana_negocio_diario` e' mediana do volume de
+           CADA EVENTO -- tamanho de negocio em tick, volume por minuto em
+           M1 -- enquanto `barra_diaria` agrega OHLCV inteiro), entao os
+           dois continuam calculados separadamente; so' a BUSCA e' unica.
+
+        Para `Gremah` (feed M1, barato) isto ja' bastava. Para o robo do
+        incidente (feed de TICK, ~14s/sessao, ~140.000 "barras" por sessao
+        de WDO) a correcao 1 e' quem importa: sem hook sobrescrito, o custo
+        cai a zero, nao a metade.
 
         Chamado a CADA `_start_session`, mesmo espirito de
         `_seed_volume_window` -- `session_bars_until` nunca levanta
         excecao (lista vazia se o terminal falhar), entao o pior caso e' o
-        robo operar sem a janela, igual a um pregao sem historico
-        anterior disponivel. Ordem devolvida: mais antiga primeiro, igual
+        robo operar sem a janela, igual a um pregao sem historico anterior
+        disponivel. Ordem devolvida: mais antiga primeiro, igual
         `backtest.intraday.engine`."""
+        usa_volatilidade = self._consome("seed_daily_volatility")
+        usa_negocio_tipico = self._consome("seed_typical_trade_size")
+        if not (usa_volatilidade or usa_negocio_tipico):
+            return
         diarias: list[Bar] = []
-        dia = session
-        for _ in range(_CAUDA_VOL_DIAS):
-            dia = clock.previous_session(dia)
-            bars_do_dia = self.bar_feed.session_bars_until(dia, _FIM_DE_PREGAO_QUALQUER)
-            diaria = barra_diaria(bars_do_dia)
-            if diaria is not None:
-                diarias.append(diaria)
-        diarias.reverse()
-        self.strategy.seed_daily_volatility(diarias)
-
-    def _seed_typical_trade_size(self, session: date) -> None:
-        """Mesmo espirito/janela de `_seed_daily_volatility` acima, so' que
-        para o teto de CAPACIDADE de caixa (`strategy.daytrade.base.
-        JanelaNegocioTipicoDiaria`) em vez do alvo por volatilidade -- so'
-        um robo com esse teto (`GremahTick` desde 2026-08-24, `Gremah`
-        tambem desde 2026-08-24) usa isto; os outros recebem uma lista que
-        nunca consultam (default no-op na base). Reusa `_CAUDA_VOL_DIAS`
-        sessoes de folga (generoso sobre o
-        default `janela_dias=1` do robo) e o mesmo feed ja' buscado por
-        `_seed_daily_volatility` -- so' agrega diferente (mediana de
-        evento, nao OHLCV)."""
         medianas: list[float] = []
         dia = session
         for _ in range(_CAUDA_VOL_DIAS):
             dia = clock.previous_session(dia)
             bars_do_dia = self.bar_feed.session_bars_until(dia, _FIM_DE_PREGAO_QUALQUER)
-            mediana = mediana_negocio_diario(bars_do_dia)
-            if mediana is not None:
-                medianas.append(mediana)
+            if usa_volatilidade:
+                diaria = barra_diaria(bars_do_dia)
+                if diaria is not None:
+                    diarias.append(diaria)
+            if usa_negocio_tipico:
+                mediana = mediana_negocio_diario(bars_do_dia)
+                if mediana is not None:
+                    medianas.append(mediana)
+        diarias.reverse()
         medianas.reverse()
-        self.strategy.seed_typical_trade_size(medianas)
+        if usa_volatilidade:
+            self.strategy.seed_daily_volatility(diarias)
+        if usa_negocio_tipico:
+            self.strategy.seed_typical_trade_size(medianas)
 
     def _start_session(self, conn, account: AccountState, session: date, now: datetime) -> StepReport:
         """Calibra o robo para este pregao e (re)abre a sessao na maquina.
@@ -1104,8 +1151,7 @@ class IntradayLiveRuntime:
         self._reconcilia_ordens_de_entrada(conn, account, session, pd.Timestamp(now))
 
         self._seed_volume_window(session)
-        self._seed_daily_volatility(session)
-        self._seed_typical_trade_size(session)
+        self._seed_daily_aggregates(session)
 
         modo = "cold"
         semente = 0
@@ -2583,6 +2629,161 @@ class IntradayLiveRuntime:
         if tocou:
             self._volume_no_nivel += bar.volume
 
+    def _reconcilia_entrada_orfa(self, conn, account: AccountState, bar: Bar) -> None:
+        """A ordem-limite de entrada que a maquina esta vigiando
+        (`resting_limit`) ja terminou o ciclo de vida inteiro na
+        corretora, SEM que `MT5IntradayExecution.limit_fill` (crescimento
+        de posicao) tivesse a chance de perceber? Chamado ANTES de
+        `machine.on_closed_bar(bar)`, de proposito -- se resolver algo
+        aqui, a chamada normal que vem depois ja roda com `resting_limit`
+        livre e `positions` vazia, e a estrategia pode re-armar NESTA
+        mesma barra.
+
+        Caso medido ao vivo em 2026-09-04 (slot
+        `dt-wdo_grid_reload_maker-wdo@-live`): ordem armada as 14:18:23,
+        preenchida as 14:18:31, posicao fechada pelo alvo ATOMICO da
+        propria corretora as 14:18:32 -- os DOIS dentro do MESMO intervalo
+        de poll do supervisor (5s). `limit_fill` compara a quantidade da
+        posicao ANTES contra AGORA; se as duas leituras caem nos dois
+        extremos de um ciclo completo (0 -> N -> 0), o crescimento nunca
+        aparece e a maquina ficaria vigiando um ticket que a corretora ja
+        resolveu ha' minutos -- o robo trava pelo resto do pregao.
+
+        So' consulta a corretora quando ha' algo para reconciliar
+        (`resting_limit is not None`) -- nao adiciona custo aos passos em
+        que o robo nao tem ordem pendente. Usa `self._snapshot.
+        pending_entry_refs` (nao `self.executor.pending_orders`) porque e'
+        a lista que SOBREVIVE a um restart no meio do pregao; `pending_
+        orders` nasce vazia numa instancia nova de `MT5IntradayExecution`."""
+        if self.executor is None or self.machine.resting_limit is None:
+            return
+        refs = list(self._snapshot.pending_entry_refs or [])
+        if not refs:
+            return
+        resultado = self.executor.resolve_orphaned_entry(refs)
+        if resultado is None or resultado["outcome"] == "already_open":
+            # Ainda vivo, consulta falhou, ou preencheu mas continua aberto
+            # -- nos dois ultimos casos o caminho normal (`limit_fill`, na
+            # chamada de `on_closed_bar` que vem depois) resolve sozinho.
+            return
+        order = self.machine.resting_limit
+        self.machine.discard_resting_limit()
+        self._snapshot.pending_entry_refs = []
+        self._volume_no_nivel = 0.0
+        if resultado["outcome"] == "dead":
+            numero = self._numero_ordem_atual()
+            self._snapshot.ordens_abandonadas += 1
+            qtd = sum(order.children(self.config.default_quantity))
+            self._log(conn, account.id, "info",
+                      f"CANCELA {order.side.upper()} #{numero:02d} "
+                      f"{self._lotes_txt(qtd)} {self.strategy.symbol} "
+                      f"@ {order.limit_price:.4f} (corretora confirmou: sem "
+                      "preenchimento)",
+                      {"numero_ordem": numero, "side": order.side, "tipo": "cancelada",
+                       "quantity": qtd, "limit_price": order.limit_price,
+                       "reason": "reconciliado_sem_fill",
+                       "sessao": self._snapshot.session.isoformat()
+                       if self._snapshot.session else None})
+            self._snapshot.trade_num = None
+            return
+        # "round_trip": preencheu E fechou por inteiro entre dois polls --
+        # ver `_aplica_entrada_e_saida_reconciliadas`.
+        self._aplica_entrada_e_saida_reconciliadas(conn, account, order, bar, resultado)
+
+    @staticmethod
+    def _infere_motivo_saida(order: EnterLimit, exit_price: float, comment: str) -> IntradayExitReason:
+        """Qual foi o motivo da saida (`IntradayExitReason`) de uma posicao
+        reconciliada pelo historico? O MT5 marca o `comment` do deal de
+        saida quando fecha por SL/TP proprio (`"[tp 5154.500]"`/
+        `"[sl 5146.000]"`, formato observado ao vivo) -- confia nisso
+        primeiro. Sem marca reconhecivel (ex.: fechamento a mercado por uma
+        tentativa NOSSA, sem comentario da corretora), desempata pela
+        distancia do preco real de saida a cada nivel que a PROPRIA ordem
+        declarou -- nunca inventa um nivel que a estrategia nao pediu."""
+        texto = (comment or "").lower()
+        if "[tp" in texto or "target" in texto:
+            return IntradayExitReason.TARGET
+        if "[sl" in texto or "stop" in texto:
+            return IntradayExitReason.STOP
+        if order.initial_target is not None and order.initial_stop is not None:
+            return (IntradayExitReason.TARGET
+                    if abs(exit_price - order.initial_target) <= abs(exit_price - order.initial_stop)
+                    else IntradayExitReason.STOP)
+        if order.initial_target is not None:
+            return IntradayExitReason.TARGET
+        if order.initial_stop is not None:
+            return IntradayExitReason.STOP
+        return IntradayExitReason.FORCED_FLATTEN
+
+    def _aplica_entrada_e_saida_reconciliadas(
+        self, conn, account: AccountState, order: EnterLimit, bar: Bar, resultado: dict,
+    ) -> None:
+        """A ordem-limite de entrada que a maquina vigiava preencheu E
+        fechou por inteiro entre dois polls -- ver `_reconcilia_entrada_
+        orfa`. Registra os DOIS eventos (abertura e fechamento) com os
+        numeros REAIS que `MT5IntradayExecution.resolve_orphaned_entry` leu
+        do historico de deals da corretora (NUNCA o nivel teorico da
+        ordem -- gap medido ao vivo em 2026-09-04: o alvo era 5154,5000 e o
+        deal real saiu a 5154,0000, 1 tick de deslize CONTRA o robo;
+        gravar o alvo teorico teria registrado ficcao no diario).
+
+        Reusa `_on_opened`/`_on_closed` (via `_apply`) para o resto do
+        bookkeeping ser IDENTICO ao caminho normal -- Intent/Order/Fill,
+        `live_positions`, debito/credito de caixa, contagem de trades. A
+        unica coisa que este caminho faz por conta propria e' o que
+        normalmente aconteceria DENTRO de `IntradaySessionMachine.
+        _close_position` (que aqui nunca e' chamado, porque a posicao
+        nunca chega a entrar em `self.machine.positions` -- ja fechou
+        antes de qualquer coisa precisar vigia-la): somar o P&L real a
+        `machine.realized_pnl`/`machine.session_pnl`, que e' o numero que
+        o proximo teto por capital (`_cap_capital_atual`) le."""
+        qty = int(resultado["entry_qty"])
+        entry_price = float(resultado["entry_price"])
+        exit_price = float(resultado["exit_price"])
+        exit_qty = int(resultado["exit_qty"])
+        reason = self._infere_motivo_saida(order, exit_price, resultado.get("exit_comment", ""))
+        self._log(conn, account.id, "warn",
+                  f"RECONCILIADO {self.strategy.symbol}: ordem {order.side} @ "
+                  f"{order.limit_price:.4f} preencheu E fechou entre duas consultas "
+                  f"a corretora -- entrada @ {entry_price:.4f}, saida ({reason.value}) "
+                  f"@ {exit_price:.4f}, lido do historico de deals da corretora.",
+                  {"side": order.side, "entry_price": entry_price, "exit_price": exit_price,
+                   "quantity": qty, "exit_reason": reason.value,
+                   "sessao": self._snapshot.session.isoformat()
+                   if self._snapshot.session else None})
+
+        abertura = PositionOpened(
+            ts=bar.ts, side=order.side, price=entry_price, quantity=qty,
+            stop=order.initial_stop, target=order.initial_target,
+            order_kind="limit", reason=order.reason, bar=bar,
+        )
+        self._apply(conn, account, abertura, bar)
+
+        cfg = self.machine.config
+        trade = IntradayTrade(
+            symbol=self.strategy.symbol,
+            strategy_name=self.strategy.name,
+            strategy_version=self.strategy.version,
+            side=order.side,
+            entry_ts=bar.ts,
+            entry_price=entry_price,
+            exit_ts=bar.ts,
+            exit_price=exit_price,
+            quantity=min(qty, exit_qty) if exit_qty else qty,
+            exit_reason=reason,
+            point_value_brl=cfg.costs.point_value_brl,
+            capital_base=cfg.initial_capital,
+            fees_total=fees_round_trip_brl(qty, entry_price, exit_price, cfg.costs),
+            slippage_total=abs(exit_price - (order.initial_target
+                                             if reason == IntradayExitReason.TARGET
+                                             else order.initial_stop or exit_price))
+                          * qty * cfg.costs.point_value_brl,
+        )
+        pnl = trade.pnl_brl
+        self.machine.session_pnl += pnl
+        self.machine.realized_pnl += pnl
+        self._apply(conn, account, PositionClosed(trade=trade, pnl_brl=pnl), bar)
+
     def _aplica_eventos_parciais_antes_de_falhar(
         self, conn, account: AccountState, erro: Exception, bar: Bar,
     ) -> tuple[int, int]:
@@ -2704,6 +2905,7 @@ class IntradayLiveRuntime:
                 self._snapshot.last_bar_ts = bar.ts
                 continue
             self._acumula_volume_no_nivel(bar)
+            self._reconcilia_entrada_orfa(conn, account, bar)
             try:
                 eventos = self.machine.on_closed_bar(bar)
             except BrokerExecutionError as erro:

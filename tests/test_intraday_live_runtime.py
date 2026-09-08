@@ -558,6 +558,45 @@ class _FakeMT5Broker:
     preco_de_saida = 9.90
 
 
+class _BrokerComHistorico(_FakeMT5Broker):
+    """Estende `_FakeMT5Broker` com `order_history_state`/`deals_for_
+    position` -- os dois metodos novos da reconciliacao por historico
+    (gap medido ao vivo em 2026-09-04, slot
+    `dt-wdo_grid_reload_maker-wdo@-live`: ordem preenche E fecha entre
+    dois polls; ver `MT5IntradayExecution.resolve_orphaned_entry` e
+    `_resolve_exit_from_history`).
+
+    AUSENTES na classe base de proposito: nenhum teste anterior configura
+    isto, e `getattr(broker, "order_history_state", None)` no codigo sob
+    teste degrada para "nada a reconciliar" quando o metodo nao existe --
+    entao a classe base continua provando que o comportamento ANTIGO
+    (sem reconciliacao) nao muda para quem nao usa esta subclasse.
+
+    Uma unica resposta CANNED para qualquer ticket/posicao consultado --
+    estes testes so' tem UMA ordem/posicao viva por vez, entao nao ha
+    necessidade de um dict indexado pelo ticket real (que so' e' conhecido
+    DEPOIS do primeiro `run_once`, ja que o dublê gera o ticket sozinho)."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Default = "nao consegui perguntar" (o mais conservador -- um
+        # teste que esquecer de configurar isto nunca declara uma ordem
+        # morta ou inventa um preco de saida por acidente).
+        self.resposta_estado = {"ok": False, "state": None, "position_id": None,
+                                "note": "nao configurado no teste"}
+        self.resposta_deals = {"ok": False, "deals": None, "note": "nao configurado no teste"}
+        self.consultas_historico: list = []
+        self.consultas_deals: list = []
+
+    def order_history_state(self, ticket):
+        self.consultas_historico.append(str(ticket))
+        return dict(self.resposta_estado)
+
+    def deals_for_position(self, position_id):
+        self.consultas_deals.append(position_id)
+        return dict(self.resposta_deals)
+
+
 def _runtime_live(tmp_path, barras, broker, semente=None, **strat_kwargs):
     from strategy.daytrade.lab.gremah import Gremah
 
@@ -714,14 +753,24 @@ def test_live_fecha_a_mercado_e_usa_o_preco_executado_pela_corretora(tmp_path, p
 
 # ---------- gap (a)/(c), incidente 2026-08-28: corrida com a protecao ------
 
-def test_live_fechamento_quando_corretora_ja_fechou_por_protecao_usa_nivel_do_stop(
+def test_live_fechamento_quando_corretora_ja_fechou_por_protecao_nunca_aproxima_pelo_nivel_teorico(
     tmp_path, pregao_aberto,
 ):
     """Corrida legitima: a protecao SL/TP registrada na corretora (gap c) ja
-    fechou a posicao alguns instantes antes deste passo, no MESMO nivel que a
-    maquina ia usar. `exit_market` nao pode mandar ordem NENHUMA (nao ha mais
-    posicao pra fechar) nem falhar alto -- usa o proprio nivel de stop como
-    o preco de saida, a aproximacao honesta sem consultar deal a deal."""
+    fechou a posicao alguns instantes antes deste passo. ATUALIZADO em
+    2026-09-04 (segundo gap medido ao vivo no slot
+    `dt-wdo_grid_reload_maker-wdo@-live`, ver LICOES_DE_PRODUCAO.md): a
+    versao antiga deste metodo usava o nivel de stop/alvo como "a melhor
+    aproximacao honesta" -- e um fechamento real medido ao vivo mostrou essa
+    aproximacao ERRADA por R$9,50 num trade so' (deslize contra o robo que o
+    nivel teorico nao capturava). `exit_market` NAO PODE MAIS aproximar por
+    nivel teorico nem por ultimo preco negociado -- so' um deal CONFIRMADO
+    no historico da corretora vale. Sem historico disponivel (este broker
+    nao implementa `deals_for_position`, o dublê antigo), a saida certa e'
+    RECUSAR e tentar de novo na proxima barra, com a posicao continuando
+    aberta NA MAQUINA -- nunca um preco inventado. Ver
+    `test_fechamento_sem_posicao_na_corretora_usa_deal_real_nunca_nivel_teorico`
+    para o caminho em que o historico ESTA disponivel."""
     broker = _FakeMT5Broker()
     script = {
         0: [EnterLimit(side="long", limit_price=10.00, initial_stop=9.00,
@@ -741,9 +790,11 @@ def test_live_fechamento_quando_corretora_ja_fechou_por_protecao_usa_nivel_do_st
     # a protecao da corretora ja fechou a posicao ANTES desta barra chegar.
     broker.posicao = None
     feed._barras.append(_bar("13:03", 9.50, 9.50, 8.50, 8.90))  # rompe o stop (9.00)
-    rt.run_once(now=_agora("13:03:00"))
+    passos = rt.run_once(now=_agora("13:03:00"))
 
-    assert rt.machine.position is None, "fechou mesmo sem ordem a mercado nova"
+    passo = [p for p in passos if p.action == "daytrade_recusa_fechamento"]
+    assert passo, "sem historico pra confirmar o deal real, recusa e tenta de novo -- nunca inventa"
+    assert rt.machine.position is not None, "a posicao continua aberta NA MAQUINA"
     assert broker.ordens_a_mercado == [], "nenhuma ordem nova foi mandada"
     with store.live_journal(rt.db_path) as conn:
         acc = store.load_account(conn, SLOT.id)
@@ -751,7 +802,7 @@ def test_live_fechamento_quando_corretora_ja_fechou_por_protecao_usa_nivel_do_st
             "SELECT * FROM live_orders WHERE account_id = ? AND side = 'sell' ORDER BY id",
             (acc.id,),
         ).fetchone()
-    assert ordem["avg_price"] == pytest.approx(9.00), "usou o nivel do STOP como preco de saida"
+    assert ordem is None, "nenhuma saida foi registrada -- nao ha' deal confirmado ainda"
 
 
 def test_live_sem_conexao_com_o_terminal_nao_conclui_que_nao_preencheu(tmp_path, pregao_aberto):
@@ -1481,10 +1532,11 @@ def test_liga_depois_do_corte_comeca_a_frio_sem_buscar_semente(tmp_path, pregao_
     for _ in range(itr_mod._CAUDA_VOL_DIAS):
         dia = live_clock.previous_session(dia)
         dias_vol.append((dia, itr_mod._FIM_DE_PREGAO_QUALQUER))
-    # `_seed_typical_trade_size` reusa a MESMA janela/feed que `_seed_daily_
-    # volatility` (mesmo espirito), entao busca os MESMOS dias de novo --
-    # so' agrega diferente (mediana de evento, nao OHLCV).
-    esperado = [(date(2026, 8, 20), itr_mod._FIM_DE_PREGAO_QUALQUER)] + dias_vol + dias_vol
+    # `_seed_daily_aggregates` (2026-09-04, item 5.9 do LICOES_DE_PRODUCAO.md)
+    # busca cada uma das `_CAUDA_VOL_DIAS` sessoes UMA SO' VEZ e calcula os
+    # dois agregados (`barra_diaria` e `mediana_negocio_diario`) das MESMAS
+    # barras -- antes buscava os mesmos dias 2x (um laco por agregado).
+    esperado = [(date(2026, 8, 20), itr_mod._FIM_DE_PREGAO_QUALQUER)] + dias_vol
     assert feed.pedidos_de_semente == esperado
 
 
@@ -1552,6 +1604,126 @@ def test_seed_daily_volatility_busca_e_repassa_o_range_diario_do_pregao_anterior
     # `session_bars_until` devolvem lista vazia, `barra_diaria([])` e' None
     # e nao entra na janela) -- mediana de 1 valor so' e' o proprio valor.
     assert rt.strategy._janela_vol.range_mediano() == pytest.approx(1.5)
+
+
+# ---------- item 5.9 do LICOES_DE_PRODUCAO (2026-09-04): nao busca o que a
+# estrategia nao consome, e busca cada sessao consumida UMA SO VEZ --------
+
+def test_robo_sem_hooks_de_seed_sobrescritos_nao_busca_historico_nenhum(tmp_path, pregao_aberto):
+    """`WdoGridReloadMaker`/`CopaWin` (os dois robos do incidente de
+    2026-09-04) nao sobrescrevem NENHUM dos tres hooks de seed
+    (`seed_volume_window`/`seed_daily_volatility`/`seed_typical_trade_size`
+    -- default no-op puro em `IntradayStrategy`) e nao tem
+    `fixed_anchor_until` (entao tambem nao fazem warm start). ANTES desta
+    correcao, `_start_session` buscava as MESMAS 31 sessoes do feed so'
+    para alimentar metodos vazios -- 1 (janela de volume) + 15
+    (`seed_daily_volatility`) + 15 (`seed_typical_trade_size`), NENHUMA
+    aproveitada. Contra o feed de TICK real (~14s/sessao, ~140.000
+    "barras" degeneradas por sessao de WDO) isso sozinho e' o essencial dos
+    ~430s que derrubaram os dois slots `wdo_grid_reload_maker` pelo
+    watchdog de heartbeat. DEPOIS: zero buscas."""
+    from strategy.daytrade.lab.wdo_grid_reload_maker import WdoGridReloadMaker
+
+    strat = WdoGridReloadMaker(tick_size=0.5, level_spacing_ticks=1, profit_ticks=1, stop_ticks=16)
+    slot = slot_by_id("dt-wdo_grid_reload_maker-wdo@-shadow")
+    feed = _ScriptedBarFeed([_bar("13:01", 5_100.0, 5_100.0, 5_100.0, 5_100.0)], semente=[])
+    rt = IntradayLiveRuntime(
+        slot=slot, strategy=strat, config=_config(), bar_feed=feed,
+        broker=_ExplodingBroker(), db_path=tmp_path / "live_intraday.sqlite",
+        execution_mode="shadow", initial_capital=100_000.0,
+    )
+    rt.ensure_account()
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, slot.id)
+        acc.cash = 100_000.0
+        store.save_account(conn, acc)
+
+    rt.run_once(now=_agora("13:02:00"))
+
+    assert feed.pedidos_de_semente == [], (
+        "sem hook de seed sobrescrito e sem fixed_anchor_until, NENHUMA "
+        "busca de historico deveria acontecer ao feed -- eram 31 antes "
+        "desta correcao"
+    )
+
+
+def test_seed_daily_aggregates_busca_cada_sessao_consumida_uma_so_vez_ordem_e_valores_batem(
+    tmp_path, pregao_aberto,
+):
+    """`Gremah` sobrescreve os TRES hooks (feed M1, barato) -- prova que a
+    fusao dos dois lacos que antes buscavam as MESMAS `_CAUDA_VOL_DIAS`
+    sessoes duas vezes (um para `barra_diaria`, outro para
+    `mediana_negocio_diario`) nao mudou UMA VIRGULA do que a estrategia
+    recebe: mesma ORDEM (mais antiga primeiro) e mesmos VALORES -- so' que
+    buscando cada sessao ao feed 1x em vez de 2x."""
+    def _bar_on(date_str, hhmm, o, h, low, c, volume):
+        return Bar(ts=pd.Timestamp(f"{date_str} {hhmm}", tz="UTC"),
+                   open=float(o), high=float(h), low=float(low), close=float(c), volume=float(volume))
+
+    # 2 sessoes ANTERIORES com dado; as outras 13 dentro de
+    # `_CAUDA_VOL_DIAS` ficam vazias (`barra_diaria`/`mediana_negocio_
+    # diario` de `[]` sao `None` e nao entram na janela -- mesmo
+    # comportamento de antes da correcao).
+    dia_2_atras = [
+        _bar_on("2026-08-19", "13:00", 5.0, 5.2, 4.8, 5.1, 50.0),
+        _bar_on("2026-08-19", "13:01", 5.1, 5.3, 4.9, 5.2, 150.0),
+    ]
+    dia_1_atras = [
+        _bar_on("2026-08-20", "13:00", 10.0, 10.5, 9.8, 10.2, 100.0),
+        _bar_on("2026-08-20", "13:01", 10.2, 11.0, 9.5, 10.9, 500.0),
+        _bar_on("2026-08-20", "13:02", 10.9, 10.9, 10.9, 10.9, 300.0),
+    ]
+    semente = dia_2_atras + dia_1_atras
+    rt, feed = _runtime(tmp_path, barras=[], semente=semente,
+                        fixed_anchor_until=time(14, 0),
+                        alvo_por_volatilidade=True, alvo_vol_mult=0.5,
+                        capacidade_janela_dias=2)  # janela=2 pra' os 2 dias caberem
+
+    from strategy.daytrade.lab.gremah import Gremah
+    recebido: dict = {}
+    original_vol = Gremah.seed_daily_volatility
+    original_tip = Gremah.seed_typical_trade_size
+
+    def _spy_vol(self, previous_daily_bars):
+        recebido["daily_bars"] = list(previous_daily_bars)
+        return original_vol(self, previous_daily_bars)
+
+    def _spy_tip(self, previous_daily_medians):
+        recebido["medians"] = list(previous_daily_medians)
+        return original_tip(self, previous_daily_medians)
+
+    Gremah.seed_daily_volatility = _spy_vol
+    Gremah.seed_typical_trade_size = _spy_tip
+    try:
+        rt.run_once(now=_agora("15:01:00"))
+    finally:
+        Gremah.seed_daily_volatility = original_vol
+        Gremah.seed_typical_trade_size = original_tip
+
+    # UMA busca por sessao consumida: 1 (janela de volume) +
+    # `_CAUDA_VOL_DIAS` (o laco fundido) -- nunca 1 + 2*`_CAUDA_VOL_DIAS`
+    # (31 chamadas antes desta correcao, 16 depois).
+    assert len(feed.pedidos_de_semente) == 1 + itr_mod._CAUDA_VOL_DIAS
+
+    # ORDEM: mais antiga primeiro nos dois hooks, igual antes da fusao.
+    assert [b.ts.date() for b in recebido["daily_bars"]] == [date(2026, 8, 19), date(2026, 8, 20)]
+
+    # VALORES: a barra diaria agregada de cada sessao, exatamente como
+    # `barra_diaria` calcularia isolado (nao uma media/mistura das duas).
+    b19, b20 = recebido["daily_bars"]
+    assert (b19.high, b19.low) == pytest.approx((5.3, 4.8))
+    assert (b20.high, b20.low) == pytest.approx((11.0, 9.5))
+    # `mediana_negocio_diario` de CADA sessao (mediana do volume de cada
+    # evento DENTRO do dia -- mediana(50,150) -> 100.0; mediana(100,500,300)
+    # -> 300.0), na MESMA ordem -- nao a mesma metrica de `barra_diaria`
+    # numa resolucao diferente.
+    assert recebido["medians"] == [pytest.approx(100.0), pytest.approx(300.0)]
+
+    # fim a fim: o agregado que a estrategia efetivamente usa bate com o
+    # calculo manual (mediana de [0.5, 1.5] = 1.0; mediana de [100, 300] =
+    # 200.0 -- os dois com os 2 dias dentro da janela).
+    assert rt.strategy._janela_vol.range_mediano() == pytest.approx(1.0)
+    assert rt.strategy._janela_negocio_tipico.tipico_mediano() == pytest.approx(200.0)
 
 
 def test_comeco_a_frio_nao_consome_as_barras_que_ja_passaram(tmp_path, pregao_aberto):
@@ -4793,3 +4965,228 @@ def test_falha_alto_no_filho_de_entrada_sem_fatia_confirmada_antes_nao_deixa_ras
     assert n_ordens_depois == n_ordens_antes, "nada novo -- nada de real aconteceu neste passo"
     assert rt.machine.position is not None and rt.machine.position.quantity == 1
     assert rt.machine.position is not None, "a posicao continua aberta -- corretora recusou a leitura"
+
+
+# ---------- reconciliacao por historico (gap medido ao vivo 2026-09-04) ----
+#
+# Slot `dt-wdo_grid_reload_maker-wdo@-live`, R$375 reais: a ordem-limite de
+# entrada preencheu as 14:18:31 e a posicao fechou pelo alvo ATOMICO da
+# propria corretora as 14:18:32 -- os DOIS dentro do MESMO intervalo de poll
+# do supervisor (5s). `positions_get` nunca mostrou a posicao aberta em
+# NENHUM poll: a deteccao por crescimento (`limit_fill`, 0 -> N -> 0 entre
+# duas leituras) nunca tem chance de perceber, e sem a reconciliacao por
+# historico o robo ficaria vigiando pra sempre um ticket que a corretora ja
+# resolveu.
+
+def test_entrada_preencheu_e_fechou_entre_dois_polls_e_reconciliada_pelo_historico(
+    tmp_path, pregao_aberto,
+):
+    """Caso exato medido ao vivo: preenche @ 9,80, fecha pelo alvo com 1 tick
+    de deslize CONTRA o robo (9,89 em vez do teorico 9,90) -- o diario tem
+    de gravar o preco do DEAL, nunca o nivel teorico da ordem, e a maquina
+    tem de ficar livre para re-armar."""
+    broker = _BrokerComHistorico()
+    script = {
+        0: [EnterLimit(side="long", limit_price=9.80, initial_stop=7.80,
+                       initial_target=9.90, quantity=1, reason="teste_round_trip")],
+    }
+    rt, feed = _runtime_live_scripted(tmp_path, broker, script)
+    rt.run_once(now=_agora("13:00:00"))  # feed vazio -- so' abre a sessao
+
+    feed._barras.append(_bar("13:01", 9.80, 9.80, 9.80, 9.80))
+    rt.run_once(now=_agora("13:01:00"))  # consome a barra 0 do script -- arma a ordem
+    assert len(broker.pendentes_enviadas) == 1
+    ticket = broker.pendentes_enviadas[0].broker_ref
+    assert rt.machine.resting_limit is not None
+
+    # A corretora NUNCA mostra posicao aberta -- o ciclo inteiro (fill +
+    # fechamento pelo alvo) aconteceu ENTRE dois polls.
+    broker.posicao = None
+    broker.resposta_estado = {"ok": True, "state": "filled", "position_id": 909, "note": ""}
+    broker.resposta_deals = {"ok": True, "deals": [
+        {"entry": 0, "price": 9.80, "quantity": 1, "profit": 0.0, "commission": 0.0,
+         "swap": 0.0, "fee": 0.0, "time": 100, "comment": ""},
+        {"entry": 1, "price": 9.89, "quantity": 1, "profit": 0.09, "commission": 0.0,
+         "swap": 0.0, "fee": 0.0, "time": 101, "comment": "[tp 9.9000]"},
+    ], "note": ""}
+
+    feed._barras.append(_bar("13:02", 9.85, 9.85, 9.85, 9.85))
+    rt.run_once(now=_agora("13:02:00"))
+
+    assert ticket in broker.consultas_historico
+    assert 909 in broker.consultas_deals
+    assert rt.machine.resting_limit is None, "livre para re-armar"
+    assert rt.machine.position is None
+    assert rt.machine.realized_pnl == pytest.approx(0.09)
+    assert rt._snapshot.trades == 1
+    assert rt._snapshot.pending_entry_refs == []
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        eventos = [e["message"] for e in reversed(store.recent_events(conn, acc.id, limit=50))]
+    de_ordem = [m for m in eventos if "#0" in m]
+    assert de_ordem == [
+        "LIMITE LONG #01 1 lote PMAM3 @ 9.8000 (stop 7.8000 / alvo 9.9000)",
+        "LONG #01 1 lote PMAM3 @ 9.8000 (stop 7.8000 / alvo 9.9000)",
+        "TARGET LONG #01 1 lote PMAM3 @ 9.8900 - R$ +0.09",
+    ]
+
+
+def test_entrada_cancelada_sem_fill_e_reconciliada_libera_pra_rearmar(tmp_path, pregao_aberto):
+    """A corretora confirma (pelo historico) que a ordem morreu SEM
+    preencher nada -- nenhum trade pode ser inventado, e a maquina tem de
+    ficar livre para o robo re-armar na MESMA barra."""
+    broker = _BrokerComHistorico()
+    script = {
+        0: [EnterLimit(side="long", limit_price=9.80, initial_stop=7.80,
+                       initial_target=9.90, quantity=1, reason="primeira")],
+        1: [EnterLimit(side="long", limit_price=9.75, initial_stop=7.75,
+                       initial_target=9.85, quantity=1, reason="segunda")],
+    }
+    rt, feed = _runtime_live_scripted(tmp_path, broker, script)
+    rt.run_once(now=_agora("13:00:00"))  # feed vazio -- so' abre a sessao
+
+    feed._barras.append(_bar("13:01", 9.80, 9.80, 9.80, 9.80))
+    rt.run_once(now=_agora("13:01:00"))  # consome a barra 0 do script -- arma a ordem
+    ticket = broker.pendentes_enviadas[0].broker_ref
+    assert rt.machine.resting_limit is not None
+
+    broker.posicao = None
+    broker.resposta_estado = {"ok": True, "state": "canceled", "position_id": None, "note": ""}
+
+    feed._barras.append(_bar("13:02", 9.80, 9.80, 9.80, 9.80))
+    rt.run_once(now=_agora("13:02:00"))
+
+    assert ticket in broker.consultas_historico
+    assert broker.consultas_deals == [], "sem position_id, nao ha' o que procurar nos deals"
+    assert rt._snapshot.trades == 0
+    assert rt.machine.realized_pnl == pytest.approx(0.0)
+    # Re-armou NA MESMA barra, com a ordem NOVA do script -- prova que a
+    # maquina nao ficou parada esperando um ticket que a corretora ja tinha
+    # resolvido.
+    assert rt.machine.resting_limit is not None
+    assert rt.machine.resting_limit.limit_price == pytest.approx(9.75)
+    assert len(broker.pendentes_enviadas) == 2
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        eventos = [e["message"] for e in reversed(store.recent_events(conn, acc.id, limit=50))]
+    assert any("CANCELA" in m and "sem preenchimento" in m for m in eventos)
+
+
+def test_consulta_de_historico_falhou_mantem_vigilancia_sem_inventar_desfecho(
+    tmp_path, pregao_aberto,
+):
+    """'Nao sei' (consulta que falhou) NUNCA pode virar 'morreu' nem
+    'preencheu' -- item 1.6 de LICOES_DE_PRODUCAO.md. A ordem continua
+    vigiada, sem nenhum trade inventado."""
+    broker = _BrokerComHistorico()
+    script = {
+        0: [EnterLimit(side="long", limit_price=9.80, initial_stop=7.80,
+                       initial_target=9.90, quantity=1, reason="primeira")],
+    }
+    rt, feed = _runtime_live_scripted(tmp_path, broker, script)
+    rt.run_once(now=_agora("13:00:00"))  # feed vazio -- so' abre a sessao
+
+    feed._barras.append(_bar("13:01", 9.80, 9.80, 9.80, 9.80))
+    rt.run_once(now=_agora("13:01:00"))  # consome a barra 0 do script -- arma a ordem
+    ticket = broker.pendentes_enviadas[0].broker_ref
+
+    broker.posicao = None
+    broker.resposta_estado = {"ok": False, "state": None, "position_id": None,
+                              "note": "terminal fora do ar (simulado)"}
+
+    feed._barras.append(_bar("13:02", 9.80, 9.80, 9.80, 9.80))
+    rt.run_once(now=_agora("13:02:00"))
+
+    assert ticket in broker.consultas_historico
+    assert rt.machine.resting_limit is not None, "continua vigiando -- 'nao sei' nunca autoriza"
+    assert rt._snapshot.pending_entry_refs == [ticket]
+    assert rt._snapshot.trades == 0
+
+
+def test_fechamento_sem_posicao_na_corretora_usa_deal_real_nunca_nivel_teorico(
+    tmp_path, pregao_aberto,
+):
+    """Segundo gap medido ao vivo no MESMO slot, 2026-09-04: uma tentativa de
+    fechamento pareceu recusada (`retcode=DONE` sem `price`/`deal`) mas na
+    verdade executou -- a corretora reporta 'sem posicao' na consulta
+    seguinte, e o historico mostra o deal REAL de saida (9,85) num preco
+    PIOR que o alvo teorico (9,90, +R$0,10 se gravado por engano). O robo
+    tem de gravar o preco do DEAL (+R$0,05), nunca o nivel teorico."""
+    broker = _BrokerComHistorico()
+    script = {
+        0: [EnterLimit(side="long", limit_price=9.80, initial_stop=7.80,
+                       initial_target=9.90, quantity=1, reason="primeira")],
+    }
+    rt, feed = _runtime_live_scripted(tmp_path, broker, script)
+    rt.run_once(now=_agora("13:00:00"))  # feed vazio -- so' abre a sessao
+
+    feed._barras.append(_bar("13:01", 9.80, 9.80, 9.80, 9.80))
+    rt.run_once(now=_agora("13:01:00"))  # consome a barra 0 do script -- arma a ordem
+
+    # Fill normal -- deteccao por crescimento de posicao, caminho de sempre.
+    broker.posicao = {"side": "long", "price": 9.80, "quantity": 1, "ticket": 501}
+    feed._barras.append(_bar("13:02", 9.80, 9.80, 9.80, 9.80))
+    rt.run_once(now=_agora("13:02:00"))
+    assert rt.machine.position is not None
+    assert rt.machine.position.entry_price == pytest.approx(9.80)
+
+    # A posicao ja NAO existe mais na corretora quando a maquina decide
+    # fechar (fechada por uma tentativa anterior "ambigua" que na verdade
+    # executou, ou pela propria protecao SL/TP atomica) -- o historico
+    # confirma o deal REAL, num preco PIOR que o alvo teorico.
+    broker.posicao = None
+    broker.resposta_deals = {"ok": True, "deals": [
+        {"entry": 1, "price": 9.85, "quantity": 1, "profit": 0.05, "commission": 0.0,
+         "swap": 0.0, "fee": 0.0, "time": 200, "comment": "meta-live"},
+    ], "note": ""}
+
+    feed._barras.append(_bar("13:03", 9.80, 9.91, 9.80, 9.90))  # toca o alvo teorico (9.90)
+    rt.run_once(now=_agora("13:03:00"))
+
+    assert 501 in broker.consultas_deals
+    assert rt.machine.position is None
+    assert rt.machine.realized_pnl == pytest.approx(0.05)
+    assert broker.close_tickets == [], "nunca chegou a MANDAR fechamento -- so' leu o historico"
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        eventos = [e["message"] for e in reversed(store.recent_events(conn, acc.id, limit=50))]
+    de_ordem = [m for m in eventos if "#0" in m]
+    assert de_ordem[-1] == "TARGET LONG #01 1 lote PMAM3 @ 9.8500 - R$ +0.05"
+
+
+def test_fechamento_sem_posicao_e_sem_deal_no_historico_ainda_nao_confirma_nada(
+    tmp_path, pregao_aberto,
+):
+    """Sem deal de saida no historico (ainda nao replicou, ou a consulta
+    falhou), o fechamento NUNCA aproxima pelo nivel teorico nem pelo ultimo
+    preco negociado -- levanta e tenta de novo, com a posicao continuando
+    aberta NA MAQUINA."""
+    broker = _BrokerComHistorico()
+    script = {
+        0: [EnterLimit(side="long", limit_price=9.80, initial_stop=7.80,
+                       initial_target=9.90, quantity=1, reason="primeira")],
+    }
+    rt, feed = _runtime_live_scripted(tmp_path, broker, script)
+    rt.run_once(now=_agora("13:00:00"))  # feed vazio -- so' abre a sessao
+
+    feed._barras.append(_bar("13:01", 9.80, 9.80, 9.80, 9.80))
+    rt.run_once(now=_agora("13:01:00"))  # consome a barra 0 do script -- arma a ordem
+
+    broker.posicao = {"side": "long", "price": 9.80, "quantity": 1, "ticket": 501}
+    feed._barras.append(_bar("13:02", 9.80, 9.80, 9.80, 9.80))
+    rt.run_once(now=_agora("13:02:00"))
+    assert rt.machine.position is not None
+
+    broker.posicao = None
+    broker.resposta_deals = {"ok": True, "deals": [], "note": ""}  # historico ainda nao tem nada
+
+    feed._barras.append(_bar("13:03", 9.80, 9.91, 9.80, 9.90))
+    passos = rt.run_once(now=_agora("13:03:00"))
+
+    passo = [p for p in passos if p.action == "daytrade_recusa_fechamento"]
+    assert passo, "recusa de fechamento -- posicao continua aberta, tenta de novo depois"
+    assert rt.machine.position is not None, "a maquina NAO pode ter fechado sem deal confirmado"
+    assert rt.machine.realized_pnl == pytest.approx(0.0)

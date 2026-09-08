@@ -192,8 +192,10 @@ class ProcessConfig:
     #
     # Traduz ticker de futuro CONTÍNUO (`"WDO@"`, `"WIN@"` -- só dá cotação
     # no terminal) para o contrato REAL com vencimento em aberto AGORA
-    # (ex. `"WDOU26"`) -- é nele que o servidor de fato aceita ordem; achado
-    # ao vivo em 2026-08-28 (slot do WDO F1: "Trade disabled" ao mandar
+    # (padrão RAIZ+letra-do-mês+ano -- a letra/ano exatos dependem só de
+    # QUANDO isto roda, nunca fixos aqui) -- é nele que o
+    # servidor de fato aceita ordem; achado ao vivo em 2026-08-28 (slot do
+    # WDO F1: "Trade disabled" ao mandar
     # ordem em `WDO@`). Como é redetectado a cada início, o contrato virado
     # na rolagem mensal/bimestral (WDO/WIN) é pego sozinho no próximo
     # "Iniciar operação" -- ninguém precisa editar código/config todo mês.
@@ -501,23 +503,34 @@ def credential_status() -> dict:
 # `dashboard/app.py::operacao_caixa`.
 
 
-def _broker_for_detection():
-    """Um `MT5Broker` só para CONSULTA (`symbol_info`/saldo), montado com as
-    credenciais SALVAS (`load_credentials()`) e nunca via `os.environ`:
-    diferente de `start()` (que injeta `_credentials_env()` no `env` do
-    processo FILHO), uma chamada feita aqui roda no processo do DASHBOARD,
-    que nunca recebe essas variáveis — daria `login=None` mesmo com as
-    credenciais MT5 salvas corretamente."""
+def _broker_for_detection(magic: Optional[int] = None):
+    """Um `MT5Broker` só para CONSULTA (`symbol_info`/saldo/posição), montado
+    com as credenciais SALVAS (`load_credentials()`) e nunca via
+    `os.environ`: diferente de `start()` (que injeta `_credentials_env()` no
+    `env` do processo FILHO), uma chamada feita aqui roda no processo do
+    DASHBOARD, que nunca recebe essas variáveis — daria `login=None` mesmo
+    com as credenciais MT5 salvas corretamente.
+
+    `magic` (default `None`, mantém o default da classe): necessário para
+    `MT5Broker.position_state`, que numa conta NETTING compartilhada entre
+    slots filtra a posição pelo `magic` do robô — sem passar o `magic` DESTE
+    slot (`Slot.magic`), a consulta veria (ou deixaria de ver) a posição de
+    OUTRO robô. Os demais chamadores (`detect_shares_per_lot` e primos)
+    consultam `symbol_info`, não posição, e por isso nunca precisaram
+    disto."""
     from live.broker_mt5 import MT5Broker
 
     creds = load_credentials()
     login = creds.get("mt5_login")
-    return MT5Broker(
+    kwargs = dict(
         login=int(login) if login else None,
         password=creds.get("mt5_password"),
         server=creds.get("mt5_server"),
         path=creds.get("mt5_terminal_path"),
     )
+    if magic is not None:
+        kwargs["magic"] = magic
+    return MT5Broker(**kwargs)
 
 
 def universe_for_slot(slot_id: str, robot_key: Optional[str] = None) -> tuple[str, ...]:
@@ -1534,7 +1547,54 @@ _HEARTBEAT_FLOOR_SECONDS = 900.0
 #: (terminal fechado, credencial errada, disco cheio), não de rede
 #: instável, e reiniciar sem parar nesse caso só bate cabeça sozinho.
 _MAX_AUTO_RESTARTS = 3
-_COOLDOWN_WINDOW_SECONDS = 900.0
+
+#: MESMO valor de `app.py::WATCHDOG_INTERVAL_SECONDS` (o laço de fundo só
+#: verifica travamento 1x/min) -- duplicado aqui (não importado) pelo mesmo
+#: motivo de `_heartbeat_path` acima: `app.py` já importa `dashboard.
+#: live_control`, então importar `app` daqui de volta fecharia um ciclo.
+_WATCHDOG_POLL_INTERVAL_SECONDS = 60.0
+
+#: Duração do PIOR ciclo completo "trava -> detecta -> mata -> sobe" que o
+#: cooldown precisa enxergar: `_HEARTBEAT_FLOOR_SECONDS` até o heartbeat
+#: ficar velho o bastante para ser flagrado, mais até
+#: `_WATCHDOG_POLL_INTERVAL_SECONDS` de atraso do laço de fundo (só verifica
+#: 1x/min, pode achar o travamento quase um minuto depois de cruzar o piso),
+#: mais a subida do processo novo (`_STARTUP_GRACE_SECONDS`, 2s -- desprezível
+#: ao lado dos outros dois, por isso fora da soma). Confirmado ao vivo em
+#: 04/09/2026 no slot `dt-wdo_grid_reload_maker-wdo@-shadow` (`live_events`,
+#: `source='watchdog'`): reinícios às 13:28:53, 13:45:04 e 14:01:00 -- gaps
+#: de 971s e 956s, batendo os ~960s previstos aqui (jitter de rede/disco
+#: explica a diferença de ~1-2%).
+_RESTART_CYCLE_SECONDS = _HEARTBEAT_FLOOR_SECONDS + _WATCHDOG_POLL_INTERVAL_SECONDS
+
+#: Janela do cooldown de `_registrar_tentativa`. ERA `_COOLDOWN_WINDOW_
+#: SECONDS = _HEARTBEAT_FLOOR_SECONDS` (900.0 solto, mesmo valor do piso) --
+#: bug de DESENHO achado por auditoria em 04/09/2026 com o dado real citado
+#: acima: o ciclo completo de detecção+reinício (~960s, `_RESTART_CYCLE_
+#: SECONDS`) já é MAIOR que uma janela de 900s, então a tentativa anterior
+#: sempre cai da lista (`agora - t < _COOLDOWN_WINDOW_SECONDS`) ANTES da
+#: próxima tentativa ser registrada -- o contador nunca passa de 1,
+#: `_MAX_AUTO_RESTARTS` nunca é atingido, e o watchdog reinicia o MESMO slot
+#: PARA SEMPRE (exatamente o que `_MAX_AUTO_RESTARTS` existe para evitar; foi
+#: isso que aconteceu 3x seguidas no slot acima, 13:28-14:01, sem o contador
+#: nunca ver mais de 1 tentativa viva).
+#:
+#: A conta certa: se `_MAX_AUTO_RESTARTS` tentativas aconteceram nos piores
+#: instantes possíveis -- 0, g, 2g, ..., (N-1)*g, cada uma exatamente quando
+#: a anterior libera um novo ciclo -- a checagem que teria de flagrar a
+#: (N+1)-ésima como "travou de novo rápido demais" roda em N*g (um ciclo
+#: depois da última), e olha para trás até a 1ª tentativa (em t=0), a
+#: `N*g` de distância. Ou seja, a janela precisa ser MAIOR que `N * g`, não
+#: `(N-1) * g` -- usar só `N-1` deixa a 1ª tentativa cair da lista um
+#: instante antes de a (N+1)-ésima checagem rodar, e o contador nunca fecha
+#: em `N` (é exatamente essa fresta de 1 ciclo que fazia a janela antiga,
+#: igual a 1 ciclo em vez de folgada, nunca acumular -- ver acima).
+#: Multiplicar por `_MAX_AUTO_RESTARTS + 1` em vez do mínimo estrito
+#: `_MAX_AUTO_RESTARTS` dá uma folga de um `_RESTART_CYCLE_SECONDS` inteiro
+#: por cima -- tolera o ciclo real ser até ~33% mais longo que o modelo
+#: (`(N+1)/N` para N=3) antes do cooldown parar de fechar em `N`, folga bem
+#: acima do jitter medido ao vivo (~1-2%, ver `_RESTART_CYCLE_SECONDS`).
+_COOLDOWN_WINDOW_SECONDS = (_MAX_AUTO_RESTARTS + 1) * _RESTART_CYCLE_SECONDS
 
 #: `{slot_id: [timestamps unix dos restarts recentes]}` -- em memória,
 #: reseta com o dashboard (aceitável: um restart do próprio dashboard já é
@@ -1607,7 +1667,62 @@ def _registrar_tentativa(slot_id: str) -> bool:
     return True
 
 
-def reiniciar_travado(slot_id: str) -> dict:
+class PosicaoAbertaError(RuntimeError):
+    """`reiniciar_travado` recusou reiniciar porque há posição aberta na
+    corretora para este slot -- ou a consulta falhou e "não sei" foi tratado
+    como "pode ter" (tri-estado, item 1.6 de LICOES_DE_PRODUCAO.md) -- e o
+    chamador não passou `permitir_com_posicao_aberta=True`.
+
+    Tipo próprio (em vez de `RuntimeError` genérico) para
+    `verificar_e_recuperar_travamentos` distinguir isto de qualquer OUTRA
+    falha de restart (piso de caixa, colisão de símbolo, processo que morre
+    logo após subir) e alertar com mensagem específica, em vez de cair no
+    "falhou" genérico."""
+
+
+def _posicao_aberta_na_corretora(slot, robot_key: Optional[str]) -> tuple[Optional[bool], str]:
+    """Pergunta à CORRETORA -- nunca ao diário nem a `policy_state`, os dois
+    podem estar defasados (foi exatamente esse tipo de divergência que
+    motivou o item 1.7 de LICOES_DE_PRODUCAO.md) -- se há posição aberta
+    neste slot, para QUALQUER ticker do universo do robô `robot_key`
+    (`universe_for_slot`; um slot de day trade tem um só ticker, swing pode
+    ter vários).
+
+    Tri-estado, devolvido como `(estado, motivo)`:
+      - `(True, motivo)` -- há posição confirmada em pelo menos um ticker.
+      - `(False, "")` -- perguntou a TODOS os tickers e nenhum tinha posição.
+      - `(None, motivo)` -- pelo menos uma consulta FALHOU (terminal fora do
+        ar, pacote MetaTrader5 indisponível, erro inesperado). Item 1.6:
+        "não sei" NUNCA vira "não tem" -- o chamador trata `None` exatamente
+        como `True` (não autoriza reiniciar sozinho).
+
+    Filtra por `slot.magic` (via `_broker_for_detection(magic=...)`): a conta
+    MT5 é NETTING e compartilhada entre slots, então sem o filtro certo esta
+    função veria a posição de OUTRO robô como sua (ou vice-versa)."""
+    try:
+        tickers = universe_for_slot(slot.id, robot_key)
+        if not tickers:
+            return False, ""
+        broker = _broker_for_detection(magic=slot.magic)
+        for ticker in tickers:
+            estado = broker.position_state(ticker)
+            if not estado["ok"]:
+                return None, (
+                    f"não foi possível consultar a posição de {ticker!r} na "
+                    f"corretora ({estado['note']})"
+                )
+            posicao = estado["position"]
+            if posicao is not None:
+                return True, (
+                    f"posição aberta em {ticker!r} na corretora "
+                    f"({posicao['side']}, qty={posicao['quantity']})"
+                )
+        return False, ""
+    except Exception as exc:  # noqa: BLE001 -- qualquer falha inesperada aqui é "não sei", nunca "não tem" (item 1.6)
+        return None, f"falha inesperada ao consultar posição na corretora: {exc}"
+
+
+def reiniciar_travado(slot_id: str, *, permitir_com_posicao_aberta: bool = False) -> dict:
     """Mata o processo travado deste slot e sobe de novo, REDETECTANDO os
     parâmetros do terminal (mesmo caminho que `dashboard/app.py::
     operacao_iniciar` já faz para uma conta já existente) -- nunca reaproveita
@@ -1621,12 +1736,31 @@ def reiniciar_travado(slot_id: str) -> dict:
     `capital` salvo -- o dono pode ter ajustado o caixa do slot enquanto ele
     estava travado.
 
-    Levanta se não houver PID registrado (nada a reiniciar) ou se a conta não
+    `permitir_com_posicao_aberta` (default `False`, achado ao vivo em
+    04/09/2026): por padrão RECUSA reiniciar se há posição aberta na
+    CORRETORA para este slot, ou se a consulta falhar (`_posicao_aberta_na_
+    corretora`, tri-estado -- item 1.6). Motivo: a posição já tem stop/alvo
+    REGISTRADOS na corretora (item 1.2 de LICOES_DE_PRODUCAO.md -- "proteção
+    tem de morar na CORRETORA, não no laço do processo") e segue protegida
+    com o processo morto; reiniciar dispara o protocolo de buraco do runtime
+    (`IntradayLiveRuntime._start_session`/`force_flatten`), que pode ACHATAR
+    a posição A MERCADO -- uma saída decidida pela INFRAESTRUTURA, não pelo
+    mercado. Um robô travado com posição protegida é problema para o DONO
+    decidir, não para a infra resolver sozinha. O caminho AUTOMÁTICO
+    (`verificar_e_recuperar_travamentos`) nunca passa `True` aqui; só quem
+    chama manualmente (painel/CLI), já tendo conferido a posição de verdade,
+    pode pedir a passagem explícita.
+
+    Levanta se não houver PID registrado (nada a reiniciar), se a conta não
     tiver `investment_robot` gravado (robô nunca escolhido -- não há como
-    redetectar sozinho, precisa de 'Iniciar' manual no painel). Deixa
-    qualquer outra falha de `start()` (piso de caixa, colisão de símbolo,
-    processo que morre logo após subir) subir tal como está -- já carregam
-    mensagem própria."""
+    redetectar sozinho, precisa de 'Iniciar' manual no painel), ou
+    `PosicaoAbertaError` se houver posição aberta (ou consulta falha) sem
+    `permitir_com_posicao_aberta=True`. Estas três checagens rodam ANTES de
+    matar o processo -- de propósito: uma checagem que vai recusar o restart
+    não deve matar um supervisor que, travado ou não, continua sendo a única
+    coisa viva vigiando o resto do estado local. Deixa qualquer outra falha
+    de `start()` (piso de caixa, colisão de símbolo, processo que morre logo
+    após subir) subir tal como está -- já carregam mensagem própria."""
     from core.config import slot_by_id
     from journal import live_store
 
@@ -1634,6 +1768,27 @@ def reiniciar_travado(slot_id: str) -> dict:
     estado = _read_state(slot_id)
     if estado is None or estado.get("pid") is None:
         raise RuntimeError(f"slot {slot_id!r} não está rodando -- nada a reiniciar.")
+
+    with live_store.live_journal() as conn:
+        conta = live_store.load_account(conn, slot_id)
+    if conta is None or not conta.investment_robot:
+        raise RuntimeError(
+            f"slot {slot_id!r} travado mas sem conta/robô gravado -- não dá "
+            "para redetectar sozinho, use 'Iniciar' manual no painel."
+        )
+
+    if not permitir_com_posicao_aberta:
+        tem_posicao, motivo_posicao = _posicao_aberta_na_corretora(slot, conta.investment_robot)
+        if tem_posicao is not False:  # True (tem) ou None (não sei) -- os dois bloqueiam, item 1.6
+            raise PosicaoAbertaError(
+                f"slot {slot_id!r} travado, mas NÃO reiniciado: "
+                f"{motivo_posicao or 'não foi possível confirmar a ausência de posição na corretora'}. "
+                "Proteção (stop/alvo) já mora na corretora e segue valendo com o processo morto -- "
+                "reiniciar dispararia o protocolo de buraco do runtime, que pode achatar a posição a "
+                "mercado por decisão da infraestrutura, não do mercado. Confira a posição de verdade e "
+                "chame de novo com permitir_com_posicao_aberta=True se quiser reiniciar mesmo assim."
+            )
+
     _matar_arvore(estado["pid"])
     # Achado ao vivo em 02/09/2026: ler o diário LOGO após um `taskkill /F`
     # às vezes esbarra em "disk I/O error" -- o processo morto ainda segura
@@ -1649,14 +1804,6 @@ def reiniciar_travado(slot_id: str) -> dict:
     # morto continuaria "rodando" no arquivo de estado e `start()` abaixo
     # se recusaria com "já está rodando".
     _write_state(slot_id, {**estado, "pid": None, "started_at": None})
-
-    with live_store.live_journal() as conn:
-        conta = live_store.load_account(conn, slot_id)
-    if conta is None or not conta.investment_robot:
-        raise RuntimeError(
-            f"slot {slot_id!r} travado mas sem conta/robô gravado -- não dá "
-            "para redetectar sozinho, use 'Iniciar' manual no painel."
-        )
 
     strategy_key = conta.investment_robot
     execution_mode = slot.execution_mode if slot.is_intraday else "live"
@@ -1684,10 +1831,26 @@ def verificar_e_recuperar_travamentos() -> list[dict]:
     tentativa`), que desiste de tentar de novo depois de `_MAX_AUTO_RESTARTS`
     numa janela curta e só alerta pedindo intervenção manual.
 
+    NUNCA reinicia um slot com posição aberta na corretora (achado do dono,
+    04/09/2026): antes de gastar uma tentativa do cooldown, pergunta a
+    `_posicao_aberta_na_corretora` -- se houver posição (ou a consulta
+    falhar, tri-estado do item 1.6) grava o achado, notifica e DESISTE desta
+    rodada sem contar como tentativa de restart (`acao="posicao_aberta"`),
+    pedindo intervenção humana. Ver a docstring de `reiniciar_travado` para o
+    raciocínio completo (proteção mora na corretora, achatar por decisão da
+    infra é pior que ficar travado). Checado ANTES do cooldown de propósito:
+    um slot travado com posição aberta por vários polos seguidos não é "3
+    tentativas de restart falhando" (não é nem tentativa), é a MESMA causa
+    -- contar como cooldown trocaria a mensagem certa ("posição aberta") por
+    uma errada ("problema estrutural, desisti") depois de 3 polls.
+    `reiniciar_travado` também checa isto por conta própria (defesa em
+    profundidade para qualquer OUTRO chamador) -- a checagem aqui é só para
+    não misturar as duas causas de desistência no relatório/mensagem.
+
     Devolve um relatório por slot travado (`slot`, `idade_heartbeat_s`,
-    `acao`: "reiniciado"/"falhou"/"cooldown", detalhe) -- usado só em teste e
-    log do próprio laço de fundo; o dashboard não expõe isto em rota alguma
-    hoje."""
+    `acao`: "reiniciado"/"falhou"/"cooldown"/"posicao_aberta", detalhe) --
+    usado só em teste e log do próprio laço de fundo; o dashboard não expõe
+    isto em rota alguma hoje."""
     from core.config import slot_by_id
     from journal import live_store
 
@@ -1708,6 +1871,26 @@ def verificar_e_recuperar_travamentos() -> list[dict]:
             live_store.log_event(conn, conta_id, "error", "watchdog", msg,
                                  {"slot": slot_id, "idade_heartbeat_s": idade})
         notifier.notify("error", "watchdog", msg, {"slot": slot_id})
+
+        robot_key = conta.investment_robot if conta is not None else None
+        tem_posicao, motivo_posicao = _posicao_aberta_na_corretora(slot, robot_key)
+        if tem_posicao is not False:  # True (tem) ou None (não sei) -- os dois bloqueiam, item 1.6
+            msg_posicao = (
+                f"slot {slot.label!r} travado, mas o watchdog NÃO vai reiniciar sozinho: "
+                f"{motivo_posicao or 'não foi possível confirmar a ausência de posição na corretora'}. "
+                "Proteção (stop/alvo) já mora na CORRETORA (item 1.2 de LICOES_DE_PRODUCAO.md) e "
+                "segue valendo com o processo morto; reiniciar dispararia o protocolo de buraco do "
+                "runtime, que pode ACHATAR a posição A MERCADO -- saída decidida pela infraestrutura, "
+                "não pelo mercado. Precisa de intervenção humana: confira a posição e, se quiser "
+                "reiniciar mesmo assim, use 'reiniciar_travado' com permitir_com_posicao_aberta=True."
+            )
+            with live_store.live_journal() as conn:
+                live_store.log_event(conn, conta_id, "error", "watchdog", msg_posicao,
+                                     {"slot": slot_id})
+            notifier.notify("error", "watchdog", msg_posicao, {"slot": slot_id})
+            relatorio.append({"slot": slot_id, "idade_heartbeat_s": idade,
+                              "acao": "posicao_aberta", "detalhe": msg_posicao})
+            continue
 
         if not _registrar_tentativa(slot_id):
             msg_desiste = (f"slot {slot.label!r} travou de novo rápido demais "

@@ -187,6 +187,73 @@ def test_cooldown_expira_fora_da_janela(isolated, monkeypatch):
     assert live_control._registrar_tentativa(DAYTRADE) is True
 
 
+# ---------- espiral de reinício (achado 04/09/2026) --------------------------
+#
+# `db/live.sqlite`, `live_events` `source='watchdog'`, slot
+# `dt-wdo_grid_reload_maker-wdo@-shadow`: reinícios automáticos às 13:28:53,
+# 13:45:04 e 14:01:00 de 04/09/2026 -- gaps de 971s e 956s. Cada um desses
+# gaps já é MAIOR que a janela de cooldown antiga (`_COOLDOWN_WINDOW_SECONDS
+# == _HEARTBEAT_FLOOR_SECONDS`, 900s): o ciclo completo "trava -> detecta
+# (piso 900s) -> mata -> sobe" nunca cabe dentro de uma janela do MESMO
+# tamanho do próprio piso. Os dois testes abaixo replicam esse gap real
+# (`_GAP_REAL_SEGUNDOS`) com um relógio FAKE (nunca `time.sleep`, nunca
+# depende do relógio de parede) para provar a espiral com a janela antiga e
+# provar que ela para de existir com a janela atual (derivada de
+# `_RESTART_CYCLE_SECONDS`, ver comentário da constante em `live_control.py`).
+
+_GAP_REAL_SEGUNDOS = 971.0  # pior gap medido ao vivo entre dois restarts do watchdog
+
+
+class _RelogioFake:
+    """Substitui o módulo `time` inteiro dentro de `live_control` por algo
+    com só `.time()` -- `_registrar_tentativa` não chama `time.sleep`, então
+    não precisa de mais nada, e isto evita monkeypatchar `time.time` GLOBAL
+    (que afetaria qualquer outro código do processo durante o teste)."""
+
+    def __init__(self, inicio: float):
+        self.agora = inicio
+
+    def time(self) -> float:
+        return self.agora
+
+
+def test_espiral_com_janela_antiga_igual_ao_piso_nunca_desiste(isolated, monkeypatch):
+    """ANTES do fix: com a janela do MESMO tamanho do piso (o valor antigo,
+    `_COOLDOWN_WINDOW_SECONDS = _HEARTBEAT_FLOOR_SECONDS`), reinícios
+    espaçados pelo gap real (971s) nunca acumulam -- a tentativa mais antiga
+    sempre cai da lista antes da próxima ser registrada, o contador nunca
+    passa de 1, e o watchdog reiniciaria o MESMO slot para sempre."""
+    monkeypatch.setattr(live_control, "_COOLDOWN_WINDOW_SECONDS",
+                        live_control._HEARTBEAT_FLOOR_SECONDS)
+    relogio = _RelogioFake(1_757_000_000.0)
+    monkeypatch.setattr(live_control, "time", relogio)
+
+    resultados = []
+    for _ in range(6):
+        resultados.append(live_control._registrar_tentativa(DAYTRADE))
+        relogio.agora += _GAP_REAL_SEGUNDOS
+
+    assert resultados == [True] * 6  # NUNCA desiste -- é a espiral do bug de desenho
+
+
+def test_espiral_com_janela_atual_acumula_e_desiste_no_limite(isolated, monkeypatch):
+    """DEPOIS do fix: `_COOLDOWN_WINDOW_SECONDS` (produção, sem monkeypatch)
+    deriva de `_RESTART_CYCLE_SECONDS` com folga sobre o mínimo estrito. O
+    MESMO gap real (971s) agora ACUMULA: as `_MAX_AUTO_RESTARTS` primeiras
+    tentativas ainda passam, e a que reproduziria a espiral (a
+    `_MAX_AUTO_RESTARTS + 1`-ésima) o watchdog desiste."""
+    relogio = _RelogioFake(1_757_000_000.0)
+    monkeypatch.setattr(live_control, "time", relogio)
+
+    resultados = []
+    for _ in range(live_control._MAX_AUTO_RESTARTS + 1):
+        resultados.append(live_control._registrar_tentativa(DAYTRADE))
+        relogio.agora += _GAP_REAL_SEGUNDOS
+
+    esperado = [True] * live_control._MAX_AUTO_RESTARTS + [False]
+    assert resultados == esperado
+
+
 # ---------- reiniciar_travado ------------------------------------------------
 
 def test_reiniciar_travado_sem_pid_recusa(isolated):
@@ -210,6 +277,11 @@ def test_reiniciar_travado_mata_o_velho_redeteta_e_sobe_de_novo(isolated, monkey
 
     mortos = []
     monkeypatch.setattr(live_control, "_matar_arvore", mortos.append)
+    # Sem posição na corretora -- caminho normal de restart (caso (b) do
+    # risco fechado em 04/09/2026: watchdog/reiniciar_travado SEM posição
+    # continuam reiniciando como antes). Nunca chama a corretora de verdade.
+    monkeypatch.setattr(live_control, "_posicao_aberta_na_corretora",
+                        lambda slot, robot_key: (False, ""))
     monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda *a, **k: 1.0)
     # `mt5_symbol_map` REDETECTADO -- não é o `{"velho": ...}` salvo no
     # estado antigo, é isto que prova que o restart não confia em cache
@@ -250,6 +322,8 @@ def _eventos(db_path, slot_id: str) -> list[tuple]:
 
 
 def test_verificar_recupera_reinicia_slot_travado(isolated, monkeypatch):
+    """Caso (b) do risco fechado em 04/09/2026: SEM posição aberta na
+    corretora, o watchdog continua reiniciando como antes."""
     _sem_alerta_externo(monkeypatch)
     _grava_estado(isolated["state"], DAYTRADE, pid=4242,
                   config={"slot": DAYTRADE, "notify_min_level": "warn"})
@@ -258,6 +332,8 @@ def test_verificar_recupera_reinicia_slot_travado(isolated, monkeypatch):
 
     monkeypatch.setattr(live_control, "_pids_alive", lambda pids: set(pids))
     monkeypatch.setattr(live_control, "_matar_arvore", lambda pid: None)
+    monkeypatch.setattr(live_control, "_posicao_aberta_na_corretora",
+                        lambda slot, robot_key: (False, ""))
     monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda *a, **k: 1.0)
     monkeypatch.setattr(live_control, "detect_futures_symbol_map", lambda *a, **k: None)
     monkeypatch.setattr(live_control.subprocess, "Popen",
@@ -279,6 +355,8 @@ def test_verificar_respeita_cooldown_e_nao_reinicia(isolated, monkeypatch):
     _seed_account(isolated["db"], DAYTRADE, robot="gremah", cash=1_000.0, shadow=True)
     _toca_heartbeat(isolated["dir"], DAYTRADE, 999.0)
     monkeypatch.setattr(live_control, "_pids_alive", lambda pids: set(pids))
+    monkeypatch.setattr(live_control, "_posicao_aberta_na_corretora",
+                        lambda slot, robot_key: (False, ""))
 
     chamou_popen = []
     monkeypatch.setattr(live_control.subprocess, "Popen",
@@ -293,12 +371,62 @@ def test_verificar_respeita_cooldown_e_nao_reinicia(isolated, monkeypatch):
     assert live_control._read_state(DAYTRADE)["pid"] == 4242  # continua "travado"
 
 
+def test_verificar_desiste_grava_evento_e_notifica(isolated, monkeypatch):
+    """Caminho de "desistir e alertar" (~1712-1724 de `live_control.py`):
+    quando o cooldown já está no limite, `verificar_e_recuperar_travamentos`
+    tem de GRAVAR o evento de desistência em `live_events` E notificar pelo
+    canal externo -- sem os dois, o slot fica travado em silêncio esperando
+    alguém notar por conta própria, o oposto do que o watchdog existe para
+    fazer."""
+    _grava_estado(isolated["state"], DAYTRADE, pid=4242, config={"slot": DAYTRADE})
+    _seed_account(isolated["db"], DAYTRADE, robot="gremah", cash=1_000.0, shadow=True)
+    _toca_heartbeat(isolated["dir"], DAYTRADE, 999.0)
+    monkeypatch.setattr(live_control, "_pids_alive", lambda pids: set(pids))
+    monkeypatch.setattr(live_control, "_posicao_aberta_na_corretora",
+                        lambda slot, robot_key: (False, ""))
+
+    notificacoes = []
+
+    class _NotifierEspiao:
+        def notify(self, level, source, message, payload=None):
+            notificacoes.append((level, source, message))
+
+    class _CliFake:
+        def _build_notifier(self, notify_min_level):
+            return _NotifierEspiao()
+
+    monkeypatch.setattr(live_control, "_load_cli", lambda: _CliFake())
+
+    chamou_popen = []
+    monkeypatch.setattr(live_control.subprocess, "Popen",
+                        lambda argv, **kw: chamou_popen.append(argv) or _FakeProc(pid=9999))
+    for _ in range(live_control._MAX_AUTO_RESTARTS):
+        live_control._registrar_tentativa(DAYTRADE)
+
+    relatorio = live_control.verificar_e_recuperar_travamentos()
+
+    assert relatorio[0]["acao"] == "cooldown"
+    assert chamou_popen == []
+
+    eventos = _eventos(isolated["db"], DAYTRADE)
+    niveis = [linha[0] for linha in eventos]
+    mensagens = [linha[2] for linha in eventos]
+    assert niveis == ["error", "error"]  # achado (travamento) + desistência
+    assert "desistiu de reiniciar sozinho" in mensagens[-1]
+
+    # notificou as DUAS vezes -- achado do travamento e desistência do watchdog
+    assert len(notificacoes) == 2
+    assert notificacoes[-1][2] == mensagens[-1]
+
+
 def test_verificar_registra_falha_sem_derrubar_o_laco(isolated, monkeypatch):
     _sem_alerta_externo(monkeypatch)
     _grava_estado(isolated["state"], DAYTRADE, pid=4242, config={"slot": DAYTRADE})
     _seed_account(isolated["db"], DAYTRADE, robot="gremah", cash=1_000.0, shadow=True)
     _toca_heartbeat(isolated["dir"], DAYTRADE, 999.0)
     monkeypatch.setattr(live_control, "_pids_alive", lambda pids: set(pids))
+    monkeypatch.setattr(live_control, "_posicao_aberta_na_corretora",
+                        lambda slot, robot_key: (False, ""))
 
     def _falha(slot_id):
         raise RuntimeError("terminal MT5 fechado (simulado)")
@@ -309,3 +437,125 @@ def test_verificar_registra_falha_sem_derrubar_o_laco(isolated, monkeypatch):
 
     assert relatorio[0]["acao"] == "falhou"
     assert "terminal MT5 fechado" in relatorio[0]["detalhe"]
+
+
+# ---------- posição aberta bloqueia restart automático (achado 04/09/2026) --
+#
+# Risco fechado nesta data: o watchdog reiniciava um slot travado sem
+# perguntar à corretora se havia posição aberta -- e um restart automático
+# dispara o protocolo de buraco do runtime (`IntradayLiveRuntime.
+# _start_session`/`force_flatten`), que pode ACHATAR a posição A MERCADO por
+# decisão da infraestrutura, não do mercado. Os quatro testes abaixo cobrem
+# os casos pedidos: (a) posição aberta -> não reinicia, grava evento, notifica;
+# (b) sem posição -> reinicia como sempre (já coberto acima, nos testes que
+# passaram a mockar `_posicao_aberta_na_corretora` retornando `(False, "")`);
+# (c) consulta falhando -> NÃO reinicia (tri-estado, item 1.6 de
+# LICOES_DE_PRODUCAO.md: "não sei" nunca autoriza ação); (d) caminho MANUAL
+# com `permitir_com_posicao_aberta=True` reinicia mesmo com posição.
+
+
+def test_watchdog_nao_reinicia_com_posicao_aberta_grava_evento_e_notifica(isolated, monkeypatch):
+    """Caso (a): posição CONFIRMADA aberta na corretora -- o watchdog grava o
+    achado, notifica e desiste desta rodada sem NUNCA tentar subir o
+    processo de novo (nem contar como tentativa de restart)."""
+    _grava_estado(isolated["state"], DAYTRADE, pid=4242, config={"slot": DAYTRADE})
+    _seed_account(isolated["db"], DAYTRADE, robot="gremah", cash=1_000.0, shadow=True)
+    _toca_heartbeat(isolated["dir"], DAYTRADE, 999.0)
+    monkeypatch.setattr(live_control, "_pids_alive", lambda pids: set(pids))
+    monkeypatch.setattr(
+        live_control, "_posicao_aberta_na_corretora",
+        lambda slot, robot_key: (True, "posição aberta em 'PMAM3' na corretora (long, qty=100)"),
+    )
+
+    notificacoes = []
+
+    class _NotifierEspiao:
+        def notify(self, level, source, message, payload=None):
+            notificacoes.append((level, source, message))
+
+    class _CliFake:
+        def _build_notifier(self, notify_min_level):
+            return _NotifierEspiao()
+
+    monkeypatch.setattr(live_control, "_load_cli", lambda: _CliFake())
+
+    chamou_popen = []
+    monkeypatch.setattr(live_control.subprocess, "Popen",
+                        lambda argv, **kw: chamou_popen.append(argv) or _FakeProc(pid=9999))
+
+    relatorio = live_control.verificar_e_recuperar_travamentos()
+
+    assert relatorio == [{"slot": DAYTRADE, "idade_heartbeat_s": pytest.approx(999.0, abs=2.0),
+                          "acao": "posicao_aberta", "detalhe": relatorio[0]["detalhe"]}]
+    assert chamou_popen == []                                  # NUNCA sobe o processo com posição aberta
+    assert live_control._read_state(DAYTRADE)["pid"] == 4242   # continua travado -- ninguém tocou
+    assert live_control._restart_attempts.get(DAYTRADE, []) == []  # não consumiu tentativa do cooldown
+
+    eventos = _eventos(isolated["db"], DAYTRADE)
+    niveis = [linha[0] for linha in eventos]
+    mensagens = [linha[2] for linha in eventos]
+    assert niveis == ["error", "error"]  # achado do travamento + bloqueio por posição
+    assert "posição aberta" in mensagens[-1]
+
+    assert len(notificacoes) == 2
+    assert notificacoes[-1][0] == "error"
+    assert "posição aberta" in notificacoes[-1][2]
+
+
+def test_watchdog_nao_reinicia_quando_consulta_de_posicao_falha(isolated, monkeypatch):
+    """Caso (c): a consulta à corretora FALHA (terminal fora do ar, por
+    exemplo) -- item 1.6 de LICOES_DE_PRODUCAO.md: "não sei" nunca vira "não
+    tem", então o watchdog trata como se HOUVESSE posição e não reinicia."""
+    _sem_alerta_externo(monkeypatch)
+    _grava_estado(isolated["state"], DAYTRADE, pid=4242, config={"slot": DAYTRADE})
+    _seed_account(isolated["db"], DAYTRADE, robot="gremah", cash=1_000.0, shadow=True)
+    _toca_heartbeat(isolated["dir"], DAYTRADE, 999.0)
+    monkeypatch.setattr(live_control, "_pids_alive", lambda pids: set(pids))
+    monkeypatch.setattr(
+        live_control, "_posicao_aberta_na_corretora",
+        lambda slot, robot_key: (None, "sem conexao com o terminal MT5 (simulado)"),
+    )
+
+    chamou_popen = []
+    monkeypatch.setattr(live_control.subprocess, "Popen",
+                        lambda argv, **kw: chamou_popen.append(argv) or _FakeProc(pid=9999))
+
+    relatorio = live_control.verificar_e_recuperar_travamentos()
+
+    assert relatorio[0]["acao"] == "posicao_aberta"
+    assert chamou_popen == []
+    assert live_control._read_state(DAYTRADE)["pid"] == 4242
+
+
+def test_reiniciar_travado_recusa_com_posicao_e_permite_com_flag_explicita(isolated, monkeypatch):
+    """Caso (d): o caminho MANUAL (`reiniciar_travado` chamado direto, como o
+    painel/CLI fariam) também recusa por padrão com posição aberta -- e só
+    reinicia se o chamador pedir `permitir_com_posicao_aberta=True`
+    explicitamente. Prova as duas metades: sem o parâmetro recusa (mesmo
+    risco do caminho automático), com o parâmetro segue em frente."""
+    _grava_estado(isolated["state"], DAYTRADE, pid=4242,
+                  config={"slot": DAYTRADE, "notify_min_level": "warn"})
+    _seed_account(isolated["db"], DAYTRADE, robot="gremah", cash=1_000.0, shadow=True)
+
+    mortos = []
+    monkeypatch.setattr(live_control, "_matar_arvore", mortos.append)
+    monkeypatch.setattr(live_control, "detect_shares_per_lot", lambda *a, **k: 1.0)
+    monkeypatch.setattr(live_control, "detect_futures_symbol_map", lambda *a, **k: None)
+    monkeypatch.setattr(live_control.subprocess, "Popen",
+                        lambda argv, **kw: _FakeProc(pid=9999))
+    monkeypatch.setattr(live_control, "_pids_alive", lambda pids: set(pids))
+    monkeypatch.setattr(
+        live_control, "_posicao_aberta_na_corretora",
+        lambda slot, robot_key: (True, "posição aberta (simulada)"),
+    )
+
+    # SEM o parâmetro -- recusa, e NÃO mata o processo (checagem roda antes).
+    with pytest.raises(live_control.PosicaoAbertaError, match="posição aberta"):
+        live_control.reiniciar_travado(DAYTRADE)
+    assert mortos == []
+    assert live_control._read_state(DAYTRADE)["pid"] == 4242
+
+    # COM o parâmetro explícito -- reinicia mesmo com posição confirmada.
+    novo_estado = live_control.reiniciar_travado(DAYTRADE, permitir_com_posicao_aberta=True)
+    assert mortos == [4242]
+    assert novo_estado["pid"] == 9999

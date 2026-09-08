@@ -314,6 +314,102 @@ class MT5IntradayExecution:
         self.last_entry_ref = posicao.get("ticket")
         return {"price": delta_price, "quantity": int(round(delta_qty))}
 
+    def resolve_orphaned_entry(self, broker_refs: list[str]) -> Optional[dict]:
+        """A ordem-limite de ENTRADA identificada por `broker_refs` (os
+        tickets em `IntradayLiveRuntime._snapshot.pending_entry_refs` -- a
+        lista que sobrevive a restart, NAO `self.pending_orders`, que nasce
+        vazia numa instancia nova) terminou o ciclo de vida inteiro SEM que
+        a deteccao por crescimento de posicao (`limit_fill`) tivesse a
+        chance de perceber.
+
+        Caso medido ao vivo em 2026-09-04 (slot
+        `dt-wdo_grid_reload_maker-wdo@-live`): a ordem preencheu as 14:18:31
+        e a posicao fechou pelo alvo ATOMICO da propria corretora as
+        14:18:32 -- os DOIS dentro do MESMO intervalo de poll do
+        supervisor (5s). No poll seguinte a posicao mostra ZERO de novo
+        (0 -> N -> 0 entre duas leituras): o crescimento nunca aparece,
+        `limit_fill` nunca devolve nada, e a maquina fica vigiando pra
+        sempre um ticket que a corretora ja resolveu ha' minutos.
+
+        Devolve:
+          - `None`: pelo menos um ticket ainda esta VIVO no book, ou nao
+            deu para confirmar algum deles (consulta falhou -- item 1.6 de
+            LICOES_DE_PRODUCAO.md, "nao sei" nunca autoriza). Fica tudo
+            como esta, sem inventar desfecho.
+          - `{"outcome": "dead"}`: nenhum ticket esta mais no book, e o
+            historico confirma que NENHUM chegou a preencher (cancelada,
+            recusada ou expirada) -- nenhum trade aconteceu, so' libera a
+            vigilancia.
+          - `{"outcome": "already_open"}`: preencheu, mas a posicao AINDA
+            esta aberta (ou so' fechou PARCIALMENTE) -- deixa o caminho
+            normal (`limit_fill`, na proxima chamada) descobrir isso pelo
+            crescimento de posicao, como sempre; este metodo nao antecipa
+            nada nesse caso.
+          - `{"outcome": "round_trip", "entry_price", "entry_qty",
+            "exit_price", "exit_qty", "exit_comment"}`: preencheu E fechou
+            por inteiro entre dois polls -- os numeros vem DIRETO dos deals
+            da corretora (`MT5Broker.deals_for_position`), nunca do nivel
+            teorico da ordem (stop/alvo)."""
+        tickets = [str(r) for r in broker_refs if r]
+        if not tickets:
+            return None
+        consulta_estado = getattr(self.broker, "order_history_state", None)
+        consulta_deals = getattr(self.broker, "deals_for_position", None)
+        if consulta_estado is None or consulta_deals is None:
+            return None  # broker sem os metodos novos (dublê antigo) -- nada a reconciliar
+
+        estados = []
+        for ticket in tickets:
+            estado = consulta_estado(ticket)
+            if not estado.get("ok"):
+                return None
+            estados.append(estado)
+        if any(e.get("state") == "pending" for e in estados):
+            return None
+
+        algum_preencheu = any(e.get("state") in ("filled", "partial") for e in estados)
+        position_ids = {e.get("position_id") for e in estados if e.get("position_id")}
+        entradas: list[dict] = []
+        saidas: list[dict] = []
+        for pos_id in position_ids:
+            resposta = consulta_deals(pos_id)
+            if not resposta.get("ok"):
+                return None
+            for d in (resposta.get("deals") or []):
+                if d.get("entry") == 0:
+                    entradas.append(d)
+                elif d.get("entry") == 1:
+                    saidas.append(d)
+
+        if not entradas:
+            if algum_preencheu:
+                # O proprio registro da ordem diz "preencheu", mas o deal
+                # ainda nao apareceu no historico -- atraso de replicacao,
+                # nao ausencia de fato. Fica esperando (item 1.6).
+                return None
+            return {"outcome": "dead"}
+
+        qtd_entrada = sum(d["quantity"] for d in entradas)
+        if qtd_entrada <= 0:
+            return None
+        preco_entrada = sum(d["price"] * d["quantity"] for d in entradas) / qtd_entrada
+
+        qtd_saida = sum(d["quantity"] for d in saidas)
+        if qtd_saida < qtd_entrada:
+            # Nao fechou por inteiro (ou nao fechou nada ainda) -- a leitura
+            # de posicao normal (`limit_fill`) ja vai mostrar essa
+            # quantidade aberta no proximo poll, sem precisar deste caminho.
+            return {"outcome": "already_open"}
+
+        preco_saida = sum(d["price"] * d["quantity"] for d in saidas) / qtd_saida
+        ultima_saida = max(saidas, key=lambda d: d.get("time") or 0)
+        return {
+            "outcome": "round_trip",
+            "entry_price": preco_entrada, "entry_qty": int(round(qtd_entrada)),
+            "exit_price": preco_saida, "exit_qty": int(round(qtd_saida)),
+            "exit_comment": ultima_saida.get("comment", ""),
+        }
+
     # ---------- ordem-limite pendente (SAIDA dividida, Fase 2) --------------
 
     def _exit_position_ticket(self, position_side: str) -> Optional[int]:
@@ -470,32 +566,37 @@ class MT5IntradayExecution:
             # `MT5Broker.place_pending`; ou pelo reforco `set_protection`)
             # alguns instantes antes deste passo -- corrida legitima entre
             # "a maquina decidiu fechar no fechamento desta barra" e "a
-            # corretora ja tinha fechado no MESMO nivel", porque a protecao
-            # SEMPRE espelha o nivel que a maquina ja decidiu (nunca inventa
-            # um diferente, regra 6 do AGENTS.md). Nao ha posicao para
-            # mandar ordem NENHUMA -- usa o proprio nivel (stop ou alvo,
-            # conforme o motivo) como a melhor aproximacao honesta do preco
-            # de saida, sem consultar deal a deal no terminal; se nem isso
-            # existir (ex.: FORCED_FLATTEN sem nivel), cai para o ultimo
-            # preco negociado antes de desistir.
-            nivel = None
-            if reason == IntradayExitReason.STOP:
-                nivel = position.current_stop
-            elif reason == IntradayExitReason.TARGET:
-                nivel = position.current_target
-            if nivel is None:
-                ultimo_preco = getattr(self.broker, "last_price", None)
-                nivel = ultimo_preco(self.symbol) if ultimo_preco is not None else None
-            if nivel is None:
-                raise BrokerExecutionError(
-                    f"fechamento ({reason.value}) de {self.symbol}: a corretora nao "
-                    f"reporta posicao aberta para este magic, mas a maquina tem "
-                    f"{position.quantity} {position.side} para fechar -- divergencia "
-                    "grave, e sem nivel de referencia para aproximar o preco. Confira "
-                    "o terminal antes de religar este slot."
-                )
-            self.last_exit_order = None
-            return {"price": float(nivel), "order": None}
+            # corretora ja tinha fechado no MESMO nivel" -- OU (gap medido ao
+            # vivo em 2026-09-04, slot `dt-wdo_grid_reload_maker-wdo@-live`)
+            # uma tentativa NOSSA anterior de fechamento pareceu RECUSADA
+            # (`retcode=DONE` sem `price`/`deal`, ver `MT5Broker._send`) mas
+            # na verdade EXECUTOU: o fechamento real saiu a 5151,5000
+            # (-R$5,00), e a versao antiga deste metodo gravava o ALVO
+            # teorico (5152,5000, +R$4,50) como se fosse o preco de
+            # execucao -- erro de R$9,50 num trade so', na direcao
+            # FAVORAVEL, que o painel nunca denunciaria por conta propria.
+            #
+            # NUNCA MAIS aproxima pelo nivel teorico (stop/alvo) nem pelo
+            # ultimo preco negociado: preco/resultado de um fechamento SO'
+            # pode vir de um deal CONFIRMADO no historico da corretora (ver
+            # `MT5Broker.deals_for_position`, via `_resolve_exit_from_
+            # history`). Sem esse deal, a resposta certa e' "ainda nao sei"
+            # -- levanta `FECHAMENTO_RECUSADO` (a posicao continua aberta NA
+            # MAQUINA, tenta de novo na proxima barra) em vez de inventar
+            # QUALQUER preco.
+            resolvido = self._resolve_exit_from_history()
+            if resolvido is not None:
+                self.last_exit_order = None
+                return resolvido
+            raise BrokerExecutionError(
+                f"fechamento ({reason.value}) de {self.symbol}: a corretora nao "
+                f"reporta posicao aberta para este magic, e o historico de deals "
+                "ainda nao confirma a saida real -- nao vou aproximar pelo nivel "
+                f"teorico nem pelo ultimo preco negociado. A maquina continua com "
+                f"{position.quantity} {position.side} para fechar; tento de novo na "
+                "proxima barra.",
+                kind=BrokerExecutionError.FECHAMENTO_RECUSADO,
+            )
         if real["side"] != position.side:
             raise BrokerExecutionError(
                 f"a corretora reporta posicao {real['side']} em {self.symbol} "
@@ -572,6 +673,40 @@ class MT5IntradayExecution:
             )
         self.last_exit_order = executada
         return {"price": float(executada.avg_price), "order": executada}
+
+    def _resolve_exit_from_history(self) -> Optional[dict]:
+        """A posicao sumiu da corretora antes de NOS mandarmos (ou de
+        confirmarmos) o fechamento -- ver o comentario longo em
+        `exit_market`. So' devolve algo quando o HISTORICO CONFIRMA o deal
+        de saida de verdade (preco da corretora, nunca nivel teorico).
+        `None` = ainda nao deu para confirmar (broker sem os metodos novos,
+        consulta que falhou, ou o deal ainda nao apareceu no historico) --
+        quem chama (`exit_market`) trata como recusa de fechamento e tenta
+        de novo na proxima barra (item 1.6 de LICOES_DE_PRODUCAO.md: "nao
+        sei" nunca autoriza um resultado).
+
+        Usa `self.last_entry_ref` -- o ticket/position_id que `limit_fill`
+        leu da corretora no fill de ENTRADA desta mesma posicao -- para
+        procurar os deals dela no historico (`MT5Broker.deals_for_
+        position`). Sem esse ticket (posicao herdada de um jeito que nunca
+        passou por `limit_fill`), nao ha como saber QUAL posicao procurar;
+        devolve `None`, mesma politica de 'nao sei'."""
+        if not self.last_entry_ref:
+            return None
+        consulta = getattr(self.broker, "deals_for_position", None)
+        if consulta is None:
+            return None
+        resposta = consulta(self.last_entry_ref)
+        if not resposta.get("ok"):
+            return None
+        saidas = [d for d in (resposta.get("deals") or []) if d.get("entry") == 1]
+        if not saidas:
+            return None
+        ultima = max(saidas, key=lambda d: d.get("time") or 0)
+        preco = float(ultima.get("price") or 0.0)
+        if preco <= 0.0:
+            return None
+        return {"price": preco, "order": None}
 
     # ---------- leitura -----------------------------------------------------
 
