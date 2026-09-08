@@ -60,11 +60,27 @@ errado -- mas qualquer corte que caisse dentro de 12:00..21:29 UTC teria
 disparado na hora errada, sem sintoma nenhum.)
 
 A funcao foi CORRIGIDA (rota compartilhada `mt5_ticks_source.
-fetch_ticks_range` + limite no relogio do servidor + folga de fetch), mas o
-parquet em disco NAO foi regerado: enquanto ele nao for, `WDO_A_f1.parquet`
-e todo numero publicado da linha F1-tick antes de 2026-09-07 (headline IS,
-"ponto de morte" de pedagio, R$/pregao, OOS, tempo de fila) descrevem a
-janela truncada, nao o pregao.
+fetch_ticks_range` + limite no relogio do servidor + folga de fetch). Ate'
+esse ponto do dia, o parquet em disco ainda NAO tinha sido regerado --
+enquanto nao fosse, `WDO_A_f1.parquet` e todo numero publicado da linha
+F1-tick antes de 2026-09-07 (headline IS, "ponto de morte" de pedagio,
+R$/pregao, OOS, tempo de fila) descreviam a janela truncada, nao o pregao.
+
+RESOLVIDO em 2026-09-07: `wdof1_tick_cache_2026_08_27.py` foi rodado de novo
+sobre a funcao ja corrigida e substituiu `data/raw_ticks/WDO_A_f1.parquet`.
+De 4.011.197 para 20.646.379 ticks (5,15x); cobertura de minutos de pregao
+(mediana/pregao) de 212/570 para 570/570 (38,2% -> 100,0%). Os conjuntos de
+dias IS (72, 2026-02-27..2026-06-12) e OOS (51, 2026-06-15..2026-08-25, 2
+deles `m1_fallback`) ficaram INTACTOS -- so' a cobertura DENTRO de cada dia
+mudou. Verificacao de identidade de negocio (instante+preco+volume): os
+4.010.057 ticks do arquivo truncado acharam par identico no canonico, zero
+negocio perdido. Backup do arquivo truncado em
+`data/raw_ticks/WDO_A_f1.parquet.bak-2026-09-07` (gitignored). Suite depois
+da troca: 1698 passed, 1 skipped. Isto NAO recalcula sozinho os numeros
+publicados ANTES de 2026-09-07 pelos scripts que leem este cache (este
+arquivo incluso, `wdo_grid_reload_f1_tick_lab.py`,
+`wdo_grid_reload_f1_tick_lab_oos_2026_08_27.py`, ...) -- cada um so' passa a
+descrever o pregao inteiro na PROXIMA vez que for rodado.
 
 Uso: `python scripts/daytrade/wdo_grid_reload_f1_tick_probe.py`
 """

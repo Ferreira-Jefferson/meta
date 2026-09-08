@@ -5,14 +5,29 @@ O dono AUTORIZOU EXPLICITAMENTE destravar o OOS agora (>=2026-06-13) para
 esta validacao final -- `LockedBars.unlock(reason=...)` e' chamado aqui de
 proposito, uma unica vez, com o motivo abaixo (`OOS_UNLOCK_REASON`).
 
-AVISO 2026-09-07 -- este e' um REGISTRO de rodada; os numeros abaixo foram
-medidos com `buscar_ticks` ainda defeituosa (janela pedida ao terminal
-deslocada +3h e index rotulado 3h cedo, cobrindo so' 14:58..18:29 de cada
-pregao). A funcao foi corrigida no probe, este arquivo NAO foi re-rodado.
-Ler o AVISO no topo de `wdo_grid_reload_f1_tick_probe.py`. (A cobertura de
-tick descrita abaixo continua valendo: re-testado em 2026-09-07 pela rota
-corrigida, 2026-08-03 e 2026-08-04 seguem devolvendo 0 ticks -- e' gap de
-retencao do terminal de verdade, nao efeito do defeito.)
+AVISO 2026-09-07 -- RESOLVIDO: este era um REGISTRO de rodada com numeros
+medidos sob bug; o cache subjacente foi regenerado NO MESMO DIA
+=================================================================
+Este e' um REGISTRO de rodada; os numeros de contagem de trades/win rate
+citados abaixo (win rate tick 99,4% vs M1 89,3%, 1.667 trades tick-only,
+etc.) foram medidos com `buscar_ticks` ainda defeituosa (janela pedida ao
+terminal deslocada +3h e index rotulado 3h cedo, cobrindo so' 14:58..18:29
+de cada pregao) -- ler o AVISO no topo de `wdo_grid_reload_f1_tick_probe.py`
+para os dois defeitos. A funcao foi corrigida no probe e, mais tarde no
+mesmo dia, `wdof1_tick_cache_2026_08_27.py` rodou de novo `carregar_oos_bars`
+(a funcao deste modulo) sobre a rota ja corrigida para gerar o novo
+`WDO_A_f1.parquet` -- ou seja a PARTICAO de dias deste modulo (49 dias com
+tick real + 2 `m1_fallback`) foi de fato reexecutada sob o fix, mesmo que
+este arquivo nao tenha sido rodado como script standalone de novo. A
+cobertura de tick descrita abaixo (49/51 dias, 2026-08-03 e 2026-08-04 sem
+tick) continua valendo -- re-testado em 2026-09-07 pela rota corrigida, os
+mesmos 2 dias seguem devolvendo 0 ticks, e' gap de retencao do terminal de
+verdade, nao efeito do defeito. O que NAO foi recalculado sao os numeros de
+DESEMPENHO citados acima (win rate, contagem de trades) -- esses continuam
+sendo o registro historico da rodada de 2026-08-27, sob o cache truncado;
+recomputa-los exige rodar este arquivo de novo sobre o `WDO_A_f1.parquet`
+atual (20.646.379 ticks, cobertura 570/570 minutos de pregao -- ver o AVISO
+em `wdof1_tick_cache_2026_08_27.py` para os numeros completos da troca).
 
 ## Cobertura de tick no trecho OOS -- CONFIRMADA (item 1 da missao)
 

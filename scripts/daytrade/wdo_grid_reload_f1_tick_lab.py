@@ -14,8 +14,17 @@ de uma janela TRUNCADA. `buscar_ticks`, que este modulo importa do probe,
 pedia a janela errada ao terminal e rotulava o resultado 3h cedo: cada
 pregao vinha das 14:58 as 18:29 (3h31 de um pregao de 9h30). A funcao foi
 corrigida -- ler o AVISO no topo de `wdo_grid_reload_f1_tick_probe.py` --
-mas NADA aqui foi re-rodado, entao nenhum numero deste cabecalho e'
-reproduzivel pelo codigo atual.
+e, mais tarde no mesmo dia, o CACHE em disco tambem foi regerado
+(`wdof1_tick_cache_2026_08_27.py`, 4.011.197 -> 20.646.379 ticks, cobertura
+de minutos de pregao 212/570 -> 570/570 -- numeros completos no AVISO
+daquele arquivo). O que NAO mudou: este arquivo (RODADA 3, bateria
+completa) NAO foi re-rodado, entao os numeros do cabecalho acima (R$/pregao
+156,02, win rate 99,4%, etc.) continuam sendo o resultado medido SOB o bug
+-- so' deixam de ser reproduziveis pelo bug em si; para obter o numero
+correto e' preciso rodar este script de novo (ele busca tick DIRETO do MT5
+via `buscar_ticks`, ja corrigida -- nao le o parquet `WDO_A_f1.parquet` em
+cache, que e' consumido so' pelos scripts que importam de
+`wdof1_tick_cache_2026_08_27.py`).
 
 RESSALVA que se aplica a CADA numero deste arquivo, sem excecao: e' um
 subconjunto de 58,5% do IS (faltam os 51 PRIMEIROS pregoes, sem tick

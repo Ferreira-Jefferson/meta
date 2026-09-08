@@ -6,16 +6,23 @@ parquet no disco, a leitura passa a ser de segundos e sobra so' o tempo de
 motor -- que por sua vez e' paralelizavel (ver
 `wdof1_rerun_paralelo_2026_08_27.py`).
 
-AVISO 2026-09-07 -- o parquet em disco esta TRUNCADO
-====================================================
-O `WDO_A_f1.parquet` que existe hoje foi gerado pela versao ERRADA de
-`wdo_grid_reload_f1_tick_probe.py::buscar_ticks` (ler o AVISO no topo
-daquele arquivo): cobre 14:58..18:29 de cada pregao -- 3h31 de um pregao de
-9h30, 4.011.197 ticks -- porque a janela pedida ao terminal andava +3h e o
-index vinha rotulado 3h cedo. A funcao foi corrigida; **este cache NAO foi
-regerado**. Rodar este script de novo (~10,7 min) e' o que substitui o
-arquivo truncado; ate' la, todo numero da linha F1-tick que sair do parquet
-descreve so' a tarde do pregao.
+AVISO 2026-09-07 -- RESOLVIDO: o parquet em disco ESTAVA TRUNCADO
+==================================================================
+O `WDO_A_f1.parquet` que existia ate' 2026-09-07 tinha sido gerado pela
+versao ERRADA de `wdo_grid_reload_f1_tick_probe.py::buscar_ticks` (ler o
+AVISO no topo daquele arquivo): cobria 14:58..18:29 de cada pregao -- 3h31
+de um pregao de 9h30, 4.011.197 ticks -- porque a janela pedida ao terminal
+andava +3h e o index vinha rotulado 3h cedo. A funcao foi corrigida e ESTE
+SCRIPT foi rodado de novo (~10,7 min) no mesmo dia, substituindo o arquivo
+truncado: 4.011.197 -> 20.646.379 ticks (5,15x), cobertura de minutos de
+pregao (mediana/pregao) de 212/570 para 570/570 (38,2% -> 100,0%). Os
+conjuntos de dias IS (72, 2026-02-27..2026-06-12) e OOS (51,
+2026-06-15..2026-08-25, 2 deles `m1_fallback`) ficaram os MESMOS -- so' a
+cobertura dentro de cada dia mudou. Verificacao de identidade de negocio
+(instante+preco+volume): os 4.010.057 ticks do arquivo truncado acharam par
+identico no canonico, zero negocio perdido na troca. Backup do arquivo
+truncado em `data/raw_ticks/WDO_A_f1.parquet.bak-2026-09-07` (gitignored).
+Suite depois da troca: 1698 passed, 1 skipped.
 
 Nao inventa dado: usa exatamente `carregar_tick_bars()` (IS) e
 `carregar_oos_bars()` (OOS, com o fallback M1 dos 2 dias sem tick retido) dos

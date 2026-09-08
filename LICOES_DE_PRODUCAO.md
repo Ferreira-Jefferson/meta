@@ -1883,6 +1883,72 @@ si é cosmético — o perigo estava só no critério de comparação.
 > disco pelo caminho de produção, ou confere as estruturas que acabaram
 > de ser montadas em memória? (5.13)
 
+### 5.14 O recorte carregava um SEGUNDO bug de fuso, próprio, além do herdado do canônico
+
+Regenerar o canônico (5.12/5.13) obrigou a olhar de novo para
+`data/raw_ticks/WDO_A_f1.parquet` — o recorte que a linha F1-tick usa,
+gerado por um caminho TOTALMENTE separado (`wdo_grid_reload_f1_tick_probe.
+py::buscar_ticks`, que chamava o terminal direto em vez de usar a rota
+compartilhada — a mesma classe de defeito do item 5.10). O recorte não
+estava só truncado: o índice vinha rotulado **3 horas mais cedo** que o
+UTC verdadeiro. A prova veio de bater a MESMA amostra nos dois arquivos: o
+tick rotulado `14:58:00.257` no recorte antigo é, no canônico, o mesmo
+negócio (mesmo preço, mesmo volume) em `17:58:00.257`. Os dois defeitos se
+somaram sem se cancelar — o recorte cobria 212 de 570 minutos de pregão
+(38,2%), e os 4.011.197 ticks que tinha estavam TODOS com hora de parede
+errada. Um aviso antigo no repositório descrevia isso como "cobre a tarde
+inteira do pregão"; era uma janela deslocada 3h que por acidente caía
+dentro do horário de pregão, não a tarde. Toda medição feita sobre esse
+recorte que dependesse de HORA DO DIA (filtro dia/hora, padrão de
+cadência, "o pico mora na primeira hora") leu o horário errado, em
+silêncio. Regenerado em 2026-09-07 pela rota corrigida: 4.011.197 →
+20.646.379 ticks, cobertura de minutos de pregão 212/570 → 570/570
+(38,2% → 100,0%), IS/OOS intactos (72 + 51 dias) — números completos no
+AVISO de `wdof1_tick_cache_2026_08_27.py`.
+
+> **Regra:** um dado DERIVADO herda os bugs de fuso do caminho que o
+> gerou — e pode acrescentar os seus próprios, independentes. Corrigir a
+> fonte não corrige o derivado: o derivado se repara REGERANDO a partir da
+> fonte corrigida, nunca sendo "consertado" no lugar. E a verificação de
+> que o reparo funcionou tem de casar o MESMO NEGÓCIO (instante + preço +
+> volume) nos dois arquivos — foi exatamente esse cruzamento que revelou o
+> deslocamento de 3h; comparar contagem de linhas ou intervalo de datas não
+> o teria revelado, porque os dois números "batiam" mesmo com o índice
+> inteiro deslocado.
+> **Pergunte à plataforma nova:** a pergunta 37 (5.10) já cobre a causa —
+> script novo reimplementando a chamada em vez de usar a rota compartilhada
+> que converte fuso. Este item mostra que o MESMO defeito reincide em
+> arquivos diferentes do mesmo projeto quando um deles tem caminho de
+> geração próprio (5.14).
+
+### 5.15 Medição feita durante uma regeneração de dado lê a base velha, e não reclama
+
+A calibração do freio de cadência do WDO F1 (`reancora_min_segundos`, que
+escolheu o default `10,0`s — ver a docstring do parâmetro em
+`WdoGridReloadMaker`) rodou às 21:59 de 2026-09-07 e gravou
+`cadencia_sweep.csv` sobre um cache de sessão de 20:55; o canônico
+corrigido (5.12/5.13) só substituiu o arquivo em disco às 22:03 — quatro
+minutos DEPOIS. A varredura inteira mediu, portanto, sobre a base com
+19,3% dos minutos de pregão faltando, sem nenhum sintoma: o argumento de
+sanidade usado antes de confiar no resultado ("a base cobre 09:00–18:29 em
+125 de 126 pregões") era verdadeiro sobre o PRIMEIRO e o ÚLTIMO registro
+de cada dia e falso sobre o MEIO — e a primeira hora do pregão, exatamente
+onde mora o pico de envios que a calibração existe para medir, tinha 9,6%
+menos ticks na base velha que na corrigida (4.177.643 contra 4.619.105).
+
+> **Regra:** enquanto uma regeneração de dado estiver em curso, NENHUMA
+> medição sobre esse dado vale — não importa se o script "leu o arquivo
+> certo", o que importa é QUAL VERSÃO daquele arquivo existia no instante
+> em que ele rodou. Antes de confiar num número, confira o mtime de TODO
+> artefato de medição contra o horário exato da troca do arquivo fonte;
+> dizer "o script leu X.parquet" não diz QUAL X.parquet. Corolário: um
+> argumento de cobertura que olha só o primeiro e o último registro do dia
+> não detecta buraco no MEIO — a checagem tem de contar minutos (ou
+> unidades de tempo) distintos cobertos, nunca só os extremos.
+> **Pergunte à plataforma nova:** a plataforma nova permite saber se o
+> histórico que ela devolve está completo, ou só dá para inferir pelos
+> extremos (primeiro/último registro do dia)? (5.15)
+
 ---
 
 ## Parte 6 — Método: os erros que custam meses, não reais
@@ -2302,7 +2368,9 @@ dinheiro ou meses.
     rota compartilhada que já converte fuso? A hora que a API devolve é UTC
     ou hora de parede do servidor? Um número de fuso declarado em dois
     lugares é um número que vai divergir — e a divergência se apresenta
-    como bug de estratégia, nunca como erro de relógio. (5.10)
+    como bug de estratégia, nunca como erro de relógio. Reincide em
+    qualquer arquivo derivado que tenha caminho de geração próprio, mesmo
+    depois de corrigida na rota principal. (5.10, 5.14)
 38. A consulta de histórico avisa quando devolve MENOS do que a janela
     pedida, ou entrega um resultado curto em silêncio? A partir de quanto
     tempo depois do fechamento o dado do pregão de hoje fica completo? Sem
@@ -2344,6 +2412,13 @@ dinheiro ou meses.
     (flags, ids internos, campo derivado)? A minha verificação final lê
     do disco pelo caminho de produção, ou confere as estruturas que
     acabei de montar em memória? (5.13)
+46. A plataforma nova permite saber se o histórico que ela devolve está
+    completo, ou só dá para inferir pelos extremos (primeiro/último
+    registro do dia)? Um argumento de cobertura que olha só os extremos
+    não detecta buraco no meio — e uma medição rodada enquanto uma
+    regeneração de dado está em curso lê a versão velha do arquivo sem
+    nenhum sintoma; confira sempre o mtime do artefato de medição contra o
+    horário exato da troca do arquivo fonte. (5.15)
 
 ---
 
@@ -2378,6 +2453,13 @@ travando o próprio freio de segurança: 3 itens (1.18, 3.16, 4.14) — um
 freio de cadência calibrado pra barra que dispara no primeiro minuto de
 tick, uma reancoragem sem espera mínima que persegue o preço e nunca é
 tocada, e uma recusa por capital sem espera que virou 25.556 tentativas
-idênticas num único pregão.
+idênticas num único pregão. Mais uma última rodada no mesmo dia, fechando
+a regeneração do canônico: 2 itens (5.14, 5.15) — o recorte `WDO_A_f1.
+parquet` da linha F1-tick carregava um SEGUNDO bug de fuso próprio (índice
+rotulado 3h cedo, além de truncado), achado batendo o MESMO negócio nos
+dois arquivos; e a calibração do freio de cadência que escolheu o default
+de produção (`reancora_min_segundos=10,0`) rodou 4 minutos antes do
+canônico corrigido substituir o arquivo em disco, medindo sobre uma base
+com 19,3% dos minutos de pregão faltando sem nenhum sintoma.
 Mais o registro acumulado do projeto. Quando um item aqui contradisser o código, o código ganha — e este
 arquivo está desatualizado.*

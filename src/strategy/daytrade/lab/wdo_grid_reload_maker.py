@@ -849,11 +849,24 @@ class WdoGridReloadMaker(IntradayStrategy):
         E o pico mora na PRIMEIRA HORA. Pior janela de 60s por hora BRT nos
         pregoes que saturam (default 10s): 2026-03-23 = 26 as 09:01 (contra
         13 na hora seguinte); 2026-03-26 = 18 as 09:00 (12 na seguinte);
-        2026-03-12 = 17 as 11:46. Quem for re-medir isto com outro cache de
-        tick precisa garantir que o cache TEM a manha: `WDO_A_f1.parquet`
-        cobre so' ~14:58-18:29 (janela pedida ao MT5 saiu deslocada) e
-        subestimaria o pico por construcao. Os numeros desta docstring vem de
-        `WDO_A_.parquet`, que cobre 12:00-21:29 UTC = 09:00-18:29 BRT.
+        2026-03-12 = 17 as 11:46. Os numeros desta docstring vem de
+        `WDO_A_.parquet`, que cobre 12:00-21:29 UTC = 09:00-18:29 BRT --
+        nao de `WDO_A_f1.parquet`.
+        AVISO (2026-09-07, resolvido em 2026-09-07 -- ver `LICOES_DE_
+        PRODUCAO.md`): ate' esse dia, `WDO_A_f1.parquet` cobria so'
+        ~14:58-18:29 de cada pregao (janela pedida ao MT5 saia deslocada +3h,
+        ver o AVISO em `wdo_grid_reload_f1_tick_probe.py`) -- quem re-medisse
+        isto usando aquele cache em vez do `WDO_A_.parquet` subestimaria o
+        pico por construcao, faltando a manha inteira. O cache foi regerado
+        no mesmo dia (4.011.197 -> 20.646.379 ticks, cobertura de minutos de
+        pregao 212/570 -> 570/570) e cobre o pregao inteiro agora. Mas a
+        grade 6/10/15s ACIMA em si foi medida ANTES da correcao do
+        `WDO_A_.parquet` do proprio dia (fuso na paginacao do terminal
+        comia 19,3% dos minutos) -- a varredura leu um cache de sessao de
+        20:55 e o canonico corrigido so' substituiu o arquivo as 22:03; nao
+        foi remedida sobre o canonico corrigido. Quem for re-medir isto,
+        re-rode a grade sobre o `WDO_A_.parquet` atual antes de confiar no
+        numero.
 
         `0.0` restaura o comportamento sem freio (so' para medir o baseline;
         nunca para operar).
