@@ -73,42 +73,24 @@ if errorlevel 1 (
     "%PY%" scripts\download_data.py
 )
 
-REM 5) dashboard — Ctrl+C mata uvicorn; tree-kill defensivo abaixo apanha o que sobreviver
+REM 5) dashboard -- via scripts/dev_server.py, que faz a limpeza no `finally`
 echo ==^> Dashboard META em http://127.0.0.1:8000 ^(Ctrl+C para parar^)
 echo ==^> Hot-reload ativo: edicoes em src/ recarregam automaticamente
 
-"%PY%" -m uvicorn --app-dir src dashboard.app:app --reload --host 127.0.0.1 --port 8000
-
-REM --kill-robots: mata TODO processo run_live.py, rastreado ou orfao (o
-REM bug de double-Popen documentado em live_control.py::start() deixa
-REM duplicados que nao aparecem em db/live_process.json). Casa pela LINHA
-REM DE COMANDO, nao pelo nome do processo -- "python.exe" pegaria qualquer
-REM python do usuario, inclusive este shell/venv. So roda se a flag foi
-REM passada (ver topo do arquivo): sem ela, robo sobrevive ao dashboard
-REM fechar, que e' o comportamento padrao.
+REM A limpeza (matar robos com --kill-robots, e liberar a porta 8000) NAO mora
+REM mais aqui. Ctrl+C num .bat faz o cmd perguntar "Deseja finalizar o arquivo
+REM em lotes (S/N)?", e responder S mata o script NESTE ponto -- nenhuma linha
+REM abaixo roda. Como "S" e' o que qualquer um responde, a flag --kill-robots
+REM quase nunca disparava (queixa do dono, 2026-09-08: tres robos sobreviveram
+REM ao Ctrl+C com a flag passada). Quem limpa agora e' scripts/dev_server.py,
+REM que tem `finally` de Python e roda mesmo no Ctrl+C -- a semantica da flag
+REM nao mudou, so' mudou quem executa. Ver a docstring dele.
 if "%KILL_ROBOTS%"=="1" (
-    echo ==^> --kill-robots: encerrando processos run_live.py ^(rastreados e orfaos^)...
-    powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'run_live\.py' } | ForEach-Object { Write-Host ('  matando PID ' + $_.ProcessId); Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+    "%PY%" scripts\dev_server.py --kill-robots
+) else (
+    "%PY%" scripts\dev_server.py
 )
 
-REM Ao voltar (Ctrl+C ou saida normal), garante que nada ficou orfao na porta 8000.
-REM Uvicorn --reload cria master + filho spawn: quando o master morre, o filho
-REM herda o socket. Precisamos matar em loop ate a porta liberar (o `netstat`
-REM sempre reporta o PID do binder original, que pode ja estar morto; e nesse
-REM caso `taskkill /T` nao acha filhos. Loop resolve: mata o vivo, netstat troca
-REM pro proximo owner, mata de novo, ate liberar).
-set /a _tries=0
-:cleanup_loop
-set "_pid="
-for /f "tokens=5" %%a in ('netstat -ano ^| findstr /r "TCP.*127.0.0.1:8000.*LISTENING"') do set "_pid=%%a"
-if not defined _pid goto cleanup_done
-"%SystemRoot%\System32\taskkill.exe" /F /T /PID %_pid% >nul 2>&1
-set /a _tries+=1
-if %_tries% GEQ 10 goto cleanup_done
-timeout /t 1 /nobreak >nul
-goto cleanup_loop
-:cleanup_done
-echo ==^> Encerrado.
 endlocal
 goto :eof
 

@@ -2395,6 +2395,98 @@ Folga residual nomeada e aceita, sem mudança: 4 ordens no pior minuto (26 de
 > ou "maior retorno médio"? E o valor escolhido antes e depois da correção
 > teve os MESMOS casos por trás, ou só coincidiu no número? (5.16)
 
+### 5.17 O feed de tick cegou por 44,8 minutos sem levantar erro, e o robô mandou 45 ordens reais contra preços de até 45 minutos atrás — CORRIGIDO 2026-09-08
+
+Pregão de 2026-09-08, slot real `dt-wdo_grid_reload_maker-wdo@-live` (WDO@,
+conta 474 em `db/live.sqlite`): **−R$116,00**. O terminal parou de entregar
+tick NOVO por **44,8 minutos**, sem levantar erro nenhum. A leitura de barras
+fechadas devolveu **lista vazia em 538 passos seguidos** (supervisor a cada
+5 s), com a marca d'água congelada em `2026-09-08 14:14:20.804`; no passo
+seguinte devolveu **13.644 barras de uma vez**. Não foi evento único: houve um
+travamento igual de 8,8 min antes (marca em 13:50:57) e mais dois no slot
+sombra (16,2 min e 37,1 min).
+
+Às 15:00:57 UTC o estado da conta mostrava `last_bar_ts = 14:36:21` contra
+`last_poll_at = 15:00:57` — o robô estava processando barra de **24 minutos
+atrás** e armando ordem-limite no preço daquela barra. O laço de consumo
+tratava cada barra atrasada como se fosse tempo real: **45 ordens-limite REAIS
+na corretora contra preços de até 45 minutos atrás.** A prova está no diário de
+ordens: a ordem 736 (STOP) tem `sent_at=14:14:32` e `created_at=15:00:01` — 45
+min e 29 s de atraso; a 771 tem `sent_at=14:36:13` e `created_at=15:00:52`.
+
+A mecânica da perda é o item 4.17 em escala: um limite num preço que já morreu
+chega ao book **marketable** e executa na hora como agressor, no pior preço; o
+alvo, calculado a partir do mesmo nível morto, já nasce violado. A sequência
+real no diário é −R$5,50 por ida e volta, repetida até o freio de perda do dia
+(R$112,50) disparar às 15:01:04.
+
+**O que foi descartado como causa, com evidência** — cada um parecia plausível,
+e é por terem sido eliminados que a regra abaixo não fala de processo nem de
+máquina:
+
+| Suspeita | Evidência que a derruba |
+|---|---|
+| Processo, lock do banco, CPU, supervisor duplicado | O slot SOMBRA — outro processo do sistema operacional — congelou no **mesmo tick** (`14:14:20.804`, ao milissegundo) pelo **mesmo número de passos** (538) |
+| O mercado parou | Pedindo hoje ao terminal os ticks daquela janela: 1.000 a 2.900 ticks por 5 minutos, **zero minutos sem um único negócio** |
+| Máquina ou conexão | O slot `dt-copa_win-win@-shadow` (feed de barra M1, outro símbolo) avançou 1 barra por minuto sem falhar durante toda a janela; e o log do próprio terminal não registra perda de conexão nenhuma no período |
+| Feed lento | Sondando o mesmo terminal, a chamada exata que o feed faz devolve **109.255 ticks em 109 ms** |
+
+**O que sobra é hipótese não provada:** o caminho de HISTÓRICO de tick ficando
+cego enquanto o stream de cotação continua vivo. Um detalhe forte e sem
+explicação: os 5 travamentos observados terminam todos numa fronteira de meia
+hora de relógio de parede — 13:31, 14:00, 15:00 e 16:00 UTC em 08/09, e 18:33
+em 31/08. Duas dessas liberações estão cravadas no segundo pelo banco
+(`created_at` 14:00:04 e 15:00:01). Não saber a causa **não** impede fechar o
+buraco: a defesa é contra o SINTOMA (dado velho), não contra o mecanismo.
+
+> **Regra**, em cinco partes, todas necessárias:
+>
+> 1. **Feed que devolve "nada" não pode ser indistinguível de feed que devolve
+>    "nada de novo".** Aqui a falha era engolida por construção: zero ticks
+>    virava resultado vazio sem erro, e a documentação da própria função
+>    declarava lista vazia como "o caso NORMAL". Um robô precisa de um relógio
+>    de **STALENESS DE DADO**, separado do relógio de "há quanto tempo não
+>    rodo".
+> 2. **Todo detector de buraco tem de medir a idade do DADO, não a do
+>    PROCESSO.** O freio que já existia media tempo sem rodar (15 min) e por
+>    isso não viu absolutamente nada: o supervisor rodou de 5 em 5 segundos o
+>    tempo inteiro. Vigia de vivacidade de processo não é vigia de dado.
+> 3. **Barra atrasada pode atualizar estado, nunca virar ordem.** Percorrer
+>    barras velhas para manter indicador, âncora e contador quentes é correto;
+>    mandar ordem com o preço delas não é. E a recusa vale só para EXPOSIÇÃO
+>    NOVA: stop, alvo, cancelamento e fechamento passam sempre, porque não são
+>    decisão nova e sim constatação de fato — engolir um fechamento cria
+>    posição fantasma (1.6, 2.2).
+> 4. **O teto de idade tem de somar o atraso ESTRUTURAL do feed.** Um número
+>    fixo mata o feed de barra por construção: uma barra M1 só é legível depois
+>    de fechar e seu carimbo é a ABERTURA do minuto, então ela chega com ≥60 s
+>    de idade num robô perfeitamente saudável. O teto é *tolerância +
+>    atraso nominal do feed*, declarado pelo feed, nunca uma constante única.
+> 5. **Descarte nunca é silencioso.** Robô que para de mandar ordem sem dizer
+>    nada é exatamente o modo de falha do item 6.15 — a janela censurada que
+>    depois é lida como edge negativo.
+
+**A correção**, commit `60034e3` (*"barra velha nao vira ordem"*):
+`MAX_ATRASO_PARA_ORDEM_SEGUNDOS = 120,0` somado ao atraso nominal declarado
+pelo feed (120 s no tick, 180 s no M1), portão por barra nos três pontos que
+podem gerar exposição nova, arme velho tratado como "não enviei" (devolvido à
+máquina de estados em vez de ficar órfão), e uma linha de aviso por lote com a
+contagem de barras recusadas. Os 120 s **não** são chute: saíram de sonda no
+próprio terminal repetindo a chamada exata do feed de 5 em 5 s, 260 passos —
+p50 0,14 s, p99 4,17 s, máximo 4,27 s (o máximo é limitado pelo passo do
+supervisor). 120 s é ~29× o p99, folga suficiente para que o portão só dispare
+em cegueira de verdade, não em latência.
+
+> **Pergunte à plataforma nova:** (a) a API de dado distingue "não há negócio
+> novo" de "não consegui ler o histórico"? Se não distingue, qual é o sintoma
+> observável de um feed cego e em quanto tempo ele aparece? (b) existe alguma
+> garantia de que o histórico de tick/barra que ela devolve está sincronizado
+> com o stream de cotação em tempo real, ou os dois podem divergir por dezenas
+> de minutos sem erro? (c) qual é o atraso ESTRUTURAL de cada granularidade (o
+> equivalente a "barra M1 só existe depois que o minuto acaba")? É esse número
+> que entra no teto de idade de barra — sem ele, o portão ou é frouxo demais
+> para servir ou recusa o feed saudável. (5.17)
+
 ---
 
 ## Parte 6 — Método: os erros que custam meses, não reais
@@ -3152,6 +3244,27 @@ dinheiro ou meses.
     jogou fora a fila já conquistada — a pergunta 42 (freio de CADÊNCIA,
     1.20/1.18) e esta são portões ortogonais: uma limita QUANTAS
     substituições saem, a outra PARA ONDE elas vão. (4.19, 1.20)
+55. A API de dado da plataforma distingue **"não há negócio novo"** de **"não
+    consegui ler o histórico"**? Se não distingue, qual é o sintoma observável
+    de um feed cego e em quanto tempo ele aparece? E existe alguma garantia de
+    que o histórico de tick/barra que ela devolve está sincronizado com o
+    stream de cotação em tempo real, ou os dois podem divergir por dezenas de
+    minutos sem erro? Aqui divergiram por 44,8 minutos com o mercado
+    negociando 1.000 a 2.900 ticks por 5 minutos, sem nenhuma exceção e sem
+    perda de conexão — e o robô mandou 45 ordens reais contra preços de até
+    45 minutos atrás. A pergunta 38 (5.11) cobre a consulta que devolve MENOS
+    do que a janela pedida; esta cobre a que devolve ZERO e chama isso de
+    normal. (5.17, 5.3)
+56. Qual é o atraso **ESTRUTURAL** de cada granularidade de dado da plataforma
+    — o equivalente a "barra M1 só existe depois que o minuto acaba, e seu
+    carimbo é a abertura do minuto"? É esse número que entra no teto de idade
+    de barra: o teto é *tolerância medida + atraso nominal do feed*, declarado
+    pelo próprio feed, nunca uma constante única. Sem ele, o portão que impede
+    barra velha de virar ordem ou é frouxo demais para servir ou recusa o feed
+    saudável por construção. E o meu robô tem um relógio de idade do DADO
+    separado do relógio de idade do PROCESSO? O segundo rodou de 5 em 5
+    segundos durante a cegueira inteira e por isso o freio de 15 minutos não
+    viu nada. (5.17)
 
 ---
 
@@ -3219,5 +3332,11 @@ de produção (T2/S16) sobre a base de tick já corrigida: a janela OOS fez 2
 trades e travou por 50 dos 51 pregões — à primeira vista overfitting
 clássico, mas é censura pelo mesmo piso de capital dos itens 3.10/3.11, e o
 achado de método é que perto desse piso IS-vs-OOS deixa de validar
-generalização e passa a comparar dois sorteios (6.15). Mais o registro acumulado do projeto. Quando um item aqui contradisser o código, o código ganha — e este
+generalização e passa a comparar dois sorteios (6.15). Mais 1 item no mesmo 2026-09-08, da investigação sobre POR QUE aquele
+pregão real acumulou ordens contra preços defasados (4.17): o feed de tick do
+terminal cegou por 44,8 minutos sem levantar erro nenhum — lista vazia em 538
+passos seguidos e depois 13.644 barras de uma vez, com o mercado negociando o
+tempo todo e o slot SOMBRA congelando no mesmo tick ao milissegundo — e o freio
+que existia media a idade do PROCESSO, não a do DADO, então não viu nada (5.17).
+Mais o registro acumulado do projeto. Quando um item aqui contradisser o código, o código ganha — e este
 arquivo está desatualizado.*
