@@ -14,8 +14,10 @@ import pytest
 from backtest.intraday.profiles import FUTURES_PROFILES, PROFILES, config_for, profile_for
 from strategy.daytrade.base import (
     MARGIN_BUFFER_FUTUROS,
+    RESERVA_CAIXA_SEGURANCA,
     contracts_from_capital,
     contracts_from_capital_com_reserva,
+    contracts_from_capital_operacional,
 )
 from strategy.daytrade.lab.gremah import _CALIBRATION_BY_SYMBOL
 
@@ -350,3 +352,84 @@ def test_todo_perfil_de_futuro_do_registry_declara_margem():
     assert futuros, "premissa: ha perfil de futuro no registry"
     faltando = [s for s, p in futuros.items() if not p.margin_per_contract_brl]
     assert not faltando, f"perfil de futuro sem margem declarada: {faltando}"
+
+
+# ---------- invariantes que valem para TODO robo (2026-09-08) ---------------
+# Os tres testes abaixo varrem o REGISTRY em vez de citar WDO@/WIN@ na mao.
+# O motivo e' o pedido do dono de 2026-09-08 -- "isso deve ser verdade para
+# todos os robos, sejam os que ja existem ou os futuros": as tres correcoes
+# daquele dia (piso de capital, saldo do MT5, relogio de futuro) nasceram
+# olhando o WDO@, e um perfil/robo novo herdaria a versao quebrada em
+# silencio se o teste fosse escrito sobre um simbolo especifico.
+
+
+@pytest.mark.parametrize("symbol", sorted(FUTURES_PROFILES))
+def test_todo_perfil_de_futuro_declara_a_propria_abertura(symbol):
+    """Futuro NAO usa o relogio da acao. Sem `session_start_time` o robo cai
+    no `clock.phase()` de acao (10:00) e perde a primeira hora do pregao --
+    no WDO@ eram 149 minutos, 26,2% da sessao, onde mora o pico de atividade
+    (ver `live.intraday_runtime.IntradayLiveRuntime._fase_do_instrumento`).
+
+    Quem constroi por `_futures_profile` ganha isso de graca; o teste existe
+    para o perfil montado na mao, que nao ganharia."""
+    perfil = FUTURES_PROFILES[symbol]
+    assert perfil.session_start_time is not None, (
+        f"{symbol}: perfil de futuro sem `session_start_time` -- ao vivo ele "
+        "seria gateado pelo pregao de ACAO e operaria uma janela menor que a "
+        "que o backtest mede."
+    )
+    assert perfil.session_start_time < perfil.session_end_time
+
+
+@pytest.mark.parametrize("symbol", sorted(FUTURES_PROFILES))
+def test_todo_futuro_sobrevive_na_margem_crua_e_so_escala_com_a_pilha(symbol):
+    """A regra do dono (2026-09-08): a pilha de seguranca governa ESCALAR,
+    nunca SOBREVIVER.
+
+    Com o caixa exatamente na margem crua o robo ainda abre 1 contrato pelo
+    caminho que o motor usa (`contracts_from_capital_operacional`), e NAO
+    abre pelo caminho com reserva -- e' essa diferenca que conserta o bug em
+    que um unico stop derrubava o caixa abaixo do piso cheio e calava o robo
+    em silencio, para sempre. Se as duas funcoes empatarem aqui, alguem
+    reintroduziu a reserva no caminho de recusa."""
+    margem = FUTURES_PROFILES[symbol].margin_per_contract_brl
+    assert margem, "premissa: perfil de futuro declara margem"
+
+    assert contracts_from_capital_operacional(margem, margem) == 1, (
+        f"{symbol}: com a margem crua no caixa a corretora deixa segurar 1 "
+        "contrato -- o motor nao pode recusar antes dela."
+    )
+    assert contracts_from_capital_com_reserva(margem, margem) == 0, (
+        f"{symbol}: a pilha de seguranca precisa continuar recusando aqui -- "
+        "e' ela que impede o 2o contrato que zerou a conta em 2026-08-28."
+    )
+    # Escalar continua exigindo a pilha inteira: 2 contratos so' com
+    # margem x buffer x reserva x 2.
+    piso_de_dois = margem * MARGIN_BUFFER_FUTUROS * RESERVA_CAIXA_SEGURANCA * 2
+    assert contracts_from_capital_operacional(piso_de_dois, margem) == 2
+    assert contracts_from_capital_operacional(piso_de_dois - 0.01, margem) == 1
+
+
+@pytest.mark.parametrize("symbol", sorted(FUTURES_PROFILES))
+def test_piso_do_dia_a_dia_fica_abaixo_do_piso_de_partida(symbol):
+    """O piso cheio e' indicacao de PARTIDA, nao condicao de continuidade.
+
+    `live.intraday_runtime.IntradayLiveRuntime._check_capital` cobra
+    `margem x default_quantity` todo pregao; o painel cobra a pilha inteira
+    UMA vez, no botao "Iniciar operacao" (`dashboard.robot_view.
+    _capital_minimo_do_robo`). Este teste trava a ORDEM entre os dois: se o
+    piso do dia-a-dia alcancar o de partida, o robo volta a se auto-barrar no
+    primeiro stop -- exatamente o que o dono mandou consertar."""
+    perfil = FUTURES_PROFILES[symbol]
+    margem = perfil.margin_per_contract_brl
+    minimo_do_dia = margem * perfil.default_quantity
+    piso_de_partida = margem * MARGIN_BUFFER_FUTUROS * RESERVA_CAIXA_SEGURANCA
+
+    assert minimo_do_dia < piso_de_partida, (
+        f"{symbol}: o piso do dia-a-dia (R$ {minimo_do_dia:.2f}) alcancou o de "
+        f"partida (R$ {piso_de_partida:.2f}) -- a partir dai um stop cala o robo."
+    )
+    assert minimo_do_dia == margem, (
+        f"{symbol}: o gate diario tem que ser a margem CRUA de 1 contrato. "
+        "Futuro nao opera lote de 100 -- `default_quantity` tem que ser 1."
+    )
