@@ -1949,6 +1949,90 @@ menos ticks na base velha que na corrigida (4.177.643 contra 4.619.105).
 > histórico que ela devolve está completo, ou só dá para inferir pelos
 > extremos (primeiro/último registro do dia)? (5.15)
 
+**Desfecho:** a varredura foi refeita depois que o canônico corrigido
+substituiu o arquivo em disco. O valor escolhido (10s) sobreviveu — mas o
+conjunto de pregões que travam mudou por completo, e vale a leitura de por
+quê antes de confiar em qualquer "mesmo número, então nada mudou". Ver item
+5.16.
+
+### 5.16 Recalibração do freio de cadência na base corrigida: o número sobreviveu, os pregões que travam não
+
+A calibração do `reancora_min_segundos` do WDO F1 (item 4.14) foi refeita
+sobre a base de tick regenerada (5.12/5.13), depois que o item 5.15 registrou
+que a varredura original tinha rodado, por 4 minutos, sobre a base velha —
+19,3% dos minutos de pregão faltando. O default de produção (10s)
+**sobreviveu** — mas o conjunto de pregões que travam mudou por completo, e a
+vizinhança do parâmetro ficou mais hostil. Grade de 6 valores, 130 pregões,
+teto interno `MAX_ENVIOS_POR_MINUTO = 30` (`src/live/intraday_runtime.py`,
+item 1.18) — estourar não recusa a ordem, liga `disaster_halt` e cala o robô
+o resto do pregão:
+
+| config | pregões travados | pior janela de 60s | trades | líquido R$ |
+|---|---|---|---|---|
+| 6s | 2/130 | 33 | 16.977 | 84.236,50 |
+| 8s | 2/130 | 35 | 16.405 | 82.057,50 |
+| **10s (produção)** | **0/130** | **26** | 16.490 | 83.430,00 |
+| 12s | 0/130 | 28 | 14.705 | 77.262,50 |
+| 15s | 2/130 | 36 | 17.872 | 94.329,00 |
+| 20s | 1/130 | 31 | 14.767 | 75.821,50 |
+
+Quem trava e onde: 6s em 2026-06-10 e 2026-06-29; 8s em 2026-03-03 e
+2026-06-10; 15s em 2026-08-07 e 2026-08-12; 20s em 2026-06-10. Na base velha
+(item 4.14), quem travava eram 6s e 15s — os mesmos DOIS valores da grade,
+mas em pregões diferentes; agora 8s e 20s travam também, e 2026-03-03 é
+justamente o pregão de MAIOR reparo da regeneração (208.151 → 398.881 ticks,
+item 5.13).
+
+Três fatos, não um, fazem o item valer:
+
+1. **Coincidência de número não é reprodução de medição.** 10s continua
+   sendo o único valor com 0 travadas e pior minuto 26 — idêntico ao número
+   medido na base furada. Mas se o critério de escolha fosse "menor pior
+   minuto" em vez de "0 travadas", a base furada dava empate entre
+   10s/15s/20s, e a corrigida separa os três. Quando uma medição é refeita
+   numa base reparada e devolve o MESMO número, isso não dispensa olhar
+   QUAIS casos mudaram de lado — o valor pode estar certo por um motivo
+   diferente do que se acreditava, e é o motivo que se leva para a
+   plataforma nova, não o número.
+2. **A relação é não monotônica, e agora mais do que antes.** 6s trava, 8s
+   trava, 10s limpo, 12s limpo, 15s trava, 20s trava — não existe "quanto
+   mais freio, mais seguro". Um freio maior concentra os envios que
+   sobraram em rajadas piores. Escolher o parâmetro por intuição de direção
+   ou por busca em gradiente falha aqui: é preciso varrer a grade inteira
+   já mapeada e contar travadas, não olhar a média nem extrapolar de um
+   ponto vizinho.
+3. **A escolha custa lucro de propósito, e é o certo.** 15s rende
+   R$94.329,00 contra R$83.430,00 do 10s — 13% a mais — e trava 2 pregões em
+   130. Travar não é perder o lucro daquele dia: é o robô ficar MUDO o
+   resto do pregão, com posição possivelmente aberta. Trocar 13% de lucro
+   medido por não ter 2 eventos de robô morto só aparece como a escolha
+   certa se o critério de decisão for CONTAGEM de travadas — não retorno,
+   que sistematicamente recompensa o valor mais arriscado da grade.
+
+Folga residual nomeada e aceita, sem mudança: 4 ordens no pior minuto (26 de
+30 do teto), e o pico de envios continua morando na primeira hora do pregão.
+
+> **Regra:** re-medir um parâmetro de segurança numa base de dado corrigida
+> e obter o MESMO valor não é confirmação — é o ponto de partida de uma
+> segunda pergunta: quais casos mudaram de lado, e o critério de escolha
+> ainda apontaria para o mesmo valor se olhasse outra estatística (pior
+> janela em vez de contagem de travadas, por exemplo)? Além disso, um freio
+> de cadência não tem relação monotônica com "mais seguro": ele redistribui
+> os envios que sobram em vez de eliminá-los, então a grade tem de ser
+> varrida INTEIRA, nunca buscada por gradiente nem por intuição de direção.
+> E quando o parâmetro protege contra o robô ficar MUDO (não contra perder
+> dinheiro num trade), o critério de escolha certo é a CONTAGEM de eventos
+> de trava — nunca o retorno médio, que recompensa sistematicamente o valor
+> mais arriscado da grade.
+> **Pergunte à plataforma nova:** as perguntas 42 (limite de cadência
+> interno vs. imposto pela plataforma, e o que acontece ao estourar) e 43
+> (cadência mínima de reancoragem medida contra contagem de trades, não só
+> contra o limite de taxa) já cobrem o desenho do freio em si — não
+> duplicar. O que este item acrescenta: ao recalibrar esse freio numa base
+> de dado corrigida, o critério de escolha foi "menor contagem de travadas"
+> ou "maior retorno médio"? E o valor escolhido antes e depois da correção
+> teve os MESMOS casos por trás, ou só coincidiu no número? (5.16)
+
 ---
 
 ## Parte 6 — Método: os erros que custam meses, não reais
@@ -2399,11 +2483,14 @@ dinheiro ou meses.
     algum freio interno calibrado para uma frequência de decisão diferente
     da que ele vai rodar? Ao estourar, o comportamento é recusar a ação ou
     parar o robô — e esse caminho é exercitado pelo modo sombra, ou só
-    pelo real? (1.18)
+    pelo real? (1.18, 5.16)
 43. A ordem em repouso é reancorada por evento (a cada negócio) ou por
     tempo? Se for por evento, qual a cadência mínima entre duas
     reancoragens — e ela foi medida contra a contagem de trades, não só
-    contra o limite de taxa? (4.14)
+    contra o limite de taxa? A relação entre essa cadência e o número de
+    travadas do freio de segurança é monotônica, ou preciso varrer a grade
+    inteira (nunca por gradiente) e escolher pela CONTAGEM de travadas, não
+    pelo retorno médio? (4.14, 5.16)
 44. Quando a plataforma recusa uma ordem, o meu robô espera antes de
     tentar de novo? Existe contador de recusas por motivo e por pregão,
     com teto? (3.16)
@@ -2418,7 +2505,10 @@ dinheiro ou meses.
     não detecta buraco no meio — e uma medição rodada enquanto uma
     regeneração de dado está em curso lê a versão velha do arquivo sem
     nenhum sintoma; confira sempre o mtime do artefato de medição contra o
-    horário exato da troca do arquivo fonte. (5.15)
+    horário exato da troca do arquivo fonte. Mesmo depois de corrigida, uma
+    remedição que devolve o MESMO valor não dispensa checar quais casos
+    individuais mudaram de lado — coincidência de número não é reprodução
+    de medição. (5.15, 5.16)
 
 ---
 
@@ -2460,6 +2550,11 @@ rotulado 3h cedo, além de truncado), achado batendo o MESMO negócio nos
 dois arquivos; e a calibração do freio de cadência que escolheu o default
 de produção (`reancora_min_segundos=10,0`) rodou 4 minutos antes do
 canônico corrigido substituir o arquivo em disco, medindo sobre uma base
-com 19,3% dos minutos de pregão faltando sem nenhum sintoma.
+com 19,3% dos minutos de pregão faltando sem nenhum sintoma. Mais 1 item
+fechando o desfecho daquela rodada, em 2026-09-07: a calibração foi refeita
+sobre a base já corrigida (5.16) — o valor de produção sobreviveu (10s,
+0/130 pregões travados), mas o conjunto de pregões que travam mudou por
+completo e a relação com o parâmetro se confirmou não monotônica, o que
+por si só derruba a ideia de que "mesmo número" bastasse como confirmação.
 Mais o registro acumulado do projeto. Quando um item aqui contradisser o código, o código ganha — e este
 arquivo está desatualizado.*
