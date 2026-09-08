@@ -1670,36 +1670,89 @@ caberia.
 > procura. Vale igual para o stop — "stop" que executou 3 ticks além do nível
 > é stop MAIS deslize, e o segundo pedaço é seu, não do mercado.
 
-### 4.16 Dez posições viveram menos de 1 segundo e entraram no diário como trades — round-trip de execução não é trade
+### 4.16 Metade das posições reais do robô viveu menos de 1 segundo — round-trip de execução não é trade, e só o relógio da CORRETORA enxerga isso
 
-Das 13 saídas a mercado do item anterior, **10 fecharam em menos de 1 segundo
-depois de abrir**: 58 ms, 62 ms, 64 ms, 66 ms, 100 ms, 109 ms, 127 ms, 319 ms,
-342 ms e 561 ms. Cada uma perdeu **exatamente 1 tick**; juntas, **−R$40,00** —
-36% do prejuízo bruto do dia. Todas rotuladas `exit_reason: "target"` (item
-4.15): o diário chama de "alvo atingido" um ciclo de 58 milissegundos que
-nunca chegou perto do alvo.
+Das 13 saídas a mercado do item anterior, **11 fecharam em menos de 1 segundo
+depois de abrir**: 58 ms, 62 ms, 64 ms, 66 ms, 100 ms, 109 ms, 127 ms, 288 ms,
+319 ms, 342 ms e 561 ms. Juntas somaram **−R$40,50** — 34,9% do prejuízo do
+pregão (−R$116,00). Todas rotuladas `exit_reason: "target"` (item 4.15): o
+diário chama de "alvo atingido" um ciclo de 58 milissegundos que nunca chegou
+perto do alvo.
+
+Uma sondagem read-only sobre o histórico de deals da corretora
+(`history_deals_get`, campo `time_msc`) mostrou que 2026-09-08 não é um pregão
+fora da curva — é o comportamento do robô. Nos três pregões reais que o slot
+`dt-wdo_grid_reload_maker-wdo@-live` tem:
+
+| pregão | posições | vida < 1 s | líquido dos < 1 s | líquido do dia |
+|---|---|---|---|---|
+| 2026-08-28 | 2 | 1 | −R$5,50 | −R$301,00 |
+| 2026-09-04 | 4 | 2 | **+R$4,00** | −R$2,00 |
+| 2026-09-08 | 22 | 11 | −R$40,50 | −R$116,00 |
+| **TOTAL** | **28** | **14 (50%)** | **−R$42,00** | **−R$419,00** |
+
+**Metade de tudo que este robô já fez com dinheiro real — 14 de 28 posições —
+nunca foi trade.** E o piso tem de ser de TEMPO, nunca de resultado: a posição
+de 288 ms deu **+R$5,00**, e o conjunto dos < 1 s de 2026-09-04 deu **+R$4,00**.
+Um round-trip lucrativo continua sendo round-trip. Filtrar por resultado
+guardaria os que deram certo e descartaria só os que doeram, que é a definição
+de contaminar a amostra.
 
 Uma posição que abre e fecha em 58 ms não expressou tese nenhuma sobre preço —
-o preço não teve tempo de andar. O que ela mede é a distância entre o preço
-que a máquina achava ter e o preço que o book tinha: é **round-trip de
-execução**, e o resultado dela é o custo de estar errado sobre o book, não o
-resultado de um trade. Somada junto com os trades de verdade, contamina tudo o
-que se olha depois — taxa de acerto, R$/trade, contagem de trades, e a
-comparação com o backtest, onde esse objeto simplesmente não existe.
+o preço não teve tempo de andar. O que ela mede é a distância entre o preço que
+a máquina achava ter e o preço que o book tinha: é **round-trip de execução**, e
+o resultado dela é o custo de estar errado sobre o book, não o resultado de um
+trade. Somada junto com os trades de verdade, contamina tudo o que se olha
+depois. O tamanho da contaminação em 2026-09-08: com os 11 round-trips dentro, o
+pregão mostra **31,8% de acerto (7/22)**; só com os trades de verdade, **54,5%
+(6/11)** — **22,7 pontos percentuais** de distorção vindos de objetos que nunca
+expressaram tese sobre preço.
+
+**E nem todo relógio serve.** Os três relógios disponíveis foram medidos contra
+os MESMOS 11 casos de 2026-09-08:
+
+| relógio | acha quantos dos 11 | patologia |
+|---|---|---|
+| carimbo de TICK (`entry_ts`/`exit_ts` do trade) | **4 (36%)**, e ainda inventa **1 falso positivo** | anda com a defasagem do feed (24 min naquele pregão): um round-trip de 62 ms aparece como 51,5 s. Deixa passar −R$28,50 |
+| relógio de PAREDE do processo (`_on_opened` → `_on_closed`) | **1 (9%)** | abertura e fechamento caem no mesmo passo do poll e a conta dá ~0; e quando o poll trava, dá 3.184 s para uma posição que viveu 456 s |
+| relógio da CORRETORA (`time_msc` dos deals) | **11 (100%)** | — |
 
 > **Regra:** todo diário registra a DURAÇÃO da posição (abertura →
 > fechamento), e existe um piso abaixo do qual ela não é contada como trade, e
 > sim como round-trip de execução — reportado em linha separada, com o custo
-> próprio somado. Onde fica o piso é da estratégia (aqui, qualquer coisa muito
-> abaixo do tempo típico entre dois negócios do instrumento), mas ele precisa
-> EXISTIR: sem a duração no registro, a métrica que denuncia o problema nem
-> pode ser calculada, e o sintoma chega disfarçado de "a taxa de acerto caiu
-> um pouco". Um pico de posições ultracurtas é alarme de execução, nunca
-> resultado de estratégia.
-> **Pergunte à plataforma nova:** o histórico expõe o tempo de vida da posição
-> (abertura → fechamento, em milissegundos), ou só deals soltos com carimbo de
-> tempo? Sem isso não dá para separar trade de round-trip de execução — e o
-> segundo entra na sua taxa de acerto sem pedir licença.
+> próprio somado. **Essa duração vem do carimbo da CORRETORA, não de nenhum
+> relógio do processo.** Relógio de dado (tick/barra) mede a defasagem do feed;
+> relógio de parede do laço mede a latência do próprio laço — os dois medem o
+> OBSERVADOR, não o observado. Um piso de tempo montado sobre qualquer um dos
+> dois erra de 64% a 91% dos casos e ainda produz falso positivo. Onde fica o
+> piso é da estratégia (aqui, qualquer coisa muito abaixo do tempo típico entre
+> dois negócios do instrumento), mas ele precisa EXISTIR: sem a duração no
+> registro, a métrica que denuncia o problema nem pode ser calculada, e o
+> sintoma chega disfarçado de "a taxa de acerto caiu um pouco". Um pico de
+> posições ultracurtas é alarme de execução, nunca resultado de estratégia.
+>
+> **Corolário — registrar não é alarmar.** O campo entra no diário como
+> OBSERVAÇÃO: carimbo copiado da corretora, que não filtra entrada, não
+> dimensiona e não interrompe nada — `live/` continua sem decidir. Onde fica o
+> piso do que conta como round-trip é decisão de estratégia/dono, tomada depois,
+> com o relógio já validado ao vivo. Alarme montado sobre relógio ainda não
+> validado foi exatamente o erro do freio de cadência no mesmo pregão.
+>
+> **Pergunte à plataforma nova — RESPONDIDA no MetaTrader5:**
+> `history_deals_get` devolve `time_msc` em milissegundos e o `position_id`
+> amarra entrada e saída, então a vida da posição é a diferença entre o primeiro
+> deal de entrada e o último de saída. A pergunta que a medição refinou, e que
+> continua aberta para a plataforma da Copa: **quais relógios a plataforma
+> oferece, e qual deles é o da CONTRAPARTE?** Um relógio de dado e um relógio do
+> meu próprio laço vão parecer plausíveis e medir a coisa errada — 36% e 9% de
+> acerto, respectivamente, no único caso em que isso foi medido.
+
+**Implementado (commit `a278447`):** `MT5Broker.deals_for_position` expõe
+`time_msc`; `MT5IntradayExecution.vida_da_posicao_ms()` fecha a conta (primeiro
+deal de entrada → último de saída, nunca levanta, `None` = "não sei"); e
+`IntradayLiveRuntime._on_closed` grava `duracao_corretora_ms` no evento de
+fechamento. Só existe em execução REAL — em sombra e em backtest o campo é
+`None`, porque não há corretora para carimbar.
 
 ### 4.17 Ordem-limite ancorada em preço defasado é ordem a mercado disfarçada — o maker virou taker na ENTRADA
 
@@ -2431,13 +2484,61 @@ máquina:
 | Máquina ou conexão | O slot `dt-copa_win-win@-shadow` (feed de barra M1, outro símbolo) avançou 1 barra por minuto sem falhar durante toda a janela; e o log do próprio terminal não registra perda de conexão nenhuma no período |
 | Feed lento | Sondando o mesmo terminal, a chamada exata que o feed faz devolve **109.255 ticks em 109 ms** |
 
-**O que sobra é hipótese não provada:** o caminho de HISTÓRICO de tick ficando
-cego enquanto o stream de cotação continua vivo. Um detalhe forte e sem
-explicação: os 5 travamentos observados terminam todos numa fronteira de meia
-hora de relógio de parede — 13:31, 14:00, 15:00 e 16:00 UTC em 08/09, e 18:33
-em 31/08. Duas dessas liberações estão cravadas no segundo pelo banco
-(`created_at` 14:00:04 e 15:00:01). Não saber a causa **não** impede fechar o
-buraco: a defesa é contra o SINTOMA (dado velho), não contra o mecanismo.
+**O despejo cai na HORA CHEIA, e é preciso ao segundo** — rodada de 2026-09-08,
+noite, que CORRIGE a versão anterior deste item (ela falava em "fronteira de
+meia hora"). Reconstruído de `db/live.sqlite`, tabela `live_orders`, comparando
+`sent_at` (hora de MERCADO da barra que gerou a ordem) com `created_at` (hora de
+ESCRITA no banco, isto é, quando o despejo chegou): todo travamento aparece como
+um bloco de ordens com `sent_at` espalhado e `created_at` IDÊNTICO — o instante
+em que o feed voltou a enxergar.
+
+| Feed cegou às (UTC) | Despejou às (UTC) | Cegueira | Slot |
+|---|---|---|---|
+| 13:51:04 | **14:00:04** | 9,0 min | 474 (real) + 476 (sombra) |
+| 14:14:24 | **15:00:01** | 45,6 min | 474 (real) + 476 (sombra) |
+| 15:39:50 | **16:00:04** | 20,2 min | 476 (sombra; o real já parado pelo freio de perda) |
+| 19:44:02 | **20:00:01** | 16,0 min | 476 (sombra) |
+
+**4 de 4 liberações caem dentro de 5 segundos do topo da HORA.** O passo do
+supervisor é 5 s, então o terminal voltou a servir essencialmente em
+`hh:00:00.000`. Sob liberação uniforme ao acaso, quatro acertos numa janela de
+5 s em 3.600 é ~4·10⁻¹⁰ — não é coincidência. Os INÍCIOS, ao contrário, não têm
+padrão nenhum: 13:51, 14:14, 15:39, 19:44. Nenhum outro pregão do banco (30/08
+em diante) tem ordem com atraso >5 min, e os travamentos de 31/08 citados na
+versão anterior vieram de lacuna no fluxo de eventos, não desse carimbo — a
+evidência cravada ao segundo é só a de 08/09.
+
+**O que a segunda rodada descartou**, esvaziando o resto da lista de suspeitos:
+
+| Suspeita | Evidência que a derruba |
+|---|---|
+| Queda de conexão do terminal | O log do MT5 (`...\logs\20260908.log`, UTF-16) não tem UMA linha de `Network` entre 13:07 e 15:33 UTC — nem perda, nem reautorização. **Cuidado, a leitura ingênua é circular:** a última linha antes do silêncio de 44,8 min é `Trades deal #475853438 buy 1 WDOV26 at 5116.000` (14:14:31 UTC) e a próxima é 15:00 UTC, mas o terminal só loga ORDEM — e o robô parou de mandar ordem porque estava cego. Serve para descartar queda de conexão, não para dizer nada sobre o feed |
+| O dado nunca existiu | Sonda read-only hoje (Rico-PRD, build 6182): `copy_ticks_range(WDOV26, 14:14→15:00 UTC de 08/09, COPY_TICKS_TRADE)` devolve **13.864 ticks em UMA chamada**. O histórico EXISTE; o terminal simplesmente não conseguiu servi-lo naquele momento |
+| A atualização do terminal (build 6182) | Entrou às 09:08 UTC de 08/09, e o travamento de 31/08 é anterior |
+
+**A causa raiz continua DESCONHECIDA — mas a hipótese que sobrou agora tem
+forma.** Não provada: *o terminal serve `copy_ticks_range` a partir de um
+instantâneo do histórico de tick que ele só renova no topo da hora.* Isso
+explicaria exatamente o que se vê — a cegueira COMEÇA num instante arbitrário
+(quando o instantâneo fica velho) e TERMINA cravada na hora cheia (quando um
+novo é tirado), com o stream de cotação vivo o tempo todo em paralelo. E tem
+parentesco direto com o bug de 2026-08-24 (5.11, a constante
+`_SAFE_FETCH_LOOKBACK` em `live/tick_feed.py`): nos dois casos o caminho de
+HISTÓRICO de tick devolve dado incompleto ou zero **sem levantar erro nenhum**.
+Mesma família de falha, gatilhos diferentes.
+
+**Próximo passo para quem retomar** — não foi feito, orçamento de tempo: sonda
+que roda por cima de pelo menos uma virada de hora chamando, no MESMO passo de
+5 s, DUAS versões de `copy_ticks_range` para o mesmo símbolo — a janela LARGA
+que o feed usa (`agora−24h → agora+2min`) e uma ESTREITA (`agora−60s →
+agora+2min`) — e compara o timestamp do último tick das duas. Se a larga
+envelhecer e a estreita não, a causa está achada e o conserto é do FORMATO DA
+JANELA. Cuidado: estreitar a janela em produção é justamente o que o bug de
+2026-08-24 proíbe, então o conserto teria de ser híbrido — janela larga para o
+dado, estreita só como sonda de vivacidade.
+
+Não saber a causa **não** impede fechar o buraco: a defesa é contra o SINTOMA
+(dado velho), não contra o mecanismo.
 
 > **Regra**, em cinco partes, todas necessárias:
 >
@@ -2446,7 +2547,14 @@ buraco: a defesa é contra o SINTOMA (dado velho), não contra o mecanismo.
 >    virava resultado vazio sem erro, e a documentação da própria função
 >    declarava lista vazia como "o caso NORMAL". Um robô precisa de um relógio
 >    de **STALENESS DE DADO**, separado do relógio de "há quanto tempo não
->    rodo".
+>    rodo". E antes de construir esse vigia: **a distinção quase sempre EXISTE
+>    na API e está sendo DESCARTADA pelo código.** Aqui ela estava a uma chamada
+>    de `last_error()` de distância e ninguém olhava (correção `6092d4a`,
+>    abaixo). Olhe primeiro se a plataforma já não está dizendo "falhei" num
+>    canal lateral que o seu código ignora. Corolário do alarme: **vazio com
+>    erro OK NÃO pode virar alarme.** Se o robô gritar em todo passo de papel
+>    parado, o dono para de ler o diário — e é exatamente assim que o PRÓXIMO
+>    sintoma passa despercebido (6.15).
 > 2. **Todo detector de buraco tem de medir a idade do DADO, não a do
 >    PROCESSO.** O freio que já existia media tempo sem rodar (15 min) e por
 >    isso não viu absolutamente nada: o supervisor rodou de 5 em 5 segundos o
@@ -2477,15 +2585,54 @@ p50 0,14 s, p99 4,17 s, máximo 4,27 s (o máximo é limitado pelo passo do
 supervisor). 120 s é ~29× o p99, folga suficiente para que o portão só dispare
 em cegueira de verdade, não em latência.
 
+**A segunda correção**, commit `6092d4a`: o `60034e3` atacava o SINTOMA (barra
+velha não vira ordem); este ataca a INVISIBILIDADE.
+
+- **Medido no terminal real, read-only:** o pacote `MetaTrader5` DÁ a distinção,
+  e ela estava sendo jogada fora. Símbolo inexistente → `copy_ticks_range`
+  devolve `None` com `last_error() == (-4, 'Terminal: Not found')`. Janela de
+  madrugada, sem negócio nenhum → array **vazio** com
+  `last_error() == (1, 'Success')`. Ou seja: `None`, ou vazio com código
+  NEGATIVO, é falha de leitura; vazio com código OK é papel parado.
+- O código antigo fazia `if resultado is None or len(resultado) == 0: return
+  DataFrame()` — os dois casos no MESMO `return`, sem chamar `on_error`. Foi
+  assim que 538 chamadas seguidas de cegueira ficaram idênticas a um papel
+  parado.
+- Corrigidos os QUATRO caminhos de leitura (`copy_ticks_range`,
+  `copy_ticks_from`, `copy_rates_range`, `copy_rates_from_pos`) em
+  `market_data_intraday/mt5_ticks_source.py` e `mt5_source.py` — inclusive o M1,
+  que nunca foi visto cegar, porque o `return` que engolia era idêntico (7.1: ao
+  corrigir um bug, varra todas as instâncias do padrão).
+- **A segunda metade do buraco, que ninguém tinha visto: o `on_error` dos feeds
+  nunca era ligado a nada.** `scripts/run_live.py` chama
+  `live.intraday_feed.feed_for(...)` SEM callback, então até o erro que já era
+  reportado (falha de conexão ao terminal) morria no caminho. O novo
+  `live/feed_health.py::RegistroDeLeitura` faz a falha viajar POR FORA do valor
+  de retorno, porque o contrato "lista vazia, nunca exceção" não pode mudar: um
+  passo que levanta derruba o robô em vez de deixá-lo esperar o terminal voltar.
+- `IntradayLiveRuntime._vigia_leitura_do_feed` grava UMA linha no diário por
+  TRANSIÇÃO (cegou / voltou, com a contagem de passos), nunca uma por passo: a
+  5 s por passo, 45 min de cegueira viraria 538 linhas iguais e o diário ficaria
+  ilegível justamente no pregão em que o dono mais precisa lê-lo.
+- 7 testes novos, todos falhando no código antigo. Suíte inteira verde (1.790
+  passed).
+
 > **Pergunte à plataforma nova:** (a) a API de dado distingue "não há negócio
-> novo" de "não consegui ler o histórico"? Se não distingue, qual é o sintoma
-> observável de um feed cego e em quanto tempo ele aparece? (b) existe alguma
+> novo" de "não consegui ler o histórico"? Em MT5 a resposta é **SIM**, mas por
+> um canal LATERAL (`last_error()`) que é fácil de ignorar — confira se a
+> plataforma nova tem equivalente, e **qual é o valor dele quando a leitura foi
+> legitimamente vazia**, senão o portão vira alarme em todo papel parado. Se não
+> distingue de jeito nenhum, qual é o sintoma observável de um feed cego e em
+> quanto tempo ele aparece? (b) existe alguma
 > garantia de que o histórico de tick/barra que ela devolve está sincronizado
 > com o stream de cotação em tempo real, ou os dois podem divergir por dezenas
 > de minutos sem erro? (c) qual é o atraso ESTRUTURAL de cada granularidade (o
 > equivalente a "barra M1 só existe depois que o minuto acaba")? É esse número
 > que entra no teto de idade de barra — sem ele, o portão ou é frouxo demais
-> para servir ou recusa o feed saudável. (5.17)
+> para servir ou recusa o feed saudável. (d) o histórico que a plataforma serve
+> é renovado por EVENTO ou por RELÓGIO? Se por relógio, com que cadência? No
+> MT5, 4 de 4 travamentos de 08/09 liberaram dentro de 5 s do topo da hora.
+> (5.17)
 
 ---
 
@@ -3191,12 +3338,21 @@ dinheiro ou meses.
     15 (3.3, margem exigida x margem livre) e 16 (3.13, trava entre
     processos) já assumem que o número consultado é confiável; esta
     pergunta vem ANTES das duas — descobre se ele é. (1.19)
-49. O histórico expõe o TEMPO DE VIDA da posição (abertura → fechamento, em
-    milissegundos), ou só deals soltos com carimbo de tempo? Sem essa medida
-    não dá para separar um trade de um round-trip de execução: 10 posições de
-    menos de 1 segundo entraram no diário como trades rotulados "alvo", cada
-    uma perdendo 1 tick, e o sintoma chegou disfarçado de taxa de acerto um
-    pouco pior. (4.16)
+49. **RESPONDIDA no MetaTrader5** — o histórico expõe o TEMPO DE VIDA da
+    posição (abertura → fechamento, em milissegundos), ou só deals soltos com
+    carimbo de tempo? No MT5, `history_deals_get` devolve `time_msc` em
+    milissegundos e o `position_id` amarra entrada e saída, então a vida da
+    posição é a diferença entre o primeiro deal de entrada e o último de
+    saída. Sem essa medida não dá para separar um trade de um round-trip de
+    execução: 14 das 28 posições reais do robô (50%) viveram menos de 1
+    segundo, entraram no diário como trades rotulados "alvo", e num único
+    pregão isso distorceu a taxa de acerto em 22,7 pontos percentuais (31,8%
+    com os round-trips dentro, 54,5% só com os trades de verdade). A pergunta
+    que a medição refinou, e que continua aberta para a plataforma da Copa:
+    **quais relógios a plataforma oferece, e qual deles é o da CONTRAPARTE?**
+    Um relógio de dado e um relógio do meu próprio laço vão parecer plausíveis
+    e medir a coisa errada — 36% e 9% de acerto, respectivamente, no único
+    caso em que isso foi medido. (4.16)
 50. Existe teto de cadência de envio/cancelamento de ordens — imposto pela
     plataforma e/ou construído por mim — e ele conta o rearme pós-PREENCHIMENTO
     junto com a reprecificação por deriva de preço? Um freio com uma fonte de
@@ -3245,7 +3401,15 @@ dinheiro ou meses.
     1.20/1.18) e esta são portões ortogonais: uma limita QUANTAS
     substituições saem, a outra PARA ONDE elas vão. (4.19, 1.20)
 55. A API de dado da plataforma distingue **"não há negócio novo"** de **"não
-    consegui ler o histórico"**? Se não distingue, qual é o sintoma observável
+    consegui ler o histórico"**? Em MT5 a resposta é **SIM**, mas por um canal
+    LATERAL fácil de ignorar: `copy_ticks_range` devolve `None` com
+    `last_error() == (-4, 'Terminal: Not found')` quando falha, e array vazio com
+    `last_error() == (1, 'Success')` quando o papel só está parado — a distinção
+    existia e o código a jogava fora nos dois casos no mesmo `return`. Confira se
+    a plataforma nova tem equivalente, e **qual é o valor dele quando a leitura
+    foi legitimamente vazia**: sem essa segunda metade o portão vira alarme em
+    todo passo de papel parado, o dono para de ler o diário, e o próximo sintoma
+    passa despercebido (6.15). Se não distingue, qual é o sintoma observável
     de um feed cego e em quanto tempo ele aparece? E existe alguma garantia de
     que o histórico de tick/barra que ela devolve está sincronizado com o
     stream de cotação em tempo real, ou os dois podem divergir por dezenas de
@@ -3265,6 +3429,16 @@ dinheiro ou meses.
     separado do relógio de idade do PROCESSO? O segundo rodou de 5 em 5
     segundos durante a cegueira inteira e por isso o freio de 15 minutos não
     viu nada. (5.17)
+57. O histórico que a plataforma serve é renovado por **EVENTO** ou por
+    **RELÓGIO**? Se por relógio, com que cadência? No MT5, 4 de 4 travamentos de
+    08/09 liberaram **dentro de 5 s do topo da hora** (14:00:04, 15:00:01,
+    16:00:04 e 20:00:01), enquanto os INÍCIOS não têm padrão nenhum (13:51,
+    14:14, 15:39, 19:44) — o que aponta para um instantâneo de histórico
+    renovado na hora cheia, servido em paralelo a um stream de cotação que
+    continua vivo. Causa raiz ainda NÃO provada. A sonda que responde: por cima
+    de uma virada de hora, no mesmo passo, pedir a janela LARGA que o feed usa e
+    uma ESTREITA de 60 s, e comparar o timestamp do último tick das duas.
+    (5.17, 5.11)
 
 ---
 
@@ -3323,8 +3497,8 @@ de n=1 para n=8 (8 de 8 alvos nativos pior que o nível pedido, sempre contra a
 posição, R$45,00 de deslize num dia), mais 1.20 (o freio de cadência não cobre
 o rearme pós-fill: 125 ordens para 22 trades), 1.21 (2 contratos preenchidos
 com 83 ms de diferença viraram 1 no diário), 4.15 (21 saídas rotuladas "alvo"
-sem que nenhuma tenha pago o alvo), 4.16 (10 posições de menos de 1 segundo
-contadas como trades), 4.17 (limite ancorado em preço de 24 minutos atrás
+sem que nenhuma tenha pago o alvo), 4.16 (11 posições de menos de 1 segundo
+contadas como trades, metade de tudo que o robô já fez com dinheiro real), 4.17 (limite ancorado em preço de 24 minutos atrás
 executando como agressor) e 4.18 (sombra +R$171,00 contra real −R$116,00 no
 mesmo minuto; R$430,00 de gap de execução, e 3 de 3 pregões reais negativos,
 −R$435,00 acumulados). Mais 1 item em 2026-09-08, fechando a primeira medição IS/OOS da config REAL
