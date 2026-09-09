@@ -884,6 +884,34 @@ def available_cash(slot_id: str, execution_mode: str = "live") -> Optional[float
     return None if conta is None else round(conta.cash_for(execution_mode), 2)
 
 
+def capital_em_posicao(conta) -> float:
+    """R$ já comprometidos nas posições abertas desta conta — o que o caixa
+    LIVRE deixou de mostrar porque virou posição.
+
+    Existe para o portão de caixa somar `caixa + posição aberta` antes de
+    comparar com o piso (ver `start()` e `dashboard.app.operacao_iniciar`):
+    sem isso, reiniciar o processo só para continuar vigiando uma posição
+    que já existe ficava bloqueado, porque a entrada debitou o caixa.
+
+    `capital_allocated` é o número certo, e não `preço x quantidade`
+    (2026-09-09): aquele é o valor NOCIONAL, e num futuro o nocional não é
+    caixa nenhum — 1 contrato de WDO@ aberto contava ~R$5.100 de
+    "comprometido" onde a corretora reservou R$150, inflando o portão em 34x
+    e deixando passar um robô que o piso deveria barrar. `capital_allocated`
+    é exatamente o que `IntradayLiveRuntime._on_opened` debitou do caixa
+    (margem em futuro, preço cheio em ação), então as duas metades da soma
+    voltam a falar da mesma moeda.
+
+    Em MÓDULO: capital comprometido é comprometido nos dois lados, e
+    `quantity` vem negativa numa vendida."""
+    if conta is None:
+        return 0.0
+    return sum(
+        abs(float(p.capital_allocated or 0.0)) or abs(int(p.quantity)) * float(p.entry_price)
+        for p in conta.positions.values()
+    )
+
+
 #: Quanto tempo uma cotação lida do terminal vale antes de ser relida. O
 #: painel repinta a cada poucos segundos e o piso de caixa aparece em vários
 #: cartões ao mesmo tempo — sem o TTL, cada repintura abriria uma consulta por
@@ -1177,10 +1205,7 @@ def start(config: ProcessConfig) -> dict:
             from journal import live_store
             with live_store.live_journal() as conn:
                 conta = live_store.load_account(conn, config.slot)
-            comprometido = (
-                sum(abs(p.quantity) * p.entry_price for p in conta.positions.values())
-                if conta is not None else 0.0
-            )
+            comprometido = capital_em_posicao(conta)
         else:
             comprometido = 0.0
         if caixa is None or (caixa + comprometido) < piso:

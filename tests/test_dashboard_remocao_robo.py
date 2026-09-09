@@ -105,7 +105,33 @@ def test_dialogo_lista_ordem_e_resultado_estimado(client, isolated_journal, monk
 
     assert "#123456" in html and "0,13" in html
     assert "encerrada a mercado" in html
-    assert "prejuízo de R$ 1,00" in html
+    # O popup mostra o número LÍQUIDO desde 2026-09-09, o mesmo que a remoção
+    # vai creditar (antes ele prometia um resultado melhor que o cobrado), e
+    # líquido dos DOIS custos de uma saída a mercado: 1 tick de derrapagem
+    # (R$0,01 numa ação, a saída vende a R$0,12 -> R$2,00 de prejuízo bruto)
+    # mais R$0,01 de taxa de bolsa do round-trip.
+    assert "prejuízo de R$ 2,01" in html
+    assert "1 tick de derrapagem" in html
+
+
+def test_preco_recusado_explica_o_motivo_em_vez_de_dizer_que_nao_ha_preco(
+        client, isolated_journal, monkeypatch):
+    """"Não achei preço" e "achei e recusei" levam o dono a ações diferentes:
+    no segundo caso abrir o MT5 e remover de novo dá um número de verdade. O
+    diálogo dizia a mesma frase para os dois, e o dono confirmaria achando que
+    o painel está cego."""
+    _conta(isolated_journal)
+    monkeypatch.setattr(live_teardown, "inspecionar", lambda slot: _pendencias(
+        posicao={"side": "long", "price": 0.14, "quantity": 100},
+        preco_atual=None,
+        preco_recusado="a ultima barra salva e' de 2026-08-28, 12 dias atras "
+                       "(o limite e' 5)"))
+
+    html = client.post(f"/operacao/{SLOT}/remover", data={}).text
+
+    assert "12 dias atras" in html
+    assert "encerrada pelo próprio preço de entrada" in html
+    assert "Não consegui ler o preço de agora" not in html
 
 
 def test_corretora_muda_nao_oferece_o_botao_de_remover(client, isolated_journal, monkeypatch):

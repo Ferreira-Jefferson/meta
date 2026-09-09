@@ -106,9 +106,19 @@
       um <span class="neg">prejuízo de R$ {{ (0 - remocao.pl_estimado) | num_br }}</span>.
       {% endif %}
       <span class="ops-modal-hint">
-        Estimativa, não promessa: o preço de execução depende da fila no
-        momento do envio, e a corretagem não está descontada.
+        Já com corretagem, emolumentos e 1 tick de derrapagem descontados —
+        saída a mercado não preenche no preço de tela. Ainda é estimativa, não
+        promessa: o preço de execução depende da fila no momento do envio.
       </span>
+      {% elif remocao.preco_recusado %}
+      {#  Há preço, e ele foi RECUSADO por velho (`_preco_velho_demais`).
+          Dizer QUAL é a diferença entre o dono fechar o diálogo e abrir o MT5
+          (o número sai certo) e ele confirmar assim mesmo achando que o
+          painel está cego. #}
+      Não estimo o resultado por esse preço: {{ remocao.preco_recusado }}. Se
+      confirmar assim, a posição é encerrada pelo próprio preço de entrada —
+      entra no caixa de sombra só o custo da saída, não o resultado. Com o
+      terminal MT5 aberto o número sai certo.
       {% else %}
       Não consegui ler o preço de agora, então não dá para estimar o resultado
       dessa saída.

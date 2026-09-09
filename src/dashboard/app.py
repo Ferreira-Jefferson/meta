@@ -1327,15 +1327,13 @@ async def operacao_iniciar(request: Request, slot_id: str):
         # Soma o que já está comprometido numa posição aberta deste slot
         # (2026-08-24, mesmo dia da correção que passou a debitar o custo da
         # entrada do caixa em `live.intraday_runtime._on_opened`) -- mesma
-        # regra de `live_control.start()` (ver o comentário lá para o
-        # raciocínio completo): sem isto, reiniciar o processo para só
-        # continuar vigiando uma posição que já existe ficava bloqueado pelo
-        # piso, porque o caixa LIVRE caiu abaixo dele assim que a entrada
-        # começou a ser debitada.
-        comprometido = (
-            sum(abs(p.quantity) * p.entry_price for p in conta.positions.values())
-            if conta is not None else 0.0
-        )
+        # regra de `live_control.start()`: sem isto, reiniciar o processo para
+        # só continuar vigiando uma posição que já existe ficava bloqueado
+        # pelo piso, porque o caixa LIVRE caiu abaixo dele assim que a entrada
+        # começou a ser debitada. A conta mora em `capital_em_posicao` (ver a
+        # docstring de lá: nocional NÃO é caixa num futuro) para os dois
+        # portões não divergirem.
+        comprometido = live_control.capital_em_posicao(conta)
         if (ledger + comprometido) < piso:
             rotulo_saldo = "sombra" if execution_mode == "shadow" else "real"
             erro = (

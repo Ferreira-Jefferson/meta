@@ -47,6 +47,364 @@ from core.live_models import Fill, Order, OrderSide, OrderStatus, OrderType
 _TOLERANCIA_CAIXA = 0.005
 
 
+# ---------- a economia de uma posição (AÇÃO x FUTURO) -----------------------
+#
+# Três números precisam estar certos para uma posição virar dinheiro, e em
+# AÇÃO os três são tão triviais que dava para não pensar neles. Foi o que
+# aconteceu -- e o dia em que um robô de FUTURO passou por aqui, os três
+# erraram juntos (2026-09-09, `dt-wdo_grid_reload_maker-wdo@-shadow`: um
+# short de 1 WDO@ @ 5133,0 encerrado deixou `cash_sombra = -R$4.706,00`):
+#
+#   * QUANTO VALE UM PONTO. Em ação, R$1,00 -- o preço já é em reais por
+#     ação. Em futuro, o preço vem em PONTOS do dólar/índice: 1 ponto do
+#     WDO@ vale R$10,00 e 1 do WIN@, R$0,20. Sem isso, 52 pontos de perda
+#     viraram "R$52,00" em vez de R$520,00.
+#   * QUANTO ESTÁ PRESO NO CAIXA. Em ação, o preço cheio do lote (comprar
+#     100 x R$0,14 custa R$14,00 de verdade). Em futuro, só a MARGEM
+#     (R$150 por contrato de WDO@): do nocional de ~R$5.100 nada é caixa.
+#     Devolver o nocional ao fechar credita dinheiro que nunca saiu.
+#   * O LADO, uma vez só. `live_positions.quantity` vem NEGATIVA numa
+#     vendida (`IntradayLiveRuntime._on_opened`) E o lado está em
+#     `metadata["side"]`; aplicar os dois inverte o resultado, e no caminho
+#     do capital transforma um crédito num débito do tamanho do nocional.
+#     Numa COMPRADA o mesmo código não debita: INFLA o caixa em ~R$5.100,
+#     que é pior, porque não chama atenção de ninguém.
+#
+# As três funções abaixo são a resposta a cada um, e existem separadas para
+# `inspecionar()` (o número do popup), `_limpar_na_corretora()` (o P&L do
+# fechamento real) e `_encerrar_posicao_sombra()` (o que mexe no caixa)
+# usarem exatamente a MESMA conta.
+
+
+def _preco_de_saida(symbol: str) -> tuple[Optional[float], str]:
+    """`(preço, origem)` para marcar uma posição a mercado AGORA.
+
+    `live_control.preco_de_referencia`: cotação ao vivo do terminal
+    primeiro, último fechamento de minuto salvo em parquet como retaguarda.
+    `(None, "")` se nenhum dos dois responder.
+
+    POR QUE NÃO O PARQUET DIRETO, que era o que estava aqui. Nada salva
+    aquele arquivo sozinho -- o robô ao vivo lê barra direto do terminal e
+    nunca escreve nele, o download é script manual. Medido em 2026-09-09:
+    `_ultimo_preco("WDO@")` devolvia 5185,0 de 28/08, **12 dias velho**,
+    enquanto o mini-dólar negociava a ~5133. Encerrar uma posição contra um
+    preço de outra quinzena não é estimativa, é um número inventado com
+    cara de dado. É o mesmo achado que já tinha custado o piso de caixa da
+    PMAM3 (parquet parado 15 dias, +120% de defasagem) e criado
+    `preco_de_referencia`; este caminho ficou para trás.
+
+    O I/O NOVO NESTE CAMINHO, examinado e ACEITO (2026-09-09). Remover um
+    robô de SOMBRA era 100% offline antes desta troca; agora pode abrir uma
+    leitura no terminal. O que limita o custo, e é o que torna aceitável:
+
+      * só roda QUANDO HÁ POSIÇÃO ABERTA. Os dois chamadores saem antes
+        quando `conta.positions` não tem o símbolo (`inspecionar()` devolve
+        `Pendencias(ordens=[])` e `remover()` nem chama
+        `_encerrar_posicao_sombra`) -- que é o caso da esmagadora maioria
+        das remoções. Sem posição não há preço para marcar, então a consulta
+        não mudaria nada, e é por isso que ela não acontece;
+      * é UMA leitura por remoção, não uma por chamada. `inspecionar()` e
+        `_encerrar_posicao_sombra()` pedem o preço em sequência, mas
+        `preco_de_referencia` guarda a cotação por `_PRECO_TTL_SEGUNDOS`
+        (30s) num cache de processo compartilhado com o painel -- a segunda
+        chamada é acerto de cache;
+      * é `last_price` num `MT5Broker` de CONSULTA já instanciado
+        (`live_control._preco_broker`, sem `magic`, que nunca manda ordem), o
+        mesmo que o painel usa a cada repintura do piso de caixa. Não é uma
+        porta nova para a corretora, é a porta que já estava aberta;
+      * não bloqueia: qualquer falha (terminal fechado, credencial ausente)
+        vira `None` dentro de `_cotacao_do_terminal` e cai no parquet.
+
+    O que se compra com isso é o defeito nº 3 do item 5.19 -- encerrar uma
+    posição contra um preço de 12 dias atrás. Custo de um clique manual
+    contra um número inventado no caixa: o clique paga. Quando mesmo assim o
+    preço vier do parquet, `_encerrar_posicao_sombra` AVISA o dono com a data
+    dele, em vez de deixar a defasagem silenciosa.
+
+    A troca NÃO custa robustez, que é o que o módulo precisava preservar:
+    `preco_de_referencia` nunca levanta e nunca bloqueia por terminal
+    fechado (cai no parquet e diz de onde veio), então "sem preço" continua
+    caindo no preço de entrada em vez de travar a remoção. O I/O é LEITURA
+    (`_cotacao_do_terminal` -> `last_price`), nunca ordem, e é o mesmo
+    caminho que o painel já percorre a cada cálculo de piso de caixa. Na
+    suíte ele fica desligado por `tests/conftest.py`, então todo teste
+    continua lendo o parquet fixo do repo."""
+    from dashboard.live_control import preco_de_referencia
+
+    return preco_de_referencia(symbol)
+
+
+#: Idade maxima, em DIAS CORRIDOS, de uma barra salva que ainda serve para
+#: marcar uma posicao a mercado. Cinco cobre a maior distancia NORMAL entre
+#: dois pregoes consecutivos da B3 -- feriado emendado no fim de semana
+#: (quinta a terca) --, de modo que "o terminal estava fechado no fim de
+#: semana" nunca cai na recusa, e "o parquet nao e' atualizado ha mais de uma
+#: semana" sempre cai.
+_IDADE_MAXIMA_DO_PRECO_DIAS = 5
+
+
+def _preco_velho_demais(origem: str, entrada_em: Optional[date],
+                        hoje: Optional[date] = None) -> Optional[str]:
+    """Motivo para RECUSAR `origem` como marcacao a mercado, ou `None` quando
+    ela serve. `origem` e' o segundo item de `_preco_de_saida`: `"agora"`
+    (cotacao do terminal, sempre serve), `""` (nao veio preco nenhum, nao ha
+    o que julgar) ou a data ISO da ultima barra salva em parquet.
+
+    O QUE ESTA REGRA DECIDE, e o que ela deliberadamente NAO decide. Ela
+    recusa o PRECO, nunca a remocao. Travar a remocao tambem e' um modo de
+    falha -- e um caro: o robo fica preso no painel, com o cartao na tela e o
+    ativo bloqueado para qualquer outro robo, por causa de um terminal
+    fechado que o dono pode nem conseguir abrir agora. E o modulo ja tinha a
+    saida certa escrita para o caso vizinho ("nao veio preco nenhum"):
+    encerrar pelo PROPRIO preco de entrada, resultado bruto zero, e avisar. A
+    escolha real nao e' "encerrar com preco velho x nao encerrar" -- e'
+    "creditar um resultado inventado x creditar so' o custo conhecido", e a
+    segunda e' a mesma que `_valor_do_ponto_brl` ja faz: numero errado no
+    caixa e' pior que numero ausente.
+
+    Isso importa porque o erro de um preco velho NAO e' pequeno nem
+    aleatorio: ele credita um movimento de mercado que nunca aconteceu nesta
+    posicao, com sinal arbitrario e tamanho ilimitado. No caso real de
+    2026-09-09 o parquet do WDO@ estava em 5185,0 de 28/08 -- 12 dias -- e
+    aquele numero sozinho decidia R$520,00 num caixa simulado de R$375,00. Um
+    resultado bruto zero erra por no maximo o que a posicao realmente andou; o
+    preco de outra quinzena erra pelo que o mercado andou em duas semanas.
+
+    DOIS CRITERIOS, e o primeiro nao tem constante para discutir:
+
+      1. **anterior a propria posicao.** Uma barra de antes de a posicao
+         existir nao e' uma marcacao velha, e' uma impossibilidade logica --
+         nao ha preco de saida que anteceda a entrada. Foi exatamente esta a
+         forma do caso real (barra de 28/08 marcando uma posicao aberta em
+         09/09), e ela dispensa qualquer juizo sobre "quanto e' velho demais";
+      2. **mais de `_IDADE_MAXIMA_DO_PRECO_DIAS` dias corridos.** Pega o caso
+         que o criterio 1 nao pega: robo morto ha semanas, cuja posicao e o
+         parquet envelheceram JUNTOS. Aqui ha uma constante e ela e' uma
+         escolha -- ver a nota dela.
+
+    Data ilegivel devolve `None` de proposito: nao saber a idade nao autoriza
+    inventar uma recusa (o aviso de "nao e' a cotacao de agora" continua
+    saindo por outro caminho)."""
+    if origem in ("", "agora"):
+        return None
+    try:
+        quando = date.fromisoformat(origem)
+    except ValueError:
+        return None
+    if entrada_em is not None and quando < entrada_em:
+        return (f"a ultima barra salva e' de {origem}, ANTERIOR a abertura da "
+                f"posicao ({entrada_em.isoformat()}) -- nao existe preco de saida "
+                f"anterior a propria entrada")
+    idade = ((hoje or date.today()) - quando).days
+    if idade > _IDADE_MAXIMA_DO_PRECO_DIAS:
+        return (f"a ultima barra salva e' de {origem}, {idade} dias atras "
+                f"(o limite e' {_IDADE_MAXIMA_DO_PRECO_DIAS})")
+    return None
+
+
+def _valor_do_ponto_brl(symbol: str) -> Optional[float]:
+    """Quantos REAIS vale 1 ponto de preco de `symbol`, por unidade.
+
+    Sai do PERFIL do instrumento (`backtest.intraday.profiles.SymbolProfile.
+    point_value_brl`) -- 1,0 em acao (o preco ja e' em reais por acao),
+    R$0,20 no WIN@, R$10,00 no WDO@.
+
+    ANTES (ate 2026-09-09) saia do ROBO do slot, por um parametro homonimo
+    de `wdo_grid_reload_maker`/`copa_win`. Estava no lugar errado: valor do
+    ponto e' propriedade do INSTRUMENTO, nao de quem opera nele -- dois
+    robos no mesmo simbolo tem obrigatoriamente o mesmo numero, e um robo de
+    futuro NOVO que esquecesse o parametro fazia esta rotina responder "nao
+    sei quanto vale 1 ponto" e deixar de apurar o resultado da remocao.
+    Ler do perfil tambem tira daqui a dependencia do catalogo de robos: uma
+    conta criada com um robo que depois saiu do registry continua tendo o
+    resultado apurado, porque o INSTRUMENTO nao mudou.
+
+    Continua sem tocar no terminal, de proposito: este caminho roda depois
+    de o processo do robo ja' ter morrido e precisa funcionar com o MT5
+    fechado.
+
+    `None` = perfil de futuro que nao declara o valor do ponto (hoje
+    impossivel -- `_futures_profile` exige o campo -- mas o guard fica).
+    Quem chama trata como "nao sei" e nao credita resultado nenhum: num WDO@
+    o chute de 1,0 erraria por 10x, e numero errado no caixa e' pior que
+    numero ausente."""
+    from backtest.intraday.profiles import profile_for
+
+    try:
+        perfil = profile_for(symbol)
+    except KeyError:
+        # Sem perfil declarado so chega acao (simbolo novo, slot de swing):
+        # futuro sem perfil nao consegue nem ser iniciado pelo painel.
+        return 1.0
+    if not perfil.is_futures:
+        return 1.0
+    valor = perfil.point_value_brl
+    return float(valor) if valor else None
+
+
+def _custos_de_saida(symbol: str, quantidade: int, entrada: float,
+                     saida: float) -> Optional[float]:
+    """Corretagem + emolumentos, em R$, de um round-trip de `quantidade`
+    unidades de `symbol` entre `entrada` e `saida`. `None` quando o
+    instrumento nao tem perfil (nao da' para saber o que ele cobra).
+
+    MESMA formula e MESMOS numeros do fechamento normal: o motor cobra
+    `backtest.intraday.costs.fees_round_trip_brl` uma vez, no fechamento,
+    pelo round-trip inteiro (`IntradayTrade.pnl_brl` subtrai `fees_total`), e
+    `live.intraday_runtime._on_closed` credita no caixa esse liquido. Sem
+    isto, remover o robo com posicao aberta creditava um numero LEVEMENTE
+    MELHOR do que fechar a mesma posicao pelo caminho normal -- duas rotas
+    para o mesmo evento com contabilidade diferente, que e' a familia de bug
+    dos itens 5.7/5.19 vista pelo lado do custo.
+
+    POR QUE NAO `config_for` (que e' quem monta o modelo em todo o resto do
+    projeto). Ele exige a economia lida do TERMINAL (`trade_tick_value`/
+    `trade_tick_size`, via `market_data_intraday.mt5_source.symbol_economics`)
+    e este caminho tem de funcionar com o MT5 fechado e com o processo do
+    robo ja' morto -- pedir I/O de corretora aqui trocaria um erro de
+    centavos por uma remocao que trava quando o terminal nao responde.
+    `cost_model_from_profile` monta o modelo com os MESMOS campos do perfil
+    que `config_for` leria (`fee_round_trip_brl`, `exchange_fee_pct_per_leg`,
+    `point_value_brl`), que e' tudo que a conta de TAXA usa.
+
+    O QUE FICA DE FORA, e e' separacao de responsabilidade, nao esquecimento:
+    a SLIPPAGE. No motor ela nao e' uma taxa -- e' um ajuste no PRECO de
+    execucao (`apply_intraday_slippage`) --, entao ela entra por
+    `_preco_de_execucao_a_mercado` ANTES desta funcao, e o `saida` que chega
+    aqui ja e' o preco executado. Cobra-la tambem como taxa contaria o mesmo
+    custo duas vezes (e sobre o notional errado: a taxa percentual segue o
+    preco REAL de cada perna)."""
+    from backtest.intraday.costs import fees_round_trip_brl
+    from backtest.intraday.profiles import cost_model_from_profile, profile_for
+
+    try:
+        perfil = profile_for(symbol)
+    except KeyError:
+        return None
+    modelo = cost_model_from_profile(perfil)
+    if modelo is None:
+        return None
+    return round(
+        fees_round_trip_brl(abs(int(quantidade)), float(entrada), float(saida), modelo), 2)
+
+
+def _preco_de_execucao_a_mercado(symbol: str, marcado: float, lado: str) -> float:
+    """O preco que uma saida A MERCADO de `lado` (`"long"`/`"short"`) sairia,
+    partindo da marcacao `marcado`: 1 tick CONTRA a posicao. Devolve `marcado`
+    intacto quando o instrumento nao tem perfil (sem perfil nao ha tick, e
+    chutar o passo de preco erraria por 50x entre uma acao e um WDO@).
+
+    POR QUE ISTO EXISTE, e por que a resposta e' DIFERENTE nas duas rotas de
+    fechamento deste modulo (2026-09-09). O texto anterior dizia que cobrar
+    slippage aqui "inventaria um fill que ninguem observou" e deixava as duas
+    rotas sem cobrar. Metade do argumento estava certa, e a metade certa e' a
+    que se aplica a rota ERRADA:
+
+      * `_limpar_na_corretora` (robo REAL) NAO passa por aqui, e nao pode
+        passar: a corretora EXECUTOU, e `executada.avg_price` e' o preco
+        observado -- a derrapagem ja aconteceu e ja esta DENTRO dele. Piorar
+        esse numero em 1 tick seria cobrar duas vezes um custo que o extrato
+        ja cobrou uma;
+      * `_encerrar_posicao_sombra` (robo de SOMBRA) passa: ninguem executou
+        nada, e e' exatamente por isso que o custo tem de ser MODELADO. A
+        alternativa nao e' "nao inventar um fill" -- e' inventar um fill
+        PERFEITO, ao preco de tela, que e' a unica coisa que a corretora
+        garantidamente nao faz.
+
+    Quem ja tinha decidido isto e' o proprio motor, e a regra aqui e' copia
+    fiel dele: `machine._close_position` calcula `exec_px =
+    apply_intraday_slippage(...)` e SO' o substitui pelo preco da corretora
+    quando existe execucao real (`self.execution is not None`). Em sombra o
+    motor fica com o preco deslizado -- ou seja, fechar a mesma posicao pelo
+    caminho normal, em sombra, JA pagava o tick. Remover o robo era a unica
+    rota que nao pagava, e "duas rotas para o mesmo evento com contabilidade
+    diferente" e a familia de bug dos itens 5.7/5.19.
+
+    O sinal do erro tambem manda: creditar de menos assusta o dono, creditar
+    de MAIS nao chama atencao de ninguem e vira tamanho de posicao no pregao
+    seguinte (item 5.19, "caixa inflado e' pior que caixa negativo").
+
+    QUANTOS TICKS. `IntradayCostModel.slippage_ticks`, lido do proprio
+    dataclass em vez de redigitado -- e' o numero que o motor usa em toda
+    saida a mercado (1,0 hoje). `cost_model_from_profile` zera esse campo de
+    proposito (a docstring de la' diz por que: quem chama normalmente ja tem
+    o preco executado em maos), entao a reposicao acontece aqui, no unico
+    ponto do modulo que precisa ESTIMAR uma execucao. Vale R$5,00 num
+    contrato de WDO@ (tick de 0,5 pt x R$10,00/pt) e R$1,00 num lote de 100
+    acoes de R$0,13 -- num papel de centavos o tick e' o custo dominante, e
+    esconde-lo era o que fazia a remocao parecer barata."""
+    from dataclasses import replace
+
+    from backtest.intraday.costs import IntradayCostModel, apply_intraday_slippage
+    from backtest.intraday.profiles import cost_model_from_profile, profile_for
+
+    try:
+        perfil = profile_for(symbol)
+    except KeyError:
+        return float(marcado)
+    modelo = cost_model_from_profile(perfil)
+    if modelo is None:
+        return float(marcado)
+    # `lado` e' o lado da POSICAO; a ordem que a fecha e' a oposta -- fechar
+    # comprado e' vender (sai mais BAIXO), fechar vendido e' comprar (sai
+    # mais ALTO). Mesma convencao de `machine._exit_side`.
+    saida = "sell" if lado == "long" else "buy"
+    return apply_intraday_slippage(
+        float(marcado), saida,
+        replace(modelo, slippage_ticks=IntradayCostModel.slippage_ticks))
+
+
+def _capital_comprometido(pos, symbol: str) -> float:
+    """R$ que esta posição prendeu no caixa ao abrir -- é o que volta a ele
+    quando ela fecha. SEMPRE positivo, nos dois lados: capital comprometido é
+    comprometido em compra e em venda (mesma razão de
+    `LivePosition.market_value` usar `abs`).
+
+    Preferência absoluta por `capital_allocated`, que é exatamente o número
+    que `IntradayLiveRuntime._on_opened` DEBITOU (`_custo_posicao`: margem em
+    futuro, preço cheio em ação). Devolver ao caixa uma conta diferente da
+    que saiu dele é como um bookkeeping deixa de fechar -- e recalcular por
+    fora é justamente o convite para as duas pontas divergirem.
+
+    A retaguarda só serve a linha antiga ou sintética sem o campo preenchido:
+    margem do perfil em futuro, preço de entrada em ação."""
+    alocado = abs(float(getattr(pos, "capital_allocated", 0.0) or 0.0))
+    if alocado:
+        return alocado
+
+    from backtest.intraday.profiles import profile_for
+
+    quantidade = abs(int(pos.quantity))
+    try:
+        perfil = profile_for(symbol)
+    except KeyError:
+        perfil = None
+    margem = perfil.margin_per_contract_brl if perfil is not None and perfil.is_futures else None
+    if margem:
+        return float(margem) * quantidade
+    return float(pos.entry_price) * quantidade
+
+
+def _pl_brl(entrada: float, saida: float, quantidade: int, lado: str,
+            valor_do_ponto: Optional[float]) -> Optional[float]:
+    """Resultado em R$ de fechar `quantidade` unidades a `saida`, ou `None`
+    quando não se sabe quanto vale um ponto do instrumento.
+
+    Mesma convenção de `backtest.intraday.costs.gross_pnl_brl`, a fórmula
+    canônica do motor: o LADO decide o sinal dos pontos (`long` ganha quando
+    o preço sobe, `short` quando cai) e a quantidade entra em MÓDULO. Aplicar
+    o lado duas vezes -- uma nos pontos, outra na quantidade negativa de uma
+    vendida -- é o que fez uma perda de 52 pontos aparecer como "lucro de
+    R$52,00" em 2026-09-09.
+
+    Bruto, sem corretagem, pelo mesmo motivo de sempre neste módulo: é
+    estimativa para o dono decidir com ordem de grandeza na tela."""
+    if valor_do_ponto is None:
+        return None
+    pontos = (entrada - saida) if lado == "short" else (saida - entrada)
+    return round(pontos * abs(int(quantidade)) * float(valor_do_ponto), 2)
+
+
 @dataclass(frozen=True)
 class OrdemPendurada:
     """Uma ordem-limite viva na corretora, como ela é lá — não como o nosso
@@ -93,8 +451,40 @@ class Pendencias:
     ordens: Optional[list[OrdemPendurada]] = None
     posicao: Optional[dict] = None
     preco_atual: Optional[float] = None
+    #: Por que o preço que existia foi RECUSADO como marcação a mercado
+    #: (`_preco_velho_demais`), ou `None`. Quando está preenchido,
+    #: `preco_atual` vem `None` de propósito -- não é "não achei preço", é
+    #: "achei e não sirvo dele", e a tela precisa dizer qual dos dois.
+    preco_recusado: Optional[str] = None
     erro_corretora: Optional[str] = None
     erro_processo: Optional[str] = None
+
+    @property
+    def valor_do_ponto(self) -> Optional[float]:
+        """R$ por PONTO de preço deste instrumento -- 1,0 em ação, R$10,00 no
+        WDO@ (ver `_valor_do_ponto_brl`). `None` = futuro cujo valor do ponto
+        não se descobriu, e aí `pl_estimado` responde "não sei" em vez de
+        mostrar ao dono um número 10x errado.
+
+        DERIVADO DO SÍMBOLO, nunca recebido de fora (2026-09-09). Era um
+        CAMPO com default 1,0, e isso deixava `pl_estimado` misturar duas
+        fontes na mesma conta: o valor do ponto vinha do que o chamador
+        tivesse passado, e as taxas de `_custos_de_saida` vinham do perfil
+        resolvido por `self.symbol`. Nada impedia
+        `Pendencias(symbol="WDO@", valor_do_ponto=1.0)` -- e o resultado não
+        seria "errado por um fator conhecido", seria um número MISTO: pontos
+        contados como reais no bruto, tarifa de contrato de futuro no
+        desconto. É o modo de falha do item 5.19 pelo lado da entrada
+        (multiplicador do instrumento errado), e a única defesa era ninguém
+        digitar.
+
+        Como propriedade, a incoerência deixa de ser possível em vez de
+        depender de disciplina: as DUAS pontas da conta -- multiplicador e
+        tarifa -- passam a sair do mesmo `profile_for(self.symbol)`. É a
+        mesma decisão que tirou o valor do ponto do robô e o pôs no perfil
+        (ver `_valor_do_ponto_brl`), agora aplicada ao último lugar que
+        ainda aceitava o número por parâmetro."""
+        return _valor_do_ponto_brl(self.symbol)
 
     @property
     def consultou_corretora(self) -> bool:
@@ -110,23 +500,51 @@ class Pendencias:
 
     @property
     def pl_estimado(self) -> Optional[float]:
-        """Resultado que encerrar a posição a mercado realizaria, pelo último
-        preço negociado. `None` quando não há posição ou não há preço.
+        """Resultado que encerrar a posição a mercado realizaria, pelo preço
+        de agora. `None` quando não há posição, não há preço ou não se sabe
+        quanto vale um ponto do instrumento.
 
-        Bruto, sem corretagem: o valor existe para o dono decidir com ordem
-        de grandeza na tela, e inventar uma taxa aqui daria falsa precisão a
-        um número que já é estimativa (o preço de execução real depende da
-        fila)."""
+        LÍQUIDO de corretagem e emolumentos (2026-09-09) -- `_custos_de_
+        saida`, a mesma conta que o motor cobra no fechamento. O texto que
+        estava aqui dizia que somar taxa "daria falsa precisão a um número
+        que já é estimativa", e isso confunde as duas incertezas: o que é
+        estimativa neste número é o PREÇO (a fila decide onde a ordem sai);
+        a taxa não é estimada nem inventada, está declarada no perfil do
+        instrumento e é exatamente o que vai ser debitado. Deixá-la de fora
+        fazia o popup prometer um número melhor do que o que a remoção
+        credita em seguida -- as duas pontas do mesmo evento com
+        contabilidade diferente, que é a família de bug dos itens 5.7/5.19.
+
+        A quantidade entra em MÓDULO (2026-09-09). Numa posição vinda do
+        BANCO ela é negativa quando vendida, e o `qtd <= 0` que estava aqui
+        devolvia `None` para toda vendida: o popup apagava a linha do
+        resultado justamente no lado em que o dono mais precisa vê-la, e
+        parecia "não há preço" em vez de "não sei ler esta posição". Da
+        corretora ela vem positiva com o lado à parte, então os dois
+        caminhos passam a ler igual."""
         if not self.posicao or not self.preco_atual:
             return None
         entrada = float(self.posicao.get("price") or 0.0)
-        qtd = int(self.posicao.get("quantity") or 0)
+        qtd = abs(int(self.posicao.get("quantity") or 0))
         if entrada <= 0 or qtd <= 0:
             return None
-        delta = self.preco_atual - entrada
-        if self.posicao.get("side") == "short":
-            delta = -delta
-        return round(delta * qtd, 2)
+        lado = self.posicao.get("side") or "long"
+        # SLIPPAGE, como o motor (2026-09-09): `preco_atual` é a marcação, e
+        # a saída é a MERCADO nos dois modos ("encerrada localmente" em
+        # sombra é uma saída a mercado simulada; no real é uma de verdade).
+        # O popup existe para PREVER o número que vem em seguida -- em
+        # sombra, exatamente o que `_encerrar_posicao_sombra` vai creditar;
+        # no real, o `avg_price` que a corretora vai devolver, que também
+        # sai ~1 tick pior que a tela. Mostrar o preço de tela limpo fazia o
+        # diálogo prometer um resultado melhor que o dos dois desfechos
+        # possíveis -- o mesmo defeito que o desconto de taxa já tinha
+        # fechado logo acima, no eixo que faltava.
+        saida = _preco_de_execucao_a_mercado(self.symbol, float(self.preco_atual), lado)
+        bruto = _pl_brl(entrada, saida, qtd, lado, self.valor_do_ponto)
+        if bruto is None:
+            return None
+        taxas = _custos_de_saida(self.symbol, qtd, entrada, saida)
+        return round(bruto - (taxas or 0.0), 2)
 
     @property
     def tem_o_que_desfazer(self) -> bool:
@@ -191,7 +609,26 @@ class ResultadoRemocao:
             preco = self.posicao_encerrada.get("price")
             texto = f"posição encerrada a R$ {preco:.2f}" if preco else "posição encerrada"
             if pl is not None:
-                texto += f" ({'lucro' if pl >= 0 else 'prejuízo'} de R$ {abs(pl):.2f})"
+                texto += f" ({'lucro' if pl >= 0 else 'prejuízo'} de R$ {abs(pl):.2f}"
+                # O número é LÍQUIDO (ver `_custos_de_saida`); dizer o custo
+                # junto é o que impede o dono de conferir contra o extrato e
+                # achar que falta dinheiro.
+                #
+                # DOIS custos, somados aqui, separados no dicionário: taxa
+                # (corretagem+emolumentos) e derrapagem. A derrapagem só
+                # existe na rota de SOMBRA -- na real ela já está dentro do
+                # `avg_price` da corretora e não tem como ser destacada (ver
+                # `_preco_de_execucao_a_mercado`). Somar sem dizer o total
+                # faria "já com R$ 0,50 de custo" aparecer ao lado de um
+                # prejuízo em que R$5,00 vieram do tick.
+                taxas = self.posicao_encerrada.get("taxas") or 0.0
+                deslize = self.posicao_encerrada.get("deslize") or 0.0
+                custo = taxas + deslize
+                if custo and deslize:
+                    texto += (f", já com R$ {custo:.2f} de custo — R$ {taxas:.2f} "
+                              f"de taxa e R$ {deslize:.2f} de derrapagem)")
+                else:
+                    texto += f", já com R$ {custo:.2f} de custo)" if custo else ")"
             partes.append(texto)
         if self.caixa_zerado:
             partes.append(f"caixa de R$ {self.caixa_zerado:.2f} zerado")
@@ -294,15 +731,29 @@ def inspecionar(slot) -> Pendencias:
     if modo == "shadow" or not slot.symbol:
         if posicao_sombra is None:
             return Pendencias(ordens=[], **base)
-        from dashboard.robot_view import _ultimo_preco
 
-        preco_atual, _ = _ultimo_preco(slot.symbol)
+        preco_atual, origem = _preco_de_saida(slot.symbol)
+        # MESMA regra que `_encerrar_posicao_sombra` aplica na hora de
+        # creditar (`_preco_velho_demais`): o popup não pode estimar o
+        # resultado por um preço que a remoção vai recusar em seguida. Sem
+        # isto o diálogo prometia "prejuízo de R$520,00" e a remoção
+        # creditava só o custo -- as duas pontas do mesmo evento com
+        # contabilidade diferente, de novo.
+        recusado = _preco_velho_demais(origem, posicao_sombra.entry_date)
         posicao = {
             "side": posicao_sombra.metadata.get("side") or "long",
-            "quantity": posicao_sombra.quantity,
+            # Em MÓDULO, como a posição que vem da CORRETORA (lá o lado é
+            # campo à parte e a quantidade é sempre positiva). Sem isto o
+            # popup escrevia "A posição de -1 WDO@ (vendida...)", com o lado
+            # dito duas vezes e uma delas em forma de sinal.
+            "quantity": abs(int(posicao_sombra.quantity)),
             "price": posicao_sombra.entry_price,
         }
-        return Pendencias(ordens=[], posicao=posicao, preco_atual=preco_atual, **base)
+        return Pendencias(
+            ordens=[], posicao=posicao,
+            preco_atual=None if recusado else preco_atual,
+            preco_recusado=recusado if preco_atual is not None else None,
+            **base)
 
     broker = _broker_do_slot(slot)
     try:
@@ -326,6 +777,9 @@ def inspecionar(slot) -> Pendencias:
     except Exception as e:  # noqa: BLE001 - qualquer falha aqui é "não sei"
         return Pendencias(erro_corretora=f"{type(e).__name__}: {e}", **base)
 
+    # Sem `_preco_velho_demais` aqui, de propósito: `broker.last_price` é a
+    # cotação do terminal AGORA ou `None` -- não existe a categoria "barra
+    # salva de outro dia" neste caminho, que é o que aquela regra julga.
     return Pendencias(
         ordens=[OrdemPendurada(**o) for o in ordens],
         posicao=posicao, preco_atual=preco, **base,
@@ -548,14 +1002,42 @@ def _limpar_na_corretora(slot, resultado: ResultadoRemocao) -> bool:
         return False
     preco = float(executada.avg_price)
     entrada = float(posicao.get("price") or 0.0)
-    delta = preco - entrada
-    if posicao["side"] == "short":
-        delta = -delta
+    # `_pl_brl` converte PONTO em REAL (2026-09-09): sem isso o fechamento de
+    # 1 contrato de WDO@ era reportado ao dono como "R$52,00" quando a
+    # corretora tinha creditado/debitado R$520,00 -- 1 ponto do mini-dólar
+    # vale R$10,00. Aqui é só o texto do resumo (o caixa REAL é o extrato da
+    # corretora, este módulo nunca o escreve), mas um número 10x errado na
+    # tela é o que o dono usa para decidir o que fazer em seguida.
+    #
+    # SEM SLIPPAGE, e é a diferença deliberada para o caminho de sombra
+    # (2026-09-09 -- ver `_preco_de_execucao_a_mercado`). `executada.
+    # avg_price` é o preço que a corretora EXECUTOU: a derrapagem não é uma
+    # estimativa a somar, ela já aconteceu e já está dentro deste número.
+    # Piorá-lo em 1 tick cobraria duas vezes o que o extrato cobra uma, e
+    # faria o resumo da tela deixar de bater com o extrato -- que é
+    # exatamente o que este bloco existe para garantir. Mesma regra do motor:
+    # `machine._close_position` só troca o preço estimado pelo da corretora
+    # quando há execução real.
+    bruto = (_pl_brl(entrada, preco, int(posicao["quantity"]), posicao["side"],
+                     _valor_do_ponto_brl(slot.symbol))
+             if entrada > 0 else None)
+    # LÍQUIDO, igual ao caminho de sombra e ao fechamento normal do motor
+    # (2026-09-09). Aqui o caixa real é o extrato da corretora -- este módulo
+    # nunca o escreve --, mas o número da tela é o que o dono compara com o
+    # extrato: reportar bruto o faria procurar uma diferença que não existe.
+    taxas = (None if bruto is None else
+             _custos_de_saida(slot.symbol, int(posicao["quantity"]), entrada, preco))
     resultado.posicao_encerrada = {
         "quantity": int(posicao["quantity"]),
         "side": posicao["side"],
         "price": preco,
-        "pl": round(delta * int(posicao["quantity"]), 2) if entrada > 0 else None,
+        "pl": None if bruto is None else round(bruto - (taxas or 0.0), 2),
+        "taxas": taxas,
+        # Sempre `None` nesta rota, e a chave existe para dizer isso: não é
+        # "não houve derrapagem", é "ela está DENTRO do `avg_price` e não dá
+        # para destacá-la". Só a rota de sombra, que modela o preço, sabe
+        # quanto do resultado veio do tick.
+        "deslize": None,
     }
     if executada.status == OrderStatus.PARTIAL:
         resultado.avisos.append(
@@ -641,13 +1123,46 @@ def _encerrar_posicao_sombra(slot, resultado: ResultadoRemocao) -> None:
     processo já foi encerrado no passo anterior, então nada mais está
     escrevendo nesta conta.
 
-    Preço de saída: o último fechamento de minuto salvo (`_ultimo_preco`),
-    o mesmo número que a ficha do robô usa para estimar P&L de posição
-    aberta. Sem preço salvo, sai pelo próprio preço de entrada (PnL zero)
-    -- estimar é melhor que travar a remoção, mas inventar um preço seria
-    pior que os dois. Credita em `cash_sombra` (nunca `cash`, o ledger
-    manual real) -- mesma regra de `IntradayLiveRuntime._on_closed`."""
-    from dashboard.robot_view import _ultimo_preco
+    Preço de saída, em duas etapas que não se misturam:
+
+      * a MARCAÇÃO (`preco_marcado`) -- `_preco_de_saida`: cotação do
+        terminal, parquet como retaguarda. Sem nenhum dos dois, ou com uma
+        barra salva que `_preco_velho_demais` RECUSA, cai no próprio preço de
+        entrada: estimar é melhor que travar a remoção, mas encerrar contra
+        um preço de outra quinzena é pior que os dois (ver a docstring
+        daquela função para por que a recusa é do PREÇO e nunca da remoção);
+      * o preço EXECUTADO (`preco`) -- a marcação piorada em 1 tick por
+        `_preco_de_execucao_a_mercado`, porque isto aqui é uma saída a
+        mercado simulada e o motor cobra o tick nela (2026-09-09). É este
+        que vira `Order`/`Fill` e resultado, como no motor.
+
+    Credita em `cash_sombra` (nunca `cash`, o ledger manual real) -- mesma
+    regra de `IntradayLiveRuntime._on_closed`.
+
+    O CAIXA SE MOVE POR DOIS MOTIVOS SOMADOS, e eles são independentes (ver
+    o bloco "a economia de uma posição" no topo do módulo):
+
+      * `liberado` -- o capital que a ENTRADA prendeu volta inteiro. É
+        `capital_allocated`, o mesmo número que `_on_closed` devolve: MARGEM
+        num futuro (R$150/contrato de WDO@), preço cheio numa ação;
+      * `pnl` -- o resultado, em REAIS, convertido do ponto do instrumento e
+        LÍQUIDO dos DOIS custos que um fechamento a mercado paga
+        (2026-09-09): corretagem/emolumentos (`_custos_de_saida`) e a
+        derrapagem de 1 tick, que entra pelo PREÇO
+        (`_preco_de_execucao_a_mercado`) e não como taxa, igual ao motor.
+        Até 2026-09-09 ele era bruto nos dois eixos, e o efeito era que
+        remover o robô com posição aberta creditava um número MELHOR do que
+        fechar a mesma posição pelo caminho normal (`_on_closed`, que
+        subtrai `IntradayTrade.fees_total` sobre um preço que a máquina já
+        deslizou) -- duas rotas para o mesmo evento com contabilidade
+        diferente.
+
+    O que estava aqui somava as duas coisas erradas ao mesmo tempo, em
+    2026-09-09, sobre um short de 1 WDO@ @ 5133,0 com `cash_sombra` de
+    R$375,00: devolvia o NOCIONAL com o sinal da quantidade
+    (`5133,00 x -1`) e chamava 52 pontos de perda de "lucro de R$52,00",
+    fechando em **-R$4.706,00**. Com esta conta, o mesmo caso dá
+    `375,00 + 150,00 - 520,00 = R$5,00`."""
     from journal import live_store
 
     with live_store.live_journal() as conn:
@@ -658,42 +1173,142 @@ def _encerrar_posicao_sombra(slot, resultado: ResultadoRemocao) -> None:
         if pos is None:
             return
 
-        preco_atual, _ = _ultimo_preco(slot.symbol)
-        preco = preco_atual if preco_atual is not None else pos.entry_price
+        preco_atual, origem = _preco_de_saida(slot.symbol)
+        # RECUSA de preço velho (item 5.19c, fechado em 2026-09-09). O aviso
+        # sozinho não bastava: ele conta ao dono que o caixa recebeu um
+        # número de outro dia DEPOIS de o número já estar lá, e ninguém
+        # desfaz um crédito lendo um aviso. Barra salva anterior à própria
+        # posição, ou com mais de `_IDADE_MAXIMA_DO_PRECO_DIAS` dias, não é
+        # marcação -- cai no mesmo caminho de "não veio preço nenhum".
+        recusado = _preco_velho_demais(origem, pos.entry_date)
+        if recusado:
+            preco_atual = None
+        preco_marcado = preco_atual if preco_atual is not None else pos.entry_price
         lado = pos.metadata.get("side") or "long"
-        delta = preco - pos.entry_price
-        if lado == "short":
-            delta = -delta
-        pnl = round(delta * pos.quantity, 2)
-        liberado = pos.entry_price * pos.quantity
+        # A saída é a MERCADO (simulada, mas a mercado): paga 1 tick, igual
+        # ao que `machine._close_position` faz em sombra. Ver
+        # `_preco_de_execucao_a_mercado` para por que a rota REAL não paga.
+        preco = _preco_de_execucao_a_mercado(slot.symbol, preco_marcado, lado)
+        # MÓDULO: o lado já está em `lado`, e `quantity` negativa de uma
+        # vendida aplicaria o sinal uma segunda vez. Vale para a ordem e o
+        # fill gravados também -- `Order.quantity` é TAMANHO, e `_on_closed`
+        # grava sempre positivo.
+        quantidade = abs(int(pos.quantity))
+        valor_do_ponto = _valor_do_ponto_brl(slot.symbol)
+        bruto = _pl_brl(pos.entry_price, preco, quantidade, lado, valor_do_ponto)
+        # LÍQUIDO de corretagem/emolumentos, como `_on_closed` (ver
+        # `_custos_de_saida`): creditar bruto aqui fazia remover o robô render
+        # um pouco MAIS do que fechar a mesma posição pelo caminho normal. A
+        # taxa percentual segue o preço EXECUTADO (`preco`, já com o tick de
+        # derrapagem), não a marcação -- é sobre o notional real da perna que
+        # a bolsa cobra.
+        taxas = _custos_de_saida(slot.symbol, quantidade, pos.entry_price, preco)
+        pnl = None if bruto is None else round(bruto - (taxas or 0.0), 2)
+        liberado = _capital_comprometido(pos, slot.symbol)
 
         ordem = Order(
             ticker=slot.symbol,
             side=OrderSide.SELL if lado == "long" else OrderSide.BUY,
-            quantity=pos.quantity,
+            quantity=quantidade,
             order_type=OrderType.MARKET,
             status=OrderStatus.FILLED,
-            filled_qty=pos.quantity,
+            filled_qty=quantidade,
             avg_price=preco,
             sent_at=datetime.now(timezone.utc),
             note="encerrada ao remover o robô (sombra, sem corretora)",
         )
         order_id = live_store.record_order(conn, conta.id, ordem)
         live_store.record_fill(conn, Fill(
-            order_id=order_id, quantity=pos.quantity, price=preco,
+            order_id=order_id, quantity=quantidade, price=preco,
             ts=datetime.now(timezone.utc),
         ))
         live_store.delete_position(conn, conta.id, slot.symbol)
-        conta.cash_sombra += liberado + pnl
+        # `pnl is None` = instrumento cujo valor do ponto não se descobriu.
+        # O capital preso volta de qualquer jeito (esse número é certo), mas
+        # o resultado NÃO é chutado: creditar pontos como se fossem reais
+        # erraria por 10x num WDO@, e o dono fica sabendo pelo aviso.
+        conta.cash_sombra += liberado + (pnl if pnl is not None else 0.0)
         live_store.save_account(conn, conta)
+        resultado_txt = (
+            f"{'lucro' if pnl >= 0 else 'prejuízo'} de R$ {abs(pnl):.2f}"
+            if pnl is not None else
+            f"resultado NÃO apurado: não sei quanto vale 1 ponto de {slot.symbol}")
         live_store.log_event(
-            conn, conta.id, "info", "teardown",
-            f"posição simulada de {pos.quantity} {slot.symbol} encerrada a "
-            f"R$ {preco:.2f} ao remover o robô "
-            f"({'lucro' if pnl >= 0 else 'prejuízo'} de R$ {abs(pnl):.2f})",
-            {"quantity": pos.quantity, "side": lado, "price": preco, "pnl_brl": pnl},
+            conn, conta.id, "info" if pnl is not None else "warn", "teardown",
+            f"posição simulada de {quantidade} {slot.symbol} ({lado}) encerrada a "
+            f"R$ {preco:.2f} ao remover o robô ({resultado_txt}; R$ {liberado:.2f} "
+            f"de capital devolvido ao caixa de sombra)",
+            # `price` é o EXECUTADO e `preco_marcado` é a marcação de onde
+            # ele saiu: sem os dois no diário não dá para auditar depois nem
+            # quanto de derrapagem foi cobrado nem de que preço ela partiu.
+            # `preco_recusado` fica gravado mesmo valendo `None`, para uma
+            # remoção que caiu no preço de entrada dizer POR QUE caiu.
+            {"quantity": quantidade, "side": lado, "price": preco,
+             "preco_marcado": preco_marcado, "origem_preco": origem,
+             "preco_recusado": recusado, "pnl_brl": pnl, "pnl_bruto_brl": bruto,
+             "taxas_brl": taxas, "liberado_brl": liberado,
+             "valor_do_ponto_brl": valor_do_ponto},
         )
 
+    if pnl is None:
+        resultado.avisos.append(
+            f"a posição simulada de {quantidade} {slot.symbol} foi encerrada e o "
+            f"capital de R$ {liberado:.2f} voltou ao caixa de sombra, mas o "
+            "RESULTADO não entrou nele: não sei quanto vale 1 ponto deste "
+            "instrumento (robô fora do catálogo?). Confira o caixa de sombra.")
+
+    # PREÇO VELHO É AVISO, NUNCA SILÊNCIO (item 5.19c) -- e, desde
+    # 2026-09-09, velho DEMAIS é recusa, não só aviso. `origem` é `"agora"`
+    # quando a cotação veio do terminal; qualquer outra coisa é a data da
+    # última barra SALVA em parquet, e nada salva aquele arquivo sozinho --
+    # foi assim que um WDO@ foi encerrado contra um preço de 12 dias antes,
+    # em 2026-09-09. A remoção nunca trava por causa disso (travar deixaria o
+    # robô preso no painel por causa de um terminal fechado); o que muda com
+    # a idade é se aquele número entra ou não no caixa de sombra.
+    #
+    # Três desfechos, três textos -- e a diferença entre eles é o que o dono
+    # precisa para saber se confere o extrato, espera o terminal abrir, ou
+    # não faz nada:
+    if recusado:
+        # Havia preço, e ele foi RECUSADO. Este é o único dos três em que o
+        # dono pode consertar o número: reabrir o MT5 (ou baixar o parquet) e
+        # remover de novo daria um resultado de verdade.
+        resultado.avisos.append(
+            f"NÃO usei o preço salvo de {slot.symbol}: {recusado}. A posição foi "
+            f"encerrada pelo PRÓPRIO preço de entrada (R$ {preco_marcado:.2f}), então "
+            "o que entrou no caixa de sombra é só o custo do round-trip (corretagem "
+            "e 1 tick de derrapagem), NÃO o resultado da posição. Marcar uma posição "
+            "a um preço desses creditaria um movimento de mercado que ela nunca "
+            "viveu — com o terminal MT5 aberto o número sai certo.")
+    elif preco_atual is None:
+        # Nem terminal nem parquet responderam. A posição sai pelo próprio
+        # preço de entrada (resultado bruto zero) para não travar a remoção,
+        # mas isso NÃO é "deu na mesma": é "não sei", e a diferença tem de
+        # aparecer na tela.
+        resultado.avisos.append(
+            f"não consegui preço nenhum para {slot.symbol} (nem terminal, nem barra "
+            f"salva): a posição foi encerrada pelo PRÓPRIO preço de entrada "
+            f"(R$ {preco_marcado:.2f}), então o resultado creditado no caixa de "
+            "sombra é só o custo do round-trip (corretagem e 1 tick de derrapagem), "
+            "não o resultado de verdade.")
+    elif origem and origem != "agora":
+        # Velha, mas dentro do limite: vale mais que nada, e o dono lê a
+        # data para julgar sozinho.
+        resultado.avisos.append(
+            f"o preço de saída de {slot.symbol} (R$ {preco_marcado:.2f}) NÃO é a "
+            f"cotação de agora: veio da última barra salva em {origem} (terminal MT5 "
+            "fechado ou sem resposta). O resultado creditado no caixa de sombra vale "
+            "o que esse preço valer.")
+
     resultado.posicao_encerrada = {
-        "quantity": pos.quantity, "side": lado, "price": preco, "pl": pnl,
+        "quantity": quantidade, "side": lado, "price": preco, "pl": pnl,
+        "taxas": taxas,
+        # A derrapagem em REAIS, separada da taxa: as duas saem do bolso do
+        # mesmo jeito, mas só uma aparece no extrato como linha de custo, e
+        # confundi-las é o que faria o dono procurar R$5,00 que "sumiram".
+        # `None` quando não se sabe converter ponto em real -- mesmo critério
+        # do `pnl`, e pelo mesmo motivo (chutar erra 10x num WDO@).
+        "deslize": (None if valor_do_ponto is None else
+                    round(abs(preco - preco_marcado) * quantidade
+                          * float(valor_do_ponto), 2)),
     }
