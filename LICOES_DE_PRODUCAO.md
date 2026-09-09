@@ -470,6 +470,12 @@ WDO F1 o bastante para nunca mais tocar este teto nos 126 pregões testados
 outra correção. O freio em si continua sem declarar no código contra qual
 cadência foi calibrado, e o caminho de shadow continua sem exercitá-lo.
 
+**Atualização (2026-09-08, commit `da6f89c`):** o teto único
+`MAX_ENVIOS_POR_MINUTO = 30` foi aposentado. Virou dois níveis —
+`COTA_ENVIOS_POR_MINUTO = 120` (recusa só a ordem excedente, robô segue
+vivo) e `MAX_TENTATIVAS_DE_ENVIO_POR_MINUTO = 600` (o disjuntor que ainda
+liga `disaster_halt`, agora contando TENTATIVA, não envio). Ver item 1.22.
+
 ### 1.19 O freio de ruína não pode confiar num número que a própria fonte já disse não sincronizar — travou o pregão com o caixa do painel positivo — CORRIGIDO 2026-09-08
 
 Medido ao vivo em 2026-09-08, 10:06:34 BRT: robô PMAM3 (day trade, slot
@@ -594,6 +600,86 @@ dia foi o tamanho da perda, não o desenho.
 > escolha de desempenho — é o tamanho da exposição que você aceitou não
 > enxergar. A pergunta 32 da Parte 8 é a que dá a ferramenta (consulta de
 > histórico, não foto do momento); esta regra é o uso obrigatório dela.
+
+### 1.22 Teto de vazão de execução precisa de DOIS níveis — disjuntor sozinho mata pregão legítimo
+
+Medido em `src/live/intraday_runtime.py` (commit `da6f89c`, 2026-09-08).
+`MAX_ENVIOS_POR_MINUTO = 30` (item 1.18) era um DISJUNTOR único: ao ser
+atingido ligava `disaster_halt` e o robô ficava mudo o pregão inteiro. Dois
+fatos medidos no mesmo dia mostraram que isso mata pregão legítimo, não só
+laço:
+
+1. O 30 foi calibrado no relógio ERRADO. Até o commit `75f6b48` o contador
+   recebia `evento.ts` (tempo de TICK); a docstring dizia "pior minuto 26 de
+   30" — tempo de tick, que não descreve nada no relógio de PAREDE, o único
+   que a corretora enxerga.
+2. A cadência LEGÍTIMA já passava de 30. Medição IS/OOS do mesmo dia
+   (commit `e8f88fe`, config de produção T2/S16 com histerese): pior minuto
+   do OOS = **42 envios**, com e sem a histerese — saturação de
+   `max_trades_per_side` (rearme pós-fill), não laço.
+
+Distribuição medida do **pior minuto por pregão**
+(`scripts/daytrade/wdof1_cadencia_envios_distribuicao_2026_09_08.py`, motor
+tick, IS/OOS congelado, config de produção T2/S16 com histerese, base
+`WDO_A_f1` regenerada em 07/09, capital real R$375):
+
+| fonte | n | p50 | p90 | p95 | p99 | max |
+|---|---|---|---|---|---|---|
+| backtest IS (relógio de mercado) | 72 | 12 | 19 | 20 | 22 | 23 |
+| backtest OOS (relógio de mercado) | 51 | 10 | 19 | 24 | 34 | 42 |
+| ao vivo 08/09 (relógio de parede, slot SOMBRA WDO@, conta 476, pregão inteiro, 173 envios) | 1 | 3 | 12 | 15 | 18 | 19 |
+
+1 dos 123 pregões (0,8%) passaria do teto antigo de 30; NENHUM passa de 50.
+(O slot REAL do mesmo dia, conta 474, deu máximo 64 — mas naquele pregão o
+feed tinha ficado cego 45 minutos e a histerese ainda não existia, as duas
+causas já corrigidas nos itens 5.17 e 4.19 — então esse número mede um
+pregão patológico já resolvido, não a cadência normal do robô.) Regime
+PATOLÓGICO conhecido do mesmo robô, antes do freio `reancora_min_segundos`
+(item 4.14): **1.020 a 3.446 envios no pior minuto** (item 1.18).
+
+> **Regra:** um teto de vazão de execução tem DOIS níveis, nunca um. O
+> **teto operacional** recusa a AÇÃO individual e o robô segue vivo; o
+> **teto de patologia**, uma ordem de grandeza acima, é que derruba o robô.
+> Um teto único é sempre errado nos dois sentidos: baixo demais mata pregão
+> legítimo, alto demais deixa laço passar batido.
+>
+> O teto de patologia tem de contar TENTATIVAS, não ações executadas — se
+> contar só o que passou, o teto operacional o prende abaixo dele por
+> construção e o disjuntor nunca dispara. Sem isso, um laço infinito vira
+> "robô rate-limited para sempre, parecendo saudável".
+>
+> Cota barra ABRIR, nunca barra SAIR: cancelamento, fechamento e ordem de
+> proteção jamais podem ser recusados por cota de vazão — uma cota que
+> atrase um fechamento inverte um freio de execução em risco de posição
+> aberta, exatamente o que o incidente da Parte 0 (2026-08-28) custou.
+>
+> Todo limite de execução tem de ser calibrado no MESMO relógio que a
+> contraparte sofre. A corretora vive em relógio de parede; medir a proteção
+> no relógio do dado é não ter proteção nenhuma (o furo corrigido em
+> `75f6b48`).
+>
+> Quando um envio é recusado, a máquina tem de ESQUECER a ordem
+> (`discard_resting_limit`), senão fica vigiando um fill impossível — e
+> recusa silenciosa é o modo de falha do item 6.15: toda recusa por cota
+> escreve linha `warn` no diário, com contagem, uma por LOTE (uma por ordem
+> reproduziria a rajada dentro do próprio diário).
+>
+> **Pergunte à plataforma nova:** qual é o limite REAL de requisições por
+> unidade de tempo que esta corretora/plataforma impõe (envio, cancelamento
+> e alteração contam igual?), e o que ela devolve ao estourar — recusa da
+> requisição, desconexão, ou bloqueio da conta? Hoje os dois tetos deste
+> projeto são calibrados pela cadência do ROBÔ, não pelo limite da
+> corretora, porque esse limite nunca foi documentado pela Rico/Clear.
+
+**Números novos em produção:** `COTA_ENVIOS_POR_MINUTO = 120` (~2,9x o
+maior pior-minuto legítimo, ~3,5x o p99 do OOS, ~6x o pior minuto de parede
+de um pregão inteiro ao vivo) e `MAX_TENTATIVAS_DE_ENVIO_POR_MINUTO = 600`
+(5x a cota, ainda abaixo do piso do regime patológico medido).
+
+**Risco residual, registrado e aceito sem mudança:** um laço LENTO (um arme
+por passo do supervisor, ~12/min) não dispara nem a cota nem o disjuntor —
+não é regressão (o teto de 30 também não pegava esse caso) e não é risco de
+corretora nessa taxa, mas fica anotado para quem for portar o freio.
 
 ---
 
@@ -1849,7 +1935,8 @@ cancela-e-reenvia REAL na corretora que joga fora a fila já acumulada naquele
 nível — num robô maker a fila é o produto. No pior minuto de RELÓGIO DE PAREDE
 (item 1.20) essas idas e vindas somaram **64 envios**, mais que o dobro do
 teto de 30 de `MAX_ENVIOS_POR_MINUTO`, que não recusa só a ordem — liga
-`disaster_halt` e cala o robô pelo resto do pregão. Veredito do dono:
+`disaster_halt` e cala o robô pelo resto do pregão (nota 2026-09-08, commit
+`da6f89c`: este teto único virou dois níveis — ver item 1.22). Veredito do dono:
 "substituiu 3 vezes para o mesmo preço, mesmo stop e mesmo alvo, isso é uso de
 recurso desnecessário, neste caso não deve substituir".
 
@@ -2427,6 +2514,15 @@ Três fatos, não um, fazem o item valer:
 Folga residual nomeada e aceita, sem mudança: 4 ordens no pior minuto (26 de
 30 do teto), e o pico de envios continua morando na primeira hora do pregão.
 
+**Atualização (2026-09-08, commit `da6f89c`):** o teto único de 30 citado
+nesta medição (e no `MAX_ENVIOS_POR_MINUTO` de `src/live/intraday_runtime.py`,
+item 1.18) foi substituído por dois níveis —
+`COTA_ENVIOS_POR_MINUTO = 120` (recusa só a ordem, robô segue vivo) e
+`MAX_TENTATIVAS_DE_ENVIO_POR_MINUTO = 600` (o disjuntor). A folga de 4 sobre
+30 media segurança contra o disjuntor antigo; a medição do item 1.22 (mesmo
+robô, config de produção) achou pior minuto legítimo de até 42 — acima do
+30 antigo e dentro do 120 atual. Ver item 1.22.
+
 > **Regra:** re-medir um parâmetro de segurança numa base de dado corrigida
 > e obter o MESMO valor não é confirmação — é o ponto de partida de uma
 > segunda pergunta: quais casos mudaram de lado, e o critério de escolha
@@ -2846,6 +2942,14 @@ deslize do TP nativo, nunca backtest) e deu pior janela de 60s = 36 (IS) e 39
 INEXEQUÍVEL ao vivo apesar de parecer melhor na tabela bruta (retorno maior,
 win% maior, líquido maior). T2 fica em 23 e 6, dentro do teto.
 
+**Atualização (2026-09-08, commit `da6f89c`):** este mesmo teto de 30 foi
+substituído por dois níveis (`COTA_ENVIOS_POR_MINUTO = 120` /
+`MAX_TENTATIVAS_DE_ENVIO_POR_MINUTO = 600`) depois que outra medição do
+mesmo dia (item 6.16, T2/OOS = 42) mostrou que a cadência LEGÍTIMA de T2
+também passa de 30 — o veredito "T1 inexequível, T2 dentro do teto" acima
+mede o teto ANTIGO; contra o teto atual, os dois só param no disjuntor de
+600. Ver item 1.22.
+
 > **Regra:** antes de interpretar qualquer diferença entre janelas de
 > backtest, confira se a janela mais fraca foi CENSURADA — conte pregões sem
 > trade e o total de trades daquela janela. Um robô que parou de operar não
@@ -2932,6 +3036,12 @@ travar, não o acaso de qual sequência de trades calhou primeiro.
 > `pior_janela_60s` baixo como "essa geometria respeita melhor o freio de
 > cadência" sem antes checar `pregões sem trade` repete o mesmo erro de
 > método, só que na métrica de cadência em vez da métrica de lucro.
+>
+> **Atualização (2026-09-08, commit `da6f89c`):** foi exatamente este
+> T2/OOS=42 "estourando" o teto de 30 que motivou substituir o disjuntor
+> único por dois níveis — `COTA_ENVIOS_POR_MINUTO = 120` (recusa só a
+> ordem) e `MAX_TENTATIVAS_DE_ENVIO_POR_MINUTO = 600` (o disjuntor). 42 é
+> cadência LEGÍTIMA, não laço; ver item 1.22.
 >
 > **Pergunte à plataforma nova:** o meu backtest expõe, POR CÉLULA de uma
 > varredura de parâmetro (não só por janela IS/OOS), quantos pregões
@@ -3439,6 +3549,20 @@ dinheiro ou meses.
     de uma virada de hora, no mesmo passo, pedir a janela LARGA que o feed usa e
     uma ESTREITA de 60 s, e comparar o timestamp do último tick das duas.
     (5.17, 5.11)
+58. Qual é o limite REAL de requisições por unidade de tempo que esta
+    corretora/plataforma impõe (envio, cancelamento e alteração contam
+    igual?), e o que ela devolve ao estourar — recusa da requisição,
+    desconexão, ou bloqueio da conta? As perguntas 42 e 50 já cobrem o
+    freio que o PRÓPRIO robô constrói; esta vem ANTES das duas — sem o
+    limite real da corretora, os dois níveis de teto deste projeto (vazão e
+    patologia) são calibrados pela cadência do ROBÔ, nunca pelo limite
+    verdadeiro, porque a Rico/Clear nunca documentou esse número. Um teto
+    único de execução é sempre errado nos dois sentidos: baixo demais mata
+    pregão legítimo (42 envios/min medidos como cadência normal, contra um
+    teto antigo de 30), alto demais deixa laço passar batido — por isso o
+    disjuntor de patologia tem de contar TENTATIVAS, não envios executados,
+    senão o próprio teto operacional o mantém sempre abaixo do gatilho.
+    (1.22)
 
 ---
 
