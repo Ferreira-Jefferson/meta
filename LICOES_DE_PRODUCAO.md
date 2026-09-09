@@ -3665,16 +3665,45 @@ acompanha** (−R$248,50 no IS, 70/72 pregões sem trade). É o T2 que sustenta.
 > real e reposicioná-la a cada barra; e, com essa limite em pé, o STOP continua
 > registrado na corretora sem risco de execução dupla? (perguntas 64, 65 e 66)
 
-### 6.20 Parâmetro emprestado de outro instrumento é hipótese, não default — `exit_ttl_bars=8` veio da `gremah` e virou o T3 fatiado de +R$12.928,50 em −R$248,50
+### 6.20 Parâmetro emprestado não é só um número fora de contexto — pode ser uma UNIDADE diferente com o mesmo nome: o literal `8` vale 8 MINUTOS num robô e meio SEGUNDO no outro
 
 Ao ligar a saída fatiada (item 6.19), o WDO F1 herdou `exit_ttl_bars=8`, o
 prazo de vida da ordem-limite de saída. Esse 8 foi calibrado na `gremah`, que
 opera **PMAM3 — ação de centavos, fila lenta, book raso**. O WDO F1 opera
 **futuro líquido**. Não era detalhe de configuração: trocar `None` (sem prazo)
-por 8 barras virou o T3 fatiado de **+R$12.928,50 para −R$248,50** — inverteu
-o sinal do resultado.
+por 8 virou o T3 fatiado de **+R$12.928,50 para −R$248,50** — inverteu o sinal
+do resultado.
 
-Varredura própria depois (11 valores de `exit_ttl_bars`, T2, 10 pregões do IS):
+**E a troca foi maior do que "outro instrumento" — foi de UNIDADE.** O
+`wdo_grid_reload_maker` declara `feed_kind="tick"`: uma "barra" dele é CADA
+NEGÓCIO, não um minuto. Medido na base canônica do WDO@: **159.440 barras num
+pregão, mediana de 62 ms entre elas.** A `gremah` não declara nada e herda o
+default `feed_kind="m1"` de `strategy/daytrade/base.py`.
+
+| robô | `feed_kind` | uma "barra" é | quanto vale `exit_ttl_bars=8` |
+|---|---|---|---|
+| `gremah` (origem do 8) | `m1` (default herdado) | 1 minuto | **8 minutos** = 480 s |
+| `wdo_grid_reload_maker` | `tick` (declarado) | 1 negócio (mediana 62 ms) | **~0,5 segundo** |
+
+**O mesmo literal, quase 1000x de diferença em tempo de relógio.** Ninguém
+percebeu porque os dois parâmetros têm o mesmo NOME, o mesmo TIPO (`int`) e o
+mesmo CAMPO de destino (`EnterLimit.exit_ttl_bars`) — o que muda é a
+granularidade do feed, que mora em OUTRO atributo da estratégia e não viaja
+junto com o número copiado. A única coisa no projeto inteiro que carregava a
+unidade era um texto de tela da própria `gremah`: *"Barras (minutos, aqui)"* —
+e o "aqui" não atravessa cópia nenhuma.
+
+**O que isto NÃO invalida, dito antes de qualquer outra coisa:** nenhuma
+medição. Backtest e produção do WDO F1 leem a MESMA base de tick, então o `8`
+quer dizer 8 negócios nos dois lados, e a varredura abaixo continua valendo
+inteira. O que estava errado era a DESCRIÇÃO — "8 barras de 1 minuto",
+documentado no commit `317e839` e corrigido em `f340b37`. Um erro de unidade
+que não move número nenhum ainda é caro, e é por isso que ele virou item: ele
+decide o que a próxima pessoa acha que pode mexer, e em que ordem de grandeza
+ela acha que está mexendo.
+
+Varredura própria depois (11 valores de `exit_ttl_bars`, em NEGÓCIOS, T2, 10
+pregões do IS):
 `ttl=1` é claramente ruim (**R$9,6 mil** contra R$13–16 mil de todo o resto);
 de 2 para cima a curva é **SERRILHADA** — 5: R$13,7 mil · 6: R$14,8 mil · 10:
 R$16,5 mil · 12: R$14,7 mil. Vizinhos diferem entre si mais do que a tendência
@@ -3690,7 +3719,15 @@ referência não-operável (item 6.19, risco 2: sem prazo, a saída depende
 eternamente de a fila andar).
 
 > **Regra:** parâmetro que atravessa de um robô para outro é **hipótese**, não
-> default — e a distância que importa não é a de código, é a de INSTRUMENTO.
+> default — e a distância que importa não é a de código: é a de INSTRUMENTO e,
+> antes dela, a de **UNIDADE**. O sintoma a procurar é preciso: dois robôs que
+> compartilham o NOME do parâmetro e o CAMPO de destino, mas não a
+> granularidade do FEED. Um `int` chamado `bars` não diz de que barra fala — a
+> unidade dele mora em outro atributo, e nome de campo não carrega unidade.
+> Antes de copiar qualquer prazo ou contador, pergunte **"8 do quê?"** e
+> responda com um tempo de RELÓGIO medido no feed de destino (aqui: mediana de
+> 62 ms entre barras), nunca com o nome do campo — comparar os dois literais
+> compara duas coisas que só têm a grafia em comum.
 > Um prazo, um teto de fila, um número de barras foram calibrados contra a
 > velocidade do book onde nasceram; num book com outra liquidez o mesmo número
 > pode inverter o sinal do resultado, e vai fazer isso em silêncio, porque
@@ -3703,6 +3740,9 @@ eternamente de a fila andar).
 > lucro pela válvula de segurança), e esse número é decisão do dono, não do
 > otimizador. O mesmo erro já apareceu no eixo do risco (item 3.12: o % de
 > risco por trade não atravessa de um robô para outro).
+> **Pergunte à plataforma nova:** os prazos e contadores dela são medidos em
+> tempo de relógio, em barras de tempo fixo, ou em eventos/negócios — e o mesmo
+> campo muda de unidade conforme a granularidade do feed? (pergunta 67)
 
 ---
 
@@ -4235,6 +4275,16 @@ dinheiro ou meses.
     corretora e passa a depender do processo do robô estar vivo — é troca de
     custo de execução por dependência de disponibilidade, e ela precisa ser
     declarada, não descoberta. (6.19, 1.23, 1.4)
+67. Os prazos e contadores desta plataforma — validade de ordem, prazo de
+    uma fatia de saída, janela de indicador, teto "por barra" — são medidos em
+    TEMPO DE RELÓGIO, em BARRAS DE TEMPO FIXO, ou em EVENTOS/negócios? O mesmo
+    campo pode mudar de unidade conforme a granularidade do feed que o robô
+    consome, e nome de campo não carrega unidade: aqui `exit_ttl_bars=8`
+    significa 8 minutos num robô de barra M1 e ~0,5 segundo (8 negócios,
+    mediana de 62 ms entre eles) num robô de tick — quase 1000x, com o mesmo
+    nome, o mesmo tipo e o mesmo campo de destino. Antes de copiar qualquer
+    prazo entre robôs, converta os dois para tempo de relógio MEDIDO no feed de
+    destino e compare os números, nunca os literais. (6.20)
 
 ---
 
