@@ -66,6 +66,55 @@ IS, motor tick) e `scripts/daytrade/wdof1_alvo2_caixa_real_2026_09_04.py`
 (ponto mais baixo do caixa acumulado contra os caixas reais R$300/R$375)
 para a medicao que acompanhou a decisao.
 
+2026-09-09, decisao do dono: `stop_ticks` mudou de 16 para 6 (T2/S6), com
+`profit_ticks=2` intacto. O que mede: varredura de `stop_ticks` com o alvo
+FIXO em T2, sobre o motor CORRIGIDO (`fatiar_saida_alvo=True`, que e' o que
+roda em producao desde `317e839` -- as varreduras de 2026-08-28 rodaram no
+motor que dava o alvo de graca e estao invalidadas como seletor), capital
+real R$375, janelas do IS sem sobreposicao. Scripts no scratchpad da sessao
+(`bateria_wdof1_stop_2026_09_09.py`), tabelas em `mini.log`/`mes.log`.
+
+O ARGUMENTO QUE DECIDIU e' de sobrevivencia, nao de lucro: a perda por stop
+cai de R$85,50 (16 ticks + 1 tick de deslize do stop + R$0,50) para R$35,50,
+e o numero de derrotas SEGUIDAS que R$375 aguenta sobe de **2 para 7**. Com
+S16 o robo cala em duas derrotas seguidas -- e foi exatamente assim que ele
+morreu na fatia de 13-26/03 (5 stops em 22 trades no primeiro pregao, caixa
+em R$74,00, 22 trades no mes inteiro contra ~4.000 das celulas vivas).
+Breakeven cai de 90,00% para 78,89%.
+
+Medido em 21 pregoes (06/04 a 06/05, pregoes 26-46 do IS), caixa reposto por
+pregao (desenho que isola geometria de composicao): win% 85,16%
+[84,39;85,94] contra breakeven 78,89% -- IC inteiro ACIMA; EV/trade a 1
+contrato +R$2,82; media R$1.393,52/dia com desvio R$292,64; **21 de 21
+pregoes positivos**, pior dia +R$760,00; menor desvio de EV entre semanas
+das tres finalistas (0,29 contra 0,46 do T2/S10 e 0,76 do T3/S6).
+
+RESSALVAS que continuam abertas, todas informadas ao dono antes da decisao:
+1. A vantagem sobre T2/S10 NAO e' estatisticamente separavel -- os IC do
+   EV/trade se sobrepoem ([+2,47;+3,17] contra [+2,06;+3,04]). O que separa
+   e' consistencia semanal, nao superioridade demonstrada.
+2. T2/S6 PERDE no drawdown: pior queda 45,5% contra 18,8% do T2/S10.
+3. A janela e' de 21 pregoes, nao os 72 do IS, e o OOS segue intocado. Uma
+   recomendacao anterior (T3/S6) veio de 10 pregoes e NAO sobreviveu a 21 --
+   o mesmo pode acontecer com esta.
+4. O teto `max_trades_per_side` corta 35,9% dos trades do T2/S6 (15 de 21
+   pregoes saturados; faria 624/dia contra os 388 medidos). E' o mais
+   estrangulado dos tres candidatos, e o numero acima e' o estrangulado.
+5. R$1.393/dia sobre R$375 NAO e' expectativa de retorno: sao 388
+   round-trips/pregao apoiados numa suposicao de fila que nunca foi medida
+   do lado da SAIDA (item 6.19), mais o otimismo do TTL (saida por estouro
+   de prazo fecha a mercado com `reason=TARGET` e nao paga deslize). Os
+   numeros comparam celulas entre si; nao descrevem retorno.
+
+EFEITO COLATERAL no dimensionamento, consequencia direta e desejada: o teto
+por RISCO (`risco_pct_por_trade=0,01`) e' `1% do caixa / risco em R$ por
+contrato`, e o risco por contrato cai de R$80,00 (16 ticks) para R$30,00 (6
+ticks). O marco do 2o contrato desce de R$16.000 para R$6.000 de caixa, o do
+3o para R$9.000. O robo passa a escalar MUITO mais cedo -- coerente, porque
+cada contrato agora arrisca menos, mas e' uma mudanca de exposicao que nao
+foi medida separadamente. Ver `tests/test_wdo_grid_reload_maker.py::
+test_marcos_de_escala_de_contrato_na_config_de_producao`.
+
 2026-09-04, CORRIGIDO bug real (item 4.9 de `LICOES_DE_PRODUCAO.md`): no
 modo `reanchor_mode="rolling_last_price"` (o DEFAULT), `on_bar` recalculava
 a ancora SO' no instante em que a `EnterLimit` era armada -- depois disso,
@@ -630,7 +679,7 @@ class WdoGridReloadMaker(IntradayStrategy):
         tick_size: float = WDO_TICK_SIZE,
         level_spacing_ticks: int = 1,   # "x1"
         profit_ticks: int = 2,          # "T2" -- ver nota 2026-09-04 no topo do modulo (mudou de T1)
-        stop_ticks: int | None = 16,    # "S16" -- ver nota 2026-08-29 no topo do modulo (S4 revertido)
+        stop_ticks: int | None = 6,     # "S6" -- ver nota 2026-09-09 no topo do modulo (era S16)
         reanchor_mode: ReanchorMode = "rolling_last_price",
         reancora_min_segundos: float = 10.0,
         reancora_min_ticks: int = 2,   # histerese anti-pingue-pongue -- ver 2026-09-08 no topo
