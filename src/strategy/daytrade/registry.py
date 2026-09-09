@@ -23,6 +23,7 @@ from __future__ import annotations
 import inspect
 from dataclasses import dataclass
 
+from core.instruments import economics_for
 from strategy.daytrade.base import IntradayStrategy
 from strategy.daytrade.lab.copa_win import CopaWin
 from strategy.daytrade.lab.gremah import Gremah
@@ -195,7 +196,8 @@ _KWARGS_PADRAO: dict[str, dict] = {
     # pediria mais contratos do que o motor aceita e toda entrada acima do
     # teto do motor seria recusada em silêncio (bug de setup já visto em
     # `wdof1_teto_por_risco_2026_08_29.py`, nunca reproduzir em produção).
-    # `risco_pct_por_trade`/`point_value_brl=10.0` (item 3.9): mesmo
+    # `risco_pct_por_trade`/`point_value_brl` (item 3.9; o valor do ponto
+    # vem de `core.instruments` -- ver o bloco acima): mesmo
     # mecanismo do `copa_win` abaixo, mas NÃO o mesmo NÚMERO — copiar 5% sem
     # medir fez o capital R$5.000 (antes o piso limpo, ver item 3.11) quase
     # zerar (líquido −R$4.753,12, equity mínima R$246,88) porque o stop
@@ -238,11 +240,31 @@ _KWARGS_PADRAO: dict[str, dict] = {
     # calibrado para PMAM3/acao M1, NAO para o WDO F1) -- funcional (sem
     # ele a execucao real quebra com `AssertionError`), mas nao e'
     # calibracao propria.
+    #
+    # A ECONOMIA DO INSTRUMENTO NAO SE DIGITA AQUI (2026-09-09). Margem por
+    # contrato e valor do ponto sao propriedade do INSTRUMENTO -- dois robos
+    # no mesmo simbolo tem obrigatoriamente os mesmos numeros -- e vem de
+    # `core.instruments.FUTUROS`, que e' a fonte da verdade tambem do
+    # `SymbolProfile` do lado do `backtest/`.
+    #
+    # Ate 2026-09-09 estes numeros estavam REDIGITADOS aqui (150,0 e 10,0),
+    # porque `strategy/` e' feature e nao pode importar `backtest/`
+    # (AGENTS.md, regra 1), e o que impedia os dois lados de divergirem em
+    # silencio era um teste de amarracao. Teste de amarracao e' rede, nao
+    # conserto: avisa DEPOIS que o numero errado foi digitado, e so' se a
+    # suite rodar. A saida ja estava escrita na propria regra 1 -- "se uma
+    # feature precisa de dado de outra, o dado sobe para `core/`".
+    #
+    # O que continua digitado aqui e' o que NAO e' do instrumento:
+    # `hard_cap_contratos=5` e' o teto REGULATORIO da Copa BTG 2025 (espelha
+    # `SymbolProfile.max_open_contracts`, nao a economia -- ver a docstring
+    # de `core.instruments`), e `risco_pct_por_trade` e' calibracao DESTE
+    # robo (1%, medido; NAO os 5% do `copa_win` -- ver o bloco acima).
     WdoGridReloadMaker.name: dict(
-        margin_per_contract_brl=150.0,
+        margin_per_contract_brl=economics_for("WDO@").margin_per_contract_brl,
         hard_cap_contratos=5,
         risco_pct_por_trade=0.01,
-        point_value_brl=10.0,
+        point_value_brl=economics_for("WDO@").point_value_brl,
         fatiar_saida_alvo=True,
     ),
     CopaWin.name: dict(
@@ -264,14 +286,15 @@ _KWARGS_PADRAO: dict[str, dict] = {
         # caixa — os outros 3 robôs do pódio já escalam pelo caixa real
         # internamente, e o painel expõe robôs prontos pra dinheiro real, não
         # só pra competição. R$100 é a margem do WIN@ em
-        # `backtest.intraday.profiles` (`_PROFILES["WIN@"].margin_per_contract_brl`,
-        # fonte real -- não confundir com o WDO@, que é R$150; a tabela de
-        # capital mínimo do `CLAUDE.md` tinha os dois trocados até 2026-08-28).
+        # `core.instruments.FUTUROS["WIN@"]` (fonte da verdade desde
+        # 2026-09-09; antes vinha redigitada aqui -- não confundir com o
+        # WDO@, que é R$150; a tabela de capital mínimo do `CLAUDE.md` tinha
+        # os dois trocados até 2026-08-28).
         # `MARGIN_BUFFER_FUTUROS` já é o default do robô. Com o caixa mínimo
         # real do WIN (R$200 = 2 lotes de margem), isto reproduz exatamente 1
         # contrato — o tamanho com que a calibração acima foi medida e
         # confirmada em OOS.
-        margin_per_contract_brl=100.0,
+        margin_per_contract_brl=economics_for("WIN@").margin_per_contract_brl,
         # 2026-08-29, item 3.9 de LICOES_DE_PRODUCAO.md: o teto por CAPITAL
         # acima limita ALAVANCAGEM, não RISCO — medido com R$3.000 reais nos
         # 182 pregões salvos de WIN@, um dia bom escalou a entrada de 12 pra

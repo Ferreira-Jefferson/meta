@@ -416,6 +416,7 @@ from typing import Literal
 
 import pandas as pd
 
+from core.instruments import economics_for
 from strategy.daytrade.base import (
     MARGIN_BUFFER_FUTUROS,
     Bar,
@@ -431,11 +432,16 @@ from strategy.daytrade.base import (
 
 #: Tick de PRECO do WDO@ (contrato cheio WDOV26, 0,5 pt) -- a serie
 #: continua do MT5 reporta 0,001, errado para posicionar ordem (ver
-#: `backtest.intraday.profiles.SymbolProfile.price_tick_size`). So' um
-#: DEFAULT de conveniencia para quem instancia sem passar o valor do
-#: perfil -- rodar de verdade sempre passa `tick_size=` explicito, vindo
-#: de `profile_for("WDO@").price_tick_size`.
-WDO_TICK_SIZE = 0.5
+#: `backtest.intraday.profiles.SymbolProfile.price_tick_size`).
+#:
+#: NAO e' "so' um default de conveniencia", como esta nota afirmava ate
+#: 2026-09-09: NINGUEM passa `tick_size=` a este construtor -- nem
+#: `strategy.daytrade.registry._KWARGS_PADRAO`, nem `scripts/run_live.py::
+#: build_intraday` -- entao e' ESTE numero que posiciona a grade de ordens
+#: em producao, e ele tem de ser o mesmo de `profile_for("WDO@").
+#: price_tick_size`. Por isso vem de `core.instruments`, a fonte da verdade
+#: dos dois lados, em vez de digitado aqui.
+WDO_TICK_SIZE = economics_for("WDO@").price_tick_size
 
 
 @dataclass

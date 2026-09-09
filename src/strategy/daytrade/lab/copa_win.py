@@ -203,6 +203,7 @@ from collections import deque
 
 import pandas as pd
 
+from core.instruments import economics_for
 from strategy.daytrade.base import (
     MARGIN_BUFFER_FUTUROS,
     AdjustStop,
@@ -251,8 +252,16 @@ class CopaWin(IntradayStrategy):
         self,
         teto_contratos: int,
         symbol: str = "WIN@",
-        tick_size: float = 5.0,
-        point_value_brl: float = 0.20,
+        # Economia do WIN@ vinda de `core.instruments` (fonte da verdade,
+        # 2026-09-09), nao digitada aqui: sao os MESMOS numeros que
+        # `profile_for("WIN@")` carrega (`price_tick_size`/`point_value_brl`),
+        # e ninguem passa `tick_size=` a este construtor em producao --
+        # `strategy.daytrade.registry._KWARGS_PADRAO` nao passa, entao e'
+        # ESTE default que a geometria do robo ao vivo usa. Dois numeros
+        # iguais digitados em arquivos diferentes divergem; este par ja era
+        # um deles.
+        tick_size: float = economics_for("WIN@").price_tick_size,
+        point_value_brl: float = economics_for("WIN@").point_value_brl,
         fracao_entrada: float = 0.5,
         janela_rompimento: int = 20,
         alvo_vol: float = 2.0,

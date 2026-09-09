@@ -23,10 +23,17 @@ com o motivo escrito junto.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import time
 from typing import Literal
 
+from core.instruments import (
+    ACAO_B3_POINT_VALUE_BRL,
+    ACAO_B3_PRICE_TICK_SIZE,
+    InstrumentEconomics,
+    economics_for,
+)
 from strategy.daytrade.base import (
     MARGIN_BUFFER_FUTUROS,
     capital_minimo_brl,
@@ -115,9 +122,35 @@ class SymbolProfile:
     # margem PROMOCIONAL de day trade que o dono relatou (~R$100 mini-
     # indice, ~R$150 mini-dolar, 2026-08-27) -- o mesmo numero que
     # `daytrade_capital_real_gate_2026_08_27` ja usa em toda a escada de
-    # capital. Declarado AQUI para nao continuar espalhado em scripts
-    # ad-hoc (o mesmo erro que motivou `price_tick_size` existir).
+    # capital.
+    #
+    # FONTE DA VERDADE desde 2026-09-09: `core.instruments.FUTUROS`. Este
+    # campo e' COPIA dela (`_futures_profile` preenche), nao a declaracao --
+    # o registry de `strategy/` precisa do mesmo numero e nao pode importar
+    # `backtest/` (AGENTS.md, regra 1), entao o dado teve de subir para
+    # `core/`. Nao digite um numero novo aqui.
     margin_per_contract_brl: float | None = None
+    # Quantos REAIS vale 1 PONTO de preco deste instrumento, por unidade
+    # (acao/contrato). Fonte da VERDADE do numero -- ele e' propriedade do
+    # INSTRUMENTO, nunca de quem opera nele: dois robos no mesmo simbolo tem
+    # obrigatoriamente o mesmo valor de ponto, e um robo novo que esquecesse
+    # de declarar deixaria a contabilidade sem como converter ponto em real.
+    #
+    # Acao: 1,0 -- o preco ja e' em reais por acao (`_equity_profile`).
+    # Futuro: vem de `core.instruments.FUTUROS` (R$0,20 no WIN@, R$10,00 no
+    # WDO@), e e' o multiplicador cuja AUSENCIA custou tres incidentes de
+    # contabilidade (itens 5.7, 5.19 de LICOES_DE_PRODUCAO.md: 52 pontos de
+    # WDO@ contabilizados como R$52,00 em vez de R$520,00, em tres caminhos
+    # de codigo diferentes).
+    #
+    # NAO substitui a economia lida do terminal em `config_for` -- ali o
+    # valor continua saindo de `trade_tick_value/trade_tick_size`, e este
+    # campo CONFERE os dois (ver o guard la'). Ele existe porque ha
+    # consumidores que precisam converter ponto em real com o MT5 FECHADO e
+    # com o processo do robo ja' morto -- a rotina de remocao de robo
+    # (`dashboard/live_teardown.py`) e' o caso -- e para eles o terminal nao
+    # e' fonte possivel. `cost_model_from_profile()` e' a porta desses.
+    point_value_brl: float | None = None
 
 
 #: Corte IS/OOS de TODA a familia de acoes calibrada em 2026-08-22. Declarado
@@ -178,6 +211,12 @@ def _equity_profile(regime_start: str, oos_note: str) -> SymbolProfile:
         session_end_time=time(19, 54),
         session_end_policy="b3_equities",
         default_quantity=100,  # 1 lote padrao
+        # Acao: o preco JA e' em reais por acao, entao 1 ponto = R$1,00.
+        # Declarado (e nao deixado em `None`) porque quem converte ponto em
+        # real fora do motor -- `cost_model_from_profile` -- precisa do
+        # numero tambem para acao, e 'nao declarado' ali significa 'nao sei',
+        # que apagaria o custo de bolsa do resultado de uma acao.
+        point_value_brl=ACAO_B3_POINT_VALUE_BRL,
     )
 
 
@@ -207,11 +246,10 @@ _FEE_NOTE_FUTURO = (
 
 
 def _futures_profile(
+    economics: InstrumentEconomics,
     session_end_time: time,
-    price_tick_size: float,
     max_open_contracts: int,
     medicao: str,
-    margin_per_contract_brl: float,
 ) -> SymbolProfile:
     """Perfil de um MINI-FUTURO da B3 (serie continua) operado em contratos.
 
@@ -228,22 +266,21 @@ def _futures_profile(
     `medicao`: o que foi medido no parquet deste simbolo, para o numero de
     corte nao ficar orfao de evidencia.
 
-    `margin_per_contract_brl` e' OBRIGATORIO (2026-08-28). Era opcional, com
-    default `None` -- e `None` desliga o teto de contratos por caixa
-    (`IntradaySessionMachine._cap_capital_atual` devolve `None`), deixando
-    valer so' `max_open_contracts`, que e' o limite REGULATORIO da Copa BTG
-    e nao tem relacao nenhuma com o dinheiro do dono. Foi exatamente esse
-    estado que o WDO F1 tinha no dia em que zerou a conta. Um perfil de
-    futuro novo que esquecesse o argumento reproduziria o incidente ponto
-    por ponto, sem erro nenhum no caminho -- entao agora nao da' para
-    esquecer."""
-    if margin_per_contract_brl is None or float(margin_per_contract_brl) <= 0:
-        raise ValueError(
-            "perfil de FUTURO exige margin_per_contract_brl > 0: sem ele o "
-            "teto de contratos por caixa fica desligado e so' sobra o limite "
-            "regulatorio, que nao conhece o caixa do dono (ver incidente "
-            "2026-08-28)."
-        )
+    `economics` (2026-09-09) traz os TRES numeros que sao propriedade do
+    INSTRUMENTO -- valor do ponto, passo de preco e margem por contrato -- de
+    `core.instruments.FUTUROS`, que e' a fonte da verdade deles. Nao sao
+    parametros soltos deste montador de proposito: `strategy.daytrade.
+    registry` precisa dos MESMOS numeros e nao pode importar `backtest/`
+    (AGENTS.md, regra 1), entao ate 2026-09-09 ele os REDIGITAVA e o que
+    impedia a divergencia era um teste de amarracao. Subir o dado para
+    `core/` e' o que a propria regra 1 prescreve.
+
+    Os tres continuam OBRIGATORIOS e positivos -- quem recusa agora e'
+    `InstrumentEconomics.__post_init__`, na fonte, em vez de aqui na copia.
+    O motivo de cada um esta' na docstring de la'; em resumo:
+    `margin_per_contract_brl` ausente desliga o teto de contratos por caixa
+    (o estado do WDO F1 no dia em que zerou a conta, 2026-08-28) e
+    `point_value_brl` ausente e' o multiplicador de 10x dos itens 5.7/5.19."""
     return SymbolProfile(
         frozen_cutoff=OOS_CUTOFF,
         frozen_note=(
@@ -266,10 +303,11 @@ def _futures_profile(
         # pelo mesmo motivo: e' assim que as barras salvas sao indexadas.
         session_start_time=time(12, 0),
         default_quantity=1,  # 1 CONTRATO -- futuro nao tem lote de 100
-        price_tick_size=price_tick_size,
+        price_tick_size=economics.price_tick_size,
         max_open_contracts=max_open_contracts,
         is_futures=True,
-        margin_per_contract_brl=margin_per_contract_brl,
+        margin_per_contract_brl=economics.margin_per_contract_brl,
+        point_value_brl=economics.point_value_brl,
     )
 
 
@@ -280,28 +318,31 @@ def _futures_profile(
 #: Um futuro nao tem calibracao `gremah`, nao opera lote de 100 e nao e'
 #: limitado por caixa -- misturar os dois faria a tabela deixar de significar
 #: uma coisa so'. `profile_for()` resolve os dois catalogos.
+#:
+#: Valor do ponto, passo de preco e margem NAO aparecem aqui: sao propriedade
+#: do INSTRUMENTO e vem de `core.instruments.FUTUROS` (ver `_futures_profile`).
+#: O que fica declarado aqui e' o que e' propriedade da MEDICAO/do
+#: REGULAMENTO -- horario medido no parquet e teto de contratos da Copa BTG.
 FUTURES_PROFILES: dict[str, SymbolProfile] = {
     "WIN@": _futures_profile(
+        economics=economics_for("WIN@"),
         session_end_time=time(21, 25),  # 18:25 de Brasilia (fecho medido 18:24)
-        price_tick_size=5.0,            # WINV26; a continua reporta 1,0 (ver `price_tick_size`)
         max_open_contracts=15,          # teto oficial da Copa BTG 2025
         medicao=(
             "182 pregoes M1 (2025-12-01..2026-08-25): range diario mediano "
             "2.968 pts, soma|C-O| por pregao 29.722 pts, 563 barras/pregao, "
             "17,4M contratos/dia de giro."
         ),
-        margin_per_contract_brl=100.0,
     ),
     "WDO@": _futures_profile(
+        economics=economics_for("WDO@"),
         session_end_time=time(21, 30),  # 18:30 de Brasilia (fecho medido 18:29)
-        price_tick_size=0.5,            # WDOV26; a continua reporta 0,001
         max_open_contracts=5,           # teto oficial da Copa BTG 2025
         medicao=(
             "177 pregoes M1 (2025-12-08..2026-08-25): range diario mediano "
             "49,3 pts, soma|C-O| por pregao 570 pts, 570 barras/pregao, "
             "2,4M contratos/dia de giro."
         ),
-        margin_per_contract_brl=150.0,
     ),
 }
 
@@ -356,6 +397,191 @@ PROFILES: dict[str, SymbolProfile] = {
     "BMGB4": _equity_profile(
         "2025-06-04", "316 trades, wr 97,5%, +R$137,72, pf 2,86, MaxDD -2,11%"),
 }
+
+
+class SymbolEconomicsError(ValueError):
+    """A economia do simbolo passada a `config_for` nao serve para montar a
+    run -- ou o terminal nao respondeu um numero utilizavel, ou ele
+    contradiz o que o perfil declara.
+
+    Subclasse de `ValueError` de proposito (todo chamador antigo que ja
+    tratava `ValueError` continua funcionando), mas com NOME proprio para
+    que quem puder degradar em vez de estourar consiga distinguir esta
+    causa das outras oito validacoes de argumento que `config_for` faz --
+    e para que um traceback num log de robo diga o que aconteceu na
+    primeira linha, nao na quinta.
+
+    Onde ela aparece hoje:
+
+      * `scripts/run_live.py::build_intraday` -- processo PROPRIO do robo,
+        levantada ANTES de qualquer ordem. O robo nao sobe, e a falha e'
+        alta (traceback no log do slot, processo morto, cartao do painel
+        mostra 'parado'). Isso e' deliberado -- ver o bloco de decisao em
+        `_confere_valor_do_ponto`.
+      * `dashboard/live_service.py::_build_intraday_runtime` -- runtime de
+        LEITURA do painel, que deriva `trade_tick_value` do PROPRIO perfil
+        (`0.01 * profile.point_value_brl`). Ali as duas fontes sao a mesma
+        e a divergencia e' impossivel por construcao; se algum dia deixar
+        de ser, `dashboard/app.py::_slot_ctx` NAO captura `ValueError` (so'
+        `KeyError` e as duas `Legacy*Error`), entao viraria HTTP 500 em
+        `/operacao`. Registrado aqui porque o conserto mora naquele arquivo,
+        nao neste."""
+
+
+#: Tolerancia RELATIVA aceita entre o valor do ponto DERIVADO da economia
+#: lida do terminal (`trade_tick_value / trade_tick_size`) e o DECLARADO em
+#: `core.instruments`.
+#:
+#: 0,5% NAO e' um numero calibrado contra dispersao medida, e afirmar que
+#: fosse seria inventar evidencia: o valor do ponto de um contrato e' uma
+#: constante decimal exata do regulamento (R$0,20 no WIN, R$10,00 no WDO),
+#: e a razao que o terminal reporta divide exatamente (1,0/5,0 e 5,0/0,5).
+#: Nao ha ruido economico para acomodar -- so' ruido de PONTO FLUTUANTE e
+#: de arredondamento na casa que a corretora escolher publicar.
+#:
+#: A faixa exata nao decide nada, e e' por isso que ela pode ser generosa:
+#: toda divergencia que pode acontecer de verdade esta' ordens de grandeza
+#: fora dela. As duas familias reais sao (1) o terminal devolver ZERO
+#: (simbolo fora do Market Watch), que `_checa_economia_do_terminal` pega
+#: antes, e (2) o simbolo apontar para o contrato CHEIO em vez do mini --
+#: DOL vale 5x o WDO e IND 5x o WIN, ou seja 400% de erro, 800 vezes esta
+#: banda. Qualquer valor entre 1e-6 e 0,5 daria o MESMO veredito em todos
+#: os casos possiveis; 0,005 fica no meio, longe do falso positivo (que
+#: pararia o robo a toa) e longe do falso negativo (que deixaria passar um
+#: erro de instrumento).
+TOLERANCIA_VALOR_DO_PONTO = 0.005
+
+
+def _symbol_do_perfil(profile: SymbolProfile) -> str:
+    """O simbolo de um perfil das tabelas deste modulo, so' para escrever
+    mensagem de erro que o dono consiga agir em cima. `SymbolProfile` nao
+    carrega o proprio simbolo (a chave do dicionario e' que carrega), e uma
+    mensagem que diz 'o perfil' sem dizer QUAL nao ajuda ninguem as 9h05.
+    Perfil montado a mao (teste, script de laboratorio) nao esta' em tabela
+    nenhuma e devolve `None`."""
+    for tabela in (FUTURES_PROFILES, PROFILES):
+        for symbol, candidato in tabela.items():
+            if candidato is profile:
+                return symbol
+    return "?"
+
+
+def _checa_economia_do_terminal(profile: SymbolProfile,
+                                trade_tick_value: float,
+                                trade_tick_size: float) -> None:
+    """Recusa uma economia que nem chega a ser um numero utilizavel, ANTES
+    de qualquer divisao.
+
+    Existe porque o caminho seguinte (`trade_tick_value / trade_tick_size`,
+    tanto no guard do valor do ponto quanto em `IntradayCostModel.
+    from_symbol_info`) rebentava em `ZeroDivisionError` cru, sem dizer o
+    simbolo nem o que fazer -- e `market_data_intraday.mt5_source.
+    symbol_economics` devolve `float(info.trade_tick_value)` SEM validar
+    nada. O caso comum nao e' hipotetico: o MT5 reporta `trade_tick_value=0`
+    para simbolo que ainda nao foi sincronizado/selecionado no Market Watch,
+    e um `point_value_brl=0` faria TODO P&L da run dar R$0,00 -- portao de
+    capital cego, disjuntor que nunca dispara, diario cheio de trade
+    gratuito. Zero e' o pior valor possivel justamente por ser silencioso."""
+    for nome, valor in (("trade_tick_value", trade_tick_value),
+                        ("trade_tick_size", trade_tick_size)):
+        try:
+            numero = float(valor)
+        except (TypeError, ValueError):
+            numero = math.nan
+        if not math.isfinite(numero) or numero <= 0:
+            symbol = _symbol_do_perfil(profile)
+            raise SymbolEconomicsError(
+                f"config_for({symbol}): a economia lida do terminal traz "
+                f"`{nome}={valor!r}`, que nao e' um numero positivo -- nao da' "
+                f"para montar custo nenhum com isso (0 zeraria o P&L da run "
+                f"inteira em silencio; dividir por 0 quebraria com traceback "
+                f"sem contexto).\n"
+                f"CAUSA MAIS COMUM: o simbolo {symbol!r} nao esta' sincronizado "
+                f"no terminal MT5 -- abra o MT5, coloque-o no Market Watch, "
+                f"espere ele cotar, e inicie o robo de novo. Se o terminal "
+                f"estiver certo e o numero ainda vier assim, o simbolo pedido "
+                f"nao existe nesse servidor."
+            )
+
+
+def _confere_valor_do_ponto(profile: SymbolProfile,
+                            trade_tick_value: float,
+                            trade_tick_size: float) -> None:
+    """O valor do ponto lido do terminal tem de bater com o declarado em
+    `core.instruments` -- senao a run PARA (2026-09-09).
+
+    ---------------------------------------------------------------------
+    DECISAO (revisada 2026-09-09): ao vivo tambem RECUSA. Nao avisa-e-segue.
+    ---------------------------------------------------------------------
+    A objecao obvia e' o item 6.15 de `LICOES_DE_PRODUCAO.md` -- robo que
+    para produz janela censurada, que depois se le como edge negativo. Ela
+    NAO se aplica aqui, e a diferenca e' o que sustenta esta decisao:
+
+      * o item 6.15 fala de robo que emudece NO MEIO do pregao, em silencio,
+        por portao de caixa -- ninguem fica sabendo, e o numero sobrevive
+        parecendo medicao. Aqui a recusa e' na MONTAGEM DA CONFIG, antes de
+        existir ordem, e e' barulhenta: o processo do slot morre com
+        traceback no log e o cartao do painel fica 'parado'. Falha alta e
+        falha silenciosa nao tem o mesmo custo;
+      * nao ha "seguir com o numero do perfil" que seja seguro, porque
+        divergir nao diz QUAL das duas fontes esta' errada. Se o perfil
+        estiver desatualizado e a corretora tiver mudado a especificacao, o
+        numero do perfil e' o errado -- e o robo operaria um pregao inteiro
+        com P&L, portao de caixa e disjuntor calculados sobre o
+        multiplicador errado. Escolher em silencio qual das duas fontes
+        vence e' exatamente a familia dos itens 5.7/5.19 (52 pontos de WDO@
+        virando R$52,00 no lugar de R$520,00, em tres caminhos diferentes);
+      * o erro que essa escolha silenciosa causa nao e' pequeno nem
+        recuperavel dentro do pregao: as duas divergencias possiveis valem
+        um fator de 5 (contrato cheio no lugar do mini) ou zeram tudo
+        (terminal dessincronizado). Um pregao nao operado se recupera no
+        dia seguinte; um pregao operado com o disjuntor lendo 1/10 da perda
+        real foi como a conta zerou em 2026-08-28.
+
+    O que a decisao CUSTA, e fica registrado: um dia em que a Rico publique
+    a especificacao arredondada de outra forma (ex.: `trade_tick_value`
+    com uma casa a menos) o robo nao sobe, e o conserto exige alguem
+    editando `core.instruments`. E' aceito -- ver a banda em
+    `TOLERANCIA_VALOR_DO_PONTO`, que e' 800x menor que a menor confusao
+    real de instrumento, entao esse falso positivo teria de vir de um
+    arredondamento grosseiro, nao de ruido.
+
+    So' para FUTURO, de proposito. Em acao o preco ja e' em reais por acao,
+    todo papel da B3 reporta a razao 1,0 e o perfil declara 1,0 -- checar la
+    so' criaria um modo de falha novo (script de laboratorio que passa uma
+    economia sintetica) sem proteger de nada que ja tenha acontecido."""
+    if not profile.is_futures or profile.point_value_brl is None:
+        return
+    derivado = trade_tick_value / trade_tick_size
+    declarado = float(profile.point_value_brl)
+    if abs(derivado - declarado) <= max(1e-9, TOLERANCIA_VALOR_DO_PONTO * abs(declarado)):
+        return
+    symbol = _symbol_do_perfil(profile)
+    fator = derivado / declarado if declarado else float("inf")
+    raise SymbolEconomicsError(
+        f"config_for({symbol}): as duas fontes do VALOR DO PONTO nao batem, "
+        f"e seguir assim produziria P&L de outro instrumento.\n"
+        f"  esperado (declarado): R${declarado:.6g} por ponto  <- "
+        f"`core.instruments.FUTUROS[{symbol!r}].point_value_brl`\n"
+        f"  recebido (terminal):  R${derivado:.6g} por ponto  <- "
+        f"trade_tick_value={trade_tick_value!r} / trade_tick_size={trade_tick_size!r}\n"
+        f"  o recebido e' {fator:.4g}x o esperado (tolerancia: "
+        f"{TOLERANCIA_VALOR_DO_PONTO:.3%}).\n"
+        f"O QUE FAZER -- so' uma das duas esta' errada, e a run nao tem como "
+        f"adivinhar qual:\n"
+        f"  (a) se o TERMINAL esta' certo (a corretora mudou a especificacao, "
+        f"ou o simbolo aponta para outro contrato -- DOL vale 5x o WDO, IND "
+        f"5x o WIN), corrija `src/core/instruments.py` -> "
+        f"`FUTUROS[{symbol!r}].point_value_brl` para R${derivado:.6g}. O perfil "
+        f"do backtest e o robo do registry leem DALI, entao um numero so' "
+        f"conserta os dois lados;\n"
+        f"  (b) se o PERFIL esta' certo, o terminal e' que respondeu por outro "
+        f"simbolo -- confira {symbol!r} no Market Watch do MT5 e o "
+        f"`--mt5-symbol-map` do slot.\n"
+        f"NAO desligue esta conferencia para o robo subir: o numero errado "
+        f"nao para no P&L, ele cega tambem o portao de capital e o disjuntor "
+        f"(itens 5.7/5.19 de LICOES_DE_PRODUCAO.md)."
+    )
 
 
 def config_for(
@@ -554,6 +780,20 @@ def config_for(
         )
     if enforce_capital_minimo is None:
         enforce_capital_minimo = profile.max_open_contracts is None
+    # A economia lida do terminal e' conferida em DOIS passos, nesta ordem,
+    # e os dois levantam `SymbolEconomicsError` (ver a classe e as
+    # docstrings dos dois helpers, onde mora a decisao de RECUSAR em vez de
+    # avisar-e-seguir, e a base da tolerancia):
+    #   1. ela e' um numero utilizavel? (>0 e finito -- senao a divisao
+    #      abaixo rebentaria em ZeroDivisionError sem contexto, e um zero
+    #      passaria zerando o P&L da run inteira em silencio);
+    #   2. em FUTURO, ela concorda com o valor do ponto declarado em
+    #      `core.instruments`? Duas fontes para o MESMO numero, e "um numero
+    #      declarado em dois lugares e' um numero que vai divergir" e' a
+    #      primeira frase deste modulo.
+    _checa_economia_do_terminal(profile, trade_tick_value, trade_tick_size)
+    _confere_valor_do_ponto(profile, trade_tick_value, trade_tick_size)
+
     if profile.price_tick_size is not None:
         # Preserva `point_value_brl` (= tick_value/tick_size) ao trocar so' a
         # GRADE de preco: reescala `trade_tick_value` junto. Sem isto, um
@@ -584,4 +824,49 @@ def config_for(
         margin_buffer=margin_buffer,
         limit_fill_at_bar_open=limit_fill_at_bar_open,
         anchor_exits_at_fill=anchor_exits_at_fill,
+    )
+
+
+def cost_model_from_profile(profile: SymbolProfile) -> IntradayCostModel | None:
+    """`IntradayCostModel` montado SO' com o que o PERFIL declara -- sem
+    terminal, sem processo de robo vivo, sem I/O nenhum.
+
+    Existe para um consumidor que precisa converter ponto em real e cobrar as
+    mesmas taxas que o motor cobra, num momento em que `config_for` nao esta'
+    disponivel: ele exige `trade_tick_value`/`trade_tick_size` lidos do MT5
+    (`market_data_intraday.mt5_source.symbol_economics`), e ha caminhos que
+    rodam com o terminal FECHADO e com o processo do robo ja' morto. O caso
+    que motivou isto e' a rotina de remocao de robo
+    (`dashboard/live_teardown.py::_encerrar_posicao_sombra`), que credita
+    resultado no caixa de sombra: ate 2026-09-09 ela creditava BRUTO,
+    enquanto um fechamento normal (`live.intraday_runtime._on_closed`) paga
+    corretagem e emolumentos -- duas rotas para o mesmo evento com
+    contabilidade diferente.
+
+    O que ele NAO tem, e o chamador precisa saber:
+
+      * `slippage_ticks=0`. Slippage e' um ajuste no PRECO de execucao, e
+        quem chama aqui ja' tem o preco (ou uma marcacao a mercado). Cobrar
+        os dois contaria o custo duas vezes;
+      * `target_slippage_ticks=0`. O deslize do alvo NATIVO so' faz sentido
+        numa saida por alvo simulada pelo motor (ver `costs.
+        DESLIZE_ALVO_NATIVO_TICKS`), nao num fechamento a mercado pedido
+        pelo dono;
+      * `tick_size` e' o do perfil quando ele declara um
+        (`price_tick_size`), senao R$0,01 -- o passo de qualquer acao da B3.
+        Como as duas parcelas de slippage estao zeradas, este campo nao
+        entra em conta nenhuma de `fees_round_trip_brl`/`gross_pnl_brl`; ele
+        so' esta' preenchido porque o dataclass exige.
+
+    `None` quando o perfil nao declara `point_value_brl` -- "nao sei quanto
+    vale um ponto" nunca pode virar 1,0 por default (erra 10x num WDO@)."""
+    if profile.point_value_brl is None:
+        return None
+    return IntradayCostModel(
+        point_value_brl=float(profile.point_value_brl),
+        tick_size=float(profile.price_tick_size or ACAO_B3_PRICE_TICK_SIZE),
+        fee_round_trip_brl=profile.fee_round_trip_brl,
+        slippage_ticks=0.0,
+        exchange_fee_pct_per_leg=profile.exchange_fee_pct_per_leg,
+        target_slippage_ticks=0.0,
     )

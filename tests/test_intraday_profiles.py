@@ -321,25 +321,23 @@ def test_perfil_de_futuro_sem_margem_declarada_e_RECUSADO():
     Era exatamente esse o estado do WDO F1 no dia em que zerou a conta. Um
     perfil de futuro novo que esquecesse o argumento reproduziria o
     incidente ponto por ponto, sem erro nenhum no caminho -- entao agora
-    esquecer nao e' possivel."""
-    from datetime import time
+    esquecer nao e' possivel.
 
+    Desde 2026-09-09 quem recusa e' `core.instruments.InstrumentEconomics`
+    (a FONTE), nao mais `_futures_profile` (a copia): o perfil so' aceita um
+    `InstrumentEconomics` ja' validado, entao nao ha como montar um perfil
+    de futuro sem margem sem antes montar uma economia sem margem -- e essa
+    e' recusada aqui."""
     import pytest
 
-    from backtest.intraday.profiles import _futures_profile
+    from core.instruments import InstrumentEconomics
 
-    with pytest.raises(ValueError, match="margin_per_contract_brl"):
-        _futures_profile(
-            session_end_time=time(21, 24), price_tick_size=0.5,
-            max_open_contracts=5, medicao="teste",
-            margin_per_contract_brl=None,
-        )
-    with pytest.raises(ValueError, match="margin_per_contract_brl"):
-        _futures_profile(
-            session_end_time=time(21, 24), price_tick_size=0.5,
-            max_open_contracts=5, medicao="teste",
-            margin_per_contract_brl=0.0,
-        )
+    for invalido in (None, 0.0, -1.0):
+        with pytest.raises(ValueError, match="margin_per_contract_brl"):
+            InstrumentEconomics(
+                symbol="XXX@", point_value_brl=10.0, price_tick_size=0.5,
+                margin_per_contract_brl=invalido,
+            )
 
 
 def test_todo_perfil_de_futuro_do_registry_declara_margem():
@@ -478,3 +476,312 @@ def test_config_for_deslize_explicito_sempre_vence():
                             target_fills_as_maker=True,
                             target_slippage_ticks=pedido)
         assert config.costs.target_slippage_ticks == pedido
+
+
+# ---------- valor do ponto: propriedade do INSTRUMENTO, nao do robo --------
+#
+# Ate 2026-09-09 o valor do ponto de um futuro morava no ROBO
+# (`strategy.daytrade.registry._KWARGS_PADRAO`: WDO@ 10,0; default do
+# `copa_win`: WIN@ 0,20). Lugar errado: dois robos no mesmo simbolo tem
+# obrigatoriamente o mesmo valor de ponto, e um robo de futuro NOVO que
+# esquecesse o parametro deixava a contabilidade de remocao sem como apurar
+# resultado. A fonte da verdade passou a ser `SymbolProfile.point_value_brl`,
+# ao lado de `margin_per_contract_brl`, que ja morava la pelo mesmo motivo.
+
+
+def test_todo_perfil_declara_quanto_vale_um_ponto():
+    """Sem este numero nao ha como converter ponto em real fora do motor --
+    e chutar 1,0 num WDO@ erra por 10x, que e' o item 5.19."""
+    for symbol, perfil in {**PROFILES, **FUTURES_PROFILES}.items():
+        assert perfil.point_value_brl is not None and perfil.point_value_brl > 0, symbol
+
+
+def test_valor_do_ponto_dos_futuros_e_o_medido_no_terminal():
+    assert FUTURES_PROFILES["WIN@"].point_value_brl == pytest.approx(0.20)
+    assert FUTURES_PROFILES["WDO@"].point_value_brl == pytest.approx(10.0)
+    for symbol in PROFILES:
+        # Acao: o preco JA e' em reais por acao.
+        assert PROFILES[symbol].point_value_brl == 1.0, symbol
+
+
+def test_perfil_de_futuro_sem_valor_do_ponto_e_recusado_na_criacao():
+    """Mesmo guard de `margin_per_contract_brl` (2026-08-28) e pelo mesmo
+    motivo: um perfil de futuro novo que esquecesse o campo reproduziria o
+    incidente ponto por ponto, sem erro nenhum no caminho.
+
+    Como o de margem, mudou de lugar em 2026-09-09: quem recusa e' a FONTE
+    (`core.instruments.InstrumentEconomics`), nao a copia."""
+    from core.instruments import InstrumentEconomics
+
+    for invalido in (None, 0.0, -1.0):
+        with pytest.raises(ValueError, match="point_value_brl"):
+            InstrumentEconomics(
+                symbol="XXX@", point_value_brl=invalido, price_tick_size=0.5,
+                margin_per_contract_brl=150.0,
+            )
+
+
+def test_config_for_recusa_economia_que_contradiz_o_valor_do_ponto_do_perfil():
+    """Duas fontes para o MESMO numero (a economia lida do terminal e o
+    perfil) so' sao seguras se divergirem em ALTO -- senao a run produz P&L
+    de outro instrumento. No WDO@ a diferenca e' de 10x."""
+    from backtest.intraday.profiles import SymbolEconomicsError
+
+    with pytest.raises(SymbolEconomicsError, match="VALOR DO PONTO"):
+        config_for(FUTURES_PROFILES["WDO@"], trade_tick_value=0.01,
+                   trade_tick_size=0.01, initial_capital=375.0)
+
+    # A economia CERTA continua passando, sem tolerancia frouxa demais.
+    ok = config_for(FUTURES_PROFILES["WDO@"], trade_tick_value=0.01,
+                    trade_tick_size=0.001, initial_capital=375.0)
+    assert ok.costs.point_value_brl == pytest.approx(10.0)
+
+
+def test_registry_espelha_a_economia_do_perfil_do_instrumento():
+    """`strategy/` e' feature e nao pode importar `backtest/` (AGENTS.md,
+    regra 1), entao `registry._KWARGS_PADRAO` continua DIGITANDO margem e
+    valor do ponto de cada futuro. Este teste e' o que impede os dois lados
+    de divergirem em silencio: um numero declarado em dois lugares e' um
+    numero que vai divergir, a menos que algo falhe quando ele divergir."""
+    from strategy.daytrade.registry import _KWARGS_PADRAO, _ROBOTS
+
+    conferidos = 0
+    for key, cls in _ROBOTS.items():
+        kwargs = _KWARGS_PADRAO.get(key, {})
+        robo = cls(**kwargs)
+        if not getattr(robo, "is_futuro", False):
+            continue
+        perfil = profile_for(robo.symbol)
+        for campo in ("margin_per_contract_brl", "point_value_brl"):
+            if campo not in kwargs:
+                continue
+            conferidos += 1
+            assert kwargs[campo] == pytest.approx(getattr(perfil, campo)), (
+                f"{key}: `{campo}` do registry ({kwargs[campo]}) diverge do perfil "
+                f"de {robo.symbol} ({getattr(perfil, campo)}) -- a fonte da verdade "
+                f"e' o perfil (`backtest.intraday.profiles`); o registry e' espelho."
+            )
+    assert conferidos >= 2, "nenhum robo de futuro foi conferido -- o teste virou no-op"
+
+
+def test_cost_model_from_profile_monta_o_custo_sem_terminal_nenhum():
+    """A porta de quem precisa cobrar as MESMAS taxas do motor com o MT5
+    fechado e o processo do robo morto (a rotina de remocao de robo). Traz
+    valor do ponto e taxas do perfil, e ZERA as duas slippages -- ali nao ha
+    execucao para deslizar."""
+    from backtest.intraday.profiles import cost_model_from_profile
+
+    wdo = cost_model_from_profile(FUTURES_PROFILES["WDO@"])
+    assert wdo.point_value_brl == pytest.approx(10.0)
+    assert wdo.fee_round_trip_brl == FUTURES_PROFILES["WDO@"].fee_round_trip_brl
+    assert wdo.slippage_ticks == 0.0 and wdo.target_slippage_ticks == 0.0
+
+    acao = cost_model_from_profile(PROFILES["PMAM3"])
+    assert acao.point_value_brl == 1.0
+    assert acao.exchange_fee_pct_per_leg == PROFILES["PMAM3"].exchange_fee_pct_per_leg
+
+
+def test_cost_model_from_profile_diz_nao_sei_em_vez_de_chutar():
+    """Perfil sem valor do ponto devolve `None`. "Nao sei quanto vale um
+    ponto" nunca pode virar 1,0 por default -- e' o erro de 10x do item
+    5.19, agora do lado do custo."""
+    from backtest.intraday.profiles import cost_model_from_profile
+
+    sem_valor = dataclasses.replace(PROFILES["PMAM3"], point_value_brl=None)
+    assert cost_model_from_profile(sem_valor) is None
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-09 -- a economia do instrumento tem UMA fonte: `core.instruments`
+# ---------------------------------------------------------------------------
+# Ate esta data, margem e valor do ponto dos minis viviam em DOIS lugares
+# (`SymbolProfile` e `registry._KWARGS_PADRAO`), e o passo de preco em TRES (os
+# dois acima mais o default da classe do robo). `strategy/` nao pode importar
+# `backtest/` (AGENTS.md, regra 1), entao a duplicacao era "necessaria" e o que
+# segurava era o teste de amarracao logo acima -- que avisa DEPOIS do numero
+# errado ser digitado. A regra 1 ja dizia a saida: dado que duas features
+# precisam sobe para `core/`.
+
+
+def test_o_perfil_do_futuro_carrega_exatamente_a_economia_declarada_em_core():
+    """O perfil e' COPIA da fonte, nunca uma segunda declaracao."""
+    from core.instruments import FUTUROS
+
+    assert set(FUTURES_PROFILES) == set(FUTUROS), (
+        "todo futuro com perfil tem de ter economia declarada em "
+        "`core.instruments.FUTUROS`, e vice-versa"
+    )
+    for symbol, econ in FUTUROS.items():
+        perfil = FUTURES_PROFILES[symbol]
+        assert perfil.point_value_brl == pytest.approx(econ.point_value_brl), symbol
+        assert perfil.price_tick_size == pytest.approx(econ.price_tick_size), symbol
+        assert perfil.margin_per_contract_brl == pytest.approx(
+            econ.margin_per_contract_brl), symbol
+
+
+def test_o_robo_de_producao_carrega_a_mesma_economia_que_o_perfil():
+    """A amarracao COMPLETA: os numeros com que o robo de futuro e' de fato
+    instanciado em producao (`get_daytrade_robot`, o mesmo caminho de
+    `scripts/run_live.py::build_intraday`) contra a fonte em `core/`.
+
+    Cobre um buraco que o teste de espelho anterior NAO cobria: `tick_size`.
+    Ninguem passa `tick_size=` ao construtor -- nem `_KWARGS_PADRAO`, nem o
+    `run_live` -- entao a grade de ordens de producao vinha do DEFAULT da
+    classe do robo (`wdo_grid_reload_maker.WDO_TICK_SIZE`, `CopaWin.
+    __init__`), um terceiro lugar onde o mesmo numero estava digitado, sem
+    nenhum teste ligando-o ao `SymbolProfile.price_tick_size` que o motor
+    usa. Uma ordem posicionada fora da grade do contrato e' recusada pela
+    corretora, e o backtest preencheria a mesma ordem sem reclamar."""
+    from core.instruments import economics_for
+    from strategy.daytrade.registry import _ROBOTS, get_daytrade_robot
+
+    conferidos = 0
+    for key in _ROBOTS:
+        robo = get_daytrade_robot(key)
+        if not getattr(robo, "is_futuro", False):
+            continue
+        econ = economics_for(robo.symbol)
+        conferidos += 1
+        assert robo.tick_size == pytest.approx(econ.price_tick_size), (
+            f"{key}: `tick_size` do robo ({robo.tick_size}) diverge do passo de "
+            f"preco de {robo.symbol} ({econ.price_tick_size}) -- ordem fora da "
+            f"grade e' recusada pela corretora e preenchida pelo backtest."
+        )
+        for campo in ("point_value_brl", "margin_per_contract_brl"):
+            valor = getattr(robo, campo, None)
+            if valor is None:
+                continue  # robo que nao liga dimensionamento dinamico
+            assert valor == pytest.approx(getattr(econ, campo)), (
+                f"{key}: `{campo}` do robo ({valor}) diverge de "
+                f"`core.instruments.FUTUROS[{robo.symbol!r}]`."
+            )
+    assert conferidos >= 2, "nenhum robo de futuro foi conferido -- o teste virou no-op"
+
+
+def test_o_teto_de_contratos_nao_migrou_para_core():
+    """`max_open_contracts` (15 no WIN@, 5 no WDO@) e' o REGULAMENTO da Copa
+    BTG 2025, nao economia do instrumento -- o mesmo contrato operado fora da
+    competicao nao tem esse teto. Fica no perfil de proposito; se um dia
+    aparecer em `core.instruments`, alguem vai le-lo como fato do mercado."""
+    from core import instruments
+
+    for econ in instruments.FUTUROS.values():
+        assert not hasattr(econ, "max_open_contracts")
+    assert FUTURES_PROFILES["WIN@"].max_open_contracts == 15
+    assert FUTURES_PROFILES["WDO@"].max_open_contracts == 5
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-09 -- a recusa de `config_for` vira erro NOMEADO e ACIONAVEL
+# ---------------------------------------------------------------------------
+
+
+def test_economia_do_terminal_invalida_nao_vira_ZeroDivisionError():
+    """`market_data_intraday.mt5_source.symbol_economics` devolve
+    `float(info.trade_tick_value)` sem validar nada, e o MT5 reporta ZERO
+    para simbolo ainda nao sincronizado no Market Watch. Antes de 2026-09-09
+    isso rebentava em `ZeroDivisionError` cru (ou, pior, passava com
+    `trade_tick_value=0` numa ACAO e zerava o P&L da run inteira em
+    silencio)."""
+    from backtest.intraday.profiles import SymbolEconomicsError
+
+    casos = [
+        (FUTURES_PROFILES["WDO@"], 0.0, 0.5, 375.0),
+        (FUTURES_PROFILES["WDO@"], 5.0, 0.0, 375.0),
+        (FUTURES_PROFILES["WDO@"], -5.0, 0.5, 375.0),
+        (FUTURES_PROFILES["WDO@"], float("nan"), 0.5, 375.0),
+        (FUTURES_PROFILES["WDO@"], 5.0, None, 375.0),
+        # Acao tambem: la' nao ha conferencia de valor do ponto, mas a
+        # divisao por zero existe do mesmo jeito.
+        (PROFILES["PMAM3"], 0.01, 0.0, 1000.0),
+        (PROFILES["PMAM3"], 0.0, 0.01, 1000.0),
+    ]
+    for perfil, tv, ts, capital in casos:
+        with pytest.raises(SymbolEconomicsError, match="numero positivo"):
+            config_for(perfil, trade_tick_value=tv, trade_tick_size=ts,
+                       initial_capital=capital)
+
+
+def test_a_recusa_por_economia_continua_sendo_um_ValueError():
+    """`SymbolEconomicsError` e' subclasse de `ValueError` de proposito: os
+    chamadores antigos (`scripts/run_live.py`, scripts de laboratorio) ja
+    tratavam `ValueError`, e trocar a hierarquia deixaria um caminho de
+    dinheiro real sem tratamento nenhum."""
+    from backtest.intraday.profiles import SymbolEconomicsError
+
+    assert issubclass(SymbolEconomicsError, ValueError)
+
+
+def test_a_mensagem_de_divergencia_diz_ao_dono_o_que_fazer():
+    """Uma recusa que para o robo antes do pregao TEM de ser acionavel sem
+    ninguem precisar ler o codigo: qual simbolo, qual arquivo, qual campo,
+    esperado x recebido. Um erro que so' diz "diverge" transforma cinco
+    minutos de conserto numa manha de leitura."""
+    from backtest.intraday.profiles import SymbolEconomicsError
+
+    with pytest.raises(SymbolEconomicsError) as exc:
+        # 25,0 / 0,5 = R$50/ponto: o mini-dolar (WDO) lido como dolar CHEIO
+        # (DOL), que e' a confusao real de simbolo, nao um numero inventado.
+        config_for(FUTURES_PROFILES["WDO@"], trade_tick_value=25.0,
+                   trade_tick_size=0.5, initial_capital=375.0)
+    msg = str(exc.value)
+    assert "WDO@" in msg                       # qual instrumento
+    assert "core/instruments.py" in msg        # qual arquivo consertar
+    assert "point_value_brl" in msg            # qual campo
+    assert "R$10" in msg and "R$50" in msg     # esperado x recebido
+    assert "5x" in msg                         # o tamanho do erro
+    assert "Market Watch" in msg               # a outra hipotese, e como checar
+
+
+def test_a_mensagem_de_terminal_invalido_nomeia_o_simbolo_e_a_causa_comum():
+    from backtest.intraday.profiles import SymbolEconomicsError
+
+    with pytest.raises(SymbolEconomicsError) as exc:
+        config_for(FUTURES_PROFILES["WIN@"], trade_tick_value=0.0,
+                   trade_tick_size=1.0, initial_capital=200.0)
+    msg = str(exc.value)
+    assert "WIN@" in msg
+    assert "trade_tick_value" in msg
+    assert "Market Watch" in msg
+
+
+def test_a_tolerancia_do_valor_do_ponto_aceita_ruido_e_recusa_instrumento():
+    """A banda existe para absorver arredondamento de ponto flutuante, nao
+    para acomodar "quase o mesmo instrumento": a menor confusao real vale um
+    fator de 5 (contrato cheio no lugar do mini), 800x a banda."""
+    from backtest.intraday.profiles import (
+        TOLERANCIA_VALOR_DO_PONTO,
+        SymbolEconomicsError,
+    )
+
+    assert TOLERANCIA_VALOR_DO_PONTO == 0.005
+    declarado = FUTURES_PROFILES["WDO@"].point_value_brl
+
+    # Dentro da banda (ruido de arredondamento) -- passa.
+    dentro = declarado * (1 + TOLERANCIA_VALOR_DO_PONTO * 0.5)
+    ok = config_for(FUTURES_PROFILES["WDO@"], trade_tick_value=dentro * 0.5,
+                    trade_tick_size=0.5, initial_capital=375.0)
+    assert ok.costs.point_value_brl == pytest.approx(declarado, rel=TOLERANCIA_VALOR_DO_PONTO)
+
+    # Logo fora dela -- recusa. (E o caso REAL, 5x, e' recusado com folga.)
+    fora = declarado * (1 + TOLERANCIA_VALOR_DO_PONTO * 3)
+    with pytest.raises(SymbolEconomicsError):
+        config_for(FUTURES_PROFILES["WDO@"], trade_tick_value=fora * 0.5,
+                   trade_tick_size=0.5, initial_capital=375.0)
+
+
+def test_o_painel_monta_a_config_de_leitura_sem_nunca_disparar_a_recusa():
+    """`dashboard/live_service.py::_build_intraday_runtime` deriva
+    `trade_tick_value` do PROPRIO perfil, entao a divergencia e' impossivel
+    por construcao ali. Isso importa porque `dashboard/app.py::_slot_ctx` NAO
+    captura `ValueError` (so' `KeyError` e as duas `Legacy*Error`): se essa
+    montagem passasse a poder divergir, a recusa viraria HTTP 500 em
+    `/operacao` em vez de mensagem. Este teste congela a premissa."""
+    for symbol, perfil in {**PROFILES, **FUTURES_PROFILES}.items():
+        cfg = config_for(
+            perfil,
+            trade_tick_value=0.01 * float(perfil.point_value_brl or 1.0),
+            trade_tick_size=0.01,
+            initial_capital=1000.0,
+        )
+        assert cfg.costs.point_value_brl == pytest.approx(perfil.point_value_brl), symbol

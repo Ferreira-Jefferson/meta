@@ -95,10 +95,19 @@ def _build_intraday_runtime(slot: Slot, capital: float, execution_mode: str, rob
     Não conecta em nada: o feed nunca é lido por `status()` — o painel
     só reporta o fuso em uso, não busca barra. Também não passa `clock_feed`:
     conferir o relógio do servidor exige ler tick, e uma página de status não
-    pode disparar I/O na corretora. Custo do perfil vem de `profile_for` com tick
-    0.01 nominal, porque `status()` não calcula P&L de trade nenhum; quem
+    pode disparar I/O na corretora. Custo do perfil vem de `profile_for` com
+    tick 0.01 nominal, porque `status()` não calcula P&L de trade nenhum; quem
     calcula é o processo do robô, que lê o tick real do terminal (ver
-    `scripts/run_live.py::build_intraday`)."""
+    `scripts/run_live.py::build_intraday`).
+
+    O VALOR DO PONTO, porém, não é nominal (2026-09-09): ele sai do perfil
+    (`SymbolProfile.point_value_brl`). O `0.01/0.01` de antes afirmava, para
+    QUALQUER símbolo, que 1 ponto vale R$1,00 -- verdade em ação, erro de 10x
+    num WDO@, e exatamente a família de bug dos itens 5.7/5.19. Não calcular
+    P&L aqui torna o erro inofensivo HOJE, não amanhã: basta alguém passar a
+    ler `config.costs` deste runtime para o erro virar número na tela. O tick
+    continua nominal (0,01) porque grade de preço só importa para posicionar
+    ordem, e este runtime nunca posiciona nenhuma."""
     from backtest.intraday.profiles import config_for, profile_for
     from live.broker_mt5 import MT5Broker  # import tardio: nao conecta ao construir
     from live.intraday_feed import feed_for
@@ -115,7 +124,9 @@ def _build_intraday_runtime(slot: Slot, capital: float, execution_mode: str, rob
     return IntradayLiveRuntime(
         slot=slot,
         strategy=robo,
-        config=config_for(profile, trade_tick_value=0.01, trade_tick_size=0.01,
+        config=config_for(profile,
+                          trade_tick_value=0.01 * float(profile.point_value_brl or 1.0),
+                          trade_tick_size=0.01,
                           target_fills_as_maker=robo.target_fills_as_maker,
                           anchor_exits_at_fill=robo.anchor_exits_at_fill,
                           initial_capital=capital),
