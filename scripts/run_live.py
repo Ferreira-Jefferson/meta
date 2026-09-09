@@ -370,9 +370,12 @@ def build_intraday(args):
         # `target_fills_as_maker` vem da ESTRATEGIA, nao deste chamador: era
         # `True` aqui e `False` no CLI de backtest, ou seja, o robo que opera e
         # o robo validado tinham modelo de custo diferente.
+        # `anchor_exits_at_fill` idem: e' o unico caminho em que ele faz
+        # alguma coisa (no simulado o fill == nivel, ver o campo na base).
         config=config_for(profile, trade_tick_value=econ.trade_tick_value,
                           trade_tick_size=econ.trade_tick_size,
                           target_fills_as_maker=strategy_obj.target_fills_as_maker,
+                          anchor_exits_at_fill=strategy_obj.anchor_exits_at_fill,
                           initial_capital=args.capital),
         bar_feed=bar_feed,
         broker=broker,

@@ -115,6 +115,34 @@ cada contrato agora arrisca menos, mas e' uma mudanca de exposicao que nao
 foi medida separadamente. Ver `tests/test_wdo_grid_reload_maker.py::
 test_marcos_de_escala_de_contrato_na_config_de_producao`.
 
+2026-09-09, ordem do dono: `anchor_exits_at_fill = True`. Alvo e stop passam
+a ser contados a partir do preco em que a ordem REALMENTE preencheu, nao do
+nivel que ela pediu -- transladados, preservando a distancia declarada. A
+flag e' de 2026-09-08 (pergunta do dono, ver `scripts/daytrade/
+wdof1_fill_favoravel_ancoragem_previa_2026_09_08.py`) e estava desligada.
+
+O que a decidiu, medido no 1o pregao real de T2/S6 (2026-09-09, deals da
+corretora, n=8 entradas): 1 delas encheu MELHOR que o pedido -- compra
+pedida em 5122,5, preenchida em 5122,0. Sem ancora, o alvo ficou onde
+estava (5123,5) e passou a exigir 3 ticks em vez de 2 (50% mais longe),
+com o stop 1 tick MAIS CURTO (15 em vez de 16). Ordem-limite enche no nivel
+OU MELHOR, entao isso so' acontece a favor -- e ainda assim degrada a
+geometria: alvo mais dificil E stop mais apertado ao mesmo tempo.
+
+RESSALVA DE METODO, importante para quem for reavaliar: o backtest NAO
+consegue dizer se ligar e' melhor. No motor simulado a `EnterLimit` preenche
+exatamente em `limit_price`, entao `delta = 0` e a flag e' NO-OP -- as duas
+configuracoes produzem numeros IDENTICOS (o proprio script de 2026-09-08 usa
+esse par de linhas como controle). Ligar nao invalida nenhuma medicao ja'
+feita, e tambem nao pode ser justificado por nenhuma. O argumento e' de
+CONSISTENCIA: com a ancora o robo opera sempre a geometria que foi medida;
+sem ela, opera uma geometria sorteada pela corretora a cada fill. Curiosidade
+que corta para o outro lado e nao foi resolvida: no exemplo acima o breakeven
+teorico SEM ancora e' melhor (67,8% contra 78,9%), porque 3:5 paga mais que
+2:6 -- so' que a 3 ticks o robo esta' fora da oscilacao de 2 ticks em que o
+edge foi medido (autocorrelacao lag-1 -0,44), que e' justamente o que pedir
+3 ticks ja' provou nao resgatar em outra medicao.
+
 2026-09-04, CORRIGIDO bug real (item 4.9 de `LICOES_DE_PRODUCAO.md`): no
 modo `reanchor_mode="rolling_last_price"` (o DEFAULT), `on_bar` recalculava
 a ancora SO' no instante em que a `EnterLimit` era armada -- depois disso,
@@ -536,6 +564,14 @@ class WdoGridReloadMaker(IntradayStrategy):
     # centro do desenho (capturar o spread em vez de paga-lo), nao um
     # detalhe de modelagem. Ver `IntradayStrategy.target_fills_as_maker`.
     target_fills_as_maker = True
+    # LIGADO 2026-09-09, ordem do dono -- ver a nota no topo do modulo.
+    # Ordem-limite enche no nivel OU MELHOR, e quando a corretora enche
+    # melhor, manter alvo/stop no nivel pedido faz o robo operar uma
+    # geometria que ninguem escolheu: medido no 1o pregao real de T2/S6,
+    # 1 de 8 entradas encheu 1 tick melhor, e nela o alvo passou a exigir
+    # 3 ticks (50% mais longe) com o stop 1 tick mais curto. Com a ancora,
+    # a distancia e' sempre a MEDIDA, contada da entrada real.
+    anchor_exits_at_fill = True
     # CORRIGIDO 2026-08-27 (era "m1", herdado de quando este modulo so'
     # tinha a checagem de sanidade em M1): a consolidacao F1 (leitura tick)
     # achou que o numero em M1 e' dominado por um artefato de

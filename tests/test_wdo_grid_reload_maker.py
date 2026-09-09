@@ -1194,3 +1194,54 @@ def test_marcos_de_escala_de_contrato_na_config_de_producao(caixa_brl, contratos
     strat.on_capital_update(caixa_brl)
     assert strat._quantidade_da_entrada() == contratos, porque
 
+
+# ---------- ancoragem de alvo/stop no fill REAL (2026-09-09) ---------------
+#
+# O motor SIMULADO preenche toda `EnterLimit` exatamente em `limit_price`,
+# entao `anchor_exits_at_fill` e' no-op no backtest e nenhum numero medido
+# muda ao liga-lo (a mecanica em si ja' e' coberta por
+# `tests/test_intraday_machine.py`, celulas `limit_fill_at_bar_open` x
+# `anchor_exits_at_fill`). O unico lugar onde ele faz alguma coisa e' a
+# execucao REAL, onde ordem-limite enche no nivel OU MELHOR e quem escolhe o
+# preco e' a corretora -- exatamente o caminho que NENHUM backtest exercita.
+#
+# Por isso o teste que importa nao e' "o atributo esta' True": e' que ele
+# CHEGA na config dos dois montadores de ambiente. Foi passando um parametro
+# parecido a mao, por chamador, que o robo ao vivo ja' rodou com modelo de
+# custo diferente do robo validado -- ver `IntradayStrategy.
+# target_fills_as_maker` e `tests/test_intraday_feed_selection.py`.
+
+
+def test_producao_ancora_alvo_e_stop_no_preco_REALMENTE_preenchido():
+    """Sem isto, um fill melhor que o pedido faz o robo operar uma geometria
+    que ninguem escolheu. Medido no 1o pregao real de T2/S6: 1 de 8 entradas
+    encheu 1 tick melhor (compra pedida 5122,5, preenchida 5122,0) e nela o
+    alvo declarado em 5123,5 passou a exigir 3 ticks em vez de 2 -- 50% mais
+    longe -- com o stop 1 tick MAIS CURTO."""
+    assert _robo_de_producao().anchor_exits_at_fill is True
+
+
+def test_painel_leva_a_ancoragem_do_robo_para_a_config_que_monta():
+    """`dashboard/live_service.py::_build_intraday_runtime` -- um dos dois
+    montadores. Le do ROBO, nunca um literal deste chamador."""
+    from core.config import slot_by_id
+    from dashboard import live_service
+
+    slot = slot_by_id("dt-wdo_grid_reload_maker-wdo@-live")
+    rt = live_service._build_intraday_runtime(
+        slot, 375.0, "shadow", "wdo_grid_reload_maker")
+
+    assert rt.config.anchor_exits_at_fill is True
+
+
+def test_robo_que_NAO_pede_ancoragem_nao_ganha_ela_de_brinde():
+    """A flag e' propriedade do ROBO -- o montador nao pode liga-la para
+    todo mundo. `Gremah` (acao, M1) continua no default."""
+    from core.config import slot_by_id
+    from dashboard import live_service
+
+    slot = slot_by_id("dt-gremah-pmam3-shadow")
+    rt = live_service._build_intraday_runtime(slot, 100.0, "shadow", "gremah")
+
+    assert rt.strategy.anchor_exits_at_fill is False
+    assert rt.config.anchor_exits_at_fill is False

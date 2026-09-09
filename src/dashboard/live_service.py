@@ -117,6 +117,7 @@ def _build_intraday_runtime(slot: Slot, capital: float, execution_mode: str, rob
         strategy=robo,
         config=config_for(profile, trade_tick_value=0.01, trade_tick_size=0.01,
                           target_fills_as_maker=robo.target_fills_as_maker,
+                          anchor_exits_at_fill=robo.anchor_exits_at_fill,
                           initial_capital=capital),
         bar_feed=feed_for(robo),
         broker=MT5Broker(magic=slot.magic),

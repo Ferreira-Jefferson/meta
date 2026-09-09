@@ -430,6 +430,25 @@ class IntradayStrategy(ABC):
     # `IntradayBacktestConfig.target_fills_as_maker` para como o motor precifica.
     target_fills_as_maker: bool = False
 
+    # Alvo e stop ancoram no preco REALMENTE preenchido (transladados,
+    # preservando a distancia declarada na ordem) ou no NIVEL que a ordem
+    # pediu? Mora aqui pelo mesmo motivo dos dois campos vizinhos: e'
+    # propriedade do ROBO -- quem escolheu a geometria e' quem sabe se ela
+    # vale a partir do nivel ou a partir de onde entrou --, e deixa-la a
+    # cargo do chamador ja' produziu, uma vez, robo ao vivo divergente do
+    # robo validado.
+    #
+    # ATENCAO ao ler backtest: no motor simulado a `EnterLimit` preenche
+    # EXATAMENTE em `limit_price`, entao `delta = 0` e isto e' NO-OP -- so'
+    # muda numero junto de `limit_fill_at_bar_open=True`. O lugar onde ele
+    # muda alguma coisa e' a execucao REAL, onde quem escolhe o preco e' a
+    # corretora e ordem-limite enche no nivel OU MELHOR. Consequencia: o
+    # backtest NAO consegue dizer se ligar e' melhor; a escolha e' de
+    # consistencia (operar sempre a geometria medida) e nao de resultado
+    # comprovado. Ver `IntradayBacktestConfig.anchor_exits_at_fill` e
+    # `scripts/daytrade/wdof1_fill_favoravel_ancoragem_previa_2026_09_08.py`.
+    anchor_exits_at_fill: bool = False
+
     # Granularidade em que este robo foi MEDIDO, e portanto a unica em que ele
     # pode operar: `"m1"` (barra de 1 minuto) ou `"tick"` (negocio a negocio).
     # Mora aqui pelo mesmo motivo de `target_fills_as_maker`: e' propriedade do

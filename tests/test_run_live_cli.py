@@ -143,6 +143,23 @@ def test_build_intraday_repassa_symbol_map_para_o_broker(cli):
     assert "symbol_map=symbol_map" in fonte
 
 
+def test_build_intraday_repassa_a_ancoragem_de_saida_declarada_pelo_ROBO(cli):
+    """`anchor_exits_at_fill` (ligado em producao no WDO F1 em 2026-09-09) so'
+    faz alguma coisa na execucao REAL: no motor simulado a `EnterLimit` enche
+    exatamente em `limit_price`, entao ele e' no-op no backtest e NENHUM teste
+    de motor pega a falta dele aqui. Se este chamador parar de repassar, o robo
+    ao vivo volta a ancorar alvo/stop no nivel PEDIDO enquanto o painel
+    (`dashboard/live_service.py::_build_intraday_runtime`, coberto em
+    `tests/test_wdo_grid_reload_maker.py`) ancora no fill -- os dois montadores
+    divergindo em silencio, que e' a falha historica de
+    `IntradayStrategy.target_fills_as_maker`. Prova estatica pelo mesmo motivo
+    do teste acima: `build_intraday` exige terminal MT5 real."""
+    import inspect
+
+    fonte = inspect.getsource(cli.build_intraday)
+    assert "anchor_exits_at_fill=strategy_obj.anchor_exits_at_fill" in fonte
+
+
 # ---------- disjuntor SEMPRE ativo, nao e escolha de quem opera (2026-08-19) -
 
 def test_build_sem_limites_no_form_ainda_ativa_disjuntor_com_default_da_classe(cli, isolated_db):
