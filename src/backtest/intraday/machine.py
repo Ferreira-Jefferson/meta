@@ -47,6 +47,7 @@ import pandas as pd
 from core import b3_session
 from backtest.intraday.costs import (
     IntradayCostModel,
+    apply_deslize_alvo_nativo,
     apply_intraday_slippage,
     fees_round_trip_brl,
 )
@@ -2023,9 +2024,35 @@ class IntradaySessionMachine:
                 "fechamento parcial de posicao (EnterLimit.exit_split_unit) nao tem "
                 "caminho de execucao real -- so' backtest/sombra, ver a docstring do campo."
             )
-        is_maker_target = reason == IntradayExitReason.TARGET and cfg.target_fills_as_maker
-        exec_px = (exit_ref_price if is_maker_target
-                   else apply_intraday_slippage(exit_ref_price, _exit_side(position), cfg.costs))
+        # ALVO fechado como MAKER e' o unico caminho que nao paga
+        # `slippage_ticks` -- mas nao e' de graca. Duas familias diferentes
+        # dentro do mesmo `reason`, e elas pagam coisas diferentes:
+        #
+        #  * saida DIVIDIDA (`exit_split_unit`): ordens-limite REAIS
+        #    posicionadas por `_resolve_live_split_exit`/`_resolve_simulated_
+        #    split_exit`. Essas de fato ficam RESTING no book e preenchem no
+        #    nivel -- nada a cobrar, comportamento antigo preservado.
+        #  * alvo NAO dividido: e' o `tp` NATIVO amarrado no request da
+        #    entrada (`live/broker_mt5.py::place_pending`), e a corretora o
+        #    executa como GATILHO varrido a mercado, nao como limite na fila.
+        #    Medido em dinheiro real em 2026-09-08 (item 4.8 de
+        #    LICOES_DE_PRODUCAO.md): 8 de 8 saidas por alvo nativo do WDO F1
+        #    executaram PIOR que o nivel pedido (7 por 1 tick, 1 por 2),
+        #    R$45,00 de deslize num pregao que perdeu R$116,00. Cobra
+        #    `costs.target_slippage_ticks` (0.0 = comportamento antigo).
+        #
+        # Cobrar isto e' pre-requisito de qualquer medicao de `profit_ticks`:
+        # com alvo de 2 ticks, 1 tick de deslize e' METADE do bruto do trade,
+        # e o motor pagava os 2 ticks cheios.
+        is_maker_target = (reason == IntradayExitReason.TARGET
+                           and cfg.target_fills_as_maker)
+        if is_maker_target and position.exit_split_unit is None:
+            exec_px = apply_deslize_alvo_nativo(
+                exit_ref_price, _exit_side(position), cfg.costs)
+        elif is_maker_target:
+            exec_px = exit_ref_price
+        else:
+            exec_px = apply_intraday_slippage(exit_ref_price, _exit_side(position), cfg.costs)
         if already_filled_at is not None:
             exec_px = float(already_filled_at)
         elif self.execution is not None:
@@ -2068,9 +2095,34 @@ class IntradaySessionMachine:
             # FORCED_FLATTEN/MANUAL/SIGNAL tambem ficam a MERCADO: para eles
             # nao existe ordem registrada, e o flatten do fim do pregao e' o
             # que garante que a posicao nao vira overnight.
+            # 2026-09-08, auditoria da ordem "nunca sair a mercado": a
+            # condicao `exit_split_unit is None` era larga DEMAIS. Ela existe
+            # por causa do ALVO -- `live.intraday_runtime._alvo_atomico`
+            # recusa amarrar TP numa posicao fatiada de proposito (dois
+            # fechamentos do tamanho total numa conta NETTING inverteriam o
+            # lado), entao para o alvo fatiado realmente NAO ha' nivel
+            # registrado na corretora para esperar.
+            #
+            # O STOP nunca teve esse problema, e o proprio `_alvo_atomico`
+            # ja' dizia isso na docstring ("o STOP nao tem esse problema e
+            # vai sempre: fatia de saida so' existe no alvo"):
+            # `_on_limit_placed` manda `stop=order.initial_stop` em TODA
+            # ordem, fatiada ou nao. Ou seja, a posicao fatiada TEM SL
+            # registrado na corretora e, mesmo assim, o motor mandava ordem
+            # A MERCADO por cima quando a barra tocava o stop -- pagando o
+            # spread que o dono mandou parar de pagar e, pior, arriscando
+            # DUPLA saida (a ordem a mercado e o SL da corretora podem
+            # executar as duas; em conta NETTING isso INVERTE o lado, o
+            # mesmo desfecho do incidente de 2026-08-28). Afetava a `gremah`,
+            # que roda `dividir_entrada=True` por default.
+            #
+            # A fatia-limite pendente ja' e' cancelada antes deste ponto
+            # (`_resolve_live_split_exit`, ramo `stop_hit`), entao a
+            # sequencia fica correta: cancela a limite -> confirma pelo SL.
             fecha_pela_protecao = (
                 reason in (IntradayExitReason.TARGET, IntradayExitReason.STOP)
-                and position.exit_split_unit is None
+                and (position.exit_split_unit is None
+                     or reason == IntradayExitReason.STOP)
                 and hasattr(self.execution, "exit_por_protecao")
             )
             if fecha_pela_protecao:

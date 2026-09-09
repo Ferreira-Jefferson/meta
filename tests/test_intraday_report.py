@@ -28,12 +28,13 @@ class _ResultadoFake:
     arquivo testa."""
 
     def __init__(self, trades, equity, max_drawdown=0.0,
-                 wiped_out_at=None, sessoes_puladas=()):
+                 wiped_out_at=None, sessoes_puladas=(), deslize_alvo_ticks=0.0):
         self.trades = trades
         self.equity_curve = equity
         self.metrics = {"max_drawdown": max_drawdown}
         self.wiped_out_at = wiped_out_at
         self.sessoes_puladas_por_capital = list(sessoes_puladas)
+        self.deslize_alvo_ticks = deslize_alvo_ticks
 
 
 class _TradeFake:
@@ -138,6 +139,44 @@ def test_conta_zerada_e_pregao_pulado_viram_aviso_automatico():
     item = linha_de_resultado("x", r, initial_capital=100.0)
     assert "ZERADO" in item.aviso and "pulou 3d" in item.aviso
     assert "ZERADO" in linha(item)
+
+
+def test_deslize_do_alvo_cobrado_aparece_na_linha_sem_virar_coluna():
+    """PREMISSA DE CUSTO tem de ser visivel: duas linhas com o mesmo
+    `liquido R$` e premissas de deslize diferentes nao sao comparaveis, e ate'
+    2026-09-08 elas sairiam IDENTICAS na tabela -- o motor fechava a saida por
+    ALVO maker exatamente no nivel pedido, de graca, e nenhuma tabela do repo
+    avisava disso (item 4.8 de LICOES_DE_PRODUCAO.md: 8 de 8 saidas reais do
+    WDO F1 executaram pior que o nivel, R$45,00 num pregao de -R$116,00).
+
+    Sai no `aviso`, nunca como coluna: a base sao 12 colunas fixas, e uma
+    coluna que nao existe em toda rodada quebraria a comparacao entre
+    tabelas.
+
+    FALHA no codigo antigo: `linha_de_resultado` nao lia `deslize_alvo_ticks`
+    e o aviso saia vazio."""
+    r = _ResultadoFake([_TradeFake(10.0)], _equity([100.0, 110.0]),
+                       deslize_alvo_ticks=1.0)
+    item = linha_de_resultado("x", r, initial_capital=100.0)
+    assert "desliz.alvo 1,0t" in item.aviso
+    assert "desliz.alvo 1,0t" in linha(item)
+    assert "desliz" not in cabecalho(), "premissa de custo nao vira coluna da base"
+
+
+def test_run_sem_deslize_nao_ganha_aviso_nenhum():
+    """O aviso e' sobre o que ESTA sendo cobrado. Uma run que nao cobra
+    deslize (motor antigo, ou alvo que ja paga `slippage_ticks` por ser a
+    mercado) nao pode carregar um rotulo que sugira que cobra -- e um
+    resultado velho, sem o campo, tambem nao pode explodir."""
+    r = _ResultadoFake([_TradeFake(10.0)], _equity([100.0, 110.0]))
+    assert linha_de_resultado("x", r, initial_capital=100.0).aviso == ""
+
+    class _ResultadoAntigo:
+        trades = []
+        equity_curve = pd.Series(dtype="float64")
+        metrics = {"max_drawdown": 0.0}
+
+    assert linha_de_resultado("y", _ResultadoAntigo(), initial_capital=100.0).aviso == ""
 
 
 def test_run_sem_trade_nenhum_nao_levanta():

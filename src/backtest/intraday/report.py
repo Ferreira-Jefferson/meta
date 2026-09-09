@@ -31,6 +31,17 @@ coluna com o MESMO nome significava coisas diferentes em scripts diferentes.
 Quem compara N variantes acrescenta colunas com `extras` (dict ordenado, ja
 formatado como texto) — elas entram DEPOIS da base, nunca no lugar dela.
 
+## O aviso `desliz.alvo Nt`
+
+Colado no fim da linha (nunca uma coluna — ver `LinhaResultado.aviso`)
+quando a run cobrou deslize da saida por ALVO maker
+(`IntradayCostModel.target_slippage_ticks`, ligado por default em
+`config_for` desde 2026-09-08). E' PREMISSA DE CUSTO, nao alerta: duas
+linhas com o mesmo `liquido R$` e premissas de deslize diferentes nao sao
+comparaveis, e antes disto elas sairiam identicas na tabela. Ver o item 4.8
+de `LICOES_DE_PRODUCAO.md` para a medicao (8 de 8 saidas por alvo nativo do
+WDO F1 executaram pior que o nivel pedido em 2026-09-08).
+
 ## Duas escolhas que valem explicacao
 
 **`lucro/DD` no lugar do Calmar anualizado.** `backtest.metrics.calmar`
@@ -201,6 +212,19 @@ def linha_de_resultado(
     puladas = len(getattr(result, "sessoes_puladas_por_capital", []) or [])
     if puladas:
         avisos.append(f"pulou {puladas}d")
+    # PREMISSA DE CUSTO, nao alerta de problema -- mas mora no mesmo lugar
+    # (`aviso`) e pelo mesmo motivo: nao existe em toda rodada, entao nao
+    # pode virar coluna da base. Sai AUTOMATICO do proprio resultado para
+    # nenhum script poder esquecer de mostra-la; ate 2026-09-08 o motor
+    # entregava a saida por ALVO maker exatamente no nivel pedido, de graca,
+    # e nenhuma tabela deste repo avisava que aquele numero dependia disso
+    # (item 4.8 de LICOES_DE_PRODUCAO.md -- 8 de 8 saidas reais do WDO F1
+    # sairam PIORES que o nivel, R$45,00 num pregao de -R$116,00). Duas
+    # linhas com o mesmo `liquido R$` e premissas de deslize diferentes nao
+    # sao comparaveis, e sem este aviso elas pareciam identicas.
+    deslize = float(getattr(result, "deslize_alvo_ticks", 0.0) or 0.0)
+    if deslize:
+        avisos.append(f"desliz.alvo {num_br(deslize, 1)}t")
 
     return LinhaResultado(
         variante=variante,

@@ -35,6 +35,7 @@ from strategy.daytrade.base import (
 
 from backtest.intraday.costs import (
     B3_EQUITY_EXCHANGE_FEE_PCT_PER_LEG,
+    DESLIZE_ALVO_NATIVO_TICKS,
     IntradayCostModel,
 )
 from backtest.intraday.machine import IntradayBacktestConfig
@@ -372,6 +373,7 @@ def config_for(
     margin_per_contract_brl: float | None = None,
     enforce_capital_cap: bool | None = None,
     margin_buffer: float = MARGIN_BUFFER_FUTUROS,
+    target_slippage_ticks: float | None = None,
 ) -> IntradayBacktestConfig:
     """Monta o `IntradayBacktestConfig` de um perfil + a economia do simbolo
     lida do terminal (`market_data_intraday.mt5_source.symbol_economics`).
@@ -464,10 +466,35 @@ def config_for(
     (`ValueError`) -- pedir um teto que nao ha dado para calcular seria um
     "sem teto" silencioso disfarcado de pedido atendido.
 
+    `target_slippage_ticks` (2026-09-08): quantos TICKS a saida por ALVO
+    paga de deslize quando ela e' modelada como maker
+    (`target_fills_as_maker=True`). `None` (default) RESOLVE SOZINHO:
+
+      * `target_fills_as_maker=True`  -> `costs.DESLIZE_ALVO_NATIVO_TICKS`
+        (1,0 tick). Um alvo maker que o robo nao varre e' o `tp` NATIVO
+        amarrado no request da entrada, e a corretora o executa como gatilho
+        a mercado: 8 de 8 saidas do WDO F1 em 2026-09-08 sairam PIORES que o
+        nivel pedido, R$45,00 num pregao de -R$116,00 (item 4.8 de
+        LICOES_DE_PRODUCAO.md).
+      * `target_fills_as_maker=False` -> `0.0`. Ali o alvo ja e' uma ordem a
+        MERCADO e ja paga `costs.slippage_ticks`; somar os dois contaria o
+        mesmo custo duas vezes.
+
+    LIGADO POR DEFAULT, e nao opt-in, por decisao de metodo: "parametro de
+    seguranca opcional e' parametro desligado" (item 3.8 de
+    LICOES_DE_PRODUCAO.md) -- e este e' o caminho que TODO backtest, sombra e
+    a producao (`scripts/run_live.py::build_intraday`) usam para montar a
+    config. Passe `0.0` EXPLICITO para reproduzir o motor antigo (a linha
+    "sem deslize" de uma comparacao), ou outro numero para medir
+    sensibilidade -- a amostra que ancora o 1,0 tem n=8, entao a
+    sensibilidade importa.
+
     O teto por capital NUNCA aumenta `max_open_contracts` (o campo que este
     montador resolve logo acima, via `teto`) -- so' pode ENCOLHER o que a
     run permitiria durante a execucao, dinamicamente, conforme o caixa muda
     (ver a docstring do campo em `IntradayBacktestConfig`)."""
+    if target_slippage_ticks is None:
+        target_slippage_ticks = (DESLIZE_ALVO_NATIVO_TICKS if target_fills_as_maker else 0.0)
     if enforce_capital_cap is None:
         enforce_capital_cap = profile.is_futures and profile.margin_per_contract_brl is not None
     if enforce_capital_cap and (not profile.is_futures or profile.margin_per_contract_brl is None):
@@ -526,6 +553,7 @@ def config_for(
         trade_tick_size=trade_tick_size,
         fee_round_trip_brl=profile.fee_round_trip_brl,
         exchange_fee_pct_per_leg=profile.exchange_fee_pct_per_leg,
+        target_slippage_ticks=target_slippage_ticks,
     )
     return IntradayBacktestConfig(
         costs=costs,

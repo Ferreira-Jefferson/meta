@@ -433,3 +433,48 @@ def test_piso_do_dia_a_dia_fica_abaixo_do_piso_de_partida(symbol):
         f"{symbol}: o gate diario tem que ser a margem CRUA de 1 contrato. "
         "Futuro nao opera lote de 100 -- `default_quantity` tem que ser 1."
     )
+
+
+# ---------- deslize do alvo NATIVO (item 4.8, 2026-09-08) ------------------
+
+def test_config_for_cobra_o_deslize_do_alvo_quando_ele_e_maker():
+    """LIGADO POR DEFAULT, e nao opt-in: "parametro de seguranca opcional e'
+    parametro desligado" (item 3.8 de LICOES_DE_PRODUCAO.md). `config_for` e'
+    o caminho que TODO backtest, sombra e a producao (`scripts/run_live.py::
+    build_intraday`, `dashboard/live_service.py`) usam para montar a config --
+    se o deslize fosse opt-in, toda medicao futura continuaria otimista
+    exatamente no evento que decidiu quase todos os trades reais do WDO F1
+    (8 de 8 saidas piores que o nivel pedido, R$45,00 num pregao de
+    -R$116,00).
+
+    FALHA no codigo antigo: `IntradayCostModel` nao tinha o campo."""
+    from backtest.intraday.costs import DESLIZE_ALVO_NATIVO_TICKS
+
+    config = config_for(FUTURES_PROFILES["WDO@"], trade_tick_value=0.01,
+                        trade_tick_size=0.001, initial_capital=375.0,
+                        target_fills_as_maker=True)
+    assert config.costs.target_slippage_ticks == DESLIZE_ALVO_NATIVO_TICKS
+
+
+def test_config_for_nao_cobra_deslize_de_alvo_que_ja_paga_slippage():
+    """Alvo com `target_fills_as_maker=False` ja e' ordem A MERCADO e ja paga
+    `costs.slippage_ticks`. Somar o deslize do TP nativo em cima contaria o
+    mesmo custo duas vezes -- e um custo dobrado e' tao mentiroso quanto um
+    custo ausente, so' que na direcao que ninguem audita."""
+    config = config_for(PROFILES["PMAM3"], trade_tick_value=0.01,
+                        trade_tick_size=0.01, preco_atual=1.0,
+                        target_fills_as_maker=False)
+    assert config.costs.target_slippage_ticks == 0.0
+
+
+def test_config_for_deslize_explicito_sempre_vence():
+    """`0.0` explicito reproduz o motor antigo (a linha "sem deslize" de uma
+    comparacao) e outro numero mede sensibilidade -- a amostra que ancora o
+    1,0 tem n=11 (2 pregoes efetivos, 1 contrato), entao a sensibilidade
+    importa e precisa de um caminho de entrada."""
+    for pedido in (0.0, 0.5, 2.0):
+        config = config_for(FUTURES_PROFILES["WDO@"], trade_tick_value=0.01,
+                            trade_tick_size=0.001, initial_capital=375.0,
+                            target_fills_as_maker=True,
+                            target_slippage_ticks=pedido)
+        assert config.costs.target_slippage_ticks == pedido

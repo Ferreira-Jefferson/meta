@@ -102,6 +102,16 @@ class IntradayBacktestResult:
     # que hoje abriria posicao de verdade passaria a aparecer aqui, nunca em
     # silencio.
     ordens_recusadas_por_capital: int = 0
+    # Ticks de deslize que ESTA run cobrou da saida por ALVO maker
+    # (`config.costs.target_slippage_ticks`), copiado da config no fim da
+    # run. Existe para a TABELA PADRAO poder avisar quando o deslize esta
+    # sendo cobrado (`backtest.intraday.report.linha_de_resultado`) sem que
+    # cada script tenha de lembrar de passar isso a mao -- uma premissa de
+    # modelagem que muda o veredito e nao aparece na saida e' exatamente
+    # como o motor passou meses entregando alvo de graca sem ninguem ver.
+    # `0.0` = nao cobrou nada (motor antigo, ou alvo que ja paga
+    # `slippage_ticks` por ser a mercado).
+    deslize_alvo_ticks: float = 0.0
 
 
 def _bar_volume(row: pd.Series) -> float:
@@ -323,4 +333,6 @@ def run_intraday_backtest(
                                    sessoes_puladas_por_capital=sessoes_puladas_por_capital,
                                    ordens_aceitas=machine.ordens_aceitas,
                                    ordens_recusadas_por_teto=machine.ordens_recusadas_por_teto,
-                                   ordens_recusadas_por_capital=machine.ordens_recusadas_por_capital)
+                                   ordens_recusadas_por_capital=machine.ordens_recusadas_por_capital,
+                                   deslize_alvo_ticks=(config.costs.target_slippage_ticks
+                                                       if config.target_fills_as_maker else 0.0))

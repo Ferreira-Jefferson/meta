@@ -1038,7 +1038,7 @@ class IntradayLiveRuntime:
 
     def _vigia_leitura_do_feed(self, conn, account) -> None:
         """Grava no diario quando o feed NAO CONSEGUE LER o terminal, e quando
-        volta a conseguir. Nao decide nada â€” so' tira o silencio.
+        volta a conseguir. Nao decide nada — so' tira o silencio.
 
         Por que existe (2026-09-08, item 5.17 do `LICOES_DE_PRODUCAO.md`): o
         terminal parou de entregar tick NOVO de WDO@ por 44,8 minutos e
@@ -1054,7 +1054,7 @@ class IntradayLiveRuntime:
         passos entra na mensagem de recuperacao, que e' onde ela informa
         quanto tempo o robo ficou cego.
 
-        Isto NAO e' o portao que impede a ordem velha â€” esse e'
+        Isto NAO e' o portao que impede a ordem velha — esse e'
         `MAX_ATRASO_PARA_ORDEM_SEGUNDOS`, e ele continua sendo a unica
         protecao. Aqui so' se registra, porque a causa do congelamento de
         2026-09-08 segue desconhecida e a proxima vez precisa deixar rastro.

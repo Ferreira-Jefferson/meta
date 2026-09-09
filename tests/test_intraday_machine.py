@@ -1670,3 +1670,255 @@ def test_sem_o_fix_a_excecao_nao_carrega_eventos_parciais():
     # chamador (`_consume`) nao tinha como recuperar o evento confirmado.
     assert len(eventos_sem_fix) == 1
     assert getattr(exc.value, "partial_events", None) is None
+
+
+# ---------- deslize do ALVO NATIVO (item 4.8, 2026-09-08) ------------------
+
+def test_alvo_maker_paga_o_deslize_do_tp_nativo_contra_a_posicao():
+    """O `tp` amarrado no request da entrada NAO fica resting no book -- a
+    corretora o executa como gatilho varrido a mercado. Medido em dinheiro
+    real no WDO F1 em 2026-09-08: das 22 idas-e-voltas do pregao, 8 sairam
+    pelo alvo nativo e 8 DE 8 executaram PIOR que o nivel pedido (7 por 1
+    tick, 1 por 2), R$45,00 de deslize num pregao que perdeu R$116,00 --
+    item 4.8 de LICOES_DE_PRODUCAO.md.
+
+    Ate' aqui o motor entregava o alvo maker EXATAMENTE no nivel pedido, de
+    graca. Com alvo de 2 ticks (T2, producao), 1 tick de deslize e' METADE
+    do bruto do trade -- ou seja, o motor era otimista exatamente no evento
+    que decide quase todos os trades reais.
+
+    FALHA no motor antigo: sem `target_slippage_ticks` o preco de saida
+    seria 9,90 cravado (lucro de 0,10) em vez de 9,89 (lucro de 0,09)."""
+    strat = _Scripted({0: [EnterLimit(side="long", limit_price=9.80,
+                                      initial_target=9.90, initial_stop=9.00)]})
+    custos = IntradayCostModel(point_value_brl=1.0, tick_size=0.01,
+                               fee_round_trip_brl=0.0, slippage_ticks=0.0,
+                               target_slippage_ticks=1.0)
+    m = IntradaySessionMachine(strat, _config(costs=custos))
+    m.begin_session(pd.Timestamp("2026-01-05").date())
+    m.on_closed_bar(_bar(0, 10.00, 10.00, 10.00, 10.00))
+    m.on_closed_bar(_bar(1, 10.00, 10.00, 9.79, 9.85))   # preenche a entrada em 9.80
+    ev = m.on_closed_bar(_bar(2, 9.85, 9.95, 9.85, 9.90))  # toca o alvo 9.90
+
+    fechadas = [e for e in ev if isinstance(e, PositionClosed)]
+    assert len(fechadas) == 1
+    trade = fechadas[0].trade
+    assert trade.exit_reason == IntradayExitReason.TARGET
+    # 1 tick ABAIXO do alvo pedido: fechar comprado e' vender, e o deslize e'
+    # sempre CONTRA a posicao (8/8 na amostra real).
+    assert trade.exit_price == pytest.approx(9.89)
+    assert trade.pnl_brl == pytest.approx(0.09)
+    assert trade.slippage_total == pytest.approx(0.01)
+
+
+def test_deslize_do_alvo_e_contra_a_posicao_tambem_no_short():
+    """Fechar vendido e' COMPRAR, entao o deslize sai mais ALTO -- o sinal
+    acompanha o lado da posicao, nunca o do preco. Se o motor aplicasse o
+    deslize sempre para baixo, o short seria PREMIADO pelo mesmo evento que
+    pune o long, e a media entre os dois lados esconderia o custo."""
+    strat = _Scripted({0: [EnterLimit(side="short", limit_price=10.20,
+                                      initial_target=10.10, initial_stop=11.00)]})
+    custos = IntradayCostModel(point_value_brl=1.0, tick_size=0.01,
+                               fee_round_trip_brl=0.0, slippage_ticks=0.0,
+                               target_slippage_ticks=1.0)
+    m = IntradaySessionMachine(strat, _config(costs=custos))
+    m.begin_session(pd.Timestamp("2026-01-05").date())
+    m.on_closed_bar(_bar(0, 10.00, 10.00, 10.00, 10.00))
+    m.on_closed_bar(_bar(1, 10.00, 10.21, 10.00, 10.15))  # preenche a venda em 10.20
+    ev = m.on_closed_bar(_bar(2, 10.15, 10.15, 10.05, 10.10))  # toca o alvo 10.10
+
+    trade = [e for e in ev if isinstance(e, PositionClosed)][0].trade
+    assert trade.exit_reason == IntradayExitReason.TARGET
+    assert trade.exit_price == pytest.approx(10.11)
+    assert trade.pnl_brl == pytest.approx(0.09)
+
+
+def test_stop_nao_paga_o_deslize_do_alvo_em_cima_do_slippage():
+    """Stop e alvo nao deslizam pelo mesmo motivo e nao podem somar: o stop
+    ja vira ordem A MERCADO no toque e ja paga `slippage_ticks`; o alvo e'
+    o `tp` registrado na corretora e paga `target_slippage_ticks`. Cobrar
+    os dois do stop contaria o mesmo custo duas vezes.
+
+    FALHA se alguem aplicar o deslize novo fora do ramo do alvo."""
+    strat = _Scripted({0: [EnterLimit(side="long", limit_price=9.80,
+                                      initial_target=9.90, initial_stop=9.50)]})
+    custos = IntradayCostModel(point_value_brl=1.0, tick_size=0.01,
+                               fee_round_trip_brl=0.0, slippage_ticks=1.0,
+                               target_slippage_ticks=1.0)
+    m = IntradaySessionMachine(strat, _config(costs=custos))
+    m.begin_session(pd.Timestamp("2026-01-05").date())
+    m.on_closed_bar(_bar(0, 10.00, 10.00, 10.00, 10.00))
+    m.on_closed_bar(_bar(1, 10.00, 10.00, 9.79, 9.85))
+    ev = m.on_closed_bar(_bar(2, 9.85, 9.85, 9.45, 9.50))  # toca o stop 9.50
+
+    trade = [e for e in ev if isinstance(e, PositionClosed)][0].trade
+    assert trade.exit_reason == IntradayExitReason.STOP
+    # 9.50 - 1 tick de `slippage_ticks`, e NADA de `target_slippage_ticks`.
+    assert trade.exit_price == pytest.approx(9.49)
+
+
+def test_saida_dividida_nao_paga_deslize_de_tp_nativo():
+    """A saida FATIADA posiciona ordens-limite REAIS no book (`place_exit_
+    limit`/`_resolve_simulated_split_exit`) -- essas ficam resting de
+    verdade e preenchem no nivel. O deslize de 2026-09-08 e' do `tp`
+    NATIVO amarrado na posicao, que e' outro mecanismo; cobra-lo aqui
+    inventaria um custo que a fatia nao paga.
+
+    FALHA se o deslize for aplicado a todo `reason == TARGET`."""
+    strat = _Scripted({0: [EnterLimit(side="long", limit_price=9.80, quantity=200,
+                                      split_quantities=(100, 100),
+                                      initial_target=9.90, initial_stop=9.00,
+                                      exit_split_unit=100, exit_ttl_bars=5)]})
+    custos = IntradayCostModel(point_value_brl=1.0, tick_size=0.01,
+                               fee_round_trip_brl=0.0, slippage_ticks=0.0,
+                               target_slippage_ticks=1.0)
+    # `limit_fill_capped_by_volume=True` (o PADRAO DE TESTE de `config_for`
+    # desde 2026-08-23) e' o que roteia a saida por `_resolve_simulated_
+    # split_exit` em vez do caminho sem prazo.
+    m = IntradaySessionMachine(strat, _config(costs=custos,
+                                              limit_fill_capped_by_volume=True))
+    m.begin_session(pd.Timestamp("2026-01-05").date())
+    m.on_closed_bar(_bar_vol(0, 10.00, 10.00, 10.00, 10.00, 0.0))
+    m.on_closed_bar(_bar_vol(1, 10.00, 10.00, 9.79, 9.85, 999.0))
+    assert m.positions, "a entrada fatiada precisa ter preenchido"
+    m.on_closed_bar(_bar_vol(2, 9.85, 9.95, 9.85, 9.90, 999.0))   # arma a fatia de saida
+    ev = m.on_closed_bar(_bar_vol(3, 9.90, 9.95, 9.88, 9.92, 999.0))  # preenche a fatia
+
+    fechadas = [e for e in ev if isinstance(e, PositionClosed)]
+    assert fechadas, "a fatia de saida precisa ter preenchido nesta barra"
+    for fechada in fechadas:
+        assert fechada.trade.exit_reason == IntradayExitReason.TARGET
+        assert fechada.trade.exit_price == pytest.approx(9.90)  # o nivel cravado
+
+
+# ---------- "nunca sair a mercado" no alvo/stop (ordem do dono 2026-09-08) --
+
+class _ExecucaoComProtecao:
+    """Fake do `execution` real que EXPOE `exit_por_protecao` -- o metodo que
+    `MT5IntradayExecution` ganhou em 2026-09-08 para fechar alvo/stop pelo
+    SL/TP registrado na corretora em vez de mandar ordem a mercado.
+
+    Conta as duas chamadas separadamente porque a pergunta que estes testes
+    fazem nao e' "fechou?" e sim "fechou por QUAL caminho": ate' aqui alvo e
+    stop saiam a mercado e pagavam 1 tick de spread em toda saida (14 dos 23
+    contratos de 2026-09-08 fecharam assim)."""
+
+    def __init__(self, preco: float = 0.0):
+        self.preco = preco
+        self.protecao_calls: list = []
+        self.market_calls: list = []
+        self.cancel_exit_limit_calls = 0
+        self.place_exit_limit_calls = 0
+        self.exit_fill_resposta: dict | None = None
+
+    def limit_fill(self, order, bar):
+        # preenche a ordem de entrada inteira no nivel, no primeiro toque
+        if bar.low <= order.limit_price <= bar.high:
+            return {"price": order.limit_price, "quantity": order.quantity or 1}
+        return None
+
+    def exit_fill(self, side, bar):
+        return self.exit_fill_resposta
+
+    def place_exit_limit(self, **kwargs):
+        self.place_exit_limit_calls += 1
+
+    def cancel_exit_limit(self, ts, reason):
+        self.cancel_exit_limit_calls += 1
+        return None
+
+    def exit_por_protecao(self, position, ts, reason):
+        self.protecao_calls.append(reason)
+        return {"price": self.preco or position.current_target}
+
+    def exit_market(self, position, ts, reason):
+        self.market_calls.append(reason)
+        return {"price": self.preco or float(position.entry_price)}
+
+
+def _maquina_real(strat, execucao, **cfg_over):
+    m = IntradaySessionMachine(strat, _config(**cfg_over), execution=execucao)
+    m.begin_session(pd.Timestamp("2026-01-05").date())
+    return m
+
+
+def test_alvo_e_stop_de_posicao_simples_fecham_pela_protecao_nunca_a_mercado():
+    """Ordem do dono, 2026-09-08: "a posicao deve ser fechada ou quando bate
+    no alvo, ou quando bate no stop", nunca por ordem a mercado deliberada.
+
+    Este teste existe porque a auditoria de 2026-09-08 achou ZERO cobertura
+    para `fecha_pela_protecao`/`exit_por_protecao` -- um roteamento que so'
+    existe por `hasattr(self.execution, "exit_por_protecao")` e que voltaria
+    em SILENCIO para `exit_market` se o metodo fosse renomeado ou movido,
+    reintroduzindo o custo de spread em toda saida sem uma linha de log."""
+    for lado, nivel_alvo, nivel_stop, barra_saida, esperado in [
+        ("long", 9.90, 9.00, (9.85, 9.95, 9.85, 9.90), IntradayExitReason.TARGET),
+        ("long", 9.90, 9.50, (9.85, 9.85, 9.45, 9.50), IntradayExitReason.STOP),
+    ]:
+        execucao = _ExecucaoComProtecao(preco=nivel_alvo)
+        strat = _Scripted({0: [EnterLimit(side=lado, limit_price=9.80,
+                                          initial_target=nivel_alvo,
+                                          initial_stop=nivel_stop)]})
+        m = _maquina_real(strat, execucao)
+        m.on_closed_bar(_bar(0, 10.00, 10.00, 10.00, 10.00))
+        m.on_closed_bar(_bar(1, 10.00, 10.00, 9.79, 9.85))
+        ev = m.on_closed_bar(_bar(2, *barra_saida))
+
+        assert [e for e in ev if isinstance(e, PositionClosed)], f"{esperado} nao fechou"
+        assert execucao.protecao_calls == [esperado]
+        assert execucao.market_calls == []
+
+
+def test_stop_de_posicao_FATIADA_tambem_fecha_pela_protecao():
+    """BURACO achado na auditoria de 2026-09-08 -- FALHA no codigo antigo.
+
+    A guarda de `_close_position` recusava o caminho da protecao para toda
+    posicao com `exit_split_unit`, alvo E stop. Mas a razao dessa exclusao
+    vale SO' para o alvo: `live.intraday_runtime._alvo_atomico` recusa
+    amarrar TP numa posicao fatiada de proposito (o TP fecharia a posicao
+    INTEIRA enquanto a limite de UMA fatia preenche, e numa conta NETTING as
+    duas somadas ABREM o lado contrario). O STOP nunca teve esse problema --
+    `_on_limit_placed` manda `stop=order.initial_stop` em TODA ordem,
+    fatiada ou nao, entao o SL ESTA registrado na corretora.
+
+    Resultado do buraco: a `gremah` (default `dividir_entrada=True`, roda ao
+    vivo em acao B3) pagava spread em todo stop, e corria risco de DUPLA
+    saida -- a ordem a mercado e o SL da corretora podendo executar as duas,
+    o que em NETTING inverte o lado. Mesmo desfecho do incidente de
+    2026-08-28."""
+    execucao = _ExecucaoComProtecao(preco=9.50)
+    strat = _Scripted({0: [EnterLimit(side="long", limit_price=9.80, quantity=2,
+                                      initial_target=9.90, initial_stop=9.50,
+                                      exit_split_unit=1, exit_ttl_bars=5)]})
+    m = _maquina_real(strat, execucao)
+    m.on_closed_bar(_bar(0, 10.00, 10.00, 10.00, 10.00))
+    m.on_closed_bar(_bar(1, 10.00, 10.00, 9.79, 9.85))
+    assert m.positions, "a entrada precisa ter preenchido"
+    ev = m.on_closed_bar(_bar(2, 9.85, 9.85, 9.45, 9.50))  # toca o stop
+
+    assert [e for e in ev if isinstance(e, PositionClosed)], "o stop nao fechou"
+    assert execucao.protecao_calls == [IntradayExitReason.STOP]
+    assert execucao.market_calls == [], (
+        "stop de posicao fatiada tem SL registrado na corretora -- fechar a "
+        "MERCADO paga spread e arrisca dupla saida em conta NETTING"
+    )
+
+
+def test_flatten_de_fim_de_pregao_continua_saindo_a_mercado():
+    """A excecao que TEM de continuar existindo: no flatten nao ha nivel
+    registrado para esperar, e esperar por um nivel que nao existe e' o que
+    deixaria a posicao virar overnight. Se este teste ficar verde por
+    engano (o flatten passando a esperar protecao), o robo carrega posicao
+    para o dia seguinte -- falha muito pior que pagar 1 tick."""
+    execucao = _ExecucaoComProtecao(preco=9.85)
+    strat = _Scripted({0: [EnterLimit(side="long", limit_price=9.80,
+                                      initial_target=99.0, initial_stop=0.01)]})
+    m = _maquina_real(strat, execucao)
+    m.on_closed_bar(_bar(0, 10.00, 10.00, 10.00, 10.00))
+    m.on_closed_bar(_bar(1, 10.00, 10.00, 9.79, 9.85))
+    assert m.positions
+    ev = m.force_flatten(pd.Timestamp("2026-01-05 20:50", tz="UTC"), 9.85)
+
+    assert [e for e in ev if isinstance(e, PositionClosed)]
+    assert execucao.market_calls == [IntradayExitReason.FORCED_FLATTEN]
+    assert execucao.protecao_calls == []
