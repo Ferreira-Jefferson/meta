@@ -676,9 +676,12 @@ def test_gate_janela_segundos_nao_positiva_levanta_erro():
 # tick sobre 126 pregoes reais de WDO@, o robo SEM freio emitia dezenas de
 # milhares de `LimitPlaced` por pregao, e ao vivo cada um vira
 # cancelar+reenviar na corretora. O teto do proprio projeto
-# (`live.intraday_runtime.MAX_ENVIOS_POR_MINUTO = 30` em janela rolante de
-# 60s) nao recusa so' a ordem que estoura: liga `disaster_halt` e para o robo
-# pelo resto do pregao. Estes testes cobrem o freio que impede isso.
+# (`live.intraday_runtime.COTA_ENVIOS_POR_MINUTO = 120` em janela rolante de
+# 60s) recusa a ordem excedente, e o teto de patologia
+# (`MAX_TENTATIVAS_DE_ENVIO_POR_MINUTO = 600`) liga `disaster_halt` e para o
+# robo pelo resto do pregao -- as dezenas de milhares de envios acima
+# atravessam os dois. (Ate' 2026-09-08 havia um teto so', 30, que ja' parava
+# o robo.) Estes testes cobrem o freio que impede isso.
 # ---------------------------------------------------------------------------
 
 def _tick(strat: WdoGridReloadMaker, ts, preco: float, volume: float = 10.0):
@@ -691,7 +694,8 @@ def _tick(strat: WdoGridReloadMaker, ts, preco: float, volume: float = 10.0):
 def test_freio_de_reprecificacao_vem_ligado_por_padrao():
     """Diferente de `defesa_ativa`/`trailing_ativo`/`gate_atividade_ativo`
     (opt-in, default desligado), este freio nasce LIGADO: sem ele o
-    comportamento default do robo estoura `MAX_ENVIOS_POR_MINUTO` ao vivo.
+    comportamento default do robo estoura os tetos de envio do runtime ao
+    vivo (`COTA_ENVIOS_POR_MINUTO`/`MAX_TENTATIVAS_DE_ENVIO_POR_MINUTO`).
 
     O valor exato (10s) e' calibrado -- ver a tabela na docstring de
     `reancora_min_segundos`. Fixado aqui para uma mudanca de default nao
@@ -706,9 +710,10 @@ def test_freio_de_reprecificacao_vem_ligado_por_padrao():
 
 def test_max_trades_per_side_continua_em_200():
     """Nao e' mais um teto folgado (2026-09-07): e' ele que limita quantos
-    REARMES pos-fill o robo manda por minuto, e o pior minuto medido no
-    default do freio ja' e' 26 de 30. Subir este numero sem re-medir o pior
-    minuto volta a estourar `MAX_ENVIOS_POR_MINUTO` -- ver a docstring do
+    REARMES pos-fill o robo manda por minuto: o pior minuto medido no
+    default do freio e' 26 em tempo de tick, 42 na medicao IS/OOS de
+    2026-09-08. Subir este numero sem re-medir o pior minuto come a cota de
+    vazao do runtime (`COTA_ENVIOS_POR_MINUTO = 120`) -- ver a docstring do
     parametro."""
     strat = WdoGridReloadMaker(tick_size=0.5, profit_ticks=2, stop_ticks=16)
     assert strat.max_trades_per_side == 200
@@ -804,7 +809,8 @@ def test_freio_limita_substituicoes_por_minuto_por_construcao():
     robo nao emite mais que `60/S` substituicoes por minuto, faca o mercado o
     que fizer. Aqui 10 negocios por segundo durante 5 minutos, com o preco
     andando 1 tick a CADA negocio (pior caso: sem freio seriam 3.000 envios,
-    ~600 por minuto, 20x o teto de `MAX_ENVIOS_POR_MINUTO=30`)."""
+    ~600 por minuto -- 5x a cota de vazao `COTA_ENVIOS_POR_MINUTO=120` e no
+    teto de patologia `MAX_TENTATIVAS_DE_ENVIO_POR_MINUTO=600`)."""
     strat = WdoGridReloadMaker(tick_size=0.5, level_spacing_ticks=1, profit_ticks=2,
                                stop_ticks=16, reancora_min_segundos=6.0)
     strat.on_session_start(None)
@@ -933,7 +939,7 @@ def test_recusa_em_laco_nao_ultrapassa_o_teto_de_envios_por_minuto():
         for inicio in emissoes
     )
     assert pior <= 60 / 6.0 + 1
-    assert pior < 30                                        # teto de MAX_ENVIOS_POR_MINUTO
+    assert pior < 120                                # cota COTA_ENVIOS_POR_MINUTO
 
 
 def test_fill_apaga_o_relogio_de_recusa():

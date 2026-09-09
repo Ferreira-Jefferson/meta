@@ -4556,31 +4556,229 @@ def test_cadencia_de_ordens_tem_teto_por_minuto(tmp_path, pregao_aberto):
     RECUSAS DE FECHAMENTO. Um laco do lado da ENTRADA martelava a corretora
     indefinidamente sem nada perceber -- o mesmo padrao que o incidente
     exibiu do lado do fechamento (~24 tentativas em minutos)."""
-    from live.intraday_runtime import MAX_ENVIOS_POR_MINUTO
+    from live.intraday_runtime import COTA_ENVIOS_POR_MINUTO
 
     broker = _FakeMT5Broker()
     rt, _feed = _runtime_live_scripted(tmp_path, broker, {})
     ts = _agora("13:00:00")
-    for _ in range(MAX_ENVIOS_POR_MINUTO):
+    for _ in range(COTA_ENVIOS_POR_MINUTO):
         assert rt._check_cadencia_de_ordens(ts) is None
-    assert rt._check_cadencia_de_ordens(ts) is not None, "o teto tem de morder"
+    excesso = rt._check_cadencia_de_ordens(ts)
+    assert excesso is not None, "a cota tem de morder"
+    assert excesso.patologia is False, (
+        "estourar a COTA e' vazao, nao patologia -- quem derruba o robo e' o "
+        "outro teto"
+    )
 
 
 def test_janela_de_cadencia_e_ROLANTE_nao_contador_de_sessao(tmp_path, pregao_aberto):
     """Um teto por PREGAO ou e' alto demais pra pegar o laco, ou baixo
     demais e mata operacao legitima num dia movimentado. Passados 60s, a
     janela esvazia."""
-    from live.intraday_runtime import MAX_ENVIOS_POR_MINUTO
+    from live.intraday_runtime import COTA_ENVIOS_POR_MINUTO
 
     broker = _FakeMT5Broker()
     rt, _feed = _runtime_live_scripted(tmp_path, broker, {})
-    for _ in range(MAX_ENVIOS_POR_MINUTO):
+    for _ in range(COTA_ENVIOS_POR_MINUTO):
         rt._check_cadencia_de_ordens(_agora("13:00:00"))
     assert rt._check_cadencia_de_ordens(_agora("13:00:30")) is not None
 
     assert rt._check_cadencia_de_ordens(_agora("13:01:30")) is None, (
         "passado um minuto, a janela esvaziou"
     )
+
+
+def test_cadencia_acima_do_teto_ANTIGO_nao_derruba_mais_o_robo(tmp_path, pregao_aberto):
+    """REGRESSAO do desenho de disjuntor (2026-09-08).
+
+    Ate' este dia `MAX_ENVIOS_POR_MINUTO = 30` era um DISJUNTOR: ao ser
+    atingido ligava `disaster_halt` e o robo ficava mudo o pregao inteiro.
+    Dois fatos do mesmo dia mostraram que isso mata pregao legitimo:
+
+      * o 30 tinha sido calibrado contando tempo de TICK (o commit 75f6b48
+        corrigiu o contador para relogio de PAREDE e deixou a ressalva
+        escrita: "o 'pior minuto 26 de 30' da docstring nao o descreve
+        mais");
+      * a medicao IS/OOS do mesmo dia (commit e8f88fe, producao T2/S16) deu
+        pior minuto de 42 envios no OOS, COM e SEM a histerese nova -- e
+        esses 42 sao saturacao de `max_trades_per_side`, nao laco.
+
+    Ou seja: num pregao movimentado NORMAL o robo estourava o teto e se
+    calava sozinho, que e' o item 6.15 do `LICOES_DE_PRODUCAO.md` embutido
+    no codigo. Aqui a rajada tem 45 envios -- acima do teto ANTIGO (30) e
+    dentro da cota nova. Tem de sair inteira, e o robo tem de continuar
+    vivo."""
+    envios = 45
+    broker = _FakeMT5Broker()
+    script = {
+        i: [EnterLimit(side="long", limit_price=10.00 + i * 0.01,
+                       initial_stop=9.00, initial_target=11.00, quantity=1,
+                       reason="cadencia_legitima")]
+        for i in range(envios)
+    }
+    rt, feed = _runtime_live_scripted(tmp_path, broker, script)
+    rt.run_once(now=_agora("13:00:00"))
+
+    for i in range(envios):
+        feed._barras.append(
+            _bar(f"13:{i // 60:02d}:{i % 60:02d}", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:00:30"))
+
+    assert rt._snapshot.disaster_halt is False, (
+        "42 envios/minuto e' cadencia MEDIDA e legitima do robo de producao "
+        "no OOS -- derrubar o robo por isso e' calar um pregao inteiro por "
+        "operacao normal"
+    )
+    assert len(broker.pendentes_enviadas) == envios, (
+        f"so' {len(broker.pendentes_enviadas)} das {envios} ordens sairam"
+    )
+
+
+def test_cota_de_vazao_RECUSA_o_excedente_e_o_robo_segue_vivo(tmp_path, pregao_aberto):
+    """O pedido do dono, textual: "por que nao limitamos esse envio da
+    maneira que tratamos o 6 por minuto? ... por que nao colocamos uma boa
+    margem de seguranca pro robo nao cair por conta disso".
+
+    O "6 por minuto" e' o freio da propria estrategia
+    (`reancora_min_segundos=10.0`), que RECUSA a acao e segue. E' esse o
+    comportamento aqui: atingida a cota, o envio que estourou nao vai ao
+    book, a maquina esquece a ordem (senao vigia um fill impossivel -- o
+    incidente de 25/08/2026 documentado em `machine.discard_resting_limit`)
+    e o robo continua operando.
+
+    Prova quatro coisas de uma vez: (1) a corretora recebe EXATAMENTE a
+    cota, (2) `disaster_halt` continua desligado, (3) a maquina nao ficou
+    vigiando nivel nenhum, (4) a recusa aparece no diario em nivel `warn`
+    com a contagem -- `notify_min_level` dos slots e' `warn`, e recusa
+    silenciosa e' o item 6.15."""
+    import json
+
+    from live.intraday_runtime import COTA_ENVIOS_POR_MINUTO
+
+    excedente = 5
+    envios = COTA_ENVIOS_POR_MINUTO + excedente
+    broker = _FakeMT5Broker()
+    script = {
+        i: [EnterLimit(side="long", limit_price=10.00 + i * 0.01,
+                       initial_stop=9.00, initial_target=11.00, quantity=1,
+                       reason="rajada")]
+        for i in range(envios)
+    }
+    rt, feed = _runtime_live_scripted(tmp_path, broker, script)
+    rt.run_once(now=_agora("13:00:00"))
+
+    for i in range(envios):
+        feed._barras.append(
+            _bar(f"13:{i // 60:02d}:{i % 60:02d}", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:00:30"))
+
+    assert len(broker.pendentes_enviadas) == COTA_ENVIOS_POR_MINUTO
+    assert rt._snapshot.disaster_halt is False, (
+        "cota de vazao e' freio de EXECUCAO: recusa a ordem, nao o pregao"
+    )
+    assert rt.machine.resting_limit is None, (
+        "recusou o envio e deixou a maquina vigiando o nivel = espera por um "
+        "fill impossivel (incidente 25/08/2026)"
+    )
+    assert broker.canceladas, (
+        "cancelar TIRA exposicao e nunca e' barrado por cota -- a ordem que "
+        "estava em pe' antes tem de morrer"
+    )
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        avisos = [json.loads(p) for (lvl, p) in conn.execute(
+            "SELECT level, payload FROM live_events WHERE account_id = ? "
+            "ORDER BY id", (acc.id,)) if lvl == "warn" and p]
+    por_cota = [a for a in avisos if "recusas_por_cota" in a]
+    assert len(por_cota) == 1, (
+        "uma linha por LOTE -- uma por ordem reproduziria a rajada dentro do "
+        f"proprio diario: {avisos}"
+    )
+    assert por_cota[0]["recusas_por_cota"] == excedente
+
+
+def test_teto_de_PATOLOGIA_continua_derrubando_o_robo(tmp_path, pregao_aberto):
+    """O disjuntor tem de sobreviver a' troca de desenho.
+
+    Sem um segundo nivel, trocar o teto por uma cota so' trocaria um modo de
+    falha por outro: um laco infinito de verdade viraria "robo rate-limited
+    para sempre, parecendo saudavel", e a falha que motivou o teto original
+    (incidente de 2026-08-28, ~24 ordens marteladas em minutos sem nada
+    contar) voltaria a passar batida -- em silencio.
+
+    Por isso o teto de patologia conta TENTATIVAS, nao envios: contar so' o
+    que saiu o prenderia abaixo da cota por construcao e ele nunca
+    dispararia. Ordem de grandeza do que ele pega: antes do freio
+    `reancora_min_segundos` este robo fazia 1.020 a 3.446 envios no pior
+    minuto (tabela no docstring de `strategy.daytrade.lab.
+    wdo_grid_reload_maker`)."""
+    from live.intraday_runtime import MAX_TENTATIVAS_DE_ENVIO_POR_MINUTO
+
+    envios = MAX_TENTATIVAS_DE_ENVIO_POR_MINUTO + 1
+    broker = _FakeMT5Broker()
+    script = {
+        i: [EnterLimit(side="long", limit_price=10.00 + (i % 50) * 0.01,
+                       initial_stop=9.00, initial_target=11.00, quantity=1,
+                       reason="laco")]
+        for i in range(envios)
+    }
+    rt, feed = _runtime_live_scripted(tmp_path, broker, script)
+    rt.run_once(now=_agora("13:00:00"))
+
+    for i in range(envios):
+        feed._barras.append(
+            _bar(f"13:{i // 60:02d}:{i % 60:02d}", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:00:30"))
+
+    assert rt._snapshot.disaster_halt is True, (
+        f"{envios} tentativas de envio em UM passo de parede e' laco, nao "
+        "operacao: o disjuntor tem de existir"
+    )
+    assert "tentativas de envio" in (rt._snapshot.disaster_reason or "")
+
+
+def test_cota_de_envio_NAO_barra_fechamento_de_posicao(tmp_path, pregao_aberto):
+    """GUARDA: cota barra ABRIR, nunca barra SAIR.
+
+    Uma cota que atrasasse fechamento transformaria um freio de execucao em
+    risco de posicao aberta -- a inversao exata que o incidente de
+    2026-08-28 custou (a perda inteira estava NAO REALIZADA, com a corretora
+    recusando o fechamento). Por construcao o portao so' e' consultado em
+    `_on_limit_placed` (entrada); este teste trava isso com a cota
+    ESGOTADA e um stop tocado."""
+    from live.intraday_runtime import COTA_ENVIOS_POR_MINUTO
+
+    broker = _FakeMT5Broker()
+    broker.preco_de_saida = 9.30
+    script = {0: [EnterLimit(side="long", limit_price=10.00, initial_stop=9.50,
+                             initial_target=11.00, quantity=1,
+                             reason="teste_cota_saida")]}
+    rt, feed = _runtime_live_scripted(tmp_path, broker, script)
+    rt.run_once(now=_agora("12:59:55"))
+
+    feed._barras.append(_bar("13:00:00", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:00:00"))
+    broker.posicao = {"side": "long", "price": 10.00, "quantity": 1, "ticket": 42,
+                      "sl": 0.0, "tp": 0.0}
+    feed._barras.append(_bar("13:00:10", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:00:10"))
+    assert rt.machine.position is not None
+
+    # COTA ESGOTADA: a janela rolante ja esta cheia de envios de agora.
+    agora = pd.Timestamp(datetime.now(timezone.utc))
+    rt._envios_recentes = [agora] * COTA_ENVIOS_POR_MINUTO
+
+    feed._barras.append(_bar("13:00:20", 10.00, 10.00, 9.40, 9.45))
+    rt.run_once(now=_agora("13:00:25"))
+
+    assert rt.machine.position is None, (
+        "fechamento barrado por cota = posicao fantasma na corretora"
+    )
+    assert len(broker.ordens_a_mercado) == 1, (
+        "o stop fecha a MERCADO mesmo com a cota de envio esgotada"
+    )
+    assert rt._snapshot.disaster_halt is False
 
 
 def test_capital_do_slot_e_relido_do_ledger_a_cada_pregao(tmp_path, pregao_aberto):
@@ -5367,9 +5565,9 @@ def test_cadencia_conta_RELOGIO_DE_PAREDE_nao_carimbo_do_tick(tmp_path, pregao_a
     Aqui o lote inteiro chega num unico `run_once`, com carimbos de tick a
     1 minuto de distancia -- espacamento em que a versao antiga NUNCA
     acumulava dois envios na mesma janela e deixava passar todos."""
-    from live.intraday_runtime import MAX_ENVIOS_POR_MINUTO
+    from live.intraday_runtime import COTA_ENVIOS_POR_MINUTO
 
-    envios = MAX_ENVIOS_POR_MINUTO + 5
+    envios = COTA_ENVIOS_POR_MINUTO + 5
     broker = _FakeMT5Broker()
     script = {
         i: [EnterLimit(side="long", limit_price=10.00 + i * 0.01,
@@ -5385,15 +5583,17 @@ def test_cadencia_conta_RELOGIO_DE_PAREDE_nao_carimbo_do_tick(tmp_path, pregao_a
     # puladas"). Carimbos a 1 min de distancia -- espacamento em que a versao
     # antiga nunca acumulava dois envios na mesma janela de 60s.
     for i in range(envios):
-        feed._barras.append(_bar(f"13:{i:02d}", 10.00, 10.00, 10.00, 10.00))
-    rt.run_once(now=_agora("13:01:00"))
-    assert len(broker.pendentes_enviadas) <= MAX_ENVIOS_POR_MINUTO, (
+        feed._barras.append(
+            _bar(f"13:{i // 60:02d}:{i % 60:02d}", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:00:30"))
+    assert len(broker.pendentes_enviadas) <= COTA_ENVIOS_POR_MINUTO, (
         f"a corretora recebeu {len(broker.pendentes_enviadas)} ordens num unico "
-        f"passo de parede -- o teto de {MAX_ENVIOS_POR_MINUTO}/60s tem de morder "
+        f"passo de parede -- a cota de {COTA_ENVIOS_POR_MINUTO}/60s tem de morder "
         "mesmo quando os carimbos de tick estao minutos um do outro"
     )
-    assert rt._snapshot.disaster_halt is True, (
-        "estourar o teto de envios e' laco, nao operacao: tem de parar o robo"
+    assert rt._snapshot.disaster_halt is False, (
+        "estourar a COTA nao derruba mais o robo (2026-09-08): ela recusa o "
+        "excedente e a operacao segue -- quem derruba e' o teto de patologia"
     )
 
 

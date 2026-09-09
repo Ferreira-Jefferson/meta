@@ -83,7 +83,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timezone
 from pathlib import Path
-from typing import Optional
+from typing import NamedTuple, Optional
 
 import pandas as pd
 
@@ -271,12 +271,116 @@ MARGEM_LIVRE_MINIMA_FATOR = 2.0
 #: por nada. A ~5s por passo, 20 leituras sao ~100s de terminal mudo.
 MAX_LEITURAS_DE_RISCO_FALHAS = 20
 
-#: Teto de envios de ordem numa janela de 60s. A operacao normal decide no
-#: MAXIMO uma entrada por barra fechada (1/min em M1) mais o cancelamento da
-#: substituida -- este teto e' ~15x isso, entao so' e' alcancado por um laco
-#: patologico, nunca por reancoragem legitima. Existe porque o incidente de
-#: 2026-08-28 martelou ~24 ordens em poucos minutos sem nada contar.
-MAX_ENVIOS_POR_MINUTO = 30
+#: DOIS TETOS, DOIS DESFECHOS -- ler os dois juntos, nunca um so'.
+#:
+#: Ate' 2026-09-08 existia um numero so' (`MAX_ENVIOS_POR_MINUTO = 30`) e
+#: ele era um DISJUNTOR: ao ser atingido ligava `disaster_halt` e o robo
+#: ficava mudo o pregao inteiro. Dois fatos do mesmo dia derrubaram esse
+#: desenho.
+#:
+#: 1. O numero 30 foi calibrado no relogio ERRADO. Ate' o commit 75f6b48 o
+#:    contador recebia `evento.ts` (tempo de TICK); a docstring dele ainda
+#:    dizia "pior minuto 26 de 30", que era tempo de tick. No relogio de
+#:    PAREDE -- o unico que a corretora tem -- o portao e' muito mais
+#:    apertado, e aquele 26 nao descreve mais nada.
+#: 2. A cadencia LEGITIMA ja passa de 30. Medicao IS/OOS de 2026-09-08
+#:    (commit e8f88fe, config de producao T2/S16 + histerese): o pior
+#:    minuto do OOS da' 42 envios, COM e SEM a histerese -- saturacao de
+#:    `max_trades_per_side` (rearme pos-fill), nao laco. Ou seja: num
+#:    pregao movimentado NORMAL o robo estourava o teto e se calava
+#:    sozinho, que e' o modo de falha do item 6.15 do
+#:    `LICOES_DE_PRODUCAO.md` (a janela censurada que parece edge negativo
+#:    e e' so' o robo calado).
+#:
+#: A forma certa ja existia no proprio projeto e o dono apontou para ela:
+#: o freio da estrategia (`WdoGridReloadMaker.reancora_min_segundos=10.0`,
+#: no maximo 6 reprecificacoes por minuto) RECUSA a acao e segue vivo --
+#: nunca derruba o robo. Este par de tetos copia esse comportamento e
+#: guarda o disjuntor so' para patologia de verdade:
+#:
+#:   COTA_ENVIOS_POR_MINUTO    -> vazao. Recusa ESTE envio, o robo segue.
+#:   MAX_TENTATIVAS_DE_ENVIO_POR_MINUTO -> patologia. Liga `disaster_halt`.
+#:
+#: Sem o segundo nivel a correcao trocaria um modo de falha por outro: um
+#: laco infinito de verdade viraria "robo rate-limited para sempre,
+#: parecendo saudavel", e a falha que motivou o teto original (incidente
+#: 2026-08-28, ~24 ordens marteladas em minutos sem nada contar) voltaria a
+#: passar batida -- so' que em silencio.
+
+#: TETO OPERACIONAL (vazao): quantas ordens de ENTRADA este robo pode
+#: mandar de fato numa janela ROLANTE de 60s de relogio de PAREDE. Ao ser
+#: atingido, o envio que estourou e' RECUSADO e a maquina esquece a ordem
+#: (`machine.discard_resting_limit`, mesmo caminho da recusa por margem e
+#: da barra velha) -- o robo continua vivo, continua fechando posicao e
+#: rearma pelo criterio DELE na barra seguinte.
+#:
+#: 120 saiu de medicao, com a margem que o dono pediu ("uma boa margem de
+#: seguranca pro robo nao cair por conta disso"). Distribuicao do PIOR
+#: MINUTO POR PREGAO (`scripts/daytrade/
+#: wdof1_cadencia_envios_distribuicao_2026_09_08.py`):
+#:
+#:   fonte                       n     p50   p90   p95   p99   max
+#:   backtest IS (mercado)      72     12    19    20    22     23
+#:   backtest OOS (mercado)     51     10    19    24    34     42
+#:   ao vivo 08/09 (parede)      1      3    12    15    18     19
+#:
+#:   * Backtest = motor tick, IS/OOS congelado, config de producao T2/S16
+#:     com histerese, base `WDO_A_f1` regenerada em 07/09, capital real
+#:     R$375. E' o relogio de MERCADO, e mede a cadencia LEGITIMA: quantas
+#:     ordens a estrategia decide mandar num minuto real. Nenhum dos 123
+#:     pregoes passa de 50; UM (0,8%) passa de 30 -- o teto antigo.
+#:   * Ao vivo = `db/live.sqlite`, conta 476 (slot SOMBRA de WDO@, pregao
+#:     inteiro de 2026-09-08, 173 envios), janela rolante de 60s no
+#:     carimbo de ESCRITA do diario, que e' relogio de parede. O slot REAL
+#:     (conta 474) do mesmo dia da' max 64, mas aquele numero e' de um
+#:     pregao com o feed cego e sem a histerese -- as duas causas ja
+#:     corrigidas (`MAX_ATRASO_PARA_ORDEM_SEGUNDOS` e `reancora_min_ticks`).
+#:
+#:   120 e' ~2,9x o maior pior-minuto LEGITIMO ja observado (42), ~3,5x o
+#:   p99 do OOS e ~6x o pior minuto de parede de um pregao inteiro ao vivo.
+#:   * regime PATOLOGICO conhecido, para saber de que lado o numero cai:
+#:     antes do freio `reancora_min_segundos` o mesmo robo fazia 1.020 a
+#:     3.446 envios no pior minuto (tabela no docstring do modulo
+#:     `strategy.daytrade.lab.wdo_grid_reload_maker`). 120 esta' uma ordem
+#:     de grandeza abaixo disso e quase 3x acima do legitimo -- a faixa
+#:     entre um e outro e' larga de proposito.
+#: Carga real na corretora e' ~o dobro deste numero: toda substituicao
+#: manda um cancelamento junto (`_aplica_cancelamento`, que NAO consome
+#: cota -- ver `_check_cadencia_de_ordens`). 120 entradas/min ~ 240
+#: requisicoes/min ~ 4/s, que nao e' rajada para terminal nenhum.
+COTA_ENVIOS_POR_MINUTO = 120
+
+#: TETO DE PATOLOGIA (disjuntor): quantas TENTATIVAS de arme -- incluindo
+#: as que a cota acima ja recusou -- numa janela rolante de 60s de parede
+#: antes de `disaster_halt`. Conta tentativa e nao envio de proposito: se
+#: contasse envio, a cota o limitaria a 120 por construcao e o disjuntor
+#: nunca dispararia, que e' exatamente o "robo rate-limited para sempre"
+#: que este segundo nivel existe para impedir.
+#:
+#: 600 = 5x a cota, ~14x o pior minuto legitimo ja medido (42, OOS) e
+#: ainda bem abaixo do piso do regime patologico medido (1.020 no pregao
+#: mais leve dos cinco da tabela do robo). Em taxa: 10 armes por SEGUNDO,
+#: sustentados por um minuto inteiro. Nenhuma estrategia deste repo decide
+#: nisso -- `reancora_min_segundos` sozinho limita a 6/min por lado no
+#: relogio de barra.
+#:
+#: RESIDUAL: um laco LENTO (um arme por passo do supervisor, ~12/min) nao
+#: dispara nem a cota nem o disjuntor. Nao e' regressao -- o teto de 30
+#: tambem nao pegava -- e tambem nao e' risco de corretora nessa taxa; o
+#: que pega esse caso e' a contagem por lote no diario, nao um teto.
+MAX_TENTATIVAS_DE_ENVIO_POR_MINUTO = 600
+
+
+class ExcessoDeCadencia(NamedTuple):
+    """O que `_check_cadencia_de_ordens` devolve quando um dos dois tetos
+    fecha. `patologia` e' a diferenca que importa: `False` recusa SO' este
+    envio (o robo segue vivo), `True` liga o freio duro."""
+
+    patologia: bool
+    motivo: str
+    envios: int
+    tentativas: int
+
 
 #: TEMPO DE VIDA DA POSICAO -- gravado no diario, NAO alarmado. Ler a
 #: ressalva antes de usar este numero para qualquer decisao.
@@ -677,10 +781,21 @@ class IntradayLiveRuntime:
         # `_avisa_saldo_mt5_dessincronizado`). Uma linha por pregao e por
         # processo: e' diagnostico, nao alarme.
         self._saldo_mt5_avisado_em: Optional[date] = None
-        # Instantes (UTC) dos ultimos envios de ordem, para a janela rolante
-        # de `MAX_ENVIOS_POR_MINUTO`. Em memoria: o alvo e' um laco dentro de
-        # UM processo, e um restart ja quebra o laco por construcao.
+        # Instantes (UTC) dos ultimos envios de ordem que de fato SAIRAM,
+        # para a janela rolante de `COTA_ENVIOS_POR_MINUTO`. Em memoria: o
+        # alvo e' um laco dentro de UM processo, e um restart ja quebra o
+        # laco por construcao.
         self._envios_recentes: list = []
+        # Instantes (UTC) de toda TENTATIVA de arme -- inclusive as que a
+        # cota recusou -- para a janela rolante de
+        # `MAX_TENTATIVAS_DE_ENVIO_POR_MINUTO`. Lista separada por
+        # necessidade: contar so' o que saiu deixaria o disjuntor preso
+        # abaixo da cota para sempre.
+        self._tentativas_recentes: list = []
+        # Recusas por COTA neste lote de barras (zerado em `_consume`, uma
+        # linha `warn` por lote em `_journaliza_recusas_por_cota`).
+        self._recusas_por_cota = 0
+        self._pico_de_envios_no_lote = 0
         # Alvo que a estrategia DECLAROU na entrada da posicao aberta agora.
         # Guardado aqui porque `PositionClosed` so' carrega o `IntradayTrade`
         # (preco de saida REAL) e o nivel pedido some junto com a posicao --
@@ -2202,9 +2317,61 @@ class IntradayLiveRuntime:
                   {"pregao": session.isoformat(), "antes": round(antes, 2),
                    "agora": round(saldo, 2)})
 
-    def _check_cadencia_de_ordens(self, agora_wall) -> Optional[str]:
+    def _check_cadencia_de_ordens(self, agora_wall) -> Optional[ExcessoDeCadencia]:
         """Envios demais numa janela de 60s de RELOGIO DE PAREDE? Devolve o
-        motivo, ou `None`.
+        `ExcessoDeCadencia`, ou `None` quando cabe.
+
+        DOIS TETOS, DOIS DESFECHOS (2026-09-08) -- ver
+        `COTA_ENVIOS_POR_MINUTO` e `MAX_TENTATIVAS_DE_ENVIO_POR_MINUTO`
+        para os numeros e a medicao que os escolheu:
+
+        * `patologia=False` (cota de VAZAO estourada): recusa SO' este
+          envio. O robo segue vivo, segue fechando posicao, segue lendo
+          barra, e rearma pelo criterio DELE na barra seguinte. E' o mesmo
+          comportamento do freio da propria estrategia
+          (`reancora_min_segundos`, no maximo 6 reprecificacoes por minuto),
+          que recusa a acao e segue -- foi o dono quem apontou a analogia:
+          "por que nao limitamos esse envio da maneira que tratamos o 6 por
+          minuto?".
+        * `patologia=True` (teto de TENTATIVAS estourado): liga
+          `disaster_halt`. Sobrou o disjuntor porque um laco infinito de
+          verdade nao pode virar "robo rate-limited para sempre, parecendo
+          saudavel" -- sem esse segundo nivel a falha que motivou o teto
+          original (2026-08-28) volta a passar batida, so' que em silencio.
+
+        Ate' 2026-09-08 havia um teto so' e ele ligava `disaster_halt`: o
+        robo perdia o pregao INTEIRO por uma cadencia que a medicao do mesmo
+        dia mostrou ser legitima (pior minuto do OOS = 42, contra teto 30).
+        Robo calado e' o item 6.15 do `LICOES_DE_PRODUCAO.md`, e um teto que
+        cala o robo num dia movimentado e' o item 6.15 embutido no codigo.
+
+        O QUE PASSA E O QUE NAO PASSA. Este portao so' e' chamado de
+        `_on_limit_placed`, isto e', so' vale para ENTRADA (`EnterLimit` ->
+        `place_limit`). Nunca e' consultado por:
+          * `_aplica_cancelamento` / `cancel_limit` / `cancel_stale_refs` --
+            cancelar TIRA exposicao;
+          * `exit_market` (alvo, stop, flatten, freio de perda do dia,
+            `force_flatten` do gap) -- fechar TIRA exposicao;
+          * `_ensure_protecao` (stop/alvo na corretora) -- proteger e'
+            reduzir risco, nao aumenta-lo.
+        A regra e' uma frase: **cota barra abrir, nunca barra sair.** Uma
+        cota que atrasasse um fechamento transformaria um freio de execucao
+        em risco de posicao aberta -- exatamente a inversao que o incidente
+        de 2026-08-28 custou. Cancelamento tambem nao CONSOME cota, e por
+        isso a carga real na corretora e' ~o dobro da cota (toda
+        substituicao manda um cancelamento junto) -- contabilizado na
+        escolha do numero.
+
+        REGRA 6 do AGENTS.md (`live/` nao decide o que negociar). Recusar
+        por cota de vazao e' higiene de EXECUCAO, nao decisao de
+        estrategia: o robo nao e' avisado, nao muda de lado, nao muda de
+        preco e nao muda de tamanho por causa disto -- ele reencontra o
+        mesmo estado de "sem ordem parada" que uma recusa da corretora ou
+        uma barra velha ja produziam, e redecide sozinho. O que `live/`
+        recusa aqui e' EXECUTAR, na velocidade que a corretora aguenta, uma
+        decisao que continua inteira da estrategia. Mesma familia da recusa
+        por margem (`_check_margem_da_conta`) e da barra velha
+        (`_descarta_arme_de_barra_velha`).
 
         `agora_wall` e' o relogio de PAREDE (`datetime.now(timezone.utc)` no
         ponto de chamada), NUNCA o carimbo da barra/tick que produziu a
@@ -2250,19 +2417,20 @@ class IntradayLiveRuntime:
 
         Janela ROLANTE, nao contador de sessao: um teto por pregao ou e'
         alto demais pra pegar o laco, ou baixo demais e mata operacao
-        legitima num dia movimentado. Ver `MAX_ENVIOS_POR_MINUTO`.
+        legitima num dia movimentado. Ver `COTA_ENVIOS_POR_MINUTO`.
 
-        RESIDUAL EM ABERTO (2026-09-08) -- este contador PARA a rajada, nao
-        a EVITA, e parar custa o pregao inteiro. Enquanto o freio da
-        estrategia medir `bar.ts` (e tem de medir: e' regra de estrategia),
-        um passo do supervisor que reprocessa fila atrasada continua podendo
-        mandar ate' `MAX_ENVIOS_POR_MINUTO` ordens em segundos de parede
-        antes de este portao fechar -- e quando fecha, o robo perde o dia.
-        A histerese de nivel (`WdoGridReloadMaker.reancora_min_ticks`, mesmo
-        dia) reduz muito a rajada (no replay do pregao de 2026-09-08 o pior
-        minuto de parede cai de 64 para 21, sob o teto de 30), mas e'
-        mitigacao, nao fechamento: um mercado que ande em linha reta gera
-        substituicoes legitimas na mesma velocidade do reprocessamento.
+        RESIDUAL (2026-09-08) -- este contador PARA a rajada, nao a EVITA.
+        Enquanto o freio da estrategia medir `bar.ts` (e tem de medir: e'
+        regra de estrategia), um passo do supervisor que reprocessa fila
+        atrasada continua podendo mandar ate' `COTA_ENVIOS_POR_MINUTO`
+        ordens em segundos de parede antes de a cota fechar. O que MUDOU e'
+        o preco disso: fechar a cota custa as ordens EXCEDENTES, nao mais o
+        pregao inteiro. Duas outras defesas cobrem a mesma rajada por
+        angulos diferentes -- o teto de idade de barra
+        (`MAX_ATRASO_PARA_ORDEM_SEGUNDOS`, que barra o caso de 08/09 antes
+        de chegar aqui: barra velha nao vira ordem) e a histerese de nivel
+        (`WdoGridReloadMaker.reancora_min_ticks`, que no replay do mesmo
+        pregao derruba o pior minuto de parede de 64 para 21).
 
         As duas saidas conhecidas, NENHUMA implementada -- ficam registradas
         para o dono decidir, porque as duas mexem em regra estrutural:
@@ -2281,14 +2449,33 @@ class IntradayLiveRuntime:
               de agente."""
         agora = pd.Timestamp(agora_wall)
         corte = agora - pd.Timedelta(seconds=60)
+        # A TENTATIVA e' contada sempre, inclusive quando a cota a recusa --
+        # e' o que permite ao disjuntor enxergar um laco que a cota esta'
+        # segurando. Contar so' o que saiu prenderia o disjuntor abaixo da
+        # cota para sempre, e o robo ficaria "rate-limited" a vida toda
+        # parecendo saudavel.
+        self._tentativas_recentes = [t for t in self._tentativas_recentes if t > corte]
+        self._tentativas_recentes.append(agora)
         self._envios_recentes = [t for t in self._envios_recentes if t > corte]
-        if len(self._envios_recentes) < MAX_ENVIOS_POR_MINUTO:
-            self._envios_recentes.append(agora)
-            return None
-        return (
-            f"{len(self._envios_recentes)} envios de ordem em 60s (teto "
-            f"{MAX_ENVIOS_POR_MINUTO}) -- isto e' laco, nao operacao"
-        )
+        tentativas = len(self._tentativas_recentes)
+        enviados = len(self._envios_recentes)
+        if tentativas > MAX_TENTATIVAS_DE_ENVIO_POR_MINUTO:
+            return ExcessoDeCadencia(
+                patologia=True,
+                motivo=(f"{tentativas} tentativas de envio em 60s (teto "
+                        f"{MAX_TENTATIVAS_DE_ENVIO_POR_MINUTO}) -- isto e' "
+                        f"laco, nao operacao"),
+                envios=enviados, tentativas=tentativas)
+        if enviados >= COTA_ENVIOS_POR_MINUTO:
+            return ExcessoDeCadencia(
+                patologia=False,
+                motivo=(f"{enviados} envios de ordem em 60s (cota "
+                        f"{COTA_ENVIOS_POR_MINUTO})"),
+                envios=enviados, tentativas=tentativas)
+        self._envios_recentes.append(agora)
+        self._pico_de_envios_no_lote = max(self._pico_de_envios_no_lote,
+                                           enviados + 1)
+        return None
 
     def _check_margem_da_conta(self, side: str, quantidade: int,
                                price: float) -> Optional[str]:
@@ -3281,6 +3468,45 @@ class IntradayLiveRuntime:
                    "limite_atraso_segundos": round(self._limite_atraso_do_lote, 1),
                    "sessao": session.isoformat()})
 
+    def _journaliza_recusas_por_cota(self, conn, account: AccountState,
+                                     session: date) -> None:
+        """UMA linha de diario por LOTE em que a COTA DE VAZAO recusou algum
+        envio de entrada -- mesmo padrao (e mesmo motivo) de
+        `_journaliza_armes_de_barra_velha`.
+
+        Nivel `warn`, e essa e' a parte que nao pode ser negociada: o
+        `notify_min_level` dos slots e' `warn`, entao o dono ve a recusa na
+        hora. Robo que para de mandar ordem EM SILENCIO e' o modo de falha
+        do item 6.15 do `LICOES_DE_PRODUCAO.md` -- e uma cota que recusa
+        calada seria justamente isso, com o agravante de o robo continuar
+        "verde" no painel.
+
+        Uma linha por LOTE e nao por ordem: a recusa por cota nasce
+        exatamente do caso em que ha MUITAS ordens no mesmo passo, entao uma
+        linha por ordem seria a rajada de novo, agora no diario."""
+        if not self._recusas_por_cota:
+            return
+        self._log(conn, account.id, "warn",
+                  f"{self._recusas_por_cota} ordem(ns) de entrada NAO "
+                  f"enviada(s): cota de vazao de {COTA_ENVIOS_POR_MINUTO} "
+                  f"envios/60s atingida (pico no lote: "
+                  f"{self._pico_de_envios_no_lote}). O robo SEGUE operando "
+                  "-- alvo, stop, cancelamento e fechamento nao passam pela "
+                  "cota, e o rearme volta na barra seguinte.",
+                  {"recusas_por_cota": self._recusas_por_cota,
+                   "pico_envios_60s": self._pico_de_envios_no_lote,
+                   "cota": COTA_ENVIOS_POR_MINUTO,
+                   "sessao": session.isoformat()})
+
+    def _detalha_recusas_por_cota(self, detalhe: dict) -> None:
+        """Acrescenta a contagem ao `detail` do `StepReport` (log do
+        supervisor). Separado do journal pelo mesmo motivo de
+        `_detalha_armes_de_barra_velha`: os dois pontos de saida ANTECIPADA
+        de `_consume` tambem precisam da contagem."""
+        if self._recusas_por_cota:
+            detalhe["recusas_por_cota"] = self._recusas_por_cota
+            detalhe["pico_envios_60s"] = self._pico_de_envios_no_lote
+
     def _detalha_armes_de_barra_velha(self, detalhe: dict) -> None:
         """Acrescenta a contagem ao `detail` do `StepReport` (o que vai para o
         log do supervisor). Separado do journal acima porque os dois pontos
@@ -3403,6 +3629,11 @@ class IntradayLiveRuntime:
         self._atraso_max_barra_velha = 0.0
         self._ultima_barra_velha = None
         self._limite_atraso_do_lote = limite_atraso
+        # Cota de vazao: contadores por LOTE (a janela rolante de 60s em si
+        # e' de PROCESSO, `_envios_recentes`/`_tentativas_recentes`, e nao
+        # pode ser zerada aqui -- ela atravessa passos por construcao).
+        self._recusas_por_cota = 0
+        self._pico_de_envios_no_lote = 0
         for bar in barras:
             if self.machine.is_previous_session_bar(bar.ts):
                 descartadas += 1
@@ -3443,7 +3674,9 @@ class IntradayLiveRuntime:
                 if descartadas:
                     detalhe["descartadas"] = descartadas
                 self._detalha_armes_de_barra_velha(detalhe)
+                self._detalha_recusas_por_cota(detalhe)
                 self._journaliza_armes_de_barra_velha(conn, account, session)
+                self._journaliza_recusas_por_cota(conn, account, session)
                 return StepReport("daytrade_recusa_fechamento", session, detail=detalhe)
             except EntradaAMercadoNaoSuportada as erro:
                 # A estrategia pediu `Enter` a mercado, que nao tem caminho
@@ -3483,7 +3716,9 @@ class IntradayLiveRuntime:
                            "saidas": fechadas + p_fechadas, "modo": self.execution_mode,
                            "erro": str(erro)}
                 self._detalha_armes_de_barra_velha(detalhe)
+                self._detalha_recusas_por_cota(detalhe)
                 self._journaliza_armes_de_barra_velha(conn, account, session)
+                self._journaliza_recusas_por_cota(conn, account, session)
                 return StepReport("daytrade_robo_incompativel", session, detail=detalhe)
             for evento in eventos:
                 if isinstance(evento, PositionOpened):
@@ -3508,11 +3743,13 @@ class IntradayLiveRuntime:
                       f"(ultima: {_hora_brt(ultima_descartada)})",
                       {"descartadas": descartadas, "sessao": session.isoformat()})
         self._journaliza_armes_de_barra_velha(conn, account, session)
+        self._journaliza_recusas_por_cota(conn, account, session)
         detalhe = {"barras": len(barras), "entradas": abertas, "saidas": fechadas,
                    "modo": self.execution_mode}
         if descartadas:
             detalhe["descartadas"] = descartadas
         self._detalha_armes_de_barra_velha(detalhe)
+        self._detalha_recusas_por_cota(detalhe)
         return StepReport("daytrade", session, detail=detalhe)
 
     # ---------- journal + execucao ------------------------------------------
@@ -3581,6 +3818,37 @@ class IntradayLiveRuntime:
                     conn, account,
                     self.executor.cancel_stale_refs(
                         self._snapshot.pending_entry_refs, ts=evento.ts))
+        self.machine.discard_resting_limit()
+
+    def _recusa_por_cota_de_envio(self, excesso: ExcessoDeCadencia) -> None:
+        """A COTA DE VAZAO recusou este envio: nada vai ao book, e o robo
+        segue vivo.
+
+        Mesmo desfecho de `_recusa_por_margem` e de
+        `_descarta_arme_de_barra_velha` -- a maquina ja gravou
+        `resting_limit` e ficaria vigiando um fill impossivel, entao
+        `machine.discard_resting_limit()` e' obrigatorio aqui. Nao e'
+        detalhe: foi exatamente esse esquecimento que faltou na recusa de
+        25/08/2026 e deixou o robo uma hora esperando uma ordem que nunca
+        existiu na corretora (ver a docstring de
+        `machine.discard_resting_limit`). Um SEGUNDO mecanismo para o mesmo
+        problema seria pior que nenhum -- este e' o caminho unico.
+
+        A ordem REAL que estava em pe' ANTES ja morreu: o cancelamento
+        acontece no topo de `_on_limit_placed`, ANTES dos portoes. E' o que
+        se quer -- cancelar TIRA exposicao e nunca e' barrado por cota (ver
+        `_check_cadencia_de_ordens`). O robo termina o passo sem nada no
+        book e sem nada sendo vigiado: estado consistente, do qual a
+        estrategia rearma pelo criterio DELA.
+
+        Sem `_log` por ordem, e sem queimar numero de rodada (`trade_num`),
+        pelo mesmo motivo da barra velha: a recusa por cota nasce de um
+        passo com MUITAS ordens, entao uma linha por ordem reproduziria a
+        rajada dentro do diario. A contagem sai numa linha unica por lote,
+        nivel `warn`, em `_journaliza_recusas_por_cota`."""
+        self._recusas_por_cota += 1
+        self._pico_de_envios_no_lote = max(self._pico_de_envios_no_lote,
+                                           excesso.envios)
         self.machine.discard_resting_limit()
 
     def _on_limit_placed(self, conn, account: AccountState, evento: LimitPlaced,
@@ -3697,7 +3965,7 @@ class IntradayLiveRuntime:
         # com executor de verdade -- modo sombra nunca manda nada, entao
         # nunca entra na trava.
         sem_margem: Optional[str] = None
-        em_laco: Optional[str] = None
+        excesso: Optional[ExcessoDeCadencia] = None
         enviadas = None
         erro_envio: Optional[BrokerExecutionError] = None
         erro_trava: Optional[MargemTravada] = None
@@ -3718,9 +3986,9 @@ class IntradayLiveRuntime:
                     # (pregao de 2026-09-08: 45 envios em 13s de
                     # parede passaram batido porque o carimbo do
                     # tick dizia que eram 7,5 minutos).
-                    em_laco = self._check_cadencia_de_ordens(
+                    excesso = self._check_cadencia_de_ordens(
                         datetime.now(timezone.utc))
-                    if em_laco is None:
+                    if excesso is None:
                         # Um filho REAL por elemento de
                         # `EnterLimit.split_quantities` (ver a docstring de
                         # `EnterLimit.children` e a Fase 2 em
@@ -3771,15 +4039,23 @@ class IntradayLiveRuntime:
             self._recusa_por_margem(conn, account, self._snapshot.session,
                                     numero, sem_margem)
             return
-        if em_laco is not None:
+        if excesso is not None and excesso.patologia:
+            # DISJUNTOR. So' este ramo derruba o robo -- ver os dois tetos em
+            # `COTA_ENVIOS_POR_MINUTO`/`MAX_TENTATIVAS_DE_ENVIO_POR_MINUTO`.
             self._snapshot.disaster_halt = True
-            self._snapshot.disaster_reason = em_laco
+            self._snapshot.disaster_reason = excesso.motivo
             self._log(conn, account.id, "error",
-                      f"FREIO DE CADENCIA em {self.strategy.symbol}: {em_laco}. "
-                      "Parei de mandar ordem.",
+                      f"FREIO DE CADENCIA em {self.strategy.symbol}: "
+                      f"{excesso.motivo}. Parei de mandar ordem.",
                       {"sessao": self._snapshot.session.isoformat(),
-                       "numero_ordem": numero})
+                       "numero_ordem": numero,
+                       "tentativas_60s": excesso.tentativas,
+                       "envios_60s": excesso.envios})
             self.machine.discard_resting_limit()
+            return
+        if excesso is not None:
+            # VAZAO. Recusa SO' esta ordem e segue -- o robo continua vivo.
+            self._recusa_por_cota_de_envio(excesso)
             return
         if erro_envio is not None:
             self._recusa_de_envio(conn, account, self._snapshot.session, numero, erro_envio)

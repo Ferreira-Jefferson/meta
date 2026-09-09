@@ -78,8 +78,10 @@ cobrar esse deslize, alvo=1 nao e' candidato a nada.
 
 ## Extras reportados
 
-`pior_janela_60s` (teto ao vivo e' 30, `live.intraday_runtime.
-MAX_ENVIOS_POR_MINUTO`) -- pior contagem, numa janela ROLANTE de 60s, de
+`pior_janela_60s` (teto ao vivo era 30 quando esta rodada foi feita,
+`live.intraday_runtime.MAX_ENVIOS_POR_MINUTO`; desde 2026-09-08 sao dois
+tetos -- cota de vazao 120 e patologia 600) -- pior contagem, numa janela
+ROLANTE de 60s, de
 `EnterLimit` emitidas por `on_bar` (armamento novo, reprecificacao e rearme
 pos-recusa contam igual: cada uma e' um `place_limit` ao vivo, mesma
 grandeza que `_check_cadencia_de_ordens` mede ao vivo). `saida_alvo`/
@@ -163,11 +165,17 @@ de falha diferentes, e a esta capitalizacao quem morde e' o segundo -- no
 fundo do OOS a folga sobre o piso de sobrevivencia era de R$140, ~1,75
 stops.
 
-### BLOQUEIO DE PRODUCAO encontrado nesta rodada
+### BLOQUEIO DE PRODUCAO encontrado nesta rodada -- RESOLVIDO em 2026-09-08
+
+(Historico, e a leitura abaixo segue valendo como diagnostico do robo. O
+BLOQUEIO em si deixou de existir no mesmo dia: o teto virou DOIS -- cota de
+vazao de 120, que recusa so' a ordem excedente, e teto de patologia de 600,
+que continua ligando `disaster_halt`. Estes 42 passaram a caber na cota com
+folga de ~2,9x. Ver `COTA_ENVIOS_POR_MINUTO` em `live/intraday_runtime.py`.)
 
 `pior_janela_60s`: **42 no OOS**, contra `MAX_ENVIOS_POR_MINUTO = 30` de
-`live.intraday_runtime` -- ao vivo isso liga `disaster_halt` e cala o robo
-pelo resto do pregao. No IS da' 23, dentro do teto.
+`live.intraday_runtime` -- ao vivo isso ligava `disaster_halt` e calava o
+robo pelo resto do pregao. No IS da' 23, dentro do teto.
 
 E' TAIL, NAO REGIME, e o par IS/OOS prova: o IS tem MAIS fills por pregao
 (275,5 contra 185,2) e pico MENOR (23 contra 42). Logo o pico nao e' funcao
@@ -253,8 +261,12 @@ def _bars_do_processo(janela: str) -> pd.DataFrame:
 
 def _pior_janela_60s(envios_ts: list) -> int:
     """Pior contagem, numa janela ROLANTE de 60s, de `EnterLimit` emitidas
-    -- mesma grandeza que `live.intraday_runtime.MAX_ENVIOS_POR_MINUTO`
-    (30) limita ao vivo. `0` se o candidato nunca armou nada."""
+    -- mesma grandeza que os tetos de envio de `live.intraday_runtime`
+    limitam ao vivo. Quando esta rodada foi feita o teto era um DISJUNTOR
+    unico de 30 (`MAX_ENVIOS_POR_MINUTO`); desde 2026-09-08 sao dois,
+    `COTA_ENVIOS_POR_MINUTO` (120, recusa a ordem excedente) e
+    `MAX_TENTATIVAS_DE_ENVIO_POR_MINUTO` (600, disjuntor). `0` se o
+    candidato nunca armou nada."""
     if not envios_ts:
         return 0
     serie = pd.Series(1, index=pd.DatetimeIndex(sorted(envios_ts)))

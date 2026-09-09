@@ -109,13 +109,18 @@ INTEIROS (09:00-18:29 BRT, cache `data/raw_ticks/WDO_A_.parquet`):
     2026-03-09       75.933             3.446             SIM
     2026-08-28       38.260             1.162             SIM
 
-Cada `LimitPlaced` e' um `place_limit` ao vivo, e
-`live.intraday_runtime.MAX_ENVIOS_POR_MINUTO` e' 30 numa janela ROLANTE de
-60s. Estourar esse teto NAO recusa so' a ordem que estourou:
-`_check_cadencia_de_ordens` devolve motivo, o runtime liga `disaster_halt`,
-chama `machine.discard_resting_limit()` e PARA o robo pelo resto do pregao
-(so' volta no pregao seguinte). Nos pregoes medidos isso acontecia no
-PRIMEIRO minuto de negociacao (12:01 UTC = 09:01 BRT).
+Cada `LimitPlaced` e' um `place_limit` ao vivo, e o runtime tem teto de
+envio por janela ROLANTE de 60s. ATENCAO ao ler os numeros acima: ate'
+2026-09-08 o teto era um DISJUNTOR unico de 30 (`MAX_ENVIOS_POR_MINUTO`) --
+estourar nao recusava so' a ordem, ligava `disaster_halt` e PARAVA o robo
+pelo resto do pregao, e nos pregoes medidos isso acontecia no PRIMEIRO
+minuto de negociacao (12:01 UTC = 09:01 BRT). Desde 2026-09-08 sao DOIS
+tetos (`live.intraday_runtime.COTA_ENVIOS_POR_MINUTO` = 120, que recusa
+so' a ordem excedente e deixa o robo vivo, e
+`MAX_TENTATIVAS_DE_ENVIO_POR_MINUTO` = 600, que continua sendo disjuntor).
+As enxurradas da tabela acima (1.020 a 3.446 no pior minuto) atravessam os
+DOIS -- continuam sendo motivo suficiente para o freio existir na
+estrategia.
 
 Sao DUAS fontes de enxurrada, nao uma, e o freio tapa as duas com a mesma
 constante:
@@ -185,8 +190,9 @@ A regra nova (`_pode_reprecar`): o nivel candidato tem de estar a pelo menos
 `reancora_min_ticks` ticks do nivel PARADO **e** do ultimo nivel ABANDONADO
 na rodada. Sobre a sequencia registrada nesse pregao isso derruba 125 envios
 para 53, e o pior minuto de PAREDE de 64 para 21 -- de mais que o dobro do
-teto de `MAX_ENVIOS_POR_MINUTO` (30, que para o robo pelo pregao inteiro)
-para 30% de folga. Nao mexe em geometria (T2/S16 intacto) nem no rearme
+teto que vigorava naquele dia (30, disjuntor: parava o robo pelo pregao
+inteiro) para 30% de folga. Desde 2026-09-08 os dois cabem na cota de vazao
+de 120 (`live.intraday_runtime.COTA_ENVIOS_POR_MINUTO`). Nao mexe em geometria (T2/S16 intacto) nem no rearme
 pos-fill. Vale nos DOIS motores por construcao: a regra e' da estrategia,
 que e' o mesmo objeto no backtest e ao vivo.
 
@@ -231,10 +237,14 @@ Tres diferencas deliberadas frente ao original de acao:
    item 4.9 ele morde de verdade (6 de 43 pregoes medidos fecham exatamente
    200+200 = 400 trades) e, mais importante, e' ele que limita quantos
    REARMES pos-fill o robo manda por minuto. O pior minuto medido no
-   default do freio (26 envios) e' 100% rearme pos-fill num pregao
-   saturado, contra o teto de 30 de `MAX_ENVIOS_POR_MINUTO`: subir
-   `max_trades_per_side` empurra esse pico por cima do teto e volta a
-   travar o robo. Nao suba sem re-medir o pior minuto. O texto original
+   default do freio (26 envios em tempo de TICK; 42 na medicao IS/OOS de
+   2026-09-08) e' 100% rearme pos-fill num pregao saturado. Ate'
+   2026-09-08 isso batia num teto de 30 que TRAVAVA o robo pelo pregao
+   inteiro; hoje bate na cota de vazao de 120
+   (`COTA_ENVIOS_POR_MINUTO`), que so' recusa a ordem excedente -- subir
+   `max_trades_per_side` ainda empurra o pico e ainda custa ordem
+   recusada, so' nao cala mais o robo. Nao suba sem re-medir o pior
+   minuto. O texto original
    abaixo (calibrado quando o robo fazia ~41 trades/dia) fica por
    historico --
    o WDO@ tem ~570 barras M1/pregao (perfil medido) e, no modo rolante,
@@ -856,8 +866,9 @@ class WdoGridReloadMaker(IntradayStrategy):
         porque sem ele o comportamento default do robo e' indeployavel. Ver a
         nota datada de 2026-09-07 no topo do modulo para a medicao que
         motivou (dezenas de milhares de envios por pregao, ate' 3.446 numa
-        unica janela de 60s, contra o teto de 30 de
-        `live.intraday_runtime.MAX_ENVIOS_POR_MINUTO`).
+        unica janela de 60s, contra os tetos de
+        `live.intraday_runtime.COTA_ENVIOS_POR_MINUTO` = 120 e
+        `MAX_TENTATIVAS_DE_ENVIO_POR_MINUTO` = 600).
 
         `reancora_min_segundos` e' a espera minima entre duas ordens que a
         CORRETORA ve, e vale para os dois caminhos que produziam enxurrada:
@@ -987,9 +998,13 @@ class WdoGridReloadMaker(IntradayStrategy):
         a ordem 1 tick e 49 devolveram a ordem a um nivel que a MESMA rodada
         ja' tinha ocupado -- e' desperdicio puro, sem contraparte. Segunda,
         e e' a que importa para o deploy: o pior minuto de PAREDE cai de 64
-        para 21, ou seja, de mais que o DOBRO do teto de
-        `live.intraday_runtime.MAX_ENVIOS_POR_MINUTO` (30, que nao recusa so'
-        a ordem -- para o robo pelo resto do pregao) para 30% de folga.
+        para 21. Contra o teto que vigorava naquele dia (30, disjuntor: nao
+        recusava so' a ordem, parava o robo pelo pregao inteiro) isso era
+        sair de mais que o DOBRO do teto para 30% de folga. Desde
+        2026-09-08 os dois numeros cabem na cota de vazao
+        (`live.intraday_runtime.COTA_ENVIOS_POR_MINUTO` = 120) -- o ganho
+        continua sendo real (menos cancela+reenvia, mais fila preservada),
+        mas ja' nao e' a diferenca entre operar e ficar mudo.
 
         RESSALVA do numero: e' um replay das ordens que o diario REGISTROU,
         nao de todos os ticks do pregao. Quando a histerese recusa uma
@@ -1551,10 +1566,12 @@ class WdoGridReloadMaker(IntradayStrategy):
             # emite uma `EnterLimit` nova a cada TICK em que o nivel muda, e
             # ao vivo cada uma delas vira cancelar+reenviar na corretora:
             # medido no motor tick, ate' 38.260 envios num unico pregao e
-            # 1.162 numa unica janela de 60s -- contra o teto de 30/60s de
-            # `live.intraday_runtime.MAX_ENVIOS_POR_MINUTO`, que NAO recusa
-            # so' aquela ordem: liga `disaster_halt` e para o robo pelo resto
-            # do pregao. O freio mora AQUI (na estrategia), nunca no `live/`:
+            # 1.162 numa unica janela de 60s -- contra a cota de 120/60s de
+            # `live.intraday_runtime.COTA_ENVIOS_POR_MINUTO` (que recusa so'
+            # a ordem excedente) e o teto de patologia de 600/60s
+            # (`MAX_TENTATIVAS_DE_ENVIO_POR_MINUTO`, que liga `disaster_halt`
+            # e para o robo pelo resto do pregao -- e que 1.162 estoura).
+            # O freio mora AQUI (na estrategia), nunca no `live/`:
             # regra do projeto e' que `live/` nao decide nada, e um freio que
             # so' existisse ao vivo faria o backtest deixar de descrever a
             # producao.

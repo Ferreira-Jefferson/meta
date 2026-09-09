@@ -48,9 +48,11 @@ modelo de preenchimento. Nao reintroduzir T1 aqui "so' para comparar".
   nenhuma tarefa espera as outras para falar.
 - Tabela de saida via `backtest/intraday/report.py` (`linha_de_resultado`,
   `cabecalho`, `linha`) com as mesmas colunas extras do script de
-  referencia: `pior_janela_60s` (teto ao vivo e' 30,
-  `live.intraday_runtime.MAX_ENVIOS_POR_MINUTO` -- estourar liga
-  `disaster_halt`), `saida_alvo`/`saida_stop`/`saida_flatten`
+  referencia: `pior_janela_60s` (teto ao vivo era 30 quando esta rodada foi
+  feita, `MAX_ENVIOS_POR_MINUTO`, e estourar ligava `disaster_halt`; desde
+  2026-09-08 sao `COTA_ENVIOS_POR_MINUTO`=120, que recusa so' a ordem
+  excedente, e `MAX_TENTATIVAS_DE_ENVIO_POR_MINUTO`=600, o disjuntor),
+  `saida_alvo`/`saida_stop`/`saida_flatten`
   (`IntradayTrade.exit_reason`), `pregoes_sem_trade` (janela censurada --
   nao ler `liquido` sem olhar esta coluna), `qtd_max` (sanity check do
   dimensionamento dinamico), `zerou`/`caixa_min` (risco de ruina --
@@ -128,8 +130,12 @@ def _bars_do_processo(janela: str) -> pd.DataFrame:
 
 def _pior_janela_60s(envios_ts: list) -> int:
     """Pior contagem, numa janela ROLANTE de 60s, de `EnterLimit` emitidas
-    -- mesma grandeza que `live.intraday_runtime.MAX_ENVIOS_POR_MINUTO`
-    (30) limita ao vivo. `0` se o candidato nunca armou nada."""
+    -- mesma grandeza que os tetos de envio de `live.intraday_runtime`
+    limitam ao vivo. Quando esta rodada foi feita o teto era um DISJUNTOR
+    unico de 30 (`MAX_ENVIOS_POR_MINUTO`); desde 2026-09-08 sao dois,
+    `COTA_ENVIOS_POR_MINUTO` (120, recusa a ordem excedente) e
+    `MAX_TENTATIVAS_DE_ENVIO_POR_MINUTO` (600, disjuntor). `0` se o
+    candidato nunca armou nada."""
     if not envios_ts:
         return 0
     serie = pd.Series(1, index=pd.DatetimeIndex(sorted(envios_ts)))

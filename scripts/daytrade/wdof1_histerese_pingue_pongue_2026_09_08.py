@@ -31,9 +31,13 @@ Nao mede `profit_ticks=1` (T1) -- proibido, ver a secao do deslize de TP em
 
 ## Colunas que importam alem da tabela padrao
 
-`pior_janela_60s` e' a mesma grandeza que `live.intraday_runtime.
-MAX_ENVIOS_POR_MINUTO` (30) limita ao vivo, e estourar esse teto NAO recusa
-so' a ordem: liga `disaster_halt` e para o robo pelo resto do pregao.
+`pior_janela_60s` e' a mesma grandeza que os tetos de envio de
+`live.intraday_runtime` limitam ao vivo. Quando esta rodada foi feita havia
+um teto so' (`MAX_ENVIOS_POR_MINUTO = 30`) e estourar NAO recusava so' a
+ordem: ligava `disaster_halt` e parava o robo pelo resto do pregao -- foi
+justamente o 42 medido aqui que motivou a troca de desenho, no mesmo dia,
+para `COTA_ENVIOS_POR_MINUTO` (120, recusa a ordem excedente) mais
+`MAX_TENTATIVAS_DE_ENVIO_POR_MINUTO` (600, disjuntor).
 `envios` e' o total de `EnterLimit` do periodo -- o desperdicio que o dono
 apontou mora ai.
 
@@ -91,7 +95,9 @@ def _bars_do_processo(janela: str) -> pd.DataFrame:
 
 def _pior_janela_60s(envios_ts: list) -> int:
     """Pior contagem, numa janela ROLANTE de 60s, de `EnterLimit` emitidas --
-    mesma grandeza que `MAX_ENVIOS_POR_MINUTO` (30) limita ao vivo."""
+    mesma grandeza que os tetos de envio do runtime limitam ao vivo (hoje
+    `COTA_ENVIOS_POR_MINUTO`=120 e `MAX_TENTATIVAS_DE_ENVIO_POR_MINUTO`=600;
+    era `MAX_ENVIOS_POR_MINUTO`=30 quando esta rodada foi feita)."""
     if not envios_ts:
         return 0
     serie = pd.Series(1, index=pd.DatetimeIndex(sorted(envios_ts)))
