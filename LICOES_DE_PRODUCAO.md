@@ -119,7 +119,10 @@ saber.
 > **Regra:** toda ordem de fechamento é limitada por `min(o que eu acho que
 > tenho, o que a corretora diz que eu tenho)`. **Pergunte à plataforma nova:** a
 > conta é netting ou hedging? A resposta muda o que "ordem grande demais"
-> significa — e num caso o erro é silencioso.
+> significa — e num caso o erro é silencioso. **O item 1.23 é a MESMA inversão
+> por outro caminho:** duas ordens do tamanho CERTO, chegando pelo mesmo
+> fechamento (a do robô e o `sl` que a corretora já tinha registrado), somam
+> exatamente como uma ordem grande demais.
 
 ### 1.5 "Cancelei" só vale se a corretora confirmou
 
@@ -690,6 +693,76 @@ de um pregão inteiro ao vivo) e `MAX_TENTATIVAS_DE_ENVIO_POR_MINUTO = 600`
 por passo do supervisor, ~12/min) não dispara nem a cota nem o disjuntor —
 não é regressão (o teto de 30 também não pegava esse caso) e não é risco de
 corretora nessa taxa, mas fica anotado para quem for portar o freio.
+
+### 1.23 Proteção já registrada na corretora MAIS ordem a mercado por cima é saída DUPLA — e em conta netting a segunda não zera, INVERTE — CORRIGIDO 2026-09-08
+
+**Honestidade primeiro: isto é lacuna achada por auditoria, não incidente
+reconstruído. Não custou nenhum dinheiro que a gente tenha conseguido
+identificar.** O que dá para afirmar com número é a exposição, mais abaixo.
+
+Em `backtest/intraday/machine.py::_close_position`, a condição que decide
+"fechar pela proteção JÁ REGISTRADA na corretora em vez de mandar ordem a
+mercado" era `reason in (TARGET, STOP) and position.exit_split_unit is None`.
+A cláusula `exit_split_unit is None` existe **por causa do ALVO**:
+`live.intraday_runtime._alvo_atomico` recusa de propósito amarrar TP numa
+posição fatiada (dois fechamentos do tamanho total numa conta NETTING
+inverteriam o lado), então para o alvo fatiado realmente NÃO há nível
+registrado na corretora para esperar. **O STOP nunca teve esse problema** —
+`_on_limit_placed` manda `stop=order.initial_stop` em TODA ordem, fatiada ou
+não, e a docstring do próprio `_alvo_atomico` já dizia isso por escrito: *"o
+STOP não tem esse problema e vai sempre: fatia de saída só existe no alvo"*.
+A guarda era larga demais: cobria os dois motivos quando a justificativa dela
+valia só para um.
+
+Efeito: posição fatiada COM stop registrado na corretora, a barra toca o
+stop, e o motor mandava ordem **a mercado** por cima. Dois danos, de
+gravidades muito diferentes:
+
+1. **Pagava o spread em todo stop de posição fatiada** — dinheiro,
+   mensurável, pequeno, e exatamente o que o dono tinha mandado parar de
+   pagar.
+2. **Risco de saída DUPLA** — a ordem a mercado e o `sl` da corretora podem
+   executar as **duas**. Em conta NETTING o excedente não vira zero: vira
+   **posição aberta no lado contrário**, sem stop e sem alvo. É o mesmo
+   desfecho do incidente da Parte 0 (mecanismo do item 1.4), por um caminho
+   diferente — e este é o dano que justifica o item, não o spread.
+
+**A exposição, com o número que existe.** Quem roda `dividir_entrada=True`
+por padrão é a `Gremah` (ação B3), que teve slot REAL ligado; o WDO F1 nunca
+esteve exposto, porque não fatia a saída. O log do slot
+`dt-gremah-pmam3-live` cobre **5 pregões** (2026-08-28, 08-31, 09-02, 09-04 e
+09-08) e em **todos** os passos registra `entradas=0 saidas=0` — o robô nunca
+chegou a abrir posição em modo real nessa janela, então o caminho nunca foi
+exercitado com dinheiro. O registro anterior mais próximo (PMAM3, 2026-08-25)
+são 12 ordens reais com **0 preenchimentos** — de novo, sem posição aberta. O
+`db/live.sqlite` atual só guarda 2026-09-08, então não dá para varrer mais
+para trás: **a exposição era de configuração, não de evento observado.**
+
+**Correção aplicada (commit `4eb3e4a`, com teste):** `fecha_pela_protecao`
+passou a ser `(exit_split_unit is None or reason == STOP)`. A fatia-limite
+pendente já é cancelada antes desse ponto (`_resolve_live_split_exit`, ramo
+`stop_hit`), então a sequência fica correta: cancela a limite → confirma pelo
+`sl` que a corretora já tem registrado.
+
+> **Regra:** enquanto a corretora tem uma proteção REGISTRADA para uma
+> posição, o robô nunca manda uma segunda ordem para fechar a mesma
+> exposição — não importa se a posição foi montada inteira ou em fatias, e
+> não importa que a segunda ordem "provavelmente chegue primeiro". As duas
+> podem executar, e em conta de netting o excedente não vira zero: vira
+> posição invertida (item 1.4). Fechar é sempre UM caminho por posição, e
+> quando já existe nível registrado na corretora, o caminho é ESPERAR esse
+> nível — cancelando antes qualquer ordem própria que dispute o mesmo
+> fechamento.
+> **Corolário sobre a FORMA do bug, que é o que generaliza:** quando uma
+> condição de guarda junta dois casos numa cláusula só (aqui, alvo e stop),
+> confira se a JUSTIFICATIVA dela vale para os dois. Aqui a razão estava
+> escrita, correta e explicitamente restrita ao alvo, na docstring da função
+> vizinha — e mesmo assim a guarda cobria os dois. Guarda larga demais não
+> falha ruidosamente: ela só age onde não devia, e só num caminho raro.
+> **Pergunte à plataforma nova:** como ela resolve uma ordem de fechamento
+> que chega enquanto já existe stop/alvo REGISTRADO para a MESMA posição —
+> recusa, cancela a proteção sozinha, ou executa as duas? E se as duas
+> executarem, o excedente vira zero ou vira lado contrário?
 
 ---
 
@@ -3848,6 +3921,16 @@ dinheiro ou meses.
     distinção, uma correção de modelo que censura a janela vira "não dá pra
     concluir nada" quando na verdade ela permite concluir tudo. (6.18,
     6.15, 6.17)
+61. Como a plataforma resolve uma ordem de fechamento que chega enquanto já
+    existe stop/alvo REGISTRADO para a MESMA posição — recusa a segunda,
+    cancela a proteção sozinha, ou executa as duas? E se as duas executarem,
+    o excedente vira ZERO ou vira posição no lado CONTRÁRIO? A pergunta 3
+    (1.4) cobre uma ordem única maior que a posição; esta cobre duas ordens
+    do tamanho certo chegando pelo mesmo motivo — o caso que aparece quando
+    a posição é montada ou desmontada em FATIAS e cada caminho de saída acha
+    que é o único. Enquanto a resposta não existir, a regra é uma só: com
+    proteção registrada na corretora, o robô espera esse nível e não manda
+    ordem própria pelo mesmo fechamento. (1.23, 1.4)
 
 ---
 
@@ -3942,5 +4025,14 @@ z = −2,15) — **não tem edge**, e a compensação intuitiva de pedir 1 tick 
 mais leva a zero, não a lucro, porque o gatilho anda junto. O motor regalava
 R$93.710,00 no IS e R$45.520,00 no OOS, e a varredura de 250 células que
 escolheu essa geometria rodou nele: toda a calibração deste robô precisa ser
-refeita (6.18). Mais o registro acumulado do projeto. Quando um item aqui contradisser o código, o código ganha — e este
+refeita (6.18). Mais 1 item da auditoria do mesmo commit, e este NÃO custou
+dinheiro identificado — é lacuna, não incidente: o motor mandava ordem a
+mercado por cima do STOP de uma posição FATIADA que já tinha `sl` registrado
+na corretora, porque uma guarda que existia só por causa do alvo cobria os
+dois motivos. Além do spread pago à toa, o risco era saída DUPLA, que em
+conta netting não zera — inverte o lado, o desfecho do incidente de
+2026-08-28 por outro caminho. Exposta era a `gremah` (`dividir_entrada=True`
+por padrão, ação B3, slot real ligado), mas os 5 pregões de log do slot real
+registram `entradas=0 saidas=0` em todos os passos: exposição de
+configuração, nunca exercitada (1.23). Mais o registro acumulado do projeto. Quando um item aqui contradisser o código, o código ganha — e este
 arquivo está desatualizado.*
