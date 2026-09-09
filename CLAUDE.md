@@ -103,6 +103,10 @@ Every day trade script must print results through `backtest/intraday/report.py`:
 
 ## Capital inicial: sempre o mínimo real do instrumento
 
+**Ordem do dono, 2026-09-08: teste SEMPRE com o capital mínimo para operar, a não ser que ele passe outro valor expressamente.** Nada de bateria "com folga" para separar geometria de censura — se o dono não tem o capital, a célula não descreve nenhum futuro possível e é só tempo de máquina gasto. Isso vale inclusive quando a janela sai censurada: uma linha censurada com o capital real informa mais (mostra que o robô morre de caixa) do que uma linha limpa com um capital que não existe.
+
+Foi exatamente o que aconteceu na varredura do deslize: 10 das 24 células eram a R$5.000, "o único lugar onde T4/T6 podem ser lidos" — e foram canceladas por este motivo. Ler T4/T6 num capital indisponível responde uma pergunta que ninguém tem.
+
 Every backtest / sweep starts from the **real** minimum cash to operate the instrument, never a round test value like "R$50k so it doesn't zero." A generic capital silently changes how many lots fit and whether the capital gate lets a session trade at all, which flips which geometry "wins."
 
 **Regra por instrumento (2 lotes / 2× buffer de margem — `CAPITAL_MINIMO_EM_LOTES = MARGIN_BUFFER_FUTUROS = 2.0`):**
