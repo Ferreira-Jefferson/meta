@@ -3876,6 +3876,37 @@ acompanha** (−R$248,50 no IS, 70/72 pregões sem trade). É o T2 que sustenta.
 
 ### 6.20 Parâmetro emprestado não é só um número fora de contexto — pode ser uma UNIDADE diferente com o mesmo nome: o literal `8` vale 8 MINUTOS num robô e meio SEGUNDO no outro
 
+> **DESFECHO, 2026-09-09 — leia isto antes do resto do item.** O valor de
+> produção **mudou de 8 para 60** depois deste item ter sido escrito
+> (`EXIT_TTL_BARS_PADRAO_FATIA` em `wdo_grid_reload_maker.py`). A pergunta do
+> dono não era sobre o erro de unidade abaixo (que continua correto e é o que
+> o item documenta) — era sobre esperar mais antes de sair a mercado: *"não
+> seria melhor trocar de 8 para 20 para aguardar mais e só então sair a
+> mercado? isso não aumentaria as chances de sair com limite?"*. A resposta
+> certa não morava no P&L ruidoso medido abaixo (10 pregões, curva
+> serrilhada) — morava na **TAXA DE FILL**, que sai monotônica
+> (`scripts/daytrade/wdof1_ttl_taxa_de_fill_2026_09_09.py`, T2 fatiado, 10
+> pregões do IS, capital real):
+>
+> | `exit_ttl_bars` | ~tempo de relógio | % preenche na limite | deslize R$ |
+> |---|---|---|---|
+> | 8 | 0,5s | 84,1% | 2.375,00 |
+> | 20 | 1,2s | 88,9% | 1.875,00 |
+> | 60 | 3,7s | 92,8% | 1.040,00 |
+> | 130 | 8,1s | 93,6% | 1.510,00 |
+>
+> O dono estava certo na direção (8→20 já sobe 4,8pp de preenchimento).
+> Ficou em **60** porque o trecho 20→60 rende MAIS que 8→20 (+3,9pp) e
+> derruba o deslize de R$1.875,00 para R$1.040,00 — menos da metade do que
+> o 8 pagava; depois de 60 a curva achata (130 só acrescenta 0,8pp e o
+> deslize volta a subir). Ou seja: **o `exit_ttl_bars` do WDO F1 não é mais
+> um empréstimo não calibrado da `gremah`** — é calibrado para o próprio
+> instrumento, com critério de TAXA DE FILL (não de P&L, que é onde a
+> varredura de 10 pregões abaixo mostrou ruído). O resto desta seção — a
+> descoberta do erro de unidade e a decisão antiga de "manter 8" — é
+> histórico e continua valendo como registro de COMO o bug foi achado; não
+> leia a decisão "manter 8" logo abaixo como o valor atual.
+
 Ao ligar a saída fatiada (item 6.19), o WDO F1 herdou `exit_ttl_bars=8`, o
 prazo de vida da ordem-limite de saída. Esse 8 foi calibrado na `gremah`, que
 opera **PMAM3 — ação de centavos, fila lenta, book raso**. O WDO F1 opera
@@ -3917,8 +3948,10 @@ pregões do IS):
 de 2 para cima a curva é **SERRILHADA** — 5: R$13,7 mil · 6: R$14,8 mil · 10:
 R$16,5 mil · 12: R$14,7 mil. Vizinhos diferem entre si mais do que a tendência
 da faixa inteira, que é a assinatura de ruído: **10 pregões não separam este
-parâmetro.** Decisão do dono: manter 8 — não porque venceu, mas porque nada
-venceu.
+parâmetro.** Decisão do dono NA ÉPOCA: manter 8 — não porque venceu, mas
+porque nada venceu neste critério. **Revista em 2026-09-09 com outro
+critério — ver o DESFECHO no topo do item: o valor de produção é 60,
+calibrado por taxa de fill, não por P&L.**
 
 O que a varredura mediu com clareza foi o **preço da válvula**, não o valor
 ótimo dela: `ttl=8` dá **R$14,9 mil** contra **R$21,0 mil** do "sem prazo".
