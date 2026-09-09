@@ -49,7 +49,7 @@
    `outerHTML` a cada 20s recriaria o nó do zero, jogando o dono de volta pro
    topo da página inicial no meio da leitura. "Diário do dia" (o botão perto
    do console) volta a ligar o poll ao trocar `eventos_full` de volta pra 0. #}
-<div id="ops-slot-live-{{ slot.id }}"
+<div id="ops-slot-live-{{ slot.id | dom_id }}"
      {% if not s.eventos_full %}hx-get="{{ frag_url }}" hx-trigger="every {{ poll_seconds }}s"{% endif %}
      hx-swap="outerHTML">
 
@@ -451,7 +451,7 @@
   {% if s.posicoes_ha_mais %}
   <div class="ops-more">
     <button type="button" hx-get="/operacao/{{ slot.id }}/fragment?posicoes={{ pos_n + 10 }}"
-            hx-target="#ops-slot-live-{{ slot.id }}" hx-swap="outerHTML">
+            hx-target="#ops-slot-live-{{ slot.id | dom_id }}" hx-swap="outerHTML">
       Ver mais 10 posições
     </button>
     <span class="dim">{{ s.posicoes | length }} de {{ n_pos }}</span>
@@ -521,18 +521,18 @@
   </summary>
   <div class="ops-sub-body">
   <pre class="console">{% for e in s.eventos %}[{{ e.ts | hora_br }}] {{ e.level | upper }} {{ e.source }}: {{ e.message }}
-{% else %}(nenhum evento registrado{% if not s.eventos_full %} ainda hoje{% endif %}){% endfor %}{% if s.eventos_full and s.eventos_mais %}<span id="ops-events-sentinel-{{ slot.id }}"
+{% else %}(nenhum evento registrado{% if not s.eventos_full %} ainda hoje{% endif %}){% endfor %}{% if s.eventos_full and s.eventos_mais %}<span id="ops-events-sentinel-{{ slot.id | dom_id }}"
       hx-get="/operacao/{{ slot.id }}/eventos?before_id={{ s.eventos[-1].id }}"
       hx-trigger="revealed" hx-swap="outerHTML" hx-target="this"></span>{% endif %}</pre>
   <div class="ops-more ops-more--center">
     {% if s.eventos_full %}
     <button type="button" hx-get="/operacao/{{ slot.id }}/fragment?posicoes={{ pos_n }}&amp;eventos_full=0"
-            hx-target="#ops-slot-live-{{ slot.id }}" hx-swap="outerHTML">
+            hx-target="#ops-slot-live-{{ slot.id | dom_id }}" hx-swap="outerHTML">
       Diário do dia
     </button>
     {% else %}
     <button type="button" hx-get="/operacao/{{ slot.id }}/fragment?posicoes={{ pos_n }}&amp;eventos_full=1"
-            hx-target="#ops-slot-live-{{ slot.id }}" hx-swap="outerHTML">
+            hx-target="#ops-slot-live-{{ slot.id | dom_id }}" hx-swap="outerHTML">
       Diário Completo
     </button>
     {% endif %}

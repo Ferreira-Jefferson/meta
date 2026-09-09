@@ -166,6 +166,66 @@ TEMPLATES.env.filters["hora_br"] = hora_br
 TEMPLATES.env.filters["inline_code"] = lambda t: Markup(strategy_registry.inline_html(t or ""))
 
 
+#: Caracteres que um `id=` de HTML pode carregar E que um seletor CSS
+#: (`#<id>`) sabe ler sem escape. Letra, dígito e hífen; o `_` entra pela
+#: porta do escape abaixo.
+_DOM_ID_SEGUROS = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-"
+)
+
+
+def dom_id(valor) -> str:
+    """Um valor de dado virando `id=` de HTML — e, sobretudo, virando um
+    seletor `#<id>` que o navegador aceita.
+
+    O QUE ISSO CUSTOU (2026-09-09): o painel de `/operacao` parou de se
+    atualizar sozinho para o robô do WDO. Todo poll de 20s voltava com o
+    HTML certo do servidor (200, conteúdo novo) e o htmx jogava a resposta
+    inteira no lixo, porque o resumo do cabeçalho viaja como swap
+    fora-de-banda e o htmx monta o alvo dele como `"#" + id` cru
+    (`oobSwap`, htmx 1.9.12). O id vinha do slot, o slot carrega o símbolo, e
+    o símbolo do mini-dólar contínuo é `WDO@`:
+
+        querySelectorAll('#ops-sum-dt-wdo_grid_reload_maker-wdo@-shadow')
+        -> SyntaxError: is not a valid selector
+
+    `@` não é caractere de identificador em CSS. O erro sobe como
+    `htmx:swapError` DENTRO de um poll de fundo: nenhuma tela vermelha,
+    nenhum aviso, o cartão simplesmente congela nos números de quando a
+    página foi carregada. O dono operou dinheiro real olhando caixa e
+    contagem de ordens que só mudavam com F5 na mão.
+
+    O `.` é o mesmo bug, e pior: `#ops-sum-dt-gremah-pmam3.sa-shadow` é
+    seletor VÁLIDO — só que significa "id `ops-sum-dt-gremah-pmam3` com
+    classe `sa-shadow`", que não existe. Nem exceção, nem swap.
+
+    A regra que sobra: nenhum `id=` desta aplicação carrega caractere que um
+    seletor não saiba ler. Quem constrói id a partir de dado (slot, símbolo,
+    robô) passa por aqui — nos DOIS lados, no `id=` e no `#...` que aponta
+    para ele.
+
+    A tradução é injetiva de propósito (dois slots diferentes nunca podem
+    virar o mesmo id, senão o swap atualizaria o cartão do robô errado — e o
+    cartão errado é um número de dinheiro no lugar errado): `_` é o escape,
+    `_` literal vira `__`, e qualquer outro caractere fora do conjunto seguro
+    vira `_` + o código em hexa de 2 dígitos (`@` -> `_40`). Hexa nunca
+    começa com `_`, então a leitura de volta é sem ambiguidade.
+    """
+    texto = "" if valor is None else str(valor)
+    partes = []
+    for c in texto:
+        if c in _DOM_ID_SEGUROS:
+            partes.append(c)
+        elif c == "_":
+            partes.append("__")
+        else:
+            partes.append(f"_{ord(c):02x}" if ord(c) < 256 else f"_u{ord(c):04x}")
+    return "".join(partes)
+
+
+TEMPLATES.env.filters["dom_id"] = dom_id
+
+
 def _static_v(filename: str) -> int:
     """Mtime do arquivo estático, usado como query-string cache-buster.
 

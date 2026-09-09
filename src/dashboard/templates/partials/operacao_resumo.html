@@ -12,7 +12,7 @@
    continuaria escrito "operando" depois de o robô parar — e um painel que
    mente sobre dinheiro é pior que um painel que não resume. #}
 {% macro resumo(slot_id, caixa, proc, caixa_minima=none, caixa_ok=True, oob=False, preenchidas=none, posicionadas=none, impedimento=none, caixa_minima_origem=none) %}
-<span id="ops-sum-{{ slot_id }}" class="ops-sum"{% if oob %} hx-swap-oob="true"{% endif %}>
+<span id="ops-sum-{{ slot_id | dom_id }}" class="ops-sum"{% if oob %} hx-swap-oob="true"{% endif %}>
   <span class="ops-sum-cash num">R$ {{ caixa | num_br }}</span>
   {# O mínimo mudou de lugar (dono, 2026-08-22): ficava ao lado do campo de
      caixa, longe de onde o cartão já mostra o próprio caixa. `caixa_minima`

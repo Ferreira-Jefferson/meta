@@ -28,6 +28,7 @@ chamada, nao um default de parametro fixado na definicao) — ai sim
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 from fastapi.testclient import TestClient
@@ -850,6 +851,75 @@ def test_cabecalho_recolhido_diz_caixa_e_estado_e_o_polling_atualiza(
     # O htmx so extrai o fora-de-banda da RAIZ da resposta: se ele vier
     # aninhado dentro do no principal, o swap silenciosamente nao acontece.
     assert frag.index("hx-swap-oob") < frag.index('id="ops-slot-live-')
+
+
+#: Todo caractere que um `id=` desta aplicacao pode carregar. E' o conjunto
+#: que um seletor `#<id>` sabe ler sem escape nenhum -- ver `app.dom_id`.
+_ID_ACEITAVEL = re.compile(r"[A-Za-z0-9_-]+")
+
+
+def _ids_e_alvos(corpo: str) -> tuple[list[str], list[str]]:
+    # O olhar-pra-tras evita casar o FIM de outro atributo -- sem ele,
+    # `data-ops-slot-id="..."` (que guarda o slot cru de proposito, e' o que o
+    # JS manda de volta ao servidor) entraria na lista como se fosse um `id=`.
+    return (re.findall(r'(?<![\w-])id="([^"]+)"', corpo),
+            re.findall(r'hx-target="#([^"]+)"', corpo))
+
+
+def test_id_do_cartao_nunca_leva_caractere_que_o_seletor_css_nao_le(
+    isolated_journal, client,
+):
+    """O painel do WDO parou de se atualizar sozinho, e nada na tela avisou.
+
+    2026-09-09: o poll de 20s do cartao voltava 200 com o HTML novo e o htmx
+    descartava a resposta inteira. Motivo: o resumo do cabecalho viaja como
+    swap FORA-DE-BANDA, e o htmx monta o alvo dele como `"#" + id` cru
+    (`oobSwap`); o id vem do slot, o slot carrega o simbolo, e o simbolo do
+    mini-dolar continuo e' `WDO@` -- `#ops-sum-...-wdo@-shadow` levanta
+    `SyntaxError: is not a valid selector`. O erro morre dentro do poll como
+    `htmx:swapError`: o cartao congela nos numeros do carregamento da pagina
+    e o dono opera dinheiro real dando F5 na mao.
+
+    O `.SA` do swing seria a MESMA falha em silencio total (`#a.b` e' seletor
+    valido, so' significa outra coisa), por isso o teste cobre o conjunto de
+    caracteres, nao o `@`."""
+    slot = "dt-wdo_grid_reload_maker-wdo@-shadow"
+    _create_mt5_account(isolated_journal, capital=375.0, slot=slot,
+                        investment_robot="wdo_grid_reload_maker")
+
+    html = client.get("/operacao").text
+    frag = client.get(f"/operacao/{slot}/fragment").text
+
+    for nome, corpo in (("pagina", html), ("fragmento", frag)):
+        ids, alvos = _ids_e_alvos(corpo)
+        assert ids, f"{nome} sem nenhum id -- teste cego"
+        assert [i for i in ids if i.startswith("ops-slot-live-")], nome
+        for valor in ids + alvos:
+            assert _ID_ACEITAVEL.fullmatch(valor), (
+                f"{nome}: `{valor}` nao cabe num seletor `#<id>`"
+            )
+
+    # E o alvo do fora-de-banda tem de existir na pagina: id igual nos dois
+    # lados, senao o swap nao acha ninguem (que e' a falha silenciosa do `.`).
+    esperado = f'id="ops-sum-{dashboard_app.dom_id(slot)}"'
+    assert esperado in html
+    assert esperado in frag
+
+
+def test_dom_id_e_injetivo(isolated_journal):
+    """Dois slots diferentes NUNCA podem virar o mesmo id de HTML: o swap
+    fora-de-banda escreve caixa e estado de um robo dentro do cartao que
+    casar com o id, e cartao errado e' numero de dinheiro no lugar errado."""
+    d = dashboard_app.dom_id
+    assert d("dt-wdo_grid_reload_maker-wdo@-shadow") == (
+        "dt-wdo__grid__reload__maker-wdo_40-shadow"
+    )
+    assert d("dt-gremah-pmam3.sa-live") == "dt-gremah-pmam3_2esa-live"
+    # o par que colidiria se o `_` literal nao fosse escapado
+    assert d("a@b") != d("a_40b")
+    # slot sem caractere problematico passa intacto (nenhum id existente muda)
+    assert d("dt-gremah-pmam3-shadow") == "dt-gremah-pmam3-shadow"
+    assert d("swing") == "swing"
 
 
 def test_operacao_sem_nenhum_robo_de_day_trade_mostra_so_o_swing_e_o_form(
