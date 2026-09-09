@@ -6068,3 +6068,120 @@ def test_feed_vazio_SEM_falha_nao_gera_alarme(tmp_path, pregao_aberto):
             "SELECT message FROM live_events WHERE account_id = ? ORDER BY id", (acc.id,))]
 
     assert not any("nao conseguiu LER" in m or "voltou a ler" in m for m in eventos)
+
+
+# ---------- TP da corretora em posicao FATIADA (auditoria 2026-09-08) -------
+
+def test_alvo_atomico_recusa_TP_em_ordem_com_saida_fatiada():
+    """Regra ja existente, travada aqui porque ela passou a ter DOIS
+    chamadores (ver o teste seguinte): saida fatiada posiciona ordens-limite
+    REAIS de fechamento, uma por fatia, e um TP da corretora no MESMO nivel
+    fecharia a posicao INTEIRA junto -- em conta NETTING as duas somadas
+    passam do tamanho da posicao e ABREM o lado contrario."""
+    from live.intraday_runtime import IntradayLiveRuntime as RT
+
+    class _Ordem:
+        initial_target = 11.00
+        exit_split_unit = None
+
+    assert RT._alvo_atomico(_Ordem()) == 11.00
+    _Ordem.exit_split_unit = 1
+    assert RT._alvo_atomico(_Ordem()) is None
+
+
+def test_ensure_protecao_nao_registra_TP_em_posicao_fatiada():
+    """FALHA no codigo antigo -- buraco achado por auditoria em 2026-09-08.
+
+    `_alvo_atomico` recusa amarrar TP numa posicao com `exit_split_unit`, mas
+    so' e' consultado no INSTANTE de armar a ordem. `_ensure_protecao` roda a
+    cada passo sobre a posicao JA ABERTA e fazia `alvo_tp =
+    pos.current_target` sem condicao nenhuma: o TP recusado ao armar voltava
+    pela porta dos fundos no passo seguinte, desfazendo a protecao contra
+    INVERSAO em conta NETTING.
+
+    Afeta a `gremah` (`dividir_entrada=True` por default, opera acao B3 com
+    dinheiro real). E' o item 1.23 de LICOES_DE_PRODUCAO.md pelo outro lado:
+    la' era protecao registrada + ordem a mercado por cima; aqui e' protecao
+    registrada + ordem-limite de fatia por cima. Mesmo desfecho.
+
+    A regra agora mora em `_alvo_registravel`, chamada pelos DOIS caminhos.
+    """
+    from live.intraday_runtime import IntradayLiveRuntime as RT
+
+    # sem fatiamento: o TP vai, e o alvo continua sendo o da posicao
+    assert RT._alvo_registravel(None, 11.00) == 11.00
+    assert RT._alvo_registravel(0, 11.00) == 11.00
+    # com fatiamento: NUNCA registra TP na corretora
+    assert RT._alvo_registravel(1, 11.00) is None
+    assert RT._alvo_registravel(100, 11.00) is None
+
+
+def test_alvo_atomico_e_ensure_protecao_usam_A_MESMA_regra():
+    """O ponto do refactor: duas decisoes sobre 'este alvo pode virar TP da
+    corretora?' em lugares diferentes e' exatamente como o buraco apareceu --
+    uma foi escrita, a outra foi esquecida. Se alguem reintroduzir a regra
+    copiada num dos dois, este teste continua verde e nao protege nada; por
+    isso ele compara os DOIS caminhos sobre os mesmos valores."""
+    from live.intraday_runtime import IntradayLiveRuntime as RT
+
+    class _Ordem:
+        def __init__(self, split, target):
+            self.exit_split_unit = split
+            self.initial_target = target
+
+    for split in (None, 0, 1, 5):
+        for target in (None, 11.00):
+            assert RT._alvo_atomico(_Ordem(split, target)) == \
+                RT._alvo_registravel(split, target), (
+                    f"os dois caminhos divergiram em split={split!r} target={target!r}"
+                )
+
+
+def test_live_posicao_FATIADA_nunca_ganha_TP_da_corretora(tmp_path, pregao_aberto):
+    """FALHA no codigo antigo, e este e' o teste que importa (os tres acima
+    travam a regra; este trava o EFEITO na corretora).
+
+    Mesmo setup de `test_live_entrada_registra_protecao_sl_tp_na_corretora`,
+    so' que a estrategia declara `exit_split_unit` -- a posicao vai fechar
+    por ordens-limite REAIS, uma por fatia (`place_exit_limit`).
+
+    `_alvo_atomico` ja recusava o TP no instante de ARMAR a ordem. O buraco
+    (auditoria 2026-09-08) era o passo SEGUINTE: `_ensure_protecao` roda a
+    cada `run_once` sobre a posicao ja aberta e mandava
+    `target=pos.current_target` sem condicao nenhuma -- o TP recusado
+    voltava pela porta dos fundos. Com ele registrado, o TP da corretora
+    fecha a posicao INTEIRA no MESMO nivel em que a limite de UMA fatia
+    preenche; numa conta NETTING as duas somadas passam do tamanho da
+    posicao e ABREM o lado contrario.
+
+    O SL continua indo, sempre: fatia de saida so' existe no alvo."""
+    broker = _FakeMT5Broker()
+    script = {
+        0: [EnterLimit(side="long", limit_price=10.00, initial_stop=9.00,
+                       initial_target=11.00, quantity=2,
+                       exit_split_unit=1, exit_ttl_bars=5, reason="teste_fatiada")],
+    }
+    rt, feed = _runtime_live_scripted(tmp_path, broker, script)
+    rt.run_once(now=_agora("13:00:00"))
+    feed._barras.append(_bar("13:01", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:01:00"))
+    broker.posicao = {"side": "long", "price": 10.00, "quantity": 2, "ticket": 1,
+                      "sl": 0.0, "tp": 0.0}
+    feed._barras.append(_bar("13:02", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:02:00"))
+    assert rt.machine.position is not None, "a posicao fatiada precisa ter aberto"
+
+    # barra parada longe do alvo: `_ensure_protecao` roda, nenhuma fatia arma
+    feed._barras.append(_bar("13:03", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:03:00"))
+
+    assert broker.protecoes, "o STOP tem de ser registrado mesmo com saida fatiada"
+    ticket, side, stop, target = broker.protecoes[-1]
+    assert ticket == 1 and side == "long"
+    assert stop == pytest.approx(9.00), "o SL vai sempre -- fatia de saida so' existe no alvo"
+    assert target is None, (
+        "TP da corretora numa posicao com exit_split_unit fecharia a posicao "
+        "INTEIRA junto com a limite de UMA fatia -- em NETTING isso INVERTE o lado"
+    )
+    # e o que a corretora passa a ter registrado nao inventa TP nenhum
+    assert broker.posicao_sl_tp == (pytest.approx(9.00), pytest.approx(0.0))

@@ -2147,10 +2147,47 @@ class IntradayLiveRuntime:
         so' no fechamento da barra M1 seguinte.
 
         Regra por CAMPO DECLARADO de `EnterLimit`, nunca por nome de robo --
-        vale para qualquer estrategia, presente ou futura."""
-        if getattr(order, "exit_split_unit", None):
+        vale para qualquer estrategia, presente ou futura.
+
+        Delega a `_alvo_registravel`, que e' onde a regra mora de verdade
+        desde 2026-09-08: `_ensure_protecao` precisa da MESMA decisao sobre
+        uma posicao ja aberta, e ate' entao ela nao a aplicava -- ver a
+        docstring de la para o que isso custava."""
+        return IntradayLiveRuntime._alvo_registravel(
+            getattr(order, "exit_split_unit", None),
+            getattr(order, "initial_target", None),
+        )
+
+    @staticmethod
+    def _alvo_registravel(exit_split_unit, target) -> Optional[float]:
+        """A REGRA, num lugar so': o alvo pode ficar amarrado na CORRETORA
+        (TP), ou a maquina continua dona dele?
+
+        Existe porque a regra vivia dentro de `_alvo_atomico`, que so' e'
+        consultado no INSTANTE de armar a ordem. `_ensure_protecao` roda a
+        cada passo sobre a posicao JA ABERTA e registrava
+        `pos.current_target` incondicionalmente -- ou seja, o TP que
+        `_alvo_atomico` tinha recusado de proposito entrava pela porta dos
+        fundos no passo seguinte, desfazendo a protecao contra INVERSAO em
+        conta NETTING que aquela recusa existe para dar (dois fechamentos do
+        tamanho total: o TP da corretora fechando a posicao INTEIRA no mesmo
+        nivel em que a limite de UMA fatia preenche, e a soma passa do
+        tamanho da posicao e ABRE o lado contrario). Achado por auditoria em
+        2026-09-08, junto com o item 1.23 de `LICOES_DE_PRODUCAO.md`, que e'
+        o mesmo modo de falha pelo outro lado (protecao registrada + ordem a
+        mercado por cima).
+
+        Afeta quem declara `exit_split_unit` -- hoje a `gremah`
+        (`dividir_entrada=True` por default, opera acao B3 com dinheiro
+        real), nunca o WDO F1, que nao fatia saida.
+
+        `None` aqui NAO apaga um TP ja registrado: `_ensure_protecao` passa
+        `tp_atual` junto para `set_protection`, e `MT5Broker._niveis_
+        protecao` preserva o que a corretora tem (invariante 1 de la). O
+        efeito e' "nao registre TP", nao "remova o TP"."""
+        if exit_split_unit:
             return None
-        return getattr(order, "initial_target", None)
+        return target
 
     def _ensure_protecao(self, conn, account: AccountState, session: date) -> None:
         """Garante que toda posicao aberta deste robo tem SL (e TP, quando a
@@ -2199,7 +2236,13 @@ class IntradayLiveRuntime:
         tp_atual = float(real.get("tp") or 0.0)
         pos = self.machine.positions[0]
         alvo_sl = pos.current_stop
-        alvo_tp = pos.current_target
+        # MESMA regra de `_alvo_atomico` (ver `_alvo_registravel`): posicao
+        # com saida FATIADA nao pode ganhar TP da corretora, senao ele fecha
+        # a posicao inteira junto com a limite de uma fatia e, em NETTING,
+        # inverte o lado. Antes de 2026-09-08 esta linha era
+        # `alvo_tp = pos.current_target`, sem condicao nenhuma -- o TP que
+        # `_alvo_atomico` recusava ao ARMAR voltava aqui no passo seguinte.
+        alvo_tp = self._alvo_registravel(pos.exit_split_unit, pos.current_target)
 
         # Ja registrado com ESTE pedido e a corretora continua com os mesmos
         # niveis que ela mesma aceitou? Nada a fazer. Comparar o par
