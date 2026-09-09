@@ -1124,3 +1124,65 @@ def test_histerese_nao_conta_reancoragem_no_mesmo_nivel_como_abandono():
                                stop_ticks=16, reancora_min_ticks=1)
     assert _replay(strat, [5100.0, 5100.0]) == pytest.approx([5099.5, 5099.5])
     assert strat._state.nivel_abandonado is None
+
+
+# ---------- os MARCOS de escala da config de PRODUCAO (2026-09-09) ---------
+# Os testes de dimensionamento acima constroem o robo A MAO, so' com
+# `margin_per_contract_brl` -- eles cobrem o teto por MARGEM e passariam
+# verdes mesmo que o teto por RISCO sumisse da producao. O teto por risco
+# nao mora no motor (`machine._cap_capital_atual` so' olha margem): ele
+# existe SO' dentro de `_quantidade_da_entrada`, vindo de
+# `registry._KWARGS_PADRAO`. Apagar a linha `risco_pct_por_trade=0.01` de
+# la' devolveria a escala por margem -- 2 contratos com R$750 de caixa --
+# sem nenhuma falha na suite. Estes dois testes fecham esse buraco: eles
+# leem a config REAL de producao (`get_daytrade_robot`), nao uma montada
+# no teste.
+
+
+def _robo_de_producao():
+    from strategy.daytrade.registry import get_daytrade_robot
+
+    return get_daytrade_robot("wdo_grid_reload_maker")
+
+
+def test_producao_declara_o_teto_por_RISCO_e_nao_so_o_de_margem():
+    """O teto por risco e' o que impede a ruina por sequencia de stops
+    (item 3.9 de LICOES_DE_PRODUCAO.md, incidente do `CopaWin`: caixa de
+    R$3.000 a R$68,50 com margem/reserva funcionando exatamente como
+    desenhadas). Margem protege a CORRETORA de chamada de margem, nao o
+    dono. Se algum destes tres campos sumir do registry, o robo volta a
+    escalar so' por margem."""
+    strat = _robo_de_producao()
+    assert strat.risco_pct_por_trade == 0.01
+    assert strat.point_value_brl == 10.0
+    assert strat.stop_ticks == 16      # o risco em R$ por contrato depende dele
+    assert strat.margin_per_contract_brl == 150.0
+    assert strat.hard_cap_contratos == 5
+
+
+@pytest.mark.parametrize(
+    "caixa_brl, contratos, porque",
+    [
+        (150.0,    1, "margem crua -- piso de SOBREVIVENCIA, 1 contrato"),
+        (375.0,    1, "piso de PARTIDA do painel; risco ainda so' paga 1"),
+        (750.0,    1, "MARGEM ja' pagaria 2 (750 / 375); o RISCO segura em 1"),
+        (7_999.0,  1, "1% = R$79,99 < R$80 do stop de 1 contrato"),
+        (15_999.0, 1, "1% = R$159,99 < R$160 do stop de 2 contratos"),
+        (16_000.0, 2, "MARCO do 2o contrato: 1% = R$160 = 2 x R$80"),
+        (24_000.0, 3, "MARCO do 3o"),
+        (40_000.0, 5, "MARCO do 5o -- e' o hard cap regulatorio"),
+        (1_000_000.0, 5, "hard cap de 5 continua valendo por cima de tudo"),
+    ],
+)
+def test_marcos_de_escala_de_contrato_na_config_de_producao(caixa_brl, contratos, porque):
+    """A tabela de marcos que o dono precisa conseguir prever de cabeca.
+
+    Regra: um stop NUNCA pode consumir mais que 1% do caixa. O stop deste
+    robo e' fixo -- `16 ticks x 0,5 x R$10 = R$80` por contrato -- entao
+    cada contrato exige **R$8.000 de caixa**, e o teto vale
+    `min(margem, risco)`. O caixa e' recalculado a cada entrada
+    (`on_capital_update(initial_capital + realized_pnl)`), entao os mesmos
+    marcos valem DESCENDO: caixa abaixo de R$16.000 volta a 1 contrato."""
+    strat = _robo_de_producao()
+    strat.on_capital_update(caixa_brl)
+    assert strat._quantidade_da_entrada() == contratos, porque
