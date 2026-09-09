@@ -764,6 +764,83 @@ pendente já é cancelada antes desse ponto (`_resolve_live_split_exit`, ramo
 > recusa, cancela a proteção sozinha, ou executa as duas? E se as duas
 > executarem, o excedente vira zero ou vira lado contrário?
 
+### 1.24 "A corretora não confirmou" tratado como "a corretora não executou" — o robô seguiu se achando comprado depois de já ter sido zerado, e a ordem-limite órfã virou o segundo contrato
+
+Primeiro dia do `wdo_grid_reload_maker` ao vivo com `fatiar_saida_alvo=True` —
+a saída de lucro deixou de ser `tp` nativo e virou ordem-limite real parada no
+livro (a troca de MECANISMO do item 6.19). Conta NETTING, capital real R$375,
+1 contrato, WDO@. Sequência reconstruída do histórico de DEALS do terminal,
+todos com o magic do robô (862399285):
+
+| hora | evento | efeito na CORRETORA | o que o ROBÔ achava |
+|---|---|---|---|
+| 06:44:51 | BUY IN 1 @ 5113,0 (posição 5938815446) | long 1 | long 1 — correto |
+| 06:45:44 | arma limite de saída @ 5114,0 (ticket 5938817623) | long 1 + limite viva | idem |
+| 06:45:46 | manda fechamento A MERCADO (prazo `exit_ttl_bars=8` estourado) | — | — |
+| **06:45:48** | **corretora EXECUTA o fechamento @ 5113,5** | **zerado, +R$5,00** | **long 1** ← divergiu |
+| 06:46:11 | "reverte" para short: vende 1 @ 5113,5 | **abre short 1** | acha que está zerando |
+| **06:46:14** | **a limite órfã de 5114,0 preenche** | **short 2** | short 1 |
+| 06:53:16 | stop @ 5121,5 | fecha os 2 | — |
+
+A geometria estava certa (alvo 2 ticks, stop 16 ticks) e o sinal nunca errou.
+O que quebrou foi uma linha de resposta da API: o `order_send` do fechamento
+voltou com `retcode=TRADE_RETCODE_DONE` — **sucesso** — mas com `price=0.0` e
+`deal=0`. A proteção adicionada em 2026-08-28 (`MT5Broker._send`, o bloco "Gap
+fechado 2026-08-28") existe justamente para não inventar preço de execução a
+partir de resposta sem os campos preenchidos, e classificou aquilo como
+**REJECTED**. Rejeitado, para o robô, quer dizer "não aconteceu" — então ele
+seguiu se achando comprado depois de já ter sido zerado pela corretora.
+
+**A assinatura visível do erro**, e ela é reproduzível em qualquer conta
+netting: o `price_open` da posição virou **5113,75** — a média de 5113,5 e
+5114,0. Um preço FORA da grade de 0,5 do WDO, impossível para um preenchimento
+único. Preço de abertura que não existe na grade do instrumento é prova de que
+duas pernas viraram uma posição só.
+
+**O número.** A posição de 2 contratos morreu no stop: **−R$80,00** (−2,50 na
+fatia já fechada + −77,50 no stop). Resultado real do pregão: **−R$65,00**
+(+5,00 − 80,00 + 15,00 − 5,00).
+
+**Dano colateral, e este é o pior.** O diário do robô registrou o primeiro
+trade como **"+R$9,50 @ 5114,00"** — o alvo cheio, deslize zero. O real foi
+**+R$5,00 @ 5113,50**, metade, e saiu **A MERCADO**. O robô journaliza o preço
+que ELE acha que conseguiu, não o que a corretora executou, então o diário
+afirmou exatamente o contrário do que aconteceu — no evento que estava sendo
+vigiado, com a saída maker sob teste justamente para medir deslize (itens 4.8,
+4.15 e 6.19). Uma medição que o próprio instrumento inverte não é medição
+ruim: é medição ao contrário.
+
+> **Regra 1 — "não confirmou" e "não executou" são estados DIFERENTES, e
+> tratar o primeiro como o segundo é o que abre exposição dobrada.** Uma
+> resposta de SUCESSO com os campos de confirmação vazios significa RESPOSTA
+> INCOMPLETA, nunca ausência de execução. O caminho correto é ir perguntar à
+> corretora qual é a posição e quais são os deals reais — reconciliar — antes
+> de concluir qualquer coisa. Nenhuma decisão de exposição sai do conteúdo de
+> uma única resposta lida sozinha. É o item 1.6 ("não sei" nunca vira "não
+> há") aplicado ao ENVIO, e não à consulta: lá o perigo era inventar uma saída
+> que não houve; aqui é negar uma saída que houve.
+> **Regra 2 — toda ordem que o robô perde de vista continua VIVA no livro.**
+> Em conta NETTING, uma ordem-limite de SAÍDA órfã não é inofensiva: quando a
+> posição que ela deveria fechar já não existe, ela vira ENTRADA nova, no lado
+> contrário, sem stop e sem alvo. Antes de mandar qualquer ordem nova, cancele
+> o que ficou pendurado e reconcilie contra a lista de ordens vivas da
+> corretora (item 1.8, agora com o caso concreto que faltava).
+> **Regra 3 — proteção defensiva escrita para evitar um estado ruim pode
+> CRIAR outro, e o custo dela precisa ser medido junto.** A regra de
+> 2026-08-28 tinha objetivo correto (não inventar preço de execução), mas
+> ninguém mediu o que ela deixa para trás: uma visão de posição divergente da
+> corretora, que é o estado mais perigoso que existe para um robô que decide
+> sozinho. Uma proteção que ALTERA a visão de estado tem de vir acompanhada da
+> reconciliação; sem isso ela não remove o modo de falha, só troca de modo de
+> falha — e trocou "número errado no diário" por "2 contratos numa conta de 1".
+> **O padrão, pelo terceiro ângulo.** Junte este item ao 1.23 e ao incidente
+> da Parte 0: é sempre ordem que o robô não sabe que tem, em conta NETTING,
+> somando onde ele achava que ia zerar. Em 08-28 foram duas entradas dentro do
+> mesmo passo do laço; no 1.23 era a proteção registrada mais uma ordem própria
+> pelo mesmo fechamento; aqui é o fechamento executado que o robô negou mais a
+> limite de saída que ele esqueceu no livro. Três causas, um desfecho.
+> **Pergunte à plataforma nova:** perguntas 68, 69 e 70 da Parte 8.
+
 ---
 
 ## Parte 2 — Estado, reinício e duplicidade
@@ -4286,6 +4363,33 @@ dinheiro ou meses.
     prazo entre robôs, converta os dois para tempo de relógio MEDIDO no feed de
     destino e compare os números, nunca os literais. (6.20)
 
+68. Quando esta plataforma devolve **sucesso** num envio de ordem sem os
+    campos de confirmação preenchidos (preço executado, identificador do
+    negócio), o que aconteceu de VERDADE? Existe uma consulta que devolve o
+    estado REAL da posição e dos deals daquele request, e o robô a executa
+    ANTES de decidir qualquer coisa? "Não confirmou" e "não executou" são
+    estados diferentes, e o segundo nunca pode ser inferido do primeiro: aqui
+    a inferência custou um short de 2 contratos numa conta de 1 e um trade
+    registrado no diário com o sinal e o preço errados. A pergunta 32 (1.17)
+    pede a consulta de histórico; esta acrescenta QUANDO ela é obrigatória —
+    em toda resposta incompleta, antes da próxima decisão. (1.24, 1.6)
+69. Como listo TODAS as ordens vivas deste robô na corretora — e o robô
+    reconcilia essa lista contra o que ele acredita ter, a cada passo, ou só
+    na inicialização? A pergunta 7 (1.8) pergunta se dá para listar ao
+    INICIAR; esta pergunta se a reconciliação acontece no laço, que é onde a
+    ordem órfã nasce: uma limite de saída armada 4 segundos antes de a posição
+    morrer por outro caminho não aparece em nenhuma reconciliação de abertura
+    de sessão. Antes de enviar qualquer ordem nova, o pendurado é cancelado e
+    a lista é conferida. (1.24, 1.8)
+70. Nesta plataforma, uma ordem-limite de SAÍDA cuja posição já foi fechada
+    por outro caminho é cancelada sozinha pela corretora, ou fica viva e vira
+    posição NOVA no lado contrário quando preencher? Em conta netting a
+    resposta observada foi a segunda, e a assinatura dela é um `price_open`
+    fora da grade de preço do instrumento (a média das duas pernas) — vale
+    programar essa checagem como alarme, porque ela detecta o estado em uma
+    leitura. As perguntas 3 (1.4) e 61 (1.23) cobrem duas ordens que somam no
+    fechamento; esta cobre a ordem que sobrevive à posição. (1.24, 1.4)
+
 ---
 
 ## O resumo, se sobrar só um parágrafo
@@ -4388,5 +4492,14 @@ conta netting não zera — inverte o lado, o desfecho do incidente de
 2026-08-28 por outro caminho. Exposta era a `gremah` (`dividir_entrada=True`
 por padrão, ação B3, slot real ligado), mas os 5 pregões de log do slot real
 registram `entradas=0 saidas=0` em todos os passos: exposição de
-configuração, nunca exercitada (1.23). Mais o registro acumulado do projeto. Quando um item aqui contradisser o código, o código ganha — e este
+configuração, nunca exercitada (1.23). Mais 1 item em 2026-09-09, primeiro
+pregão da saída maker fatiada ao vivo e o terceiro ângulo do mesmo padrão de
+08-28: um fechamento a mercado que a corretora EXECUTOU voltou com sucesso mas
+sem preço nem deal, a proteção de 08-28 classificou como recusado, e o robô
+seguiu se achando comprado — reverteu para short em cima do zerado enquanto a
+ordem-limite de saída ficou órfã no livro e preencheu 3 segundos depois: short
+de 2 contratos numa conta de R$375 dimensionada para 1, `price_open` em
+5113,75 (fora da grade de 0,5 do WDO), stop de −R$80,00, pregão de −R$65,00, e
+o diário registrando o trade que estava sob medição como "+R$9,50 no alvo"
+quando o real foi +R$5,00 a mercado (1.24). Mais o registro acumulado do projeto. Quando um item aqui contradisser o código, o código ganha — e este
 arquivo está desatualizado.*
