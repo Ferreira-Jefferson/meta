@@ -109,6 +109,95 @@ estoura a RAM da maquina). Cada tarefa imprime a linha DELA assim que
 termina; as tabelas ordenadas vem no fim.
 
 Uso: `python -u scripts/daytrade/wdof1_deslize_alvo_is_oos_2026_09_08.py`
+
+## RESULTADO (2026-09-08) -- bateria de capital REAL, 14/14 celulas
+
+Colunas abreviadas; `s/trd` = pregoes SEM trade nenhum (leia esta antes do
+liquido -- item 6.15), `desl R$` = soma do deslize cobrado nas saidas por
+alvo.
+
+    IS (72 pregoes)              liquido R$   MaxDD R$ luc/DD   win%  trades  desl R$  s/trd  caixa_min
+    T2/S16 s/ deslize            347.548,50   2.547,50 136,43  94,2%   19893     0,00   0/72     370,00
+    T2/S16 desliz 0,5t           137.618,50   3.842,50  35,81  94,5%   19921  156.495   0/72     359,50
+    T2/S16 desliz 1,0t (PROD)      -242,50      405,00  -0,60  93,3%     165   770,00  71/72     132,50
+    T3/S16 desliz 1,0t (DONO)      -229,00      495,50  -0,46  88,0%     158   695,00  70/72     146,00
+    T4/S16 desliz 1,0t             -244,00      442,00  -0,55  83,3%     108   445,00  70/72     131,00
+    T6/S16 desliz 1,0t             -230,00      398,00  -0,58  72,5%      40   145,00  71/72     145,00
+    T2/S16 desliz 2,0t             -293,00      298,00  -0,98   0,0%      76   730,00  71/72      82,00
+
+    OOS (51 pregoes)             liquido R$   MaxDD R$ luc/DD   win%  trades  desl R$  s/trd  caixa_min
+    T2/S16 s/ deslize            143.214,50   2.540,00  56,38  94,5%    9635     0,00   0/51     290,00
+    T2/S16 desliz 0,5t            44.817,50   2.036,00  22,01  94,7%   10090   44.570   0/51     269,00
+    T2/S16 desliz 1,0t (PROD)      -273,50      578,00  -0,47  94,1%     407  1.915,00  49/51     101,50
+    T3/S16 desliz 1,0t (DONO)      -237,00    1.719,50  -0,14  89,2%    1784  7.955,00  37/51     121,00
+    T4/S16 desliz 1,0t             -278,50      504,00  -0,55  82,2%     107   440,00  49/51      96,50
+    T6/S16 desliz 1,0t             -279,00      319,50  -0,87  71,1%      38   135,00  50/51      96,00
+    T2/S16 desliz 2,0t             -258,50      263,50  -0,98   5,4%      37   340,00  50/51     116,50
+
+### Como ler
+
+Toda linha que cobra >=1,0 tick esta CENSURADA nas duas janelas (37 a 71
+pregoes sem trade, `caixa_min` abaixo da margem crua de R$150). O liquido
+delas mede o portao de capital, nao edge. As unicas linhas nao censuradas
+nas duas janelas sao as de 0 e 0,5 tick -- e sao fortemente positivas.
+
+### O veredito
+
+O win% NAO muda com o deslize (o gatilho continua no mesmo nivel, so' o
+preco de saida muda), entao o teste valido e' o win% de n grande contra o
+breakeven novo. Com stop de 16 ticks e corretagem de R$0,50:
+
+    deslize   ganho/vitoria   breakeven   win% T2 (n=9.635)   E[R$]/trade
+      0,0t        R$9,50        90,00%          94,5%            +4,27
+      0,5t        R$7,00        92,43%          94,5%            +1,91
+      0,905t      R$4,98        94,50%          94,5%             0,00   <- CRITICO
+      1,0t        R$4,50        95,00%          94,5%            -0,45
+      2,0t       -R$0,50       100,59%          94,5%            -5,18
+
+**T2/S16 NAO TEM EDGE ao deslize medido de 1,0 tick.** O breakeven de 95,00%
+fica FORA do IC95% do win% ([94,04% ; 94,96%]), acima dele (z = -2,15).
+
+**A compensacao do dono (T3: pedir 3 ticks para receber 2) nao resgata.** Ela
+devolve o payoff de R$9,50, mas o gatilho anda 1 tick junto e o win% cai
+para 89,9% (n=5.076) contra breakeven de 90,00% -- o breakeven cai DENTRO do
+IC ([89,07% ; 90,73%]). Sai de "negativo mensuravel" para "cara-ou-coroa em
+cima do zero" (E = -R$0,09/trade). E' a menos ruim das quatro geometrias com
+deslize cobrado (melhor lucro/DD, 4,4x mais trades antes de travar), e move
+o ponto critico de 0,905 para 0,979 tick -- melhora real e pequena. Afastar
+mais (T4, T6) piora monotonicamente: o win% cai mais rapido que o payoff
+sobe.
+
+### O que a rodada mudou de LUGAR na incerteza
+
+O win% esta medido com n de 5 digitos e IC de +-0,5pp. O deslize tem n=11,
+media 1,000 tick, desvio 0,447, IC95% (t, gl=10) = [0,700 ; 1,300] -- e esse
+intervalo ATRAVESSA o critico de 0,905. Ou seja: mais backtest nao move mais
+esta resposta. A medicao que decide e' acumular saidas por TP nativo no
+extrato da corretora (~40-50 levariam o IC do deslize para ~+-0,14 tick).
+
+### Duas verificacoes de que o motor cobra o que diz cobrar
+
+1. `desl R$ / saidas por alvo` da EXATO R$5,00 por saida a 1,0t e R$10,00 a
+   2,0t em toda celula de 1 contrato (1 tick = 0,5 pt x R$10/pt), e escala
+   com a quantidade onde o dimensionamento dinamico destrava contratos.
+2. A 2,0t o win% desaba para 0,0% (IS) e 5,4% (OOS) -- com alvo de 2 ticks e
+   deslize de 2 ticks o bruto por vitoria e' exatamente R$0,00 menos R$0,50
+   de corretagem, entao TEM de ser ~zero. Os 5,4% do OOS sao saidas em GAP,
+   onde `_exit_fill_price` da referencia melhor que o nivel antes de o
+   deslize entrar -- o mecanismo compoe certo.
+
+### A bateria de R$5.000 NAO rodou
+
+O processo foi MORTO pelo sistema operacional (exit 255, sem traceback e sem
+`MemoryError`) ao comecar a 2a bateria, com a maquina a 81% de RAM. As 14
+celulas acima sobreviveram porque cada tarefa imprime a linha DELA assim que
+termina. Para rodar so' o que falta, com menos pressao de memoria:
+
+    WDOF1_BATERIAS=folga WDOF1_WORKERS=2 python -u <este script>
+
+Ela nao muda o veredito (que sai do win% x breakeven, e o win% de T2/T3 ja
+esta medido sem censura nas linhas de 0/0,5 tick) -- serve para ler T4 e T6,
+que a R$375 morrem de caixa antes de mostrar geometria.
 """
 from __future__ import annotations
 
@@ -134,6 +223,25 @@ CAPITAL_REAL_BRL = 375.0
 #: carrega a fatia da janela em memoria (IS ~700 MB), e o gargalo aqui e' RAM,
 #: nao CPU.
 MAX_WORKERS = int(os.environ.get("WDOF1_WORKERS", "4"))
+
+#: Quais BATERIAS de capital rodar nesta invocacao -- `"real"`, `"folga"`, ou
+#: as duas (default). Existe porque a rodada de 2026-09-08 foi MORTA pelo
+#: sistema operacional (exit 255, sem traceback e sem `MemoryError`) ao
+#: comecar a 2a bateria, com a maquina a 81% de RAM: 4 processos segurando
+#: ~700 MB da fatia IS cada, mais duas rodadas da suite de testes em
+#: paralelo. As 14 celulas da bateria REAL sobreviveram porque cada tarefa
+#: imprime a linha DELA assim que termina (regra do repo) -- nada se perdeu
+#: do que ja tinha rodado.
+#:
+#: A licao que virou codigo: uma rodada de horas tem de poder ser retomada
+#: pelo pedaco que faltou, senao um kill no fim custa tudo de novo. Rode
+#: `WDOF1_BATERIAS=folga WDOF1_WORKERS=2 python -u <este script>` para so' a
+#: parte que falta, com menos pressao de memoria.
+BATERIAS_PEDIDAS = tuple(
+    b.strip().lower()
+    for b in os.environ.get("WDOF1_BATERIAS", "real,folga").split(",")
+    if b.strip()
+)
 
 CAMPOS_KWARGS = (
     "symbol", "tick_size", "level_spacing_ticks", "profit_ticks", "stop_ticks",
@@ -340,10 +448,20 @@ def main() -> None:
           f"R${CAPITAL_FOLGA_BRL:.2f} ({len(VARIANTES_FOLGA)} variantes), "
           f"x 2 janelas, {MAX_WORKERS} processos por batelada\n", flush=True)
 
-    baterias = (
-        (f"R${CAPITAL_REAL_BRL:.0f}", CAPITAL_REAL_BRL, VARIANTES),
-        (f"R${CAPITAL_FOLGA_BRL:.0f}", CAPITAL_FOLGA_BRL, VARIANTES_FOLGA),
+    todas = (
+        ("real", f"R${CAPITAL_REAL_BRL:.0f}", CAPITAL_REAL_BRL, VARIANTES),
+        ("folga", f"R${CAPITAL_FOLGA_BRL:.0f}", CAPITAL_FOLGA_BRL, VARIANTES_FOLGA),
     )
+    desconhecidas = set(BATERIAS_PEDIDAS) - {chave for chave, *_ in todas}
+    if desconhecidas:
+        raise SystemExit(
+            f"WDOF1_BATERIAS desconhecida(s): {sorted(desconhecidas)} -- "
+            f"use 'real', 'folga' ou 'real,folga'"
+        )
+    baterias = [(rotulo, cap, vs) for chave, rotulo, cap, vs in todas
+                if chave in BATERIAS_PEDIDAS]
+    if not baterias:
+        raise SystemExit("WDOF1_BATERIAS vazia -- nada a rodar")
     resultados: dict = {}
     t0 = time.perf_counter()
     total = sum(len(vs) * 2 for _n, _c, vs in baterias)
