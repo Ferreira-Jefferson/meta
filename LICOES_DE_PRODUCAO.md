@@ -629,6 +629,16 @@ tick, IS/OOS congelado, config de produção T2/S16 com histerese, base
 | backtest OOS (relógio de mercado) | 51 | 10 | 19 | 24 | 34 | 42 |
 | ao vivo 08/09 (relógio de parede, slot SOMBRA WDO@, conta 476, pregão inteiro, 173 envios) | 1 | 3 | 12 | 15 | 18 | 19 |
 
+**Nota de 2026-09-08, mais tarde (commit `4eb3e4a`):** as duas linhas de
+backtest desta tabela vêm do motor que ainda fechava o alvo maker de graça
+(item 4.8). No motor corrigido a MESMA config trava por capital em 71 de 72
+pregões (item 6.18), e a distribuição de cadência ficaria censurada junto —
+quem quase não opera não acumula rajada (a armadilha que o item 6.16 já
+nomeia). Isto **não afrouxa** a decisão de dois níveis: a linha do pregão AO
+VIVO (relógio de parede, 173 envios reais) não depende de motor nenhum, e a
+cadência que o teto precisa suportar é a do robô operando, não a do robô
+calado. É a tabela que fica datada, não o teto.
+
 1 dos 123 pregões (0,8%) passaria do teto antigo de 30; NENHUM passa de 50.
 (O slot REAL do mesmo dia, conta 474, deu máximo 64 — mas naquele pregão o
 feed tinha ficado cego 45 minutos e a histerese ainda não existia, as duas
@@ -1093,6 +1103,14 @@ o achado adicional é que isso também invalida a comparação IS/OOS nesse
 capital, não só o número isolado. Ver item 6.15 para os dois números e a
 regra de método.
 
+> **Nota de 2026-09-08, mais tarde no mesmo dia (commit `4eb3e4a`):** a
+> catraca continua valendo — é sobre CAPITAL e independe do custo — mas a
+> geometria citada aqui como "produção ATUAL" (T2/S16) foi condenada horas
+> depois, quando o motor passou a cobrar o deslize do alvo nativo: ela não
+> tem edge (item 6.18). No motor corrigido a catraca fecha MUITO mais cedo,
+> em 71 de 72 pregões do IS. O que este item afirma sobre o mecanismo segue
+> de pé; o rótulo "produção atual" na frente do T2/S16, não.
+
 ### 3.12 O % de risco não atravessa de um robô pro outro — o tipo de stop muda o que o % vira em contratos
 
 Pedido do dono depois do item 3.11: já que o CopaWin escala contratos com o
@@ -1368,7 +1386,7 @@ Antes de comparar simulado com real, olhe o volume que preencheu no nível na
 simulação. Um único negócio de 100 ações bastando para dar a ordem por
 preenchida é evidência fraquíssima de que a fila teria chegado.
 
-### 4.8 Alvo NATIVO amarrado na própria ordem (`sl`/`tp` atômico) também desliza — 8 de 8 saíram PIOR que o nível pedido, sempre contra a posição
+### 4.8 Alvo NATIVO amarrado na própria ordem (`sl`/`tp` atômico) também desliza — 10 de 11 saíram PIOR que o nível pedido, ZERO a favor; e o STOP, medido separado, anda na direção OPOSTA
 
 Primeira operação real do WDO F1 (`dt-wdo_grid_reload_maker-wdo@-live`, WDO@,
 2026-09-04): entrada preenchida a 5.150,000, alvo amarrado nativamente na
@@ -1398,6 +1416,46 @@ ticks. Três exemplos, nível pedido → preço executado: 5.112,500 → 5.112,0
 registrado, o bruto delas seria **+R$80,00**; foi **+R$35,00**. O deslize
 cobrou **R$45,00** — 56% do bruto dos trades vencedores do dia.
 
+**A população COMPLETA, no fim do mesmo 2026-09-08: n=11, e ela virou número
+no motor.** Reconstruídos os TRÊS pregões em que este robô já mandou ordem
+real (2026-08-28, 2026-09-04, 2026-09-08) a partir do histórico de DEALS e de
+ORDENS do terminal — não de `db/live.sqlite`, que **não serve para esta
+medição**: ali a ordem de saída grava `limit_price == avg_price` (o nível
+PEDIDO simplesmente some) e o rótulo `target` é INFERIDO pelo robô, o que dá
+19 saídas rotuladas "alvo" no dia contra as 8 que a corretora de fato executou
+por TP nativo (2,4x, item 4.15). O pareamento correto é outro: a ordem de
+ENTRADA carrega o `tp` no próprio request, e o deal de saída disparado por ele
+volta com `reason=5` e o nível no `comment` — `entry_order.tp == nível do
+comment` em 11 de 11 casos.
+
+| deslize | 0 tick | −1 tick | −2 ticks |
+|---|---|---|---|
+| n | 1 | 9 | 1 |
+
+Média **−1,000 tick**, mediana −1,0, desvio 0,447, mín −2,0, máx 0,0 — **10
+contra a posição, 1 neutro, ZERO a favor** (sob moeda justa, p ≈ 0,001). Em
+dinheiro: 11 ticks × R$5,00 = **R$55,00 de deslize**, contra um bruto teórico
+de R$95,00 se as 11 tivessem pago o nível pedido — **57,9% do bruto foi
+embora antes da corretagem**.
+
+**O STOP foi medido SEPARADO, e é por isso que ele não foi tocado.** Na mesma
+reconstrução: n=2 saídas por `sl` do robô (0 tick e **+1 tick A FAVOR**) mais
+3 saídas manuais por stop no mesmo contrato (0 tick nas 3) — **5 de 5 nunca
+executaram PIOR que o nível pedido**, direção oposta à do alvo. É consistente
+com o mecanismo: o stop vira ordem a mercado no toque (e já paga
+`slippage_ticks` no motor), o alvo é gatilho varrido. Somar os dois num
+"deslize de saída" único teria cobrado duas vezes de um e nada do outro.
+
+**Consequência de engenharia (commit `4eb3e4a`):** o motor passou a COBRAR
+esse tick. `IntradayCostModel.target_slippage_ticks` +
+`apply_deslize_alvo_nativo()`, aplicado em `_close_position` **só no alvo NÃO
+fatiado** — a saída fatiada continua a zero, porque ali existem ordens-limite
+reais no book, que de fato ficam resting. Ligado por default em `config_for`
+(item 3.8: parâmetro de segurança opcional é parâmetro desligado), que é o
+caminho de `run_live.py::build_intraday`, do painel e de todo backtest. **O
+que isso revelou sobre a geometria de produção está no item 6.18, e é o
+achado mais caro do projeto até aqui.**
+
 Duas coisas que o caso de n=1 não conseguia mostrar. Primeira: o deslize é
 **direcional**, não ruído em torno do nível — em 8 de 8 ele foi contra a
 posição, então nenhuma média o compensa. Segunda: ele muda o parâmetro de
@@ -1414,7 +1472,11 @@ que o alvo está escrito.
 > menos 10 saídas antes de aceitar qualquer alvo pequeno; o alvo mínimo viável
 > é o deslize observado mais o custo por ida-e-volta, nunca 1 tick. Com alvo
 > de 1 tick o deslize consome o lucro inteiro do trade antes da corretagem;
-> com 2 ticks, metade dele.
+> com 2 ticks, metade dele. **Meça o alvo e o stop SEPARADAMENTE** — aqui os
+> dois andaram em direções opostas (10 de 11 contra no alvo, 5 de 5 nunca pior
+> no stop), e um número médio de "deslize de saída" teria escondido as duas
+> coisas. E a fonte da medição é o histórico da CORRETORA, não o diário do
+> robô: o diário grava a intenção, e a intenção nunca desliza.
 > **Pergunte à plataforma nova:** o alvo/stop que ela amarra na posição fica
 > RESTING no livro como limite de verdade (entra na fila, só preenche naquele
 > preço ou melhor) ou é gatilho varrido a mercado no toque? A resposta muda se
@@ -1535,6 +1597,23 @@ vale para o capital de teste ATUAL.
 > ser medido e somado ao breakeven antes de decidir se o trailing vale a
 > pena.
 
+> **Nota de 2026-09-08 (commit `4eb3e4a`), sobre os números acima:** este item
+> foi medido no motor que fechava o alvo maker **de graça**, e a frase
+> "`target_fills_as_maker=True`, zero deslize" que aparece na descrição do
+> baseline era falsa na corretora — o alvo NÃO fatiado é o `tp` nativo, e ele
+> desliza 1 tick contra a posição (item 4.8). O motor agora cobra esse tick, e
+> com ele o baseline "R$23.954,00 no IS / R$4.592,00 na semana fresca" some:
+> T2/S16 não tem edge (item 6.18). **Duas coisas a preservar deste item mesmo
+> assim, e elas ficam MAIS fortes, não menos:** (1) a lição de método —
+> "trocar uma saída maker por uma saída a mercado muda o TIPO de execução, e o
+> custo entra no breakeven ANTES da comparação" — é exatamente o mesmo
+> mecanismo que derrubou o baseline; (2) a comparação trailing-vs-baseline
+> tinha um viés que agora é nomeável: ela cobrava do trailing um custo de
+> execução que NÃO cobrava do alvo estático. O veredito "4/4 zeraram" não muda
+> (win 13,6%–38,9% contra um breakeven que só SOBE quando o deslize é
+> cobrado — em dinheiro, de 90,00% para 95,00%, item 6.18), mas o baseline
+> contra o qual eles perderam também perde.
+
 ### 4.11 Um gate de atividade/liquidez pré-entrada que acelera o preenchimento não virou lucro melhor — medir velocidade não é medir P&L
 
 Testado no `WdoGridReloadMaker` (WDO F1,
@@ -1611,6 +1690,15 @@ mão.
 > separadamente, em pelo menos duas janelas de tamanhos diferentes? Se só
 > foi medido num eixo, ou só numa janela pequena, ele não está validado
 > pra produção.
+
+> **Nota de 2026-09-08 (commit `4eb3e4a`):** os líquidos deste item (baseline
+> R$23.954,00 no IS, R$4.632,00 na semana fresca, e os três limiares) saíram
+> do motor que fechava o alvo maker **de graça** — a geometria de fundo
+> (T2/S16) não tem edge quando o deslize do alvo nativo é cobrado (itens
+> 4.8/6.18). O veredito do item, que é RELATIVO (os três limiares pioram o
+> líquido e o lucro/DD monotonicamente, e o único ponto positivo veio da
+> amostra pequena), não depende do nível do baseline; os valores absolutos,
+> sim, e não devem ser citados como resultado do robô.
 
 ### 4.12 Contar preenchimento de conta SOMBRA junto com conta REAL inverte o veredito — o filtro por conta vem ANTES de qualquer soma
 
@@ -2523,6 +2611,15 @@ item 1.18) foi substituído por dois níveis —
 robô, config de produção) achou pior minuto legítimo de até 42 — acima do
 30 antigo e dentro do 120 atual. Ver item 1.22.
 
+**Nota de 2026-09-08, mais tarde (commit `4eb3e4a`):** a coluna `líquido R$`
+desta grade saiu do motor que fechava o alvo maker de graça (item 4.8) —
+nenhum daqueles valores descreve resultado real, e a geometria de fundo
+(T2/S16) não tem edge no motor corrigido (item 6.18). A escolha do parâmetro
+**não muda**, e a razão é o fato 3 acima: o critério foi CONTAGEM de travadas,
+não retorno. É o exemplo de por que escolher pelo critério certo protege a
+decisão de uma correção posterior no modelo de custo — se o critério tivesse
+sido "maior líquido", a grade inteira precisaria ser refeita agora.
+
 > **Regra:** re-medir um parâmetro de segurança numa base de dado corrigida
 > e obter o MESMO valor não é confirmação — é o ponto de partida de uma
 > segunda pergunta: quais casos mudaram de lado, e o critério de escolha
@@ -2908,6 +3005,16 @@ mínimo real (R$375,00, item 3.4/3.11) sobre a base de tick já corrigida
 | IS (72 pregões) | +344.855,00 | 94,2% | 19.835 | 0 | 5 |
 | OOS (51 pregões) | −76,00 | 50,0% | 2 | 50 | 1 |
 
+> **Nota de 2026-09-08, mais tarde no mesmo dia (commit `4eb3e4a`):** os dois
+> números desta tabela vieram do motor que fechava o alvo maker **de graça**.
+> Com o deslize do alvo nativo cobrado (item 4.8), a mesma config faz
+> **−R$242,50 no IS com 71 de 72 pregões sem trade** — a geometria T2/S16 não
+> tem edge (item 6.18). Isso **reforça** a regra deste item em vez de
+> contradizê-la: o "+344.855,00" era um número censurado ao contrário — não
+> pelo capital, pelo motor. E a leitura de método continua exata: nem o
+> +344.855,00 nem o −76,00 mediam edge, e ninguém saberia disso olhando o
+> líquido.
+
 À primeira vista, "degradou de +344 mil pra −76 fora da amostra" seria a
 leitura padrão de overfitting IS/OOS (item 6.4). É a leitura ERRADA aqui, por
 dois motivos que só aparecem nas colunas EXTRAS, não no líquido:
@@ -2999,6 +3106,19 @@ congeladas de `WDO_A_f1.parquet`:
 | OOS T4/S16 | **−270,00** | 75,0% | **40** | **50/51** | **105,00** |
 | OOS T5/S16 | 6.864,50 | 79,2% | 2.511 | **49/51** | 259,00 |
 
+> **Nota de 2026-09-08, mais tarde no mesmo dia (commit `4eb3e4a`):** esta
+> varredura inteira rodou no motor que fechava o alvo maker **de graça** —
+> ela mede a diferença ENTRE as geometrias corretamente (o penhasco de
+> censura é real e é o achado do item), mas o NÍVEL de todas as linhas está
+> inflado, e mais para os alvos pequenos: quanto menor o alvo, maior a fração
+> do bruto que o motor regalava. Com o deslize cobrado, T2/S16 vai a
+> −R$242,50 (IS) e −R$273,50 (OOS) e trava em 71/72 e 49/51 pregões; T4/S16 a
+> −R$244,00 com 70/72. Ou seja: as duas linhas "vencedoras" (T2 e T3) e as
+> duas "censuradas" (T4 e T5) acabam na mesma família de resultado, e o
+> ordenamento por `profit_ticks` que esta tabela sugere não é confiável. Ver
+> item 6.18 — inclusive para a razão de método: um ótimo que mora no ponto de
+> maior otimismo do simulador não é um ótimo.
+
 Entre T3 e T4 o número de trades não desce numa reta — desce um DEGRAU, de
 5-13 mil por janela para 40-72. E o caixa mínimo atingido nos dois T4 (R$124,50
 e R$105,00) cai ABAIXO da margem crua da corretora (R$150,00, item 3.3/3.4):
@@ -3080,6 +3200,17 @@ com esse stop). `zerou` nunca dispara — não é ruína, é a armadilha silenci
 do item 1.19/3.9: o caixa cai abaixo da margem crua de R$150 e nunca mais
 reabre.
 
+> **Nota de 2026-09-08, mais tarde no mesmo dia (commit `4eb3e4a`):** a escada
+> desta tabela rodou no motor que fechava o alvo maker de graça, então o
+> breakeven usado abaixo (80,0%) está SUBESTIMADO — com 1 tick de deslize
+> cobrado no alvo nativo (item 4.8), o T4 entrega 3 ticks líquidos e não 4, e
+> o breakeven verdadeiro é `16/19 = 84,2%`. O win% medido (76,5% / 75,0%)
+> ficou ainda MAIS abaixo dele, então o veredito do item — "é edge negativo
+> por trade, não undercapitalização" — só fica mais forte. O que mudou é o
+> alcance: pelo mesmo teste, **o T2 de PRODUÇÃO também está abaixo do
+> breakeven** quando o deslize entra (94,5% medido contra 95,00%), o que este
+> item não tinha como ver (item 6.18).
+
 O breakeven teórico de T4/S16 (`stop_ticks/(profit_ticks+stop_ticks)` =
 16/20 = 80,0%) já constava do item 6.16. O win% medido nas janelas IS/OOS
 daquele item foi 76,5% e 75,0% — **abaixo do breakeven nas duas.** T4 não é
@@ -3111,6 +3242,134 @@ prejuízo — não era a causa raiz.
 > perseguindo undercapitalização que não existe — o número que resolveria
 > em uma linha (win% vs breakeven) só aparece depois de já ter gastado a
 > escada inteira. (6.17, decorre de 6.16/pergunta 52)
+
+### 6.18 O motor dava o alvo de graça: a geometria de PRODUÇÃO não tem edge, e a varredura de 250 células que a escolheu estava medindo a lacuna do próprio simulador
+
+Este é o item mais caro do arquivo em resultado de pesquisa — não custou
+dinheiro num pregão, custou a validade de **toda** a calibração deste robô.
+
+Até 2026-09-08, `IntradaySessionMachine._close_position` fechava a saída por
+alvo maker EXATAMENTE no nível pedido, de graça
+(`target_fills_as_maker=True` ⇒ `exec_px = exit_ref_price`). O item 4.8 mediu
+no extrato que isso é falso: o alvo deste robô não é limite resting, é o `tp`
+NATIVO amarrado no request da entrada, e a corretora o varre a mercado —
+**10 de 11 saídas piores que o nível pedido, zero a favor, média −1,000
+tick**. O commit `4eb3e4a` fez o motor cobrar esse tick. O que apareceu
+embaixo são TRÊS achados distintos, e confundi-los é perder dois deles.
+
+Medido em `scripts/daytrade/wdof1_deslize_alvo_is_oos_2026_09_08.py`, config
+REAL de produção via `get_daytrade_robot("wdo_grid_reload_maker")` (o mesmo
+caminho de `run_live.py`), capital R$375,00, nas janelas congeladas de
+`WDO_A_f1.parquet` (IS: 72 pregões, 2026-02-27..2026-06-12; OOS: 51 pregões,
+2026-06-15..2026-08-25). A tabela do veredito usa o OOS:
+
+| geometria | ganho líq/vitória | breakeven | win% medido (n) | IC 95% | E[R$]/trade | z |
+|---|---|---|---|---|---|---|
+| T2/S16 **sem** deslize (motor antigo) | R$9,50 | 90,00% | 94,5% (9.635) | [94,04 ; 94,96] | +4,27 | +19,4 |
+| **T2/S16 com deslize 1t (PRODUÇÃO)** | **R$4,50** | **95,00%** | 94,5% (9.635) | [94,04 ; 94,96] | **−0,45** | **−2,15** |
+| T3/S16 sem deslize | R$14,50 | 85,50% | 89,9% (5.076) | [89,07 ; 90,73] | +4,40 | +10,4 |
+| T3/S16 com deslize (compensação do dono) | R$9,50 | **90,00%** | 89,9% (5.076) | [89,07 ; 90,73] | **−0,09** | −0,24 |
+
+**(a) O veredito: T2/S16 não tem edge.** Cobrar 1 tick corta o ganho por
+vitória de R$9,50 para R$4,50 e move o breakeven de 90,00% para **95,00%**. O
+win% medido do T2 é 94,5% sobre n=9.635, e o breakeven novo cai **FORA** do IC
+95% [94,04% ; 94,96%], **acima** dele — z = −2,15, expectativa −R$0,45 por
+trade. Não é empate nem "margem apertada": é negativo com significância
+estatística, pela mesma conta do item 6.17 (win% contra
+`stop/(profit+stop)`), só que agora com o breakeven no lugar certo.
+
+**(b) Compensar movendo o gatilho não resgata — leva a ZERO.** A ideia do
+dono, na hora: "sabendo que ele escorrega 1 ponto, pedir 1 ponto a mais para
+receber o pretendido". Testada literalmente (T3 pedindo 3 para receber 2). Ela
+devolve o payoff — R$9,50 líquidos por vitória, exatamente o do T2 sem
+deslize — mas **o gatilho anda 1 tick junto**: o preço precisa andar 3 ticks
+para disparar, contra 2. O win% cai de 94,5% para 89,9% e o breakeven cai para
+90,00% — agora **DENTRO** do IC [89,07 ; 90,73], z = −0,24: indistinguível de
+zero. A perda por trade melhora 80% (−R$0,672 → −R$0,133) e os trades sobem
+4,4×, e nenhuma das duas coisas cruza o zero. O mesmo desenho aparece no IS
+(T2 com deslize −R$242,50, T3 −R$229,00): a compensação melhora o número e não
+o sinal.
+
+> A regra portável: **compensar deslize deslocando o gatilho REDISTRIBUI a
+> geometria, não cria margem.** O que se ganha em payoff por vitória se perde
+> em probabilidade de tocar o alvo, e a troca é aproximadamente justa — porque
+> as duas pontas saem do MESMO preço. Só o P&L medido diz qual das duas perdas
+> é menor; raciocinar "peço 3 e recebo 2, logo é igual ao T2 de antes" está
+> errado por omitir o lado do gatilho.
+
+**(c) A lição de método, que é a que mais vale.** O motor **regalava um tick
+em cada saída por alvo: 18.742 saídas no IS + 9.104 no OOS, × R$5,00 =
+R$93.710,00 + R$45.520,00**. A mesma geometria, nas mesmas duas janelas, com
+o mesmo sinal e os mesmos instantes de entrada:
+
+| janela | T2/S16 sem deslize (motor antigo) | T2/S16 com deslize (motor honesto) |
+|---|---|---|
+| IS (72 pregões) | **+R$347.548,50** · 19.893 trades · 0/72 sem trade · caixa mín. R$370,00 | **−R$242,50** · 165 trades · **71/72 sem trade** · caixa mín. R$132,50 |
+| OOS (51 pregões) | **+R$143.214,50** · 9.635 trades · 0/51 sem trade · caixa mín. R$290,00 | **−R$273,50** · 407 trades · **49/51 sem trade** · caixa mín. R$101,50 |
+
+(O +R$135.618,50 da tabela do item 6.16 é a mesma linha OOS medida algumas
+horas antes, sem a histerese de nível do item 4.19 — a diferença entre as duas
+é irrelevante ao lado disto. O T3 da compensação do dono dá −R$229,00 no IS e
+−R$237,00 no OOS; o T4/S16, o "edge negativo" do item 6.17, dá −R$244,00 com
+win 83,3% em 70/72 pregões sem trade: **todas as linhas com deslize cobrado
+caem na mesma família de resultado**, a geometria vencedora e a já condenada.)
+
+E a varredura de **250 células de `profit_ticks × stop_ticks`** que ESCOLHEU
+esta geometria rodou nesse mesmo motor. Ela não escolheu a melhor geometria: escolheu **a que melhor explora a
+otimização que faltava no modelo de preenchimento** — quanto menor o alvo,
+maior a fração do trade que o simulador dava de graça.
+
+> **Um ótimo que mora exatamente no ponto onde o simulador é mais otimista que
+> a realidade não é um ótimo. É o sintoma de um modelo incompleto.**
+
+**Toda a calibração deste robô precisa ser refeita** — e "refeita" inclui os
+itens deste arquivo que citam número dele: 6.15, 6.16, 6.17, 4.10 e 4.11
+mediram no motor sem deslize (ver as notas datadas em cada um).
+
+**A armadilha de leitura, que estava dentro desta própria medição.** As duas
+linhas com deslize cobrado ficaram **CENSURADAS** pelos itens 6.15/6.16: 49 de
+51 e 37 de 51 pregões sem NENHUM trade no OOS (71 de 72 e 70 de 72 no IS),
+`qtd_max` preso em 1, caixa mínimo de R$101,50 e R$121,00 — abaixo da margem
+crua de R$150,00. Os líquidos de
+−R$273,50 e −R$237,00 **não medem edge**; medem o robô batendo no portão de
+capital e emudecendo. O que salva o teste é uma propriedade específica deste
+custo: **o deslize não muda QUAIS trades acontecem.** O gatilho continua no
+mesmo nível, o motor entra e sai nos mesmos instantes; só o PREÇO de saída
+muda. Logo o win% de 94,5% medido nas 9.635 operações da linha não-censurada
+(motor antigo) é o win% verdadeiro do T2, e o teste correto é ele contra o
+breakeven NOVO. É isso que permite condenar a geometria **sem depender de
+nenhum líquido censurado**.
+
+**Risco residual nomeado, e ele é o item 3.8 de novo:** o custo novo é ligado
+por `config_for` — a rota que produção, painel e backtest usam. **7 scripts
+antigos de laboratório montam o modelo de custo NA MÃO**, não passam por essa
+rota, e continuam com o alvo de graça (a lista está no `CLAUDE.md`). Rodar um
+deles hoje produz o número otimista outra vez, sem nenhum aviso. Um default
+seguro só protege quem passa pela porta onde ele mora; quem monta o objeto na
+mão herda o default do DATACLASSE, que aqui é `0.0` de propósito (para não
+cobrar em silêncio de um instrumento cuja economia ninguém mediu). As duas
+escolhas estão certas e mesmo assim deixam uma fresta — a defesa é a linha da
+tabela padrão carimbar a premissa (`desliz.alvo 1,0t`), porque duas linhas com
+o mesmo `líquido R$` e premissas de custo diferentes não são comparáveis e
+nada no número denuncia isso.
+
+> **Regra:** todo custo que o simulador não cobra é uma otimização disponível
+> para o otimizador, e ele vai achá-la. Antes de aceitar o vencedor de
+> qualquer varredura, pergunte onde o modelo é mais otimista que a realidade e
+> confira se o vencedor não mora exatamente ali — se o parâmetro campeão for o
+> que maximiza a exposição ao pedaço não-modelado (aqui: alvo mínimo, porque o
+> tick regalado é fração fixa de um bruto cada vez menor), o resultado é sobre
+> o motor, não sobre o mercado. Um custo que o motor não cobra também precisa
+> ser medido no EXTRATO, não estimado: a diferença entre 0 e 1 tick por saída
+> inverteu o sinal de uma estratégia inteira. E quando a correção censurar a
+> janela por capital (6.15/6.16), pergunte se o custo novo muda QUAIS trades
+> acontecem ou só o preço deles — se muda só o preço, o win% da linha
+> não-censurada continua válido e o veredito sai do par (win% × breakeven
+> novo), sem precisar do líquido.
+> **Pergunte à plataforma nova:** qual é a lista dos custos de execução que o
+> simulador dela cobra, e onde cada número dessa lista foi MEDIDO? Todo item
+> que não estiver na lista é um subsídio que a varredura de parâmetros vai
+> encontrar e explorar sozinha.
 
 ---
 
@@ -3343,10 +3602,16 @@ dinheiro ou meses.
 33. A ordem de take-profit fica RESTING no livro como limite de verdade
     (preço pedido ou melhor) ou é gatilho varrido a mercado no toque (pode
     deslizar)? Meça o preço EXECUTADO contra o nível PEDIDO em pelo menos 10
-    saídas antes de confiar em qualquer alvo pequeno — aqui foram 8 de 8 pior
-    que o nível, 7 delas por 1 tick, e o erro foi sempre CONTRA a posição, o
-    que faz um alvo de 2 ticks ser pago como 1. O alvo mínimo viável é o
-    deslize observado mais o custo por ida-e-volta. (4.8)
+    saídas antes de confiar em qualquer alvo pequeno — aqui foram **10 de 11
+    pior que o nível, ZERO a favor** (média −1,000 tick, desvio 0,447), e o
+    erro foi sempre CONTRA a posição, o que faz um alvo de 2 ticks ser pago
+    como 1. O alvo mínimo viável é o deslize observado mais o custo por
+    ida-e-volta. Meça o STOP **separadamente**: aqui ele andou na direção
+    OPOSTA (5 de 5 nunca pior que o nível pedido), e um único número de
+    "deslize de saída" teria escondido as duas coisas. A fonte da medição é o
+    histórico da CORRETORA (o par nível-PEDIDO × preço-EXECUTADO), nunca o
+    diário do robô — o diário grava a intenção, e intenção não desliza. (4.8,
+    4.15)
 34. A ordem-limite da plataforma reprecifica sozinha (ou permite configurar
     cancelamento por timeout / distância de deriva do preço) quando o
     nível armado não é tocado, ou ela fica parada indefinidamente esperando
@@ -3563,6 +3828,26 @@ dinheiro ou meses.
     disjuntor de patologia tem de contar TENTATIVAS, não envios executados,
     senão o próprio teto operacional o mantém sempre abaixo do gatilho.
     (1.22)
+59. Qual é a LISTA dos custos de execução que o simulador desta plataforma
+    cobra — e, para cada item da lista, o número saiu de uma MEDIÇÃO no
+    extrato ou de uma suposição? Tudo que não estiver na lista é um subsídio
+    silencioso, e uma varredura de parâmetros vai encontrá-lo e explorá-lo
+    sozinha: aqui o motor entregava a saída por alvo EXATAMENTE no nível
+    pedido, e por isso a varredura de 250 células escolheu o menor alvo
+    possível — que é onde o tick regalado é a maior fração do bruto. Antes de
+    aceitar qualquer vencedor de varredura, pergunte **onde este simulador é
+    mais otimista que a realidade** e confira se o vencedor não mora
+    exatamente ali. O sintoma é um ótimo colado na borda de um parâmetro cujo
+    custo dominante o modelo não cobra. (6.18, 4.8)
+60. Quando um custo novo é adicionado ao simulador e a janela passa a ficar
+    CENSURADA por capital (6.15/6.16), esse custo muda **quais** trades
+    acontecem ou só o **preço** deles? Se muda só o preço — como um deslize
+    de saída, que não move o gatilho —, o win% medido na linha não-censurada
+    continua válido, e o veredito sai do par (win% observado × breakeven
+    RECALCULADO com o custo novo), sem depender de nenhum líquido. Sem essa
+    distinção, uma correção de modelo que censura a janela vira "não dá pra
+    concluir nada" quando na verdade ela permite concluir tudo. (6.18,
+    6.15, 6.17)
 
 ---
 
@@ -3579,6 +3864,15 @@ retenção fora da amostra, e morreu no primeiro dia sem nunca ter errado um
 sinal. O robô seguinte também não errou sinal nenhum: no mesmo pregão em que o
 gêmeo em sombra fez +R$171,00, ele fez −R$116,00 — e a diferença inteira era
 execução.
+
+E há um sexto lugar, que é o mais difícil de ver porque não aparece em lugar
+nenhum: **o custo que o simulador não cobra.** Um tick de deslize na saída por
+alvo — R$5,00 por trade, medido no extrato — separava **+R$347.548,50** de
+**−R$242,50** na MESMA geometria, na mesma janela, com os mesmos trades. A
+varredura de 250 células que escolheu essa geometria estava, sem que ninguém
+percebesse, procurando o ponto onde o motor era mais generoso.
+**Um ótimo que mora exatamente onde o simulador é mais otimista que a
+realidade não é um ótimo: é o sintoma de um modelo incompleto.**
 
 ---
 
@@ -3636,5 +3930,17 @@ terminal cegou por 44,8 minutos sem levantar erro nenhum — lista vazia em 538
 passos seguidos e depois 13.644 barras de uma vez, com o mercado negociando o
 tempo todo e o slot SOMBRA congelando no mesmo tick ao milissegundo — e o freio
 que existia media a idade do PROCESSO, não a do DADO, então não viu nada (5.17).
-Mais o registro acumulado do projeto. Quando um item aqui contradisser o código, o código ganha — e este
+Mais 1 item e 1 extensão no fim do mesmo 2026-09-08, o achado mais caro do
+arquivo em resultado de pesquisa: o item 4.8 saiu de n=8 (um pregão) para
+**n=11, a população COMPLETA** de operação real deste robô — média −1,000
+tick, desvio 0,447, **10 contra e ZERO a favor**, R$55,00 sobre R$95,00 de
+bruto teórico (57,9%) — com o STOP medido em separado andando na direção
+oposta (5 de 5 nunca pior que o pedido); e o motor passou a COBRAR esse tick
+(commit `4eb3e4a`), o que derrubou a geometria de PRODUÇÃO: T2/S16 tem
+breakeven de 95,00% contra win% medido de 94,5% (IC 95% [94,04 ; 94,96],
+z = −2,15) — **não tem edge**, e a compensação intuitiva de pedir 1 tick a
+mais leva a zero, não a lucro, porque o gatilho anda junto. O motor regalava
+R$93.710,00 no IS e R$45.520,00 no OOS, e a varredura de 250 células que
+escolheu essa geometria rodou nele: toda a calibração deste robô precisa ser
+refeita (6.18). Mais o registro acumulado do projeto. Quando um item aqui contradisser o código, o código ganha — e este
 arquivo está desatualizado.*
