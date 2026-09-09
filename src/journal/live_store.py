@@ -1679,3 +1679,125 @@ def daytrade_order_events_on(conn: sqlite3.Connection, account_id: int, day: str
             "numero_ordem": payload.get("numero_ordem"),
         })
     return out
+
+
+def daytrade_position_history(conn: sqlite3.Connection, account_id: int,
+                              limit: int = 200) -> list[dict]:
+    """Uma linha por POSIÇÃO (rodada) do day trade desta conta, da mais
+    recente pra trás -- fonte do cartão "Posições" do painel de `/operacao`.
+
+    Existe porque o cartão mostrava só `account.positions`, que é o que está
+    aberto AGORA: fechou, sumiu da tela (queixa do dono, 2026-09-09). O
+    histórico de rodadas já estava no diário desde 2026-08-24 (`numero_ordem`
+    marca a rodada: posicionada -> [top-up(s)] -> saída), só nunca tinha sido
+    lido como tabela -- reconstruir aqui é o que evita criar uma tabela nova
+    e um segundo lugar pra verdade sair de sincronia.
+
+    A CHAVE da rodada é `(sessão, numero_ordem)`, o mesmo par de
+    `daytrade_exit_events`/`_resultado_dia_e_acumulado`: `trade_seq` só
+    avança dentro do pregão, então o número sozinho não identifica nada.
+    Evento sem `numero_ordem` (payload anterior à numeração) vira uma rodada
+    PRÓPRIA por linha, pelo mesmo motivo documentado lá -- sem o número não
+    há como afirmar que duas linhas são a mesma tentativa, e juntá-las
+    inventaria um trade que talvez não tenha existido.
+
+    FECHADA x ABERTA não se decide comparando quantidades: `_on_closed_partial`
+    grava `quantidade_restante` e `_on_closed` não, e essa ausência é o
+    único sinal que vale também para os eventos legados (que não gravavam
+    `quantity` na saída). Uma rodada só é dada por fechada quando aparece uma
+    saída SEM `quantidade_restante`.
+
+    Os preços saem do payload, nunca do texto da mensagem (mesma cautela de
+    `daytrade_order_events_on`): `entrada` prefere o `entry_price` da saída
+    (preço médio que a máquina calculou pra posição inteira) e cai pra média
+    ponderada dos fills quando a rodada ainda está aberta; `stop`/`alvo`
+    preferem o valor do FECHO (o stop reancora no fill real, então o da
+    entrada pode estar velho) e caem pro declarado na entrada."""
+    rows = conn.execute(
+        """SELECT id, ts, payload FROM live_events
+           WHERE account_id = ? AND source = 'daytrade'
+           ORDER BY ts, id""",
+        (account_id,),
+    ).fetchall()
+    rodadas: dict[tuple, dict] = {}
+    ordem: list[tuple] = []
+    for row in rows:
+        payload = _loads(row["payload"])
+        saida = payload.get("pnl_brl") is not None
+        entrada = payload.get("tipo") == "preenchida"
+        if not (saida or entrada):
+            continue
+        sessao = payload.get("sessao") or row["ts"][:10]
+        numero = payload.get("numero_ordem")
+        chave = (sessao, numero if numero is not None else f"legado-{row['id']}")
+        r = rodadas.get(chave)
+        if r is None:
+            r = {"sessao": sessao, "numero": numero, "lado": payload.get("side"),
+                 "qtd": 0, "entrada": None, "alvo": None, "stop": None,
+                 "saida": None, "motivo": None, "pnl_brl": None,
+                 "duracao_s": None, "fatias": 0, "aberta": True,
+                 # Capital comprometido AGORA -- preenchido so' pra rodada
+                 # aberta, por `IntradayLiveRuntime.status`, que e' quem tem a
+                 # posicao viva em maos. Fechada, o capital ja' voltou pro
+                 # caixa e o numero honesto e' `None`.
+                 "valor": None,
+                 "hora_entrada": None, "hora_saida": None,
+                 "_soma_entrada": 0.0, "_soma_saida": 0.0, "_peso_saida": 0.0}
+            rodadas[chave] = r
+            ordem.append(chave)
+        if r["lado"] is None:
+            r["lado"] = payload.get("side")
+        if entrada:
+            # Top-up entra aqui de novo com a fatia DELE: somar preço×quantidade
+            # é o que faz a média ponderada bater com o preço médio da máquina
+            # enquanto a rodada ainda não fechou (fechada, o `entry_price` da
+            # saída manda -- ver a docstring).
+            qtd = int(payload.get("quantity") or 0)
+            preco = payload.get("price")
+            if qtd and preco is not None:
+                r["qtd"] += qtd
+                r["_soma_entrada"] += float(preco) * qtd
+            if payload.get("stop") is not None:
+                r["stop"] = float(payload["stop"])
+            if payload.get("target") is not None:
+                r["alvo"] = float(payload["target"])
+            if r["hora_entrada"] is None:
+                r["hora_entrada"] = row["ts"]
+        if saida:
+            r["fatias"] += 1
+            r["pnl_brl"] = (r["pnl_brl"] or 0.0) + float(payload["pnl_brl"])
+            r["motivo"] = payload.get("exit_reason") or r["motivo"]
+            r["hora_saida"] = row["ts"]
+            if payload.get("duracao_s") is not None:
+                r["duracao_s"] = float(payload["duracao_s"])
+            if payload.get("entry_price") is not None:
+                r["entrada"] = float(payload["entry_price"])
+            # Peso 1 quando a saída não diz a quantidade (payload anterior a
+            # 2026-09-09): sem isso a fatia legada não entraria na média e o
+            # preço de saída da rodada apareceria vazio mesmo existindo.
+            preco_saida = payload.get("exit_price")
+            if preco_saida is not None:
+                peso = float(payload.get("quantity") or 1)
+                r["_soma_saida"] += float(preco_saida) * peso
+                r["_peso_saida"] += peso
+            if payload.get("stop") is not None:
+                r["stop"] = float(payload["stop"])
+            if payload.get("alvo_declarado") is not None:
+                r["alvo"] = float(payload["alvo_declarado"])
+            if "quantidade_restante" not in payload:
+                r["aberta"] = False
+    out = []
+    for chave in reversed(ordem):
+        r = rodadas[chave]
+        if r["entrada"] is None and r["qtd"]:
+            r["entrada"] = round(r["_soma_entrada"] / r["qtd"], 4)
+        if r["_peso_saida"]:
+            r["saida"] = round(r["_soma_saida"] / r["_peso_saida"], 4)
+        if r["pnl_brl"] is not None:
+            r["pnl_brl"] = round(r["pnl_brl"], 2)
+        for descartavel in ("_soma_entrada", "_soma_saida", "_peso_saida"):
+            r.pop(descartavel)
+        out.append(r)
+        if len(out) >= limit:
+            break
+    return out

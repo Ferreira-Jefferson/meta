@@ -1601,6 +1601,30 @@
   font-family: var(--font-serif);
 }
 
+/* Resultado de uma rodada fechada: verde/vermelho do resto do painel. So' a
+   coluna de RESULTADO ganha cor -- colorir a linha inteira faria o preco de
+   entrada competir com o placar pela mesma leitura. */
+.ops-table tbody td.ganho { color: var(--accent-green); }
+.ops-table tbody td.perda { color: var(--accent-red); }
+
+/* Historico de rodadas do day trade (`Posicoes` em /operacao). Tabela larga
+   (12 colunas: os 4 precos + valor + motivo + duracao + placar) -- rola por dentro em
+   tela estreita em vez de espremer coluna, que e' o que tornaria os precos
+   ilegiveis justamente onde eles sao o dado. */
+.ops-table-rodadas { min-width: 60rem; }
+.ops-sub-body:has(> .ops-table-rodadas) { overflow-x: auto; }
+/* A rodada AINDA ABERTA e' a unica linha que ainda pode mudar: barra ambar a
+   esquerda, mesma marca de "isto esta' vivo" usada em `.ctx-row`. */
+.ops-table-rodadas tbody tr.rodada-viva td:first-child {
+  box-shadow: inset 2px 0 0 var(--accent-amber);
+}
+.rodada-status {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: var(--fs-metadata);
+  color: var(--accent-amber);
+}
+
 /* `.empty` global reserva 60vh — desenhado para ser a pagina inteira. Dentro
    de um cartao de slot isso viraria um vazio de meia tela POR ROBO, com dois
    cartoes na pagina; aqui o estado vazio e' so uma nota, nao um destino. */

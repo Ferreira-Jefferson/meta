@@ -2978,6 +2978,236 @@ def test_saida_sem_numero_de_rodada_ainda_conta_no_ganho(tmp_path):
     assert r["ganhos_dia"] == pytest.approx(3.95, abs=0.01)  # 1.985 + 0.9845*2
 
 
+# ---------- historico de posicoes no painel (2026-09-09) --------------------
+
+
+def test_historico_de_posicoes_traz_rodada_fechada_e_a_que_ainda_esta_aberta(
+    tmp_path, pregao_aberto,
+):
+    """O cartao "Posicoes" de `/operacao` mostrava so' `account.positions` --
+    a foto do que esta' aberto NESTE segundo. Queixa do dono (2026-09-09):
+    a posicao fechava e sumia da tela inteira, entao "o que esse robo fez
+    hoje" so' tinha resposta lendo o console linha a linha.
+
+    `status()["posicoes_historico"]` e' a lista de RODADAS reconstruida do
+    proprio diario (`store.daytrade_position_history`) -- as fechadas com os
+    quatro precos que decidem o trade (entrada, alvo, stop, saida) mais o
+    resultado, e a aberta ainda sem saida. Roteiro: uma rodada que fecha no
+    alvo e uma segunda que preenche e fica aberta no fim."""
+    barras = [
+        _bar("13:00:00", 10.00, 10.00, 10.00, 10.00),  # abertura: posiciona a 1a (long)
+        _bar("13:00:20", 10.00, 10.00, 9.79, 9.85),    # toca o nivel long (9.80) -- entra #01
+        _bar("13:00:40", 9.85, 9.91, 9.85, 9.90),      # toca o alvo (9.90) -- fecha #01
+        _bar("13:01:00", 9.90, 9.90, 9.79, 9.85),      # repete LONG e preenche #02
+        _bar("13:01:20", 9.85, 9.86, 9.85, 9.86),      # #02 continua ABERTA
+    ]
+    rt, _feed = _runtime(tmp_path, barras)
+    rt.run_once(now=_agora("13:01:25"))
+
+    hist = rt.status()["posicoes_historico"]
+    assert len(hist) == 2
+    # mais recente PRIMEIRO -- a lista e' lida de cima pra baixo no painel
+    aberta, fechada = hist
+
+    assert fechada["numero"] == 1
+    assert fechada["aberta"] is False
+    assert fechada["lado"] == "long"
+    assert fechada["motivo"] == "target"
+    assert fechada["entrada"] == pytest.approx(9.80)
+    assert fechada["saida"] == pytest.approx(9.90)
+    # Alvo e stop tem de estar na linha: sao os dois numeros que explicam por
+    # que a rodada terminou onde terminou, e nenhum deles aparecia no painel.
+    assert fechada["alvo"] == pytest.approx(9.90)
+    assert fechada["stop"] is not None
+    assert fechada["pnl_brl"] == pytest.approx(10.0)
+    assert fechada["duracao_s"] is not None
+
+    assert aberta["numero"] == 2
+    assert aberta["aberta"] is True
+    assert aberta["saida"] is None
+    # Posicao aberta NAO tem resultado: marcar a mercado exigiria preco de
+    # agora, e `status()` e' proibido de tocar na corretora.
+    assert aberta["pnl_brl"] is None
+    assert aberta["qtd"] > 0
+    assert aberta["entrada"] is not None
+
+
+def test_stop_da_rodada_aberta_vem_da_posicao_viva_nao_do_diario(tmp_path, pregao_aberto):
+    """O stop reancora no fill REAL depois da entrada (commit 2529e38), entao
+    o numero logado no evento de entrada pode ja' nao ser o que vale. A linha
+    da rodada ABERTA tem de mostrar o stop da posicao viva -- senao a mesma
+    posicao apareceria com dois numeros diferentes em dois cartoes da mesma
+    tela, e o errado seria o que o dono le' primeiro."""
+    barras = [
+        _bar("13:00", 10.00, 10.00, 10.00, 10.00),
+        _bar("13:01", 10.00, 10.00, 9.79, 9.85),  # entra e fica aberta
+    ]
+    rt, _feed = _runtime(tmp_path, barras)
+    rt.run_once(now=_agora("13:02:00"))
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        pos = acc.positions[SYMBOL]
+        pos.current_stop = 1.2345  # valor que NUNCA foi gravado em evento nenhum
+        store.upsert_position(conn, acc.id, pos)
+
+    hist = rt.status()["posicoes_historico"]
+    assert hist[0]["aberta"] is True
+    assert hist[0]["stop"] == pytest.approx(1.2345)
+
+
+def test_posicao_aberta_que_o_diario_nao_explica_ainda_aparece_na_lista(tmp_path):
+    """A lista de rodadas e' reconstruida do DIARIO, mas quem manda sobre o
+    que esta' aberto e' `live_positions`. Uma posicao viva sem evento de
+    entrada correspondente (gravada por versao anterior, adotada da corretora,
+    ou evento perdido num restart) nao pode sumir da tela -- sumir e' o
+    sintoma exato que esta lista existe pra corrigir.
+
+    Cobre tambem o bug de sinal de 2026-08-31 pelo lado do runtime: `valor`
+    sai de `market_value`, que e' positivo em SHORT (a quantidade negativa
+    marca o lado, nao o sinal do valor)."""
+    barras = [_bar("13:00", 10.00, 10.00, 10.00, 10.00)]
+    rt, _feed = _runtime(tmp_path, barras)
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        store.upsert_position(conn, acc.id, LivePosition(
+            ticker=SYMBOL, quantity=-100, entry_date=date(2026, 8, 31),
+            entry_price=9.80, capital_allocated=980.0, current_stop=10.20,
+            metadata={"side": "short", "target": 9.70},
+        ))
+
+    hist = rt.status()["posicoes_historico"]
+
+    assert len(hist) == 1
+    linha = hist[0]
+    assert linha["aberta"] is True
+    assert linha["numero"] is None      # o diario nao tem rodada pra numerar
+    assert linha["lado"] == "short"
+    assert linha["qtd"] == 100          # sem sinal: a coluna Lado ja' diz o lado
+    assert linha["entrada"] == pytest.approx(9.80)
+    assert linha["stop"] == pytest.approx(10.20)
+    assert linha["valor"] == pytest.approx(980.0)   # POSITIVO em short
+    assert linha["pnl_brl"] is None
+
+
+def test_historico_de_posicoes_junta_fatias_da_mesma_rodada_e_separa_legado(tmp_path):
+    """Tres casos que o painel encontra no diario REAL de uma conta antiga,
+    contra o sqlite direto (sem rodar o robo):
+
+    1. saida FATIADA (`_on_closed_partial` grava `quantidade_restante`, o
+       fechamento final nao) -- e' UMA rodada, com o preco de saida sendo a
+       media ponderada das fatias e `fatias=2` para o painel avisar disso;
+    2. rodada aberta que so' tem entrada -- `aberta=True`, sem resultado;
+    3. saida LEGADA sem `numero_ordem` e sem `quantity` (payload anterior a
+       essas colunas) -- vira uma rodada propria, e o preco de saida ainda
+       aparece (peso 1) em vez de ficar vazio.
+
+    A chave e' `(sessao, numero_ordem)`, nunca o numero sozinho: `trade_seq`
+    so' avanca dentro do pregao, entao a rodada #01 de ontem e a #01 de hoje
+    sao duas."""
+    import json
+
+    with store.live_journal(tmp_path / "live.sqlite") as conn:
+        cur = conn.execute(
+            "INSERT INTO live_accounts (name, mode, initial_capital, cash, symbol) "
+            "VALUES ('conta-hist', 'mt5', 375.0, 375.0, 'WDO@')"
+        )
+        acc_id = cur.lastrowid
+        hoje = "2026-09-09"
+
+        def ev(ts, payload):
+            conn.execute(
+                "INSERT INTO live_events (account_id, ts, level, source, message, payload) "
+                "VALUES (?, ?, 'info', 'daytrade', 'x', ?)",
+                (acc_id, ts, json.dumps(payload)),
+            )
+
+        # (1) rodada #01: entrada de 2 contratos, sai em 2 fatias (5133 e 5131)
+        ev(f"{hoje} 10:00:00", {"numero_ordem": 1, "side": "short", "tipo": "preenchida",
+                                "quantity": 2, "price": 5132.0, "stop": 5148.0,
+                                "target": 5130.0, "sessao": hoje})
+        ev(f"{hoje} 10:01:00", {"numero_ordem": 1, "side": "short", "exit_reason": "target",
+                                "pnl_brl": -10.0, "quantity": 1, "entry_price": 5132.0,
+                                "exit_price": 5133.0, "quantidade_restante": 1,
+                                "sessao": hoje})
+        ev(f"{hoje} 10:02:00", {"numero_ordem": 1, "side": "short", "exit_reason": "target",
+                                "pnl_brl": 10.0, "quantity": 1, "entry_price": 5132.0,
+                                "exit_price": 5131.0, "stop": 5140.0, "duracao_s": 120.0,
+                                "sessao": hoje})
+        # (2) rodada #02: so' entrada -- ainda aberta
+        ev(f"{hoje} 10:05:00", {"numero_ordem": 2, "side": "long", "tipo": "preenchida",
+                                "quantity": 1, "price": 5120.0, "stop": 5104.0,
+                                "target": 5122.0, "sessao": hoje})
+        # (3) saida legada: sem numero_ordem, sem quantity, sem sessao
+        conn.execute(
+            "INSERT INTO live_events (account_id, ts, level, source, message, payload) "
+            "VALUES (?, ?, 'info', 'daytrade', 'x', ?)",
+            (acc_id, f"{hoje} 10:06:00",
+             '{"exit_reason": "stop", "pnl_brl": -8.5, "exit_price": 5110.0}'),
+        )
+
+        hist = store.daytrade_position_history(conn, acc_id)
+
+    assert len(hist) == 3
+    legado, aberta, fatiada = hist
+
+    assert fatiada["numero"] == 1
+    assert fatiada["aberta"] is False
+    assert fatiada["fatias"] == 2
+    assert fatiada["qtd"] == 2
+    assert fatiada["saida"] == pytest.approx(5132.0)  # media de 5133 e 5131
+    assert fatiada["pnl_brl"] == pytest.approx(0.0)   # -10 + 10
+    # stop do FECHO (5140) manda sobre o da entrada (5148): e' o que valia.
+    assert fatiada["stop"] == pytest.approx(5140.0)
+    assert fatiada["alvo"] == pytest.approx(5130.0)
+
+    assert aberta["numero"] == 2
+    assert aberta["aberta"] is True
+    assert aberta["saida"] is None
+    assert aberta["entrada"] == pytest.approx(5120.0)
+    assert aberta["stop"] == pytest.approx(5104.0)
+
+    # Sem `numero_ordem` a linha vira rodada PROPRIA (nunca fundida com a #02
+    # que estava aberta), e o preco de saida aparece mesmo sem `quantity`.
+    assert legado["numero"] is None
+    assert legado["aberta"] is False
+    assert legado["saida"] == pytest.approx(5110.0)
+    assert legado["pnl_brl"] == pytest.approx(-8.5)
+
+
+def test_mesmo_numero_de_rodada_em_pregoes_diferentes_sao_duas_posicoes(tmp_path):
+    """`trade_seq` so' avanca DENTRO do pregao -- a rodada #01 de ontem e a
+    #01 de hoje sao duas posicoes distintas. Fundir as duas somaria o P&L de
+    dias diferentes numa linha so'."""
+    import json
+
+    with store.live_journal(tmp_path / "live.sqlite") as conn:
+        cur = conn.execute(
+            "INSERT INTO live_accounts (name, mode, initial_capital, cash, symbol) "
+            "VALUES ('conta-2dias', 'mt5', 375.0, 375.0, 'WDO@')"
+        )
+        acc_id = cur.lastrowid
+        for dia, preco in (("2026-09-08", 5100.0), ("2026-09-09", 5200.0)):
+            for ts, payload in (
+                (f"{dia} 10:00:00", {"numero_ordem": 1, "side": "long", "tipo": "preenchida",
+                                     "quantity": 1, "price": preco, "stop": preco - 16,
+                                     "target": preco + 2, "sessao": dia}),
+                (f"{dia} 10:01:00", {"numero_ordem": 1, "side": "long", "exit_reason": "target",
+                                     "pnl_brl": 9.5, "entry_price": preco,
+                                     "exit_price": preco + 2, "quantity": 1, "sessao": dia}),
+            ):
+                conn.execute(
+                    "INSERT INTO live_events (account_id, ts, level, source, message, payload) "
+                    "VALUES (?, ?, 'info', 'daytrade', 'x', ?)",
+                    (acc_id, ts, json.dumps(payload)),
+                )
+        hist = store.daytrade_position_history(conn, acc_id)
+
+    assert [r["sessao"] for r in hist] == ["2026-09-09", "2026-09-08"]
+    assert all(r["numero"] == 1 for r in hist)
+    assert [r["entrada"] for r in hist] == [pytest.approx(5200.0), pytest.approx(5100.0)]
+
+
 # ---------- barra atrasada do pregao anterior (2026-08-25) ------------------
 
 class _FeedComBarraAtrasadaDeOntem:

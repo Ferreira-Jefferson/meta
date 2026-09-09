@@ -4780,6 +4780,14 @@ class IntradayLiveRuntime:
                                      price=trade.exit_price, fees=trade.fees_total,
                                      ts=trade.exit_ts.to_pydatetime()))
 
+        # O stop VIGENTE no instante do fechamento -- lido ANTES de apagar a
+        # posicao, porque ele nao esta' em `trade` (que so' carrega entrada e
+        # saida) e a lista de posicoes do painel precisa dele na linha da
+        # rodada. Nao e' o stop da ENTRADA: desde 2026-09-09 ele reancora no
+        # fill REAL, entao o numero logado na entrada pode ja' nao ser o que
+        # valia aqui.
+        pos_fechada = account.positions.get(self.strategy.symbol)
+        stop_no_fecho = None if pos_fechada is None else pos_fechada.current_stop
         store.delete_position(conn, account.id, self.strategy.symbol)
         account.positions.pop(self.strategy.symbol, None)
         self._open_intent_id = None
@@ -4858,6 +4866,11 @@ class IntradayLiveRuntime:
                    "pnl_brl": round(evento.pnl_brl, 4), "entry_price": trade.entry_price,
                    "exit_price": trade.exit_price, "execution_mode": self.execution_mode,
                    "assinado_saida": assinado_saida,
+                   # QUANTIDADE que saiu e STOP vigente no fecho: sem os dois
+                   # a lista de posicoes do painel nao consegue reconstruir a
+                   # rodada (quanto fechou, contra que nivel) --
+                   # `journal.live_store.daytrade_position_history`.
+                   "quantity": trade.quantity, "stop": stop_no_fecho,
                    # Os campos que faltavam para o diario denunciar execucao
                    # ruim sozinho (2026-09-08) -- ver `DURACAO_MINIMA_DE_TRADE_S`
                    # e os itens 4.8/4.16. `duracao_corretora_ms` e' o unico dos
@@ -4955,6 +4968,13 @@ class IntradayLiveRuntime:
                   {"numero_ordem": numero, "side": trade.side,
                    "exit_reason": trade.exit_reason.value,
                    "pnl_brl": round(evento.pnl_brl, 4), "quantidade_restante": pos_total.quantity,
+                   # Mesmos campos que `_on_closed` grava, pelo mesmo motivo
+                   # (`daytrade_position_history`): uma rodada que sai FATIADA
+                   # so' e' reconstruivel se cada fatia disser preco e
+                   # quantidade dela. `quantidade_restante` continua sendo o
+                   # que distingue fatia de fechamento final.
+                   "quantity": trade.quantity, "entry_price": trade.entry_price,
+                   "exit_price": trade.exit_price, "stop": pos_total.current_stop,
                    "execution_mode": self.execution_mode,
                    "sessao": self._snapshot.session.isoformat()})
 
@@ -4986,6 +5006,14 @@ class IntradayLiveRuntime:
                                           day=None if full else session.isoformat())
             saidas = store.daytrade_exit_events(conn, account.id)
             ordens_hoje = store.daytrade_order_events_on(conn, account.id, session.isoformat())
+            # Historico de RODADAS (posicao aberta -> fechada), nao so' o que
+            # esta' aberto agora: o cartao "Posicoes" do painel mostrava
+            # `account.positions`, entao toda posicao que fechava sumia da
+            # tela (queixa do dono, 2026-09-09). O teto e' o mesmo do "ver
+            # mais" do cartao (`app.py::OPS_PAGINA_MAX`) -- reconstruir 500
+            # rodadas de payload e' barato, mandar o pregao inteiro de um robo
+            # de alta cadencia pro Jinja nao seria.
+            historico = store.daytrade_position_history(conn, account.id, limit=500)
 
         resultado = self._resultado_dia_e_acumulado(saidas, session.isoformat(), account.initial_capital)
         ordens_stats = self._ordens_por_lado(ordens_hoje, self.machine.config.margin_per_contract_brl)
@@ -5009,6 +5037,51 @@ class IntradayLiveRuntime:
             if qtd_total else 0.0
         )
         marks = {self.strategy.symbol: entrada_media} if posicoes else {}
+
+        # A rodada ainda ABERTA no historico E' a posicao de agora -- stop,
+        # alvo e quantidade dela tem de sair da conta/maquina, nao do que o
+        # diario registrou na ENTRADA: o stop reancora no fill real (commit
+        # 2529e38) e o alvo pode ter sido reposicionado. Sem isto a MESMA
+        # posicao apareceria com dois numeros diferentes em dois cartoes da
+        # mesma tela, e o cartao errado seria o que o dono le' primeiro.
+        # So' a mais recente e' candidata: uma rodada antiga sem saida no
+        # diario (processo morto no meio) fica marcada aberta de proposito --
+        # e' um fato do log, e apaga-lo esconderia justamente a anomalia.
+        viva = account.positions.get(self.strategy.symbol)
+        if viva is not None:
+            if not any(r["aberta"] for r in historico):
+                # Posicao aberta que o diario NAO explica: entrada gravada por
+                # uma versao anterior, conta adotada da corretora, ou o evento
+                # perdido num restart. A verdade do que esta' aberto e'
+                # `live_positions`, nunca o log -- entao ela entra na lista
+                # como rodada sem numero em vez de sumir da tela, que era o
+                # sintoma exato que esta reforma existe pra corrigir.
+                historico.insert(0, {
+                    "sessao": viva.entry_date.isoformat(), "numero": None,
+                    "lado": viva.metadata.get("side")
+                            or ("long" if viva.quantity >= 0 else "short"),
+                    "qtd": 0, "entrada": None, "alvo": viva.metadata.get("target"),
+                    "stop": None, "saida": None, "motivo": None, "pnl_brl": None,
+                    "duracao_s": None, "fatias": 0, "aberta": True, "valor": None,
+                    "hora_entrada": None, "hora_saida": None,
+                })
+            for r in historico:
+                if not r["aberta"]:
+                    continue
+                r["qtd"] = abs(viva.quantity)
+                r["entrada"] = round(viva.entry_price, 4)
+                r["stop"] = viva.current_stop
+                # Capital COMPROMETIDO agora (margem no futuro, preco cheio na
+                # acao) -- so' faz sentido enquanto a rodada esta' aberta: ao
+                # fechar, `_on_closed` devolve tudo pro caixa. `market_value`
+                # e' sempre POSITIVO, inclusive em short: `quantity` negativa
+                # marca o lado, nao o sinal do valor (bug de 2026-08-31, um
+                # short recem-aberto aparecia como "R$ -100,00" na tabela).
+                r["valor"] = round(viva.market_value(viva.entry_price), 2)
+                alvo_vivo = _unanime(p.current_target for p in posicoes)
+                if alvo_vivo is not None:
+                    r["alvo"] = alvo_vivo
+                break
         return {
             "conta": account.name,
             "existe": True,
@@ -5048,6 +5121,11 @@ class IntradayLiveRuntime:
                  "valor": round(p.market_value(marks.get(p.ticker, p.entry_price)), 2)}
                 for p in account.positions.values()
             ],
+            # Lista COMPLETA de rodadas (abertas e fechadas), da mais recente
+            # pra tras -- ver `store.daytrade_position_history`. `posicoes`
+            # acima continua sendo so' o que esta' aberto agora, porque e' de
+            # onde saem "Investido a mercado" e `equity()`.
+            "posicoes_historico": historico,
             "intencoes_pendentes": [],
             "eventos": eventos,
             "eventos_full": full,

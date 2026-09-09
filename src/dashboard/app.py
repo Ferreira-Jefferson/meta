@@ -702,6 +702,15 @@ def _slot_ctx(slot, posicoes_limit: int = OPS_PAGINA, eventos_full: bool = False
     status_payload["posicoes_total"] = len(posicoes)
     status_payload["posicoes_ha_mais"] = len(posicoes) > posicoes_limit
     status_payload["posicoes"] = posicoes[:posicoes_limit]
+    # O HISTÓRICO de rodadas (day trade) usa o MESMO "ver mais" da lista de
+    # posições — é a mesma lista pro dono, só que sem esquecer o que fechou
+    # (2026-09-09). Aqui o corte não é cosmético como o de cima: um pregão de
+    # robô de alta cadência tem centenas de rodadas, e o poll de 20s redesenha
+    # o cartão inteiro.
+    historico = status_payload.get("posicoes_historico") or []
+    status_payload["historico_total"] = len(historico)
+    status_payload["historico_ha_mais"] = len(historico) > posicoes_limit
+    status_payload["posicoes_historico"] = historico[:posicoes_limit]
     return {
         "slot": slot,
         "status": status_payload,

@@ -412,14 +412,98 @@
 
 {# POSIÇÕES: recolhível e paginada em 10, como a lista de simulações da home
    (dono, 2026-08-22). O cabeçalho diz a contagem TOTAL, então recolher não
-   esconde "tenho posição aberta?" — só as linhas. #}
+   esconde "tenho posição aberta?" — só as linhas.
+
+   DAY TRADE (dono, 2026-09-09): a tabela é o histórico de RODADAS, não a foto
+   do que está aberto neste segundo. Antes só saía `account.positions`, então a
+   posição fechava e desaparecia da tela inteira — a pergunta "o que esse robô
+   fez hoje" só tinha resposta lendo o console linha a linha. Cada linha aqui é
+   uma rodada inteira (entrada -> [top-ups] -> saída, reconstruída por
+   `journal.live_store.daytrade_position_history` a partir do próprio diário),
+   com os quatro preços que decidem o trade: entrada, alvo, stop e saída.
+
+   SWING continua sendo lista de posições ABERTAS: lá a posição carrega por
+   semanas e É o estado do robô, e o histórico de operações fechadas já tem
+   página própria (`/historico`). #}
+{% set MOTIVO_SAIDA = {"stop": "STOP", "target": "TARGET", "forced_flatten": "FLATTEN",
+                       "manual": "MANUAL", "signal": "SINAL"} %}
+{# Duração na MENOR unidade que ainda cabe: um scalp de 0,4s e uma posição de
+   40min na mesma coluna, sem obrigar a contar zeros. O sub-segundo importa —
+   foi assim que 10 round-trips de menos de 1s apareceram em 2026-09-08
+   (item 4.16 de LICOES_DE_PRODUCAO.md). #}
+{% macro duracao(seg) %}{% if seg is none %}<span class="dim">—</span>{% elif seg < 60 %}{{ "%.1f"|format(seg) }}s{% elif seg < 3600 %}{{ (seg // 60) | int }}m{{ "%02d"|format((seg % 60) | int) }}s{% else %}{{ (seg // 3600) | int }}h{{ "%02d"|format(((seg % 3600) // 60) | int) }}m{% endif %}{% endmacro %}
+{% set hist = s.posicoes_historico if s.daytrade else none %}
+{% set n_hist = s.historico_total | default((hist | length) if hist else 0) %}
 <details class="ops-panel ops-list" data-ops-key="pos:{{ slot.id }}" open>
   <summary class="ops-sub-head">
-    <span class="ops-sub-title">Posições abertas</span>
-    <span class="ops-sub-meta">{{ n_pos }}</span>
+    <span class="ops-sub-title">{% if s.daytrade %}Posições{% else %}Posições abertas{% endif %}</span>
+    <span class="ops-sub-meta">{% if s.daytrade %}{{ n_pos }} aberta{{ "" if n_pos == 1 else "s" }} · {{ n_hist }} no histórico{% else %}{{ n_pos }}{% endif %}</span>
     <span class="ops-sec-caret" aria-hidden="true"></span>
   </summary>
   <div class="ops-sub-body">
+  {% if s.daytrade %}
+  <table class="ops-table ops-table-rodadas">
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Aberta em</th>
+        <th>Lado</th>
+        <th class="right">Qtd</th>
+        <th class="right">Valor</th>
+        <th class="right">Entrada</th>
+        <th class="right">Alvo</th>
+        <th class="right">Stop</th>
+        <th class="right">Saída</th>
+        <th>Motivo</th>
+        <th class="right">Duração</th>
+        <th class="right">Resultado</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in hist %}
+      <tr class="{{ 'rodada-viva' if r.aberta }}">
+        <td class="num dim">{% if r.numero is not none %}#{{ "%02d"|format(r.numero) }}{% else %}<span class="dim">—</span>{% endif %}</td>
+        <td class="num dim">{{ r.hora_entrada | hora_br("%d/%m %H:%M:%S") }}</td>
+        <td>{% if r.lado %}{{ seta(r.lado) }} {{ "Compra" if r.lado == "long" else "Venda" }}{% else %}<span class="dim">—</span>{% endif %}</td>
+        <td class="right num">{{ r.qtd or "—" }}</td>
+        {# Capital COMPROMETIDO (margem no futuro, preço cheio na ação), só
+           enquanto a rodada está aberta: ao fechar, o capital volta pro caixa.
+           Sempre positivo, inclusive em venda — `quantity` negativa marca o
+           lado, não o sinal do valor (bug de 2026-08-31: short recém-aberto
+           aparecia como "R$ -100,00" nesta mesma coluna). #}
+        <td class="right num">{% if r.valor is not none %}R$ {{ r.valor | num_br }}{% else %}<span class="dim">—</span>{% endif %}</td>
+        <td class="right num">{% if r.entrada is not none %}{{ "%.4f"|format(r.entrada) }}{% else %}<span class="dim">—</span>{% endif %}</td>
+        <td class="right num">{% if r.alvo is not none %}{{ "%.4f"|format(r.alvo) }}{% else %}<span class="dim">—</span>{% endif %}</td>
+        <td class="right num">{% if r.stop is not none %}{{ "%.4f"|format(r.stop) }}{% else %}<span class="dim">—</span>{% endif %}</td>
+        <td class="right num">{% if r.saida is not none %}{{ "%.4f"|format(r.saida) }}{% else %}<span class="dim">—</span>{% endif %}</td>
+        {# Saída FATIADA continua sendo UMA rodada: o número de fatias vira nota
+           na coluna do motivo, porque o preço ao lado é a média ponderada delas
+           e sem o aviso pareceria um fill único. #}
+        <td class="dim">{% if r.aberta %}<span class="rodada-status">em aberto</span>{% else %}{{ MOTIVO_SAIDA.get(r.motivo, (r.motivo or "—") | upper) }}{% if r.fatias > 1 %} <span class="dim">({{ r.fatias }} fatias)</span>{% endif %}{% endif %}</td>
+        <td class="right num dim">{{ duracao(r.duracao_s) }}</td>
+        {# Posição aberta não tem resultado: marcar a mercado exigiria o preço de
+           agora, e `status()` tem proibição de tocar na corretora (ver a
+           docstring de `IntradayLiveRuntime.status`). Zero ali seria mentira
+           com cara de dado. #}
+        <td class="right num {% if not r.aberta and r.pnl_brl is not none %}{{ 'ganho' if r.pnl_brl > 0 else ('perda' if r.pnl_brl < 0 else '') }}{% endif %}">
+          {% if r.aberta or r.pnl_brl is none %}<span class="dim">—</span>{% else %}R$ {{ r.pnl_brl | num_br }}{% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="12" class="ops-table-empty">Nenhuma posição ainda — o robô não abriu nenhuma rodada nesta conta.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% if s.historico_ha_mais %}
+  <div class="ops-more">
+    <button type="button" hx-get="/operacao/{{ slot.id }}/fragment?posicoes={{ pos_n + 10 }}"
+            hx-target="#ops-slot-live-{{ slot.id | dom_id }}" hx-swap="outerHTML">
+      Ver mais 10 posições
+    </button>
+    <span class="dim">{{ hist | length }} de {{ n_hist }}</span>
+  </div>
+  {% endif %}
+  {% else %}
   <table class="ops-table">
     <thead>
       <tr>
@@ -456,6 +540,7 @@
     </button>
     <span class="dim">{{ s.posicoes | length }} de {{ n_pos }}</span>
   </div>
+  {% endif %}
   {% endif %}
   </div>
 </details>

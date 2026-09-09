@@ -821,8 +821,15 @@ def test_fragmento_daytrade_tabela_de_posicoes_mostra_valor_positivo_no_short(
     isolated_journal, client,
 ):
     """Mesma posição WIN@ vendida do teste acima, mas pela via de
-    `live_positions` (não `policy_state`) -- é o que preenche a linha da
-    tabela "Posições abertas" (`p.valor` em `operacao_slot_live.html`)."""
+    `live_positions` (não `policy_state`) -- é o que preenche a coluna
+    "Valor" da linha da posição em `operacao_slot_live.html`.
+
+    A tabela virou HISTÓRICO de rodadas em 2026-09-09 (antes só mostrava o
+    que estava aberto), e a coluna sobreviveu à reforma justamente por causa
+    deste teste: ela é o ÚNICO lugar do painel de day trade que renderiza
+    `LivePosition.market_value`, então tirá-la deixaria o bug de sinal do
+    short sem nenhuma barreira. Só a rodada ABERTA traz valor -- fechada, o
+    capital já voltou pro caixa."""
     acc_id = _create_daytrade_account(
         isolated_journal, capital=1_000.0, investment_robot="copa_win",
         name=DAYTRADE_WIN, symbol="WIN@",
