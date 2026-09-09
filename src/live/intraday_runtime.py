@@ -4612,7 +4612,24 @@ class IntradayLiveRuntime:
         alvo = self._alvo_declarado
         self._alvo_declarado = None
         deslize = None
-        if alvo is not None:
+        # SO' faz sentido contra uma saida por ALVO (2026-09-09). Ate' aqui a
+        # conta rodava para QUALQUER motivo de saida, e como o campo se chama
+        # "deslize" e vira `warn`, todo trade STOPADO acusava um deslize
+        # gigante e falso: medido ao vivo neste dia, um short de entrada
+        # 5107,50 / alvo 5106,50 fechou no stop a 5116,00 e o diario gritou
+        # "DESLIZE DE SAIDA -- R$ +95,00", que e' so' a distancia normal entre
+        # o stop e o alvo, nao execucao ruim.
+        #
+        # Nao e' ruido inofensivo: este alarme e' o UNICO jeito de descobrir
+        # que o alvo fatiado estourou `exit_ttl_bars` e saiu a MERCADO (o
+        # motor registra esse caso como `exit_reason=TARGET` do mesmo jeito --
+        # ver `machine._resolve_live_split_exit`). Um alarme que dispara em
+        # todo stop soterra exatamente o evento que ele existe para achar.
+        #
+        # O deslize do STOP e' outra medicao, contra o nivel do STOP, e tem
+        # constante propria (`IntradayCostModel.slippage_ticks`) -- nao se
+        # empilha com esta (ver a secao do deslize em CLAUDE.md).
+        if alvo is not None and trade.exit_reason == IntradayExitReason.TARGET:
             faltou = ((alvo - trade.exit_price) if trade.side == "long"
                       else (trade.exit_price - alvo))
             deslize = round(faltou * trade.point_value_brl * trade.quantity, 4)
