@@ -39,7 +39,8 @@ from journal import live_store as store
 from live import clock as live_clock
 from live import intraday_runtime as itr_mod
 from live.intraday_runtime import MAX_GAP_SECONDS, IntradayLiveRuntime
-from strategy.daytrade.base import Bar, Enter, EnterLimit, IntradayStrategy
+from strategy.daytrade.base import (AdjustStop, Bar, Enter, EnterLimit,
+                                    IntradayStrategy)
 
 # O slot de day trade e' DINAMICO desde 2026-08-22: o id carrega robo+ativo
 # e, desde 2026-08-24, o modo de execucao (`dt-<robo>-<ativo>-<modo>`) -- o
@@ -6326,3 +6327,80 @@ def test_live_posicao_FATIADA_nunca_ganha_TP_da_corretora(tmp_path, pregao_abert
     )
     # e o que a corretora passa a ter registrado nao inventa TP nenhum
     assert broker.posicao_sl_tp == (pytest.approx(9.00), pytest.approx(0.0))
+
+
+# ---------- espelho da posicao em `live_positions` (2026-09-09) -------------
+
+def _runtime_sombra_scripted(tmp_path, script: dict[int, list],
+                             initial_capital: float = 100.0):
+    """Gemeo de `_runtime_live_scripted` em modo SOMBRA -- corretora que
+    explode, para provar que a sincronia do espelho nao depende de execucao
+    real nenhuma."""
+    strat = _ScriptedDaytrade(SYMBOL, script)
+    feed = _ScriptedBarFeed([], [])
+    rt = IntradayLiveRuntime(
+        slot=SLOT, strategy=strat, config=_config(),
+        bar_feed=feed, broker=_ExplodingBroker(),
+        db_path=tmp_path / "live_intraday.sqlite",
+        execution_mode="shadow", initial_capital=float(initial_capital),
+    )
+    rt.ensure_account()
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        acc.cash = float(initial_capital)
+        store.save_account(conn, acc)
+    return rt, feed
+
+
+def _espelho_no_banco(rt):
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        linha = conn.execute(
+            "SELECT bars_held, current_stop FROM live_positions "
+            "WHERE account_id = ? AND ticker = ?", (acc.id, SYMBOL)).fetchone()
+    return linha
+
+
+def test_espelho_da_posicao_acompanha_bars_held_e_stop_da_maquina(tmp_path, pregao_aberto):
+    """`live_positions` e' o que o PAINEL mostra ("Barras" e "Stop" na tabela
+    de posicoes de `partials/operacao_slot_live.html`), e ate' 2026-09-09 ele
+    so' era escrito em abertura/top-up/fatia-parcial de saida. Uma posicao
+    SIMPLES nunca passa pelos dois ultimos, entao o espelho ficava congelado
+    no `bars_held=0` da abertura e no stop da ENTRADA pela vida inteira dela
+    -- no `dt-wdo_grid_reload_maker-wdo@-shadow` a maquina contava 6.143
+    barras e a tela mostrava 0.
+
+    Aqui a posicao abre, atravessa 3 barras e o robo aperta o stop no
+    caminho: o espelho tem de refletir os dois."""
+    script = {
+        0: [EnterLimit(side="long", limit_price=10.00, initial_stop=9.00,
+                       initial_target=11.00, quantity=1, reason="teste_espelho")],
+        2: [AdjustStop(new_stop=9.50)],
+    }
+    rt, feed = _runtime_sombra_scripted(tmp_path, script)
+    rt.run_once(now=_agora("13:00:00"))            # sessao a frio, sem barra
+
+    feed._barras.append(_bar("13:01", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:01:00"))            # script[0]: arma a limite
+    feed._barras.append(_bar("13:02", 10.00, 10.00, 9.95, 10.00))
+    rt.run_once(now=_agora("13:02:00"))            # script[1]: toca 10.00, preenche
+    assert rt.machine.position is not None, "a posicao precisa ter aberto"
+    assert _espelho_no_banco(rt)["bars_held"] == rt.machine.position.bars_held
+
+    feed._barras.append(_bar("13:03", 10.00, 10.20, 10.00, 10.10))
+    rt.run_once(now=_agora("13:03:00"))            # script[2]: aperta o stop
+    feed._barras.append(_bar("13:04", 10.10, 10.20, 10.00, 10.10))
+    rt.run_once(now=_agora("13:04:00"))
+
+    pos = rt.machine.position
+    assert pos is not None, "a posicao nao pode ter fechado (longe do alvo e do stop)"
+    assert pos.bars_held >= 3, "a maquina tem de ter contado as barras seguradas"
+    assert pos.current_stop == pytest.approx(9.50), "o robo apertou o stop"
+
+    linha = _espelho_no_banco(rt)
+    assert linha["bars_held"] == pos.bars_held, (
+        "o painel le `live_positions.bars_held` -- ele tem de acompanhar a maquina, "
+        "senao a coluna 'Barras' fica em 0 pela vida inteira da posicao")
+    assert linha["current_stop"] == pytest.approx(9.50), (
+        "o painel le `live_positions.current_stop` -- stop desatualizado na tela e' "
+        "informacao errada sobre RISCO, nao so' cosmetica")

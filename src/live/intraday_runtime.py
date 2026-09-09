@@ -1230,6 +1230,50 @@ class IntradayLiveRuntime:
         self._persist(conn, account)
         conn.commit()
 
+    def _sincroniza_espelho_da_posicao(self, conn, account: AccountState) -> None:
+        """Copia para `live_positions` o que a MAQUINA ja mudou na posicao
+        aberta durante este lote de barras -- `bars_held` e `current_stop`.
+
+        Por que existe (achado 2026-09-09). `live_positions` e' o ESPELHO da
+        posicao que o painel le (coluna "Barras" e coluna "Stop" de
+        `partials/operacao_slot_live.html`, via `status()["posicoes"]`), mas
+        ate' aqui ele so' era escrito em TRES momentos -- abertura
+        (`_on_opened`, com `bars_held=0` fixo), fatia ADICIONAL de entrada
+        (`_on_opened_top_up`) e fatia PARCIAL de saida
+        (`_on_closed_partial`). Uma posicao simples (sem top-up e sem saida
+        fatiada) nunca passa por nenhum dos dois ultimos, entao o espelho
+        ficava congelado em `bars_held=0` pela vida inteira dela: no
+        `dt-wdo_grid_reload_maker-wdo@-shadow` de 2026-09-09 a maquina
+        contava 6.143 barras (negocios, `feed_kind="tick"`) e o painel
+        mostrava 0. Mesmo problema no stop: `AdjustStop` move
+        `pos.current_stop` na maquina (`machine.on_closed_bar`, secao de
+        acoes) e o dono continuaria vendo na tela o stop da ENTRADA -- que
+        e' informacao errada sobre risco, nao so' cosmetica.
+
+        Uma escrita por LOTE de barras, nao por barra: num robo de tick sao
+        ~4 barras por segundo, e o espelho e' TELA (ninguem decide nada com
+        ele -- quem decide le `self.machine`, e quem sobrevive a um restart
+        e' o snapshot em `policy_state`, ver `_persist`). Nao chama
+        `_checkpoint`: o `conn.commit()` do fim do passo ja torna isto
+        duravel, e comitar aqui nao protege efeito real nenhum (nao ha
+        nenhum -- e' UPDATE de espelho).
+
+        No-op quando nao ha posicao na maquina, quando o espelho ainda nao
+        existe (a posicao abriu e fechou dentro do mesmo lote), e quando
+        nada mudou."""
+        pos_maquina = self.machine.position
+        if pos_maquina is None:
+            return
+        espelho = account.positions.get(self.strategy.symbol)
+        if espelho is None:
+            return
+        if (espelho.bars_held == pos_maquina.bars_held
+                and espelho.current_stop == pos_maquina.current_stop):
+            return
+        espelho.bars_held = pos_maquina.bars_held
+        espelho.current_stop = pos_maquina.current_stop
+        store.upsert_position(conn, account.id, espelho)
+
     @staticmethod
     def _impedimento_de_hoje(account: AccountState, session: date) -> Optional[str]:
         """O motivo gravado em `policy_state["impedimento"]`, se for do
@@ -3958,6 +4002,7 @@ class IntradayLiveRuntime:
                       f"{descartadas} barra(s) de pregao anterior descartada(s) "
                       f"(ultima: {_hora_brt(ultima_descartada)})",
                       {"descartadas": descartadas, "sessao": session.isoformat()})
+        self._sincroniza_espelho_da_posicao(conn, account)
         self._journaliza_armes_de_barra_velha(conn, account, session)
         self._journaliza_recusas_por_cota(conn, account, session)
         detalhe = {"barras": len(barras), "entradas": abertas, "saidas": fechadas,
