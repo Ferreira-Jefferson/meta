@@ -349,6 +349,50 @@ def test_sombra_com_posicao_simulada_e_removivel(diario, monkeypatch):
     assert "prejuízo" in resultado.resumo
 
 
+def test_registro_com_posicao_que_a_corretora_NAO_tem_nao_prende_o_robo(diario, monkeypatch):
+    """IMPASSE achado ao vivo em 2026-09-09, com o dono tentando remover o
+    robô e o cartão voltando para a tela.
+
+    O slot REAL tinha em `live_positions` um short de 1 WDO@ @ 5122,50 que o
+    MT5 não tinha (nem posição, nem ordem pendente -- conferido no terminal).
+    Os dois guards, cada um certo em separado, se travavam:
+
+      * `inspecionar()` pergunta a posição à CORRETORA -- não há --, então
+        `remover()` não tinha o que encerrar;
+      * `delete_account`/`archive_account` recusam olhando o BANCO: "feche na
+        corretora antes de remover o robô".
+
+    A única instrução que a tela sabia dar era impossível de cumprir. Faltava
+    alguém reconciliar quando as duas fontes discordam -- e a corretora é a
+    fonte de verdade sobre o que EXISTE.
+
+    O que este teste trava junto, e é o que torna a reconciliação segura: ela
+    só vale com a consulta CONFIRMADA (`erro_corretora is None`). Corretora
+    muda continua barrando tudo, pelo `impedimento` -- ver o teste vizinho."""
+    _conta(SLOT_REAL)
+    with live_store.live_journal() as conn:
+        conta = live_store.load_account(conn, SLOT_REAL.id)
+        live_store.upsert_position(conn, conta.id, LivePosition(
+            ticker=SLOT_REAL.symbol, quantity=-1, entry_date=date(2026, 9, 9),
+            entry_price=5122.5, capital_allocated=150.0,
+            metadata={"side": "short"}))
+
+    # Corretora responde, e responde "não tenho nada".
+    _monta(monkeypatch, broker=_BrokerFalso(), processo=None)
+
+    resultado = live_teardown.remover(SLOT_REAL, apagar_historico=True)
+
+    assert resultado.conta_apagada and not _existe(SLOT_REAL), (
+        "com a corretora confirmando que não há posição, a linha do banco é "
+        "registro errado -- não pode prender o robô no painel para sempre"
+    )
+    assert any("corretora NÃO tem" in a for a in resultado.avisos), (
+        "a divergência tem de aparecer para o dono, não sumir em silêncio"
+    )
+    # Não inventa negócio: não houve execução nenhuma para registrar.
+    assert resultado.posicao_encerrada is None
+
+
 def test_processo_que_morreu_sozinho_nao_e_falha(diario, monkeypatch):
     """Entre a inspeção e o clique o processo pode ter caído. O objetivo
     ("não está mais rodando") já está cumprido."""

@@ -392,6 +392,17 @@ def remover(slot, apagar_historico: bool = False) -> ResultadoRemocao:
         # órfã no MT5, só que não há MT5 nenhum para essa exposição existir.
         if pend.posicao:
             _encerrar_posicao_sombra(slot, resultado)
+    elif pend.consultou_corretora and not pend.posicao:
+        # A corretora CONFIRMOU que não há posição. Se o banco ainda tem uma,
+        # os dois discordam -- e sem reconciliar aqui a remoção fica presa
+        # para sempre (ver `_descartar_posicao_fantasma`). Ordens pendentes,
+        # se houver, continuam sendo canceladas logo abaixo.
+        _descartar_posicao_fantasma(slot, resultado)
+        if pend.ordens and not _limpar_na_corretora(slot, resultado):
+            resultado.avisos.append(
+                f"a conta de {slot.label} NÃO foi apagada: sobrou ordem viva na "
+                "corretora.")
+            return resultado
     elif pend.ordens or pend.posicao:
         if not _limpar_na_corretora(slot, resultado):
             # Posição que não fechou é o único desfecho em que apagar a conta
@@ -552,6 +563,68 @@ def _limpar_na_corretora(slot, resultado: ResultadoRemocao) -> bool:
             f"{posicao['quantity']} ações — o resto continua aberto no MT5.")
         return False
     return limpo
+
+
+def _descartar_posicao_fantasma(slot, resultado: ResultadoRemocao) -> None:
+    """O banco tem posição aberta, a CORRETORA CONFIRMOU que não tem nenhuma.
+    Apaga a linha do banco -- ela é registro errado, não exposição.
+
+    O IMPASSE QUE ISTO DESFAZ (achado ao vivo em 2026-09-09, com o dono
+    tentando remover o robô e não conseguindo). O slot real tinha em
+    `live_positions` um short de 1 WDO@ @ 5122,50 que o MT5 não tinha:
+
+      * `inspecionar()` pergunta a posição à CORRETORA -- não há -- então
+        `remover()` não tinha o que encerrar e seguia adiante;
+      * `delete_account`/`archive_account` recusam olhando o BANCO -- "feche
+        na corretora antes de remover o robô".
+
+    Ou seja, a única instrução que a tela sabia dar era impossível de
+    cumprir: não existe o que fechar. O robô ficava preso no painel para
+    sempre. O guard dos dois lados está certo em separado; o que faltava era
+    alguém reconciliar quando eles discordam.
+
+    POR QUE É SEGURO apagar aqui, e só aqui: `Pendencias.impedimento` já
+    barra a remoção inteira quando a corretora NÃO respondeu, e
+    `position_state()` distingue "não há posição" de "não consegui
+    perguntar" (é o motivo de ele existir em vez de `open_position`). Então,
+    neste ponto, "não há posição" é uma afirmação CONFIRMADA pela corretora,
+    não silêncio. Registro que contradiz a corretora é o registro que está
+    errado -- a corretora é a fonte de verdade sobre o que existe.
+
+    NÃO inventa trade nem P&L, e NÃO mexe no caixa. Não houve negócio: fechar
+    "a mercado" uma posição que não existe escreveria um preço de execução
+    que ninguém pagou (o mesmo erro do item 1.24, pelo avesso). O caixa é o
+    ledger digitado pelo dono (ver CLAUDE.md, "Saldo do MT5 não é confiável")
+    -- reconstruí-lo aqui seria chutar. Fica um `warn` no diário com os dois
+    lados da divergência, para a auditoria achar depois."""
+    from journal import live_store
+
+    with live_store.live_journal() as conn:
+        conta = live_store.load_account(conn, slot.id)
+        if conta is None:
+            return
+        pos = conta.positions.get(slot.symbol)
+        if pos is None:
+            return
+        lado = pos.metadata.get("side") or "long"
+        live_store.delete_position(conn, conta.id, slot.symbol)
+        live_store.save_account(conn, conta)
+        live_store.log_event(
+            conn, conta.id, "warn", "teardown",
+            f"posição de {pos.quantity} {slot.symbol} @ {pos.entry_price:.4f} existia "
+            f"no REGISTRO mas NÃO na corretora (consulta confirmada) -- linha "
+            f"descartada na remoção do robô, sem trade e sem mexer no caixa: não "
+            f"houve negócio para registrar.",
+            {"quantity": pos.quantity, "side": lado,
+             "entry_price": pos.entry_price, "motivo": "divergencia_registro_x_corretora"},
+        )
+
+    resultado.avisos.append(
+        f"o registro tinha uma posição de {pos.quantity} {slot.symbol} @ "
+        f"{pos.entry_price:.4f} que a corretora NÃO tem — a linha foi descartada "
+        "(sem trade, sem mexer no caixa). Confira o extrato: registro e corretora "
+        "estavam divergentes."
+    )
 
 
 def _encerrar_posicao_sombra(slot, resultado: ResultadoRemocao) -> None:
