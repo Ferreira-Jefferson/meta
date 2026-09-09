@@ -410,17 +410,37 @@ class _SessionState:
 #: Ver a docstring do modulo para o relato completo da investigacao.
 ReanchorMode = Literal["fixed_session_open", "rolling_last_price"]
 
-#: Prazo (barras de 1 minuto) que a fatia de SAIDA do alvo (`fatiar_saida_
-#: alvo=True`) espera parada como ordem-limite antes do motor cancelar e
-#: fechar o RESTANTE a mercado -- `EnterLimit.exit_ttl_bars`, so' consumido
-#: quando `fatiar_saida_alvo=True`. VALOR EMPRESTADO de `gremah.py::
-#: EXIT_TTL_BARS_PADRAO` (mesma constante, duplicada aqui em vez de
-#: importada -- feature nao importa feature, mesmo padrao de `strategy.
-#: daytrade.lab.gremah_tick.EXIT_TTL_BARS_PADRAO`). NAO foi varrido para o
-#: WDO F1: aquele numero saiu de uma varredura 1..10 em PMAM3 (acao, M1);
-#: o WDO F1 e' outro instrumento, outra cadencia de barra tocada. Serve
-#: para o robo nao quebrar ao ligar `fatiar_saida_alvo` em execucao real --
-#: nao serve como calibracao. Sweep proprio antes de operar assim.
+#: Prazo, EM BARRAS DESTE ROBO, que a fatia de SAIDA do alvo
+#: (`fatiar_saida_alvo=True`) espera parada como ordem-limite antes do motor
+#: cancelar e fechar o RESTANTE a mercado -- `EnterLimit.exit_ttl_bars`, so'
+#: consumido quando `fatiar_saida_alvo=True`.
+#:
+#: **"BARRA" AQUI E' UM NEGOCIO, NAO UM MINUTO.** Este robo declara
+#: `feed_kind="tick"` (ver o atributo na classe): cada barra e' CADA NEGOCIO,
+#: e o motor conta o prazo em TODA barra desde que armou, tocando ou nao.
+#: Medido na base canonica do WDO@: 159.440 barras num pregao, intervalo
+#: MEDIANO de 62 ms entre elas. Ou seja, 8 barras aqui e' da ordem de MEIO
+#: SEGUNDO -- nao 8 minutos. Quem ler "prazo 8" pensando em minutos erra a
+#: escala por ~1000x, e foi exatamente esse o erro na primeira versao deste
+#: comentario (2026-09-09).
+#:
+#: VALOR EMPRESTADO de `gremah.py::EXIT_TTL_BARS_PADRAO` (duplicado aqui em
+#: vez de importado -- feature nao importa feature, mesmo padrao de
+#: `strategy.daytrade.lab.gremah_tick.EXIT_TTL_BARS_PADRAO`). O emprestimo e'
+#: pior do que parece e vale registrar: a `gremah` roda `feed_kind="m1"` (o
+#: default), entao o 8 DELA e' 8 MINUTOS, varrido 1..10 em PMAM3 (acao de
+#: centavos, fila lenta). Trazer o mesmo "8" para ca' nao trocou so' de
+#: instrumento -- trocou de UNIDADE.
+#:
+#: Varrido depois no proprio WDO F1 (`scripts/daytrade/
+#: wdof1_exit_ttl_bars_micro_2026_09_09.py`, T2 fatiado, 10 pregoes do IS,
+#: capital real): ttl=1 e' claramente ruim (R$9,6k contra R$13-16k do resto)
+#: e de 2 pra cima a curva e' SERRILHADA -- vizinhos diferem mais entre si
+#: (5:R$13,7k, 6:R$14,8k, 10:R$16,5k, 12:R$14,7k) do que a tendencia da faixa
+#: inteira, ou seja, 10 pregoes nao separam o parametro. Decisao do dono
+#: (2026-09-09): MANTER 8. O que a varredura mede de verdade e' o PRECO da
+#: valvula: ttl 8 da' R$14,9k contra R$21,0k do "sem prazo" (referencia
+#: nao-operavel -- limite sem prazo e' exposicao indefinida), ~30% do lucro.
 EXIT_TTL_BARS_PADRAO_FATIA = 8
 
 

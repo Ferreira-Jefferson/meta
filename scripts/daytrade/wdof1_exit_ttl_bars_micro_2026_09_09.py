@@ -14,25 +14,40 @@ sem prazo (`None`) e deu T3 fatiado +R$12.928,50; a janela cheia rodou com
 prazo 8 e deu -R$248,50 com 70 de 72 pregoes parados. Mesma geometria, mesmo
 fatiamento -- so' o prazo mudou.
 
-## A natureza do WDO@ e por que a faixa testada e' CURTA
+## A natureza do WDO@ e a UNIDADE do prazo
 
-O prazo esta' em BARRAS DE 1 MINUTO, e o que ele mede e' "quanto tempo a
-ordem-limite do alvo fica parada no livro antes de desistir e ir a mercado".
-Tres fatos do instrumento definem a faixa que faz sentido:
+CORRECAO 2026-09-09 (a primeira versao desta docstring dizia "barras de 1
+minuto" e estava ERRADA): este robo declara `feed_kind="tick"`, entao BARRA
+E' NEGOCIO. Na base canonica sao 159.440 barras num pregao, mediana de 62 ms
+entre elas -- `exit_ttl_bars=8` e' da ordem de MEIO SEGUNDO, nao 8 minutos.
+Quem ler a tabela abaixo pensando em minutos erra a escala por ~1000x.
 
-  * O alvo do T2 esta' a **2 ticks = 1,0 ponto** do preco de entrada. E' uma
-    distancia que o WDO@ percorre em segundos no horario normal, nao em
-    minutos.
-  * O robo negocia ~285 trades/dia no regime fatiado (medido no IS). Uma
-    posicao que fica 8 minutos pendurada esperando 2 ticks esta' ocupando o
-    caixa que a proxima entrada precisaria -- e com capital no piso exato
-    (R$375, 1 contrato) isso e' bloqueio direto de operacao.
+Isso torna o emprestimo da `gremah` pior do que parecia: ela roda
+`feed_kind="m1"`, logo o 8 dela sao 8 MINUTOS. O mesmo numero mudou de
+UNIDADE ao atravessar de um robo para o outro.
+
+O que o prazo mede e' "quanto tempo a ordem-limite do alvo fica parada no
+livro antes de desistir e ir a mercado". Tres fatos do instrumento definem a
+faixa que faz sentido:
+
+  * O alvo do T2 esta' a **2 ticks = 1,0 ponto** do preco de entrada, e o
+    prazo conta em NEGOCIOS. Um punhado de negocios a 62 ms nao e' "tempo de
+    espera" em nenhum sentido humano -- e' quase o instante do toque.
+  * O robo negocia ~285 trades/dia no regime fatiado (medido no IS), com
+    capital no piso exato (R$375, 1 contrato): posicao pendurada e' caixa
+    indisponivel para a proxima entrada.
   * O WDO@ e' liquido: a barreira nao e' achar contraparte (como na PMAM3,
     de onde o 8 veio), e' o preco ir embora antes da fila andar.
 
-Ou seja, a intuicao e' que o otimo do WDO fica ABAIXO do 8 da gremah. Testar
-so' valores altos seria testar a hipotese errada. A faixa: 1, 2, 3, 5, 8
-(o de producao hoje), 12, 20.
+A faixa varrida: 1, 2, 3, 5, 8 (o de producao), 12, 20 -- depois preenchida
+com 6, 10 e 15.
+
+REGISTRO DE UMA INTUICAO ERRADA, que e' por que a varredura existe: eu previ
+que o otimo ficaria ABAIXO de 8, raciocinando sobre "8 minutos de espera".
+Errado duas vezes -- a unidade nao era minuto, e a tendencia do liquido vai
+no sentido CONTRARIO (ttl 1 e' o pior de todos, e o topo operavel esta' em
+20). Esperar mais rende mais porque cada estouro de prazo vira saida a
+mercado, que e' o custo que fatiar existe para evitar.
 
 `None` (sem prazo) entra como REFERENCIA, nao como candidato: e' outro
 caminho no motor (`_resolve_target_partial_fill`, preenche na propria barra
