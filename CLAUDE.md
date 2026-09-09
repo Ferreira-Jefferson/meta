@@ -173,6 +173,10 @@ As linhas com deslize estão **censuradas** (70-71/72 e 37-49/51 pregões sem tr
 
 > Um ótimo que mora exatamente no ponto onde o simulador é mais otimista que a realidade não é um ótimo. É o sintoma de um modelo incompleto.
 
+**Onde mora a incerteza que ainda decide (2026-09-08).** O ponto de virada é mais apertado do que o veredito sugere. Contra win% 94,5% e perda de R$85,50 (16 ticks + 1 tick de deslize do stop + R$0,50), o T2/S16 fica no zero a zero com **deslize de 0,905 tick** — e o IC 95% do deslize medido (média 1,000, desvio 0,447, n=11) é **[0,700 ; 1,300]**, que ATRAVESSA esse ponto. Medido por sensibilidade: a 0,5t a mesma geometria dá **+R$137.618,50 com 0 de 72 pregões sem trade** (não censurada), a 1,0t dá −R$242,50 com 71 de 72 parados. Não é gradiente, é penhasco.
+
+Consequência de método: **rodar mais janela, mais geometria ou mais capital não move a resposta** — o win% já tem n de cinco dígitos e IC de ±0,5pp. A incerteza inteira está do lado do custo, num n=11. A única medição que decide é acumular saídas por TP nativo no extrato (~40-50 levariam o IC a ~±0,14 tick), e **a sombra não serve para isso**: ela não manda ordem, então nunca preenche um TP de verdade. Essa medição só existe com dinheiro real, a uma expectativa conhecida de −R$0,45/trade — é decisão do dono, não tarefa a disparar.
+
 Consequências que continuam valendo:
 
 1. O "padrão estrutural" da varredura de 250 células (*alvo=1 é o único regime saudável*) **descreve o motor antigo, não o mercado** — não cite como achado de estratégia. Aquela grade rodou sem cobrar o deslize e escolheu a célula que mais explorava a lacuna do modelo.
