@@ -2177,9 +2177,11 @@ class IntradayLiveRuntime:
         o mesmo modo de falha pelo outro lado (protecao registrada + ordem a
         mercado por cima).
 
-        Afeta quem declara `exit_split_unit` -- hoje a `gremah`
-        (`dividir_entrada=True` por default, opera acao B3 com dinheiro
-        real), nunca o WDO F1, que nao fatia saida.
+        Afeta quem declara `exit_split_unit` -- `gremah` (`dividir_entrada=
+        True` por default, opera acao B3) e, desde 2026-09-08, tambem
+        `wdo_grid_reload_maker` (`fatiar_saida_alvo=True` em producao, ver
+        `strategy.daytrade.registry._KWARGS_PADRAO` -- troca o TP nativo
+        que desliza SEMPRE por ordem-limite real no livro).
 
         `None` aqui NAO apaga um TP ja registrado: `_ensure_protecao` passa
         `tp_atual` junto para `set_protection`, e `MT5Broker._niveis_

@@ -214,11 +214,36 @@ _KWARGS_PADRAO: dict[str, dict] = {
     # intermediários sem regredir nenhum dos testados, mas com margem de
     # segurança menor; ver a memória `wdo-dinamico-producao-2026-08-29` se
     # quiser reconsiderar depois de mais medição.
+    # 2026-09-08, ORDEM DO DONO: liga `fatiar_saida_alvo` em produção.
+    # Contexto -- o alvo NATIVO (`target_fills_as_maker=True` sem fatia)
+    # desliza SEMPRE contra (item 4.8/6.18 de LICOES_DE_PRODUCAO.md, secao
+    # "O motor COBRA o deslize do TP" do CLAUDE.md): 10 de 11 saidas reais
+    # mediram pior que o nivel pedido, e isso apagou o edge do T2/S16 (breakeven
+    # sobe de 90% para 95%). `fatiar_saida_alvo=True` troca o gatilho a
+    # mercado por ordem-limite REAL parada no livro -- mesmo mecanismo que a
+    # `gremah` ja usa (`dividir_entrada`), agora ligado aqui pela primeira
+    # vez. Previa de 10 pregoes do IS (capital R$375, T2/T3, script
+    # `wdof1_fatiar_saida_alvo_previa_2026_09_08.py`) reverteu o quadro:
+    # T2 +R$21.033,50 (vs -R$242,50 no alvo nativo), T3 +R$12.928,50 (vs
+    # -R$229,00), 0 de 10 pregoes sem trade nas duas (antes 8-9 de 10).
+    #
+    # Risco que fica ABERTO com esta troca, sem medicao ainda (dono foi
+    # avisado antes de mandar aplicar): (1) a previa e' so' 10 pregoes do IS
+    # -- a janela cheia IS/OOS nao foi rodada; (2) o alvo fatiado nao tem
+    # TP registrado na corretora (`live.intraday_runtime._alvo_atomico`
+    # recusa amarrar TP em posicao fatiada de proposito -- so' o STOP fica
+    # protegido no broker, o alvo depende do processo do robo mandando a
+    # ordem-limite a cada barra); (3) `exit_ttl_bars=8` e' o default de
+    # `WdoGridReloadMaker` (EMPRESTADO de `gremah.py::EXIT_TTL_BARS_PADRAO`,
+    # calibrado para PMAM3/acao M1, NAO para o WDO F1) -- funcional (sem
+    # ele a execucao real quebra com `AssertionError`), mas nao e'
+    # calibracao propria.
     WdoGridReloadMaker.name: dict(
         margin_per_contract_brl=150.0,
         hard_cap_contratos=5,
         risco_pct_por_trade=0.01,
         point_value_brl=10.0,
+        fatiar_saida_alvo=True,
     ),
     CopaWin.name: dict(
         # `alvo_vol`/`stop_vol` e os demais campos abaixo são

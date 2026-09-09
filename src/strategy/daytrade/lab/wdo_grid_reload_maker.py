@@ -410,6 +410,19 @@ class _SessionState:
 #: Ver a docstring do modulo para o relato completo da investigacao.
 ReanchorMode = Literal["fixed_session_open", "rolling_last_price"]
 
+#: Prazo (barras de 1 minuto) que a fatia de SAIDA do alvo (`fatiar_saida_
+#: alvo=True`) espera parada como ordem-limite antes do motor cancelar e
+#: fechar o RESTANTE a mercado -- `EnterLimit.exit_ttl_bars`, so' consumido
+#: quando `fatiar_saida_alvo=True`. VALOR EMPRESTADO de `gremah.py::
+#: EXIT_TTL_BARS_PADRAO` (mesma constante, duplicada aqui em vez de
+#: importada -- feature nao importa feature, mesmo padrao de `strategy.
+#: daytrade.lab.gremah_tick.EXIT_TTL_BARS_PADRAO`). NAO foi varrido para o
+#: WDO F1: aquele numero saiu de uma varredura 1..10 em PMAM3 (acao, M1);
+#: o WDO F1 e' outro instrumento, outra cadencia de barra tocada. Serve
+#: para o robo nao quebrar ao ligar `fatiar_saida_alvo` em execucao real --
+#: nao serve como calibracao. Sweep proprio antes de operar assim.
+EXIT_TTL_BARS_PADRAO_FATIA = 8
+
 
 class WdoGridReloadMaker(IntradayStrategy):
     """Grid maker com recarga do mesmo nivel apos cada fechamento (alvo ou
@@ -588,12 +601,16 @@ class WdoGridReloadMaker(IntradayStrategy):
         gate_atividade_ativo: bool = False,
         gate_volume_min: float | None = None,
         gate_janela_segundos: int = 15,
+        fatiar_saida_alvo: bool = False,
+        exit_ttl_bars: int | None = EXIT_TTL_BARS_PADRAO_FATIA,
     ):
         """Ver a docstring do modulo para a mecanica completa e para os
         parametros existentes acima (`tick_size`, `level_spacing_ticks`,
         `profit_ticks`, `stop_ticks`, `reanchor_mode`, `max_trades_per_side`,
         `session_stop_brl`, `quantity`). So' os quatro novos (2026-08-27/29)
-        tem prosa aqui.
+        e os dois de 2026-09-08 (`fatiar_saida_alvo`, `exit_ttl_bars`,
+        prosa junto da atribuicao em `__init__` e da constante `EXIT_TTL_
+        BARS_PADRAO_FATIA` no topo do modulo) tem prosa aqui.
 
         `margin_per_contract_brl`: ATIVA a realocacao dinamica por capital
         (ver a secao do modulo). `None` (default) -- comportamento IDENTICO
@@ -1124,6 +1141,33 @@ class WdoGridReloadMaker(IntradayStrategy):
         self.gate_atividade_ativo = bool(gate_atividade_ativo)
         self.gate_volume_min = None if gate_volume_min is None else float(gate_volume_min)
         self.gate_janela_segundos = int(gate_janela_segundos)
+        # `fatiar_saida_alvo` (2026-09-08, hipotese do dono): declara
+        # `EnterLimit.exit_split_unit` no alvo, trocando o gatilho-a-mercado
+        # (paga `costs.apply_deslize_alvo_nativo`) por ordem-limite REAL
+        # fatiada no livro (`machine._close_position` pula o deslize quando
+        # `exit_split_unit is not None` -- ver a condicao `is_maker_target`).
+        # `False` (default): comportamento IDENTICO a antes.
+        self.fatiar_saida_alvo = bool(fatiar_saida_alvo)
+        # `exit_ttl_bars`: OBRIGATORIO para `fatiar_saida_alvo` funcionar em
+        # EXECUCAO REAL -- sem prazo, `machine._resolve_live_split_exit`
+        # levanta `AssertionError` na primeira posicao que tentar fechar
+        # assim (a fatia REAL fica parada no livro para sempre sem isto).
+        # So' vale enquanto `fatiar_saida_alvo=True` (linha do EnterLimit
+        # abaixo); backtest/sombra funcionam sem ele (caminho sem prazo).
+        # Valor default EMPRESTADO de `EXIT_TTL_BARS_PADRAO` da `gremah.py`
+        # (8 barras de 1 min) -- NAO foi varrido para o WDO F1: e' ponto de
+        # partida, nao calibracao. Antes de operar real, sweep proprio.
+        #
+        # `None` = SEM prazo: a fatia espera indefinidamente pelo fill. E'
+        # outro CAMINHO no motor (`machine._resolve_target_partial_fill`, que
+        # preenche na propria barra do toque) e nao so' outro numero -- o com
+        # prazo (`_resolve_simulated_split_exit`) tem 1 barra de atraso
+        # estrutural no arme e cai a MERCADO no estouro. Medido 2026-09-08:
+        # trocar None por 8 virou o T3 fatiado de +R$12.928,50 para
+        # -R$248,50. VALE SO' EM BACKTEST: em execucao real
+        # `machine._resolve_live_split_exit` exige prazo (assert) -- uma
+        # ordem-limite real sem prazo nenhum e' posicao exposta para sempre.
+        self.exit_ttl_bars = None if exit_ttl_bars is None else int(exit_ttl_bars)
 
         self._state = _SessionState()
         # Estado de "ja armou a defesa de recuo" por POSICAO -- chave
@@ -1654,5 +1698,7 @@ class WdoGridReloadMaker(IntradayStrategy):
                              else self._target_price(next_side, level_price)),
             initial_stop=self._stop_price(next_side, level_price),
             quantity=self._quantidade_da_entrada(),
+            exit_split_unit=(self._quantidade_da_entrada() if self.fatiar_saida_alvo else None),
+            exit_ttl_bars=(self.exit_ttl_bars if self.fatiar_saida_alvo else None),
             reason="wdo_grid_reload_" + next_side,
         )]
