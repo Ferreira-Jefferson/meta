@@ -1941,7 +1941,23 @@ class IntradaySessionMachine:
             else:
                 pos.resting_exit_bars_waited += 1
                 if pos.resting_exit_bars_waited >= pos.exit_ttl_bars:
-                    self.execution.cancel_exit_limit(ts, reason="ttl")
+                    cancelada = self.execution.cancel_exit_limit(ts, reason="ttl")
+                    # A limite morreu MESMO? Se a corretora nao confirmou, ela
+                    # pode estar viva no book, e mandar o fechamento a mercado
+                    # agora poe DUAS ordens correndo pela mesma posicao. Numa
+                    # conta NETTING isso nao deixa a posicao "mais fechada":
+                    # inverte o lado. Foi o que custou R$80,00 em 2026-09-09
+                    # (item 1.24 de LICOES_DE_PRODUCAO.md) -- a orfa preencheu
+                    # 30s depois e virou o 2o contrato de um short.
+                    #
+                    # Esperar e' barato: a posicao segue protegida pelo SL
+                    # REGISTRADO na corretora (o stop nunca depende deste
+                    # caminho), o prazo continua estourado e a proxima barra
+                    # tenta cancelar de novo -- `cancel_exit_limit` guarda a
+                    # ordem justamente para isso.
+                    if cancelada is not None and not bool(
+                            getattr(cancelada, "is_terminal", True)):
+                        return events
                     pos.exit_resting_qty = 0
                     pos.resting_exit_bars_waited = 0
                     # fecha o RESTANTE a mercado -- ainda e' um exit de ALVO

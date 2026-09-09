@@ -482,23 +482,38 @@ def test_place_sem_tick_rejeita(fake_mt5):
 # mas sem preco nem deal de verdade.
 # `_send` tem de recusar isso, nunca inventar um fill com preco 0.
 
-def test_place_retcode_done_com_price_zero_rejeita_sem_inventar_fill(fake_mt5):
+def test_place_retcode_done_sem_fill_nao_inventa_e_nao_declara_recusa(fake_mt5):
+    """`DONE` sem `price`/`deal` e sem como confirmar = INDETERMINADO (`SENT`).
+
+    Este teste guardava, ate 2026-09-09, a assercao `status == REJECTED`. O
+    invariante que ele protegia continua de pe' e esta abaixo -- nao inventar
+    preco de execucao. O que mudou e' a outra metade: REJECTED significa "a
+    corretora NAO executou", e isso o robo nao sabia. `retcode=DONE` diz que o
+    servidor ACEITOU o pedido; campos de confirmacao vazios dizem que a
+    RESPOSTA veio incompleta.
+
+    Tratar um como o outro custou R$80,00 numa posicao em 2026-09-09 (item
+    1.24 de LICOES_DE_PRODUCAO.md): o fechamento executou 2s depois, o robo
+    seguiu se achando comprado, reverteu, e a ordem-limite orfa de saida
+    virou o segundo contrato de um short numa conta de 1."""
     info = _symbol_info()
     result = _order_send_result(retcode=106, price=0.0, deal=0, comment="Request executed")
+    # Sem `history_orders_by_ticket`: a consulta do desfecho nao acha nada.
     fake_mt5(symbol_info=info, tick=_tick(), order_send_result=result, history_deals=[])
 
     broker = MT5Broker()
     resultado = broker.place(Order(ticker="WEGE3.SA", side=OrderSide.BUY, quantity=10))
 
-    assert resultado.status == OrderStatus.REJECTED
+    assert resultado.status == OrderStatus.SENT
+    assert resultado.status != OrderStatus.REJECTED
     assert resultado.filled_qty == 0
-    assert "price=0.0" in resultado.note or "0.0" in resultado.note
-    assert "deal=0" in resultado.note
+    assert resultado.avg_price is None  # o invariante original: nada inventado
+    assert "INDETERMINADO" in resultado.note
 
 
-def test_place_retcode_done_com_deal_zero_mas_price_valido_rejeita(fake_mt5):
-    """Mesmo com preco > 0, `deal=0` (nenhum negocio de fato casado) tambem
-    nao pode virar FILLED -- os dois sinais sao checados independentes."""
+def test_place_retcode_done_com_deal_zero_mas_price_valido_nao_vira_filled(fake_mt5):
+    """Mesmo com preco > 0, `deal=0` nao pode virar FILLED -- os dois sinais
+    sao checados independentes. Vira INDETERMINADO, nao recusa."""
     info = _symbol_info()
     result = _order_send_result(retcode=106, price=50.1, deal=0)
     fake_mt5(symbol_info=info, tick=_tick(), order_send_result=result, history_deals=[])
@@ -506,7 +521,56 @@ def test_place_retcode_done_com_deal_zero_mas_price_valido_rejeita(fake_mt5):
     broker = MT5Broker()
     resultado = broker.place(Order(ticker="WEGE3.SA", side=OrderSide.BUY, quantity=10))
 
+    assert resultado.status == OrderStatus.SENT
+    assert resultado.avg_price is None
+
+
+def test_place_done_sem_fill_mas_historico_confirma_execucao_usa_o_preco_REAL(fake_mt5):
+    """O CASO DO INCIDENTE (2026-09-09): a ordem executou, a resposta e' que
+    nao contou. Perguntando ao historico, o robo descobre o preco de verdade.
+
+    E' tambem o que faz o diario refletir o MT5 em vez da crenca do robo: no
+    incidente o diario gravou "+R$9,50 @ 5114,00" quando a corretora tinha
+    executado "@ 5113,50" (+R$5,00)."""
+    info = _symbol_info()
+    result = _order_send_result(retcode=106, price=0.0, deal=0, order=777,
+                                comment="Request executed")
+    registro = types.SimpleNamespace(state=4, position_id=555)  # ORDER_STATE_FILLED
+    deal_meu = types.SimpleNamespace(
+        ticket=1, order=777, entry=1, type=1, price=5113.5, volume=10.0,
+        profit=0.0, commission=0.0, swap=0.0, fee=0.0, time=0, time_msc=0, comment="")
+    # Deal de OUTRA ordem na MESMA posicao: em NETTING isso acontece, e usar
+    # a media da POSICAO daria um preco que nenhuma ordem pagou (foi assim
+    # que o incidente produziu `price_open` 5113,75).
+    deal_alheio = types.SimpleNamespace(
+        ticket=2, order=999, entry=0, type=1, price=5114.0, volume=10.0,
+        profit=0.0, commission=0.0, swap=0.0, fee=0.0, time=0, time_msc=0, comment="")
+    fake_mt5(symbol_info=info, tick=_tick(), order_send_result=result,
+             history_deals=[], history_orders_by_ticket={777: [registro]},
+             history_deals_by_position={555: [deal_alheio, deal_meu]})
+
+    broker = MT5Broker()
+    resultado = broker.place(Order(ticker="WEGE3.SA", side=OrderSide.BUY, quantity=10))
+
+    assert resultado.status == OrderStatus.FILLED
+    assert resultado.avg_price == pytest.approx(5113.5)  # o MEU deal, nao a media
+    assert resultado.broker_ref == "777"
+
+
+def test_place_done_sem_fill_com_historico_de_cancelamento_ai_sim_rejeita(fake_mt5):
+    """REJECTED continua existindo -- mas agora e' afirmacao CONFIRMADA pelo
+    historico, nao palpite tirado de campos vazios."""
+    info = _symbol_info()
+    result = _order_send_result(retcode=106, price=0.0, deal=0, order=777)
+    registro = types.SimpleNamespace(state=2, position_id=None)  # ORDER_STATE_CANCELED
+    fake_mt5(symbol_info=info, tick=_tick(), order_send_result=result,
+             history_deals=[], history_orders_by_ticket={777: [registro]})
+
+    broker = MT5Broker()
+    resultado = broker.place(Order(ticker="WEGE3.SA", side=OrderSide.BUY, quantity=10))
+
     assert resultado.status == OrderStatus.REJECTED
+    assert "canceled" in resultado.note
 
 
 def test_place_retcode_done_com_price_e_deal_validos_continua_filled(fake_mt5):

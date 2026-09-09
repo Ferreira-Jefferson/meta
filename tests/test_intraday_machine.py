@@ -10,6 +10,7 @@ passou a expor para a operacao ao vivo (`live/intraday_runtime.py`) consumir.
 from __future__ import annotations
 
 from datetime import time
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
@@ -1901,6 +1902,61 @@ def test_stop_de_posicao_FATIADA_tambem_fecha_pela_protecao():
     assert execucao.market_calls == [], (
         "stop de posicao fatiada tem SL registrado na corretora -- fechar a "
         "MERCADO paga spread e arrisca dupla saida em conta NETTING"
+    )
+
+
+class _ExecucaoCancelamentoQueNaoConfirma(_ExecucaoComProtecao):
+    """`cancel_exit_limit` devolve uma ordem que NAO chegou a estado terminal
+    -- exatamente o que `MT5Broker.cancel` faz quando falha (ele nao levanta:
+    devolve a `Order` com o motivo na nota e o status intocado)."""
+
+    def cancel_exit_limit(self, ts, reason):
+        self.cancel_exit_limit_calls += 1
+        return SimpleNamespace(is_terminal=False, broker_ref="777")
+
+
+def test_prazo_estourado_NAO_manda_mercado_se_o_cancelamento_nao_confirmou():
+    """INCIDENTE 2026-09-09, -R$80,00 numa posicao (item 1.24 de
+    LICOES_DE_PRODUCAO.md).
+
+    O prazo do alvo fatiado estourou, o motor pediu o cancelamento da
+    ordem-limite de saida e mandou o fechamento a MERCADO no mesmo passo. Só
+    que o cancelamento nao pegou -- `MT5Broker.cancel` falha em SILENCIO --,
+    entao ficaram DUAS ordens vivas pela mesma posicao. A limite orfa (5114,00)
+    preencheu 30 s depois e, como a posicao que ela deveria fechar ja nao
+    existia, virou ENTRADA nova: short de 2 contratos numa conta de 1.
+
+    A regra que sobra: cancelamento nao confirmado significa ESPERAR, nunca
+    empilhar uma segunda ordem. Esperar e' barato -- a posicao segue protegida
+    pelo SL REGISTRADO na corretora (o stop nunca passa por este caminho) e a
+    proxima barra tenta cancelar de novo."""
+    execucao = _ExecucaoCancelamentoQueNaoConfirma(preco=9.90)
+    strat = _Scripted({0: [EnterLimit(side="long", limit_price=9.80, quantity=1,
+                                      initial_target=9.90, initial_stop=9.50,
+                                      exit_split_unit=1, exit_ttl_bars=1)]})
+    m = _maquina_real(strat, execucao)
+    m.on_closed_bar(_bar(0, 10.00, 10.00, 10.00, 10.00))
+    m.on_closed_bar(_bar(1, 10.00, 10.00, 9.79, 9.85))
+    assert m.positions, "a entrada precisa ter preenchido"
+
+    m.on_closed_bar(_bar(2, 9.85, 9.91, 9.85, 9.90))   # toca o alvo -> arma a fatia
+    assert execucao.place_exit_limit_calls == 1
+    ev = m.on_closed_bar(_bar(3, 9.88, 9.88, 9.86, 9.87))  # sem fill -> estoura o prazo
+
+    assert execucao.cancel_exit_limit_calls == 1, "tinha de TENTAR cancelar"
+    assert execucao.market_calls == [], (
+        "cancelamento nao confirmado: a limite pode estar viva no book, e uma "
+        "ordem a mercado por cima INVERTE a posicao em conta NETTING"
+    )
+    assert not [e for e in ev if isinstance(e, PositionClosed)], (
+        "a posicao nao pode ser dada como fechada enquanto o fechamento nao saiu"
+    )
+    assert m.positions, "a posicao continua aberta, protegida pelo SL da corretora"
+
+    # Na barra seguinte tenta de novo -- o prazo continua estourado.
+    m.on_closed_bar(_bar(4, 9.87, 9.87, 9.86, 9.86))
+    assert execucao.cancel_exit_limit_calls == 2, (
+        "a proxima barra tem de RETENTAR o cancelamento, nao esquecer a orfa"
     )
 
 

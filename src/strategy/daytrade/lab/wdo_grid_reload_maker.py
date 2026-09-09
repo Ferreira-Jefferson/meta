@@ -441,7 +441,36 @@ ReanchorMode = Literal["fixed_session_open", "rolling_last_price"]
 #: (2026-09-09): MANTER 8. O que a varredura mede de verdade e' o PRECO da
 #: valvula: ttl 8 da' R$14,9k contra R$21,0k do "sem prazo" (referencia
 #: nao-operavel -- limite sem prazo e' exposicao indefinida), ~30% do lucro.
-EXIT_TTL_BARS_PADRAO_FATIA = 8
+#:
+#: **2026-09-09, de 8 para 60** (proposta do dono: "não seria melhor trocar de
+#: 8 para 20 para aguardar mais e só então sair a mercado? isso não aumentaria
+#: as chances de sair com limite?"). A pergunta dele e' sobre TAXA DE
+#: PREENCHIMENTO, nao sobre P&L -- e taxa e' estavel onde o P&L era ruido.
+#: Medida em `scripts/daytrade/wdof1_ttl_taxa_de_fill_2026_09_09.py` (T2
+#: fatiado, 10 pregoes do IS, capital real), a curva sai MONOTONICA:
+#:
+#:     ttl |  ~tempo | % preenche na limite | saidas a mercado | deslize R$
+#:       5 |    0,3s |                80,3% |              727 |   2.915,00
+#:       8 |    0,5s |                84,1% |              586 |   2.375,00
+#:      12 |    0,7s |                87,9% |              439 |   1.620,00
+#:      20 |    1,2s |                88,9% |              412 |   1.875,00
+#:      30 |    1,9s |                90,1% |              369 |   1.650,00
+#:      60 |    3,7s |                92,8% |              264 |   1.040,00
+#:     130 |    8,1s |                93,6% |              239 |   1.510,00
+#:
+#: O dono estava certo na direcao: 8 -> 20 sobe o preenchimento 4,8pp. Ficou
+#: em 60 porque o trecho 20 -> 60 rende MAIS que o 8 -> 20 (+3,9pp) e derruba
+#: o deslize de R$1.875 para R$1.040 -- menos da metade do que o 8 pagava.
+#: Depois de 60 a curva achata (130 so' acrescenta 0,8pp e o deslize sobe de
+#: novo), entao nao ha motivo para ir alem.
+#:
+#: Por que isto tambem e' SEGURANCA, e nao so' lucro: cada estouro de prazo
+#: manda uma ordem A MERCADO enquanto a ordem-limite pode ainda estar viva no
+#: livro. Foi essa colisao que abriu um short de 2 contratos numa conta de 1
+#: em 2026-09-09 (item 1.24). Menos estouro e' menos exposicao a esse modo de
+#: falha -- e o guard de `machine._resolve_live_split_exit` (nao manda mercado
+#: sem cancelamento CONFIRMADO) e' a outra metade da correcao.
+EXIT_TTL_BARS_PADRAO_FATIA = 60
 
 
 class WdoGridReloadMaker(IntradayStrategy):

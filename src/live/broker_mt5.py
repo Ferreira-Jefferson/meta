@@ -464,28 +464,14 @@ class MT5Broker(Broker):
             )
             return order
 
-        # Gap fechado 2026-08-28 (mesmo incidente do slot
-        # `dt-wdo_grid_reload_maker-wdo@-live`, achado JUNTO com o bug do
-        # `position`): a corretora as vezes devolve `retcode=TRADE_RETCODE_
-        # DONE` ("Request executed") sem ter de fato preenchido nada --
-        # `price=0.0` e `deal=0` no mesmo log real ("fill @ 0.0000 ...
-        # deal=0, comment=Request executed"). Um "sucesso" sem preco nem
-        # deal e' informacao que a corretora nao confirmou de verdade; tratar
-        # como FILLED inventaria um preco de execucao (e um P&L) que nunca
-        # aconteceu. Vira REJECTED com o motivo explicito -- quem chama
-        # (`live/intraday_execution.py`) ja sabe tratar REJECTED como "tenta
-        # de novo", nunca como "nao preencheu".
+        # `retcode=TRADE_RETCODE_DONE` com `price=0.0` e `deal=0`: o servidor
+        # ACEITOU o pedido, e a resposta nao trouxe o resultado. Nao inventa
+        # preco (era o acerto da versao de 2026-08-28) e TAMBEM nao declara
+        # recusa -- vai PERGUNTAR o desfecho, ver `_desfecho_de_done_sem_fill`.
         preco_resultado = float(getattr(result, "price", 0.0) or 0.0)
         deal_resultado = getattr(result, "deal", None)
         if preco_resultado <= 0.0 or not deal_resultado:
-            order.status = OrderStatus.REJECTED
-            order.note = (
-                f"MT5 devolveu retcode=DONE mas sem confirmacao real de fill "
-                f"(price={preco_resultado}, deal={deal_resultado}, "
-                f"comment={getattr(result, 'comment', '')}) -- nao vou tratar "
-                "como execucao"
-            )
-            return order
+            return self._desfecho_de_done_sem_fill(order, result)
 
         filled_volume = getattr(result, "volume", volume)
         order.filled_qty = int(round(filled_volume * self._shares_per_lot))
@@ -504,6 +490,142 @@ class MT5Broker(Broker):
             f"comment={getattr(result, 'comment', '')})"
         )
         return order
+
+    def _desfecho_de_done_sem_fill(self, order: Order, result) -> Order:
+        """`retcode=DONE` sem `price`/`deal`: vai PERGUNTAR o que aconteceu,
+        em vez de decidir pelo conteudo da resposta.
+
+        INCIDENTE QUE CRIOU ESTE METODO (2026-09-09, slot
+        `dt-wdo_grid_reload_maker-wdo@-live`, -R$80,00 numa posicao e
+        -R$65,00 no pregao -- item 1.24 de LICOES_DE_PRODUCAO.md). A versao
+        anterior marcava REJECTED aqui. O raciocinio era bom (nao inventar
+        preco de execucao) e a conclusao, errada:
+
+            06:45:46  robo manda o fechamento a mercado
+            06:45:46  MT5 responde DONE com price=0.0, deal=0
+                      -> robo marca REJECTED e SEGUE SE ACHANDO COMPRADO
+            06:45:48  A CORRETORA EXECUTA o fechamento @ 5113,50
+            06:46:11  robo "reverte" para short -> abre short 1 de verdade
+            06:46:14  a ordem-limite orfa de saida preenche -> SHORT 2
+                      CONTRATOS numa conta dimensionada para 1
+            06:53:16  stop -> -R$80,00
+
+        **`retcode=DONE` significa que o servidor ACEITOU o pedido.** Campos
+        de confirmacao vazios significam RESPOSTA INCOMPLETA, nunca "nao
+        executou". Sao estados diferentes, e tratar o primeiro como o
+        segundo faz o robo decidir por cima de uma ordem que esta VIVA -- o
+        pior estado possivel para um robo que decide sozinho, e o mesmo
+        padrao do incidente de 2026-08-28 pelo terceiro angulo.
+
+        A regra, entao: com o ticket em maos (`result.order`, que vem
+        preenchido mesmo quando `price`/`deal` nao vem), pergunta ao
+        historico da corretora. Tres desfechos, e nenhum deles chuta:
+
+          * preencheu -> FILLED/PARTIAL com o preco REAL dos deals daquele
+            ticket (media ponderada por volume). E' tambem o que faz o
+            diario refletir o MT5 em vez da crenca do robo: no incidente o
+            diario gravou "+R$9,50 @ 5114,00" quando o real foi "+R$5,00 @
+            5113,50".
+          * morreu sem preencher (canceled/rejected/expired) -> REJECTED,
+            que agora e' uma afirmacao CONFIRMADA, nao um palpite.
+          * ainda viva, ou nao consegui perguntar -> `OrderStatus.SENT`:
+            "mandei, o desfecho ainda nao se sabe". NUNCA REJECTED. Quem
+            chama tem de reconciliar contra a corretora antes de agir --
+            ver `MT5IntradayExecution.exit_market`. `SENT` ja existia no
+            enum com exatamente este sentido; nao inventamos estado novo.
+
+        O caso "ainda viva" e' comum e esperado: no incidente o fill so'
+        apareceu 2 segundos depois da resposta. Por isso a resposta certa
+        aqui e' 'ainda nao sei', e a decisao fica com quem pode esperar a
+        proxima barra."""
+        preco = float(getattr(result, "price", 0.0) or 0.0)
+        deal = getattr(result, "deal", None)
+        comentario = getattr(result, "comment", "")
+        ticket = getattr(result, "order", None)
+        contexto = (f"MT5 devolveu retcode=DONE sem confirmacao de fill "
+                    f"(price={preco}, deal={deal}, comment={comentario})")
+
+        if not ticket:
+            order.status = OrderStatus.SENT
+            order.note = (f"{contexto} e SEM ticket de ordem -- nao ha o que "
+                          "consultar. Desfecho INDETERMINADO: a ordem pode estar "
+                          "viva na corretora. Reconcilie contra a posicao/deals "
+                          "reais antes de mandar qualquer coisa nova.")
+            return order
+
+        order.broker_ref = str(ticket)
+        estado = self.order_history_state(ticket)
+        if not estado.get("ok"):
+            order.status = OrderStatus.SENT
+            order.note = (f"{contexto}; a consulta do desfecho da ordem {ticket} "
+                          f"tambem falhou ({estado.get('note')}). INDETERMINADO -- "
+                          "nao trate como recusa.")
+            return order
+
+        situacao = estado.get("state")
+        if situacao in ("canceled", "rejected", "expired"):
+            order.status = OrderStatus.REJECTED
+            order.note = (f"{contexto}; o historico CONFIRMA que a ordem {ticket} "
+                          f"terminou como {situacao} sem preencher.")
+            return order
+
+        if situacao in ("filled", "partial"):
+            resolvido = self._fill_real_da_ordem(ticket, estado.get("position_id"))
+            if resolvido is not None:
+                order.filled_qty = resolvido["quantity"]
+                order.avg_price = resolvido["price"]
+                order.status = (OrderStatus.FILLED
+                                if order.filled_qty >= order.quantity
+                                else OrderStatus.PARTIAL)
+                order.note = (f"{contexto}; o historico mostra {situacao} e os deals "
+                              f"da ordem {ticket} dao o preco REAL "
+                              f"{order.avg_price:.4f} ({order.filled_qty}).")
+                return order
+            order.status = OrderStatus.SENT
+            order.note = (f"{contexto}; o historico diz {situacao} mas os deals da "
+                          f"ordem {ticket} ainda nao apareceram -- sem eles o preco "
+                          "seria inventado. INDETERMINADO, reconcilie na proxima barra.")
+            return order
+
+        # "pending" (ainda no book) ou "unknown".
+        order.status = OrderStatus.SENT
+        order.note = (f"{contexto}; a ordem {ticket} esta {situacao} na corretora. "
+                      "INDETERMINADO -- ela pode preencher a qualquer instante; "
+                      "nao decida nada por cima dela.")
+        return order
+
+    def _fill_real_da_ordem(self, ticket, position_id) -> Optional[dict]:
+        """`{"price", "quantity"}` REAIS dos deals gerados por ESTE ticket, ou
+        `None` quando ainda nao da' para saber.
+
+        Filtra por `deal["order"] == ticket` de proposito: numa conta NETTING
+        a mesma `position_id` acumula os deals de VARIAS ordens (foi assim
+        que o incidente de 2026-09-09 produziu um `price_open` de 5113,75 --
+        a media de 5113,50 e 5114,00, de duas ordens diferentes). Pegar
+        todos os deals da posicao devolveria um preco que nenhuma ordem
+        pagou. Media ponderada por volume porque um mesmo ticket pode gerar
+        varios deals."""
+        if not position_id:
+            return None
+        consulta = getattr(self, "deals_for_position", None)
+        if consulta is None:  # pragma: no cover - sempre existe em producao
+            return None
+        resposta = consulta(position_id)
+        if not resposta.get("ok"):
+            return None
+        try:
+            alvo = int(ticket)
+        except (TypeError, ValueError):
+            return None
+        meus = [d for d in (resposta.get("deals") or [])
+                if d.get("order") is not None and int(d["order"]) == alvo
+                and float(d.get("price") or 0.0) > 0.0
+                and int(d.get("quantity") or 0) > 0]
+        if not meus:
+            return None
+        total = sum(int(d["quantity"]) for d in meus)
+        preco = sum(float(d["price"]) * int(d["quantity"]) for d in meus) / total
+        return {"price": float(preco), "quantity": int(total)}
 
     def _resolve_fees(self, mt5, result) -> float:
         """Soma `commission + swap + fee` do primeiro deal reportado pelo

@@ -513,13 +513,41 @@ class MT5IntradayExecution:
         vivas pela mesma posicao -- e numa conta NETTING a limite orfa
         preenchendo DEPOIS do flatten inverte a posicao. Por isso o que nao
         confirmou vai para `exit_orphan_refs` em vez de ser esquecido; o
-        runtime avisa e tenta de novo."""
+        runtime avisa e tenta de novo.
+
+        ISSO ACONTECEU (2026-09-09, -R$80,00 numa posicao -- item 1.24 de
+        LICOES_DE_PRODUCAO.md). O paragrafo acima ja descrevia o risco com
+        precisao, e a mitigacao escolhida na epoca ("anota como orfa, o
+        runtime avisa depois") nao impedia o que importa: quem chama seguia
+        e mandava a ordem a MERCADO no mesmo passo, com a limite ainda viva
+        no book. A limite orfa de saida (5114,00) preencheu 30 segundos
+        depois e abriu o SEGUNDO contrato de um short numa conta de 1.
+
+        Duas mudancas por causa disso:
+
+         1. `pending_exit_order` so' e' esquecido quando o cancelamento
+            CONFIRMA estado terminal. Antes era zerado incondicionalmente,
+            entao a tentativa seguinte nao tinha mais o que cancelar --
+            achava que estava tudo limpo e a orfa seguia viva, invisivel.
+         2. O retorno passa a ser a resposta a "pode mandar ordem por cima?".
+            Quem chama TEM de olhar (`machine._resolve_live_split_exit`, ramo
+            do prazo): cancelamento nao confirmado significa ESPERAR, nunca
+            empilhar uma segunda ordem. A posicao continua protegida pelo SL
+            registrado na corretora enquanto isso -- esperar uma barra e'
+            barato, inverter a posicao nao."""
         order = self.pending_exit_order
         if order is None:
             return None
-        self.pending_exit_order = None
         devolvida = self.broker.cancel(order)
-        self.exit_orphan_refs.extend(orphan_refs([devolvida]))
+        if bool(getattr(devolvida, "is_terminal", False)):
+            self.pending_exit_order = None
+            return devolvida
+        # Nao confirmou: MANTEM `pending_exit_order` para a proxima barra
+        # tentar de novo, e registra o ticket para o runtime vigiar. `dict.
+        # fromkeys` em vez de `set` para nao duplicar em cada retentativa
+        # sem perder a ordem de chegada.
+        novas = orphan_refs([devolvida])
+        self.exit_orphan_refs[:] = list(dict.fromkeys(self.exit_orphan_refs + novas))
         return devolvida
 
     def exit_fill(self, position_side: str, bar) -> Optional[dict]:
