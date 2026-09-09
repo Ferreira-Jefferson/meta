@@ -3399,6 +3399,70 @@ maior a fração do trade que o simulador dava de graça.
 itens deste arquivo que citam número dele: 6.15, 6.16, 6.17, 4.10 e 4.11
 mediram no motor sem deslize (ver as notas datadas em cada um).
 
+**(d) O veredito vira em 0,1 tick — e a incerteza que decide já não é a do
+backtest.** Rodada a sensibilidade ao PRÓPRIO deslize, no mesmo script, mesma
+config de produção, capital real R$375,00, janela IS de 72 pregões:
+
+| variante (IS, R$375,00) | líquido R$ | win% | trades | pregões s/ trade | censurada? |
+|---|---|---|---|---|---|
+| T2/S16 deslize **0,0t** (motor antigo) | +347.548,50 | 94,2% | 19.893 | 0/72 | não |
+| T2/S16 deslize **0,5t** | **+137.618,50** | 94,5% | 19.921 | **0/72** | **não** |
+| T2/S16 deslize **1,0t** (o medido) | **−242,50** | 93,3% | 165 | **71/72** | sim |
+| T2/S16 deslize **2,0t** | −293,00 | **0,0%** | 76 | 71/72 | sim |
+
+A meio tick o robô sobrevive a janela inteira e é fortemente positivo; a um
+tick ele morre no primeiro pregão. **Não é gradiente, é penhasco.** (A linha
+de 2,0t é também a verificação de sanidade da implementação: com alvo de 2
+ticks e deslize de 2 ticks o bruto por vitória é exatamente R$0,00, menos
+R$0,50 de corretagem — então o win% TEM de dar 0,0%. E deu.)
+
+O penhasco tem endereço exato: o **deslize crítico**, o valor de deslize em
+que a expectativa por trade cruza zero.
+
+| geometria | ganho de breakeven | deslize crítico |
+|---|---|---|
+| T2/S16 (win 94,5%) | R$4,98 | **0,905 tick** |
+| T3/S16, a compensação do dono (win 89,9%) | R$9,61 | **0,979 tick** |
+
+**E o deslize medido tem incerteza que ATRAVESSA esse ponto.** A amostra é a
+mesma do item 4.8 — n=11, média 1,000 tick, desvio 0,447, erro-padrão 0,135,
+**IC 95% (t de Student, gl=10) = [0,700 ; 1,300] ticks**:
+
+| deslize | ganho/vitória | breakeven | margem sobre win% 94,5% | E[R$]/trade |
+|---|---|---|---|---|
+| 0,700 (limite otimista do IC) | R$6,00 | 93,44% | +1,06pp | **+0,98** |
+| 0,905 (**crítico**) | R$4,98 | 94,50% | 0,00pp | 0,00 |
+| 1,000 (**medido**) | R$4,50 | 95,00% | −0,50pp | **−0,45** |
+| 1,300 (limite pessimista do IC) | R$3,00 | 96,61% | −2,11pp | −1,84 |
+
+O ponto estimado (1,000) está ACIMA do crítico (0,905), e é por isso que o
+veredito de (a) continua de pé — ele é o melhor estimador que existe, e é o
+único medido em dinheiro real. Mas o IC do deslize contém valores dos dois
+lados do crítico.
+
+E é isso que sobra do achado como método: **mais backtest não move mais essa
+resposta.** O win% já está medido com n de 5 dígitos e IC de ±0,5pp; a
+incerteza inteira mudou de lado — ela mora num n=11 com IC de ±0,3 tick que
+atravessa o ponto de virada. A medição que decide é **acumular saídas por alvo
+nativo no extrato da corretora**: ~40 a 50 saídas levariam o IC do deslize
+para ≈±0,14 tick e tirariam o 0,905 de dentro dele, para um lado ou para o
+outro.
+
+Isso também recontextualiza a compensação do dono de (b): pedir 1 tick a mais
+no alvo move o ponto de virada de 0,905 para 0,979 tick — ou seja, compra
+~0,07 tick de margem contra o deslize. É melhora real e pequena: não resgata o
+robô (E = −R$0,09 por trade, indistinguível de zero), mas é a direção certa.
+
+> **Regra:** quando o resultado de uma estratégia depende de um parâmetro de
+> CUSTO medido com amostra pequena, calcule o **valor crítico** desse
+> parâmetro — aquele em que a expectativa cruza zero — e compare-o com o
+> **intervalo de confiança da medição do parâmetro**, não só com o ponto
+> estimado. Se o crítico cair DENTRO do IC, o veredito não está decidido pela
+> estratégia: está decidido pela precisão da medição de custo, e a próxima
+> medição útil é ampliar a amostra do CUSTO, não rodar mais backtest. Um
+> backtest com n de 5 dígitos ao lado de um custo com n=11 dá ilusão de
+> precisão, porque só o primeiro n aparece na tabela.
+
 **A armadilha de leitura, que estava dentro desta própria medição.** As duas
 linhas com deslize cobrado ficaram **CENSURADAS** pelos itens 6.15/6.16: 49 de
 51 e 37 de 51 pregões sem NENHUM trade no OOS (71 de 72 e 70 de 72 no IS),
@@ -3931,6 +3995,18 @@ dinheiro ou meses.
     que é o único. Enquanto a resposta não existir, a regra é uma só: com
     proteção registrada na corretora, o robô espera esse nível e não manda
     ordem própria pelo mesmo fechamento. (1.23, 1.4)
+62. Quantas saídas por proteção NATIVA (alvo/stop amarrados no request da
+    entrada) eu preciso acumular nesta plataforma antes de o intervalo de
+    confiança do deslize ficar mais estreito que a distância até o **deslize
+    crítico** da minha geometria — o valor de deslize em que a expectativa
+    por trade cruza zero? E a plataforma me dá o par (nível PEDIDO, preço
+    EXECUTADO) por saída, ou só o preço executado? A segunda metade decide se
+    a amostra chega a existir: aqui o banco do próprio robô
+    (`db/live.sqlite`) gravava `limit_price == avg_price` na saída — o nível
+    pedido sumia —, e os n=11 só existiram porque o histórico de ORDENS do
+    terminal ainda guardava o `tp` do request de entrada. Com o crítico em
+    0,905 tick e o IC de n=11 em [0,700 ; 1,300], são ~40 a 50 saídas para
+    tirar o crítico de dentro do intervalo. (6.18, 4.8)
 
 ---
 
