@@ -137,22 +137,47 @@ Quem faz essa conta é `strategy.daytrade.base.contracts_from_capital_operaciona
 
 Use `config_for(..., preco_atual=preco_ref)` para ação e `contracts_from_capital(cash, margin_per_contract, buffer=2.0)` para futuro — nunca digitar o número na mão. `enforce_capital_minimo` fica no default do perfil (ligado para ação) pelo mesmo motivo: desligar mede geometria isolada do caixa, que é outra pergunta. A tabela de saída sempre mostra o capital usado (a coluna, ou implícito em `capital final − líquido R$`).
 
-## O motor não cobra deslize de TP — alvo de 1 tick está PROIBIDO
+## O motor COBRA o deslize do TP nativo — e isso apagou o edge do WDO F1
 
 **Ordem do dono, 2026-09-08: `profit_ticks=1` (T1) não entra em nenhuma medição do WDO F1 nem da família maker — nem como candidato, nem como baseline, nem como "linha de referência" numa tabela.** Não é preferência de parâmetro. É uma geometria que o motor sabe simular e a corretora não sabe executar.
 
-**O número.** 1ª operação real do robô: entrada 5150,0 → alvo 5150,5 → saída 5150,0. O TP nativo derrapou 1 tick e apagou o bruto inteiro — R$0,00 bruto, −R$0,50 de corretagem. Com alvo de 1 tick, 1 tick de deslize é **100% do ganho**. Item 4.8 de `LICOES_DE_PRODUCAO.md`.
+**O número.** O `tp` nativo (o que viaja amarrado no request da entrada) não fica *resting* no livro: a corretora o executa como gatilho varrido a mercado. População completa de operação real do robô — 3 pregões, reconstruída do histórico de DEALS+ORDENS do terminal, **n=11 saídas por alvo nativo**:
 
-**A parte que importa para quem vai medir qualquer coisa, não só T1:** a varredura de 250 células de `profit_ticks × stop_ticks` que consagrou T1 rodou neste motor, que **não modela deslize no preenchimento do alvo nativo**. Ela não escolheu a melhor geometria — escolheu a que melhor explora a otimização que falta no modelo de preenchimento.
+| deslize (ticks) | 0 | −1 | −2 |
+|---|---|---|---|
+| n | 1 | 9 | 1 |
+
+média −1,000 · mediana −1,0 · desvio 0,447 · **10 contra a posição, 0 a favor** (sob moeda justa, p ≈ 0,001). R$55,00 de deslize contra R$95,00 de bruto teórico — 57,9%. Item 4.8 de `LICOES_DE_PRODUCAO.md`.
+
+O **stop** foi medido separado e **não desliza igual**: n=2 do robô (0 e +1 tick, a favor) + 3 saídas manuais (0 tick) — em 5 de 5 nunca pior que o nível pedido. Ele continua pagando só `slippage_ticks`; não empilhe os dois.
+
+**Como o motor cobra** (desde 2026-09-08): `IntradayCostModel.target_slippage_ticks` + `costs.apply_deslize_alvo_nativo()`, aplicado em `machine._close_position` **só no alvo maker NÃO fatiado** — a saída fatiada posiciona ordens-limite reais no livro e continua pagando zero. `config_for` liga sozinho (`DESLIZE_ALVO_NATIVO_TICKS = 1.0`) quando `target_fills_as_maker=True`, então backtest, sombra e produção herdam junto; passe `target_slippage_ticks=0.0` explícito para reproduzir o motor antigo e outro número para medir sensibilidade (n=11 é pouco — o forte da amostra é a direção, não a magnitude). A tabela padrão carimba `desliz.alvo 1,0t` na linha, porque duas linhas com o mesmo `líquido R$` e premissas de deslize diferentes não são comparáveis.
+
+**O que a cobrança fez com o robô.** Com alvo de 2 ticks (T2, produção) o ganho por vitória cai de R$9,50 para **R$4,50** e o breakeven sobe de **90,00% para 95,00%** — contra o stop de 16 ticks. Medido nas duas janelas congeladas, capital real R$375 (`scripts/daytrade/wdof1_deslize_alvo_is_oos_2026_09_08.py`):
+
+| janela | geometria | líquido R$ | win% | trades | pregões s/ trade | caixa mín |
+|---|---|---|---|---|---|---|
+| IS (72) | T2/S16 **sem** deslize | +347.548,50 | 94,2% | 19.893 | 0/72 | 370,00 |
+| IS | T2/S16 **com** deslize | **−242,50** | 93,3% | 165 | **71/72** | 132,50 |
+| IS | T3/S16 com deslize (dono) | −229,00 | 88,0% | 158 | **70/72** | 146,00 |
+| IS | T4/S16 com deslize | −244,00 | 83,3% | 108 | **70/72** | 131,00 |
+| OOS (51) | T2/S16 **sem** deslize | +143.214,50 | 94,5% | 9.635 | 0/51 | 290,00 |
+| OOS | T2/S16 **com** deslize | **−273,50** | 94,1% | 407 | **49/51** | 101,50 |
+| OOS | T3/S16 com deslize (dono) | −237,00 | 89,2% | 1.784 | **37/51** | 121,00 |
+
+Nas DUAS janelas, cobrar o deslize tira o robô do ar em poucos pregões partindo do capital real. A expectativa por trade, a 1 contrato, sai de **+R$4,27 (T2 sem deslize)** para **−R$0,45 (T2 com deslize)** e **−R$0,09 (T3, a compensação do dono)**.
+
+As linhas com deslize estão **censuradas** (70-71/72 e 37-49/51 pregões sem trade, `caixa_mín` abaixo da margem crua de R$150) — o líquido delas mede o portão de capital, não o edge. O que mede edge é o win% contra o breakeven, e ele é **invariante ao deslize** (o gatilho não muda, só o preço de saída), então vale o win% de n grande da linha não-censurada: **94,5% (n=9.635), IC 95% [94,04% ; 94,96%] — o breakeven de 95,00% fica FORA do intervalo, acima dele** (z = −2,15).
+
+> **T2/S16 não tem edge depois de cobrar o deslize.** A compensação do dono (pedir 3 ticks para receber 2) devolve o payoff, mas o gatilho anda junto e o win% cai para 89,9% (n=5.076) contra breakeven de 90,00% — o breakeven cai DENTRO do IC [89,07% ; 90,73%]. Ela não resgata: leva de "negativo mensurável" a "cara-ou-coroa em cima do zero".
 
 > Um ótimo que mora exatamente no ponto onde o simulador é mais otimista que a realidade não é um ótimo. É o sintoma de um modelo incompleto.
 
-Duas consequências práticas:
+Consequências que continuam valendo:
 
-1. O "padrão estrutural" daquela varredura (*alvo=1 é o único regime saudável*) **descreve o motor, não o mercado** — não cite como achado de estratégia.
-2. Toda comparação T1×T2 já feita está viciada no mesmo eixo: ela cobra do T2 um custo de execução que não cobra do T1. Inclusive a de 2026-09-04, que concluiu "T2 é pior em todos os eixos".
-
-Produção é **T2/S16**. Enquanto `backtest/intraday/` não cobrar esse deslize, qualquer varredura de `profit_ticks` vai puxar para alvos pequenos pelo mesmo motivo — modelar o deslize é o pré-requisito para essa pergunta voltar a ser respondível, e é trabalho ainda não feito.
+1. O "padrão estrutural" da varredura de 250 células (*alvo=1 é o único regime saudável*) **descreve o motor antigo, não o mercado** — não cite como achado de estratégia. Aquela grade rodou sem cobrar o deslize e escolheu a célula que mais explorava a lacuna do modelo.
+2. Toda comparação T1×T2 feita antes de 2026-09-08 está viciada no mesmo eixo. Inclusive a de 2026-09-04.
+3. **7 scripts antigos de laboratório montam `IntradayCostModel` na mão** (`copa_lab.py`, `f8_win_lacuna_execucao_sweep.py`, `wdo_fillreal_study*.py`, `wdo_geo_sweep.py`, `wdo_geo_grid_rolling_market_sweep.py`, `wdo_grid_reload_f1_lab.py`) com `target_fills_as_maker=True` — eles **não** passam por `config_for` e continuam com o alvo de graça. Rodar um deles hoje produz número otimista de novo.
 
 ## Testes rodam em paralelo — sempre
 
@@ -178,6 +203,7 @@ FastAPI + Jinja2 templates in `src/dashboard/templates/` (partials in `partials/
 ## What NOT to do (from AGENTS.md)
 
 - Medir `profit_ticks=1` (T1) no WDO F1 / família maker — nem como baseline (ver seção do deslize de TP).
+- Comparar um número medido **antes** de 2026-09-08 com um medido depois sem checar o aviso `desliz.alvo` da linha: são modelos de custo diferentes.
 - Ler um `líquido` de backtest sem antes conferir **trades** e **pregões sem trade**: janela onde o robô parou é censurada.
 - Tratar o piso de capital cheio (R$375 no WDO@) como condição de continuidade — ele é indicação de PARTIDA.
 - Add dependencies without justification (project weight matters).
