@@ -428,3 +428,106 @@ def test_vida_da_posicao_consulta_que_LEVANTA_nao_propaga():
     execu.last_entry_ref = 909
 
     assert execu.vida_da_posicao_ms() is None
+
+
+# ---------- exit_fill: encolher nao e' preencher -----------------------------
+#
+# Incidente 2026-09-09, slot `dt-wdo_grid_reload_maker-wdo@-live`, conta real.
+# A SHORT #02 foi fechada A MERCADO as 10:53:33 BRT @ 5124,50 (deal 475959377,
+# -R$5,00) -- fechamento que o robo tinha marcado como recusado. Na barra
+# seguinte a posicao estava menor, `exit_fill` concluiu "minha fatia
+# preencheu" e carimbou o preco do LIMITE que ela tinha pedido, 5123,00.
+#
+# O diario gravou "TARGET SHORT #02 @ 5123,00 - R$ +9,50" para uma saida que a
+# corretora executou a 5124,50 por -R$5,00: R$14,50 de erro num trade so', com
+# o SINAL trocado, no evento que estava justamente sob observacao.
+
+
+class _BrokerComPosicao(_FakeBroker):
+    """`_FakeBroker` mais `position_state`, que e' o que `_read_position`
+    consulta. `posicao=None` = a corretora nao reporta mais nada aberto."""
+
+    def __init__(self, posicao=None, **kwargs):
+        super().__init__(**kwargs)
+        self.posicao = posicao
+
+    def connect(self):
+        return True
+
+    def position_state(self, ticker):
+        return {"ok": True, "position": self.posicao, "note": ""}
+
+
+def _execucao_com_fatia_armada(broker, *, limite=5123.0, ticket_saida="777"):
+    """Execucao com UMA fatia de saida vigiada de 1 contrato, sobre uma
+    posicao short que a corretora ja nao reporta -- o estado exato do
+    incidente."""
+    from core.live_models import Order, OrderSide, OrderType
+
+    execu = MT5IntradayExecution(broker=broker, symbol="WDO@")
+    execu.last_entry_ref = 909
+    execu.pending_exit_order = Order(
+        ticker="WDO@", side=OrderSide.BUY, quantity=1, order_type=OrderType.LIMIT,
+        limit_price=limite, broker_ref=ticket_saida)
+    execu._exit_baseline_qty = 1.0
+    return execu
+
+
+def test_exit_fill_nao_inventa_fatia_quando_quem_encolheu_a_posicao_foi_OUTRA_ordem():
+    """A posicao encolheu, mas o deal e' de OUTRO ticket -- nao foi a nossa
+    fatia. Sem deal nosso nao ha fill nosso: e' divergencia, e quem trata
+    divergencia e' `_check_posicao_desconhecida`, nao um preco inventado
+    aqui."""
+    outro_fechamento = {"order": 555, "entry": 1, "price": 5124.5, "quantity": 1,
+                        "time": 200}
+    broker = _BrokerComPosicao(
+        posicao=None,
+        deals={909: {"ok": True, "deals": [outro_fechamento], "note": ""}})
+    execu = _execucao_com_fatia_armada(broker)
+
+    assert execu.exit_fill("short", bar=None) is None, (
+        "encolher nao e' preencher -- carimbar aqui o limite pedido (5123,00) "
+        "foi o que gravou '+R$9,50' para uma saida real de -R$5,00 @ 5124,50")
+
+
+def test_exit_fill_usa_o_preco_do_DEAL_da_nossa_fatia_e_nao_o_limite_pedido():
+    """Quando a fatia REALMENTE preencheu, o preco vem do deal do NOSSO
+    ticket. Uma limite preenche "no nivel ou melhor", e "melhor" e' dinheiro
+    que o diario perdia ao repetir o nivel pedido."""
+    nosso = {"order": 777, "entry": 1, "price": 5122.5, "quantity": 1, "time": 210}
+    broker = _BrokerComPosicao(
+        posicao=None,
+        deals={909: {"ok": True, "deals": [nosso], "note": ""}})
+    execu = _execucao_com_fatia_armada(broker, limite=5123.0)
+
+    fill = execu.exit_fill("short", bar=None)
+
+    assert fill is not None
+    assert fill["quantity"] == 1
+    assert fill["price"] == pytest.approx(5122.5), (
+        "preco do DEAL (5122,50), nao o limite pedido (5123,00)")
+
+
+def test_exit_fill_de_dubles_sem_historico_mantem_o_comportamento_antigo():
+    """Broker sem `deals_for_position` (dublê antigo, `PaperBroker`) nao tem
+    historico para confirmar nada -- degrada para o caminho anterior em vez de
+    travar. Mesma politica dos outros metodos deste arquivo."""
+    from core.live_models import Order, OrderSide, OrderType
+
+    class _SemHistorico:
+        def connect(self):
+            return True
+
+        def position_state(self, ticker):
+            return {"ok": True, "position": None, "note": ""}
+
+    execu = MT5IntradayExecution(broker=_SemHistorico(), symbol="WDO@")
+    execu.last_entry_ref = 909
+    execu.pending_exit_order = Order(
+        ticker="WDO@", side=OrderSide.BUY, quantity=1, order_type=OrderType.LIMIT,
+        limit_price=5123.0, broker_ref="777")
+    execu._exit_baseline_qty = 1.0
+
+    fill = execu.exit_fill("short", bar=None)
+
+    assert fill == {"price": 5123.0, "quantity": 1}

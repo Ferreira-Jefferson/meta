@@ -2026,3 +2026,132 @@ def test_deals_for_position_sem_conexao_e_falha(fake_mt5):
 
     assert resp["ok"] is False
     assert resp["deals"] is None
+
+
+# ---------- incidente 2026-09-09: posicao real de 2 contratos SEM SL/TP -----
+#
+# 10:55:09 BRT, slot `dt-wdo_grid_reload_maker-wdo@-live`, conta real de
+# R$375. Estado observado no terminal:
+#
+#     WDOV26 BUY vol=2.0 open=5122.5 SL=0.0 TP=0.0 magic=862399285
+#     bid 5124.0 / ask 5124.5
+#     symbol_info: trade_stops_level=0, trade_tick_size=0.5
+#
+# e no diario, repetido a cada passo por ~3 minutos ate' o dono zerar na mao:
+#
+#     NAO CONSEGUI proteger a posicao de WDO@ ... MT5 recusou SL/TP
+#     (retcode=10016): Invalid stops
+#
+# Os dois testes abaixo cobrem as duas metades mecanicas disso.
+
+
+def test_niveis_protecao_afasta_nivel_do_lado_errado_mesmo_com_stops_level_zero(fake_mt5):
+    """`trade_stops_level=0` nao quer dizer "aceita nivel de qualquer lado".
+
+    O WDOV26 na Rico reporta `trade_stops_level = 0` -- nenhuma distancia
+    MINIMA exigida -- e por isso `distancia_min` dava 0,0 e o afastamento era
+    pulado por inteiro. Um SL de 5131,50 numa posicao LONG com bid em 5124,00
+    ia inteiro para o servidor, que respondia `10016 Invalid stops`, e como o
+    `TRADE_ACTION_SLTP` e' atomico a posicao ficava NUA.
+
+    Com o piso de 1 tick o nivel impossivel vira nivel valido (bid - 1 tick =
+    5123,50) mais um aviso no diario, em vez de protecao nenhuma."""
+    mod, calls = fake_mt5(
+        symbol_info=_symbol_info_protecao(trade_stops_level=0),
+        tick=_tick(bid=5124.0, ask=5124.5),
+        order_send_result=_order_send_result(retcode=106))
+    broker = MT5Broker()
+
+    resultado = broker.set_protection("WDO@", position_ticket=555, side="long",
+                                      stop=5131.5, target=None)
+
+    enviado = calls["order_send"][0]
+    assert enviado["sl"] == pytest.approx(5123.5), (
+        "SL de posicao LONG tem de ficar ABAIXO do mercado -- 5131,50 e' o stop "
+        "de uma posicao SHORT e o servidor recusa com 10016")
+    assert resultado["ok"] is True
+    assert "afastado" in resultado["note"]
+
+
+def test_set_protection_recusada_reenvia_SO_o_stop_para_a_posicao_nao_ficar_nua(fake_mt5):
+    """`TRADE_ACTION_SLTP` e' atomico: uma perna invalida derruba a outra.
+
+    Sem esta segunda tentativa, um alvo que a corretora recusa deixa a posicao
+    SEM STOP -- que e' o estado que zerou a conta em 2026-08-28. O alvo e'
+    desejavel; o stop e' o que impede a ruina."""
+    def resposta(request):
+        # 1a tentativa (mexendo nas DUAS pernas) -> recusada.
+        # 2a (tp = tp_atual, ou seja "deixa o alvo como esta") -> aceita.
+        if request["tp"] != 0.0:
+            return _order_send_result(retcode=10016, comment="Invalid stops")
+        return _order_send_result(retcode=106)
+
+    mod, calls = fake_mt5(
+        symbol_info=_symbol_info_protecao(trade_stops_level=0),
+        tick=_tick(bid=5200.0, ask=5200.5),
+        order_send_result=resposta)
+    broker = MT5Broker()
+
+    resultado = broker.set_protection("WDO@", position_ticket=555, side="long",
+                                      stop=5190.0, target=5210.0,
+                                      sl_atual=0.0, tp_atual=0.0)
+
+    assert len(calls["order_send"]) == 2, "tem de INSISTIR so' com o stop"
+    assert calls["order_send"][0]["tp"] == pytest.approx(5210.0)
+    assert calls["order_send"][1]["tp"] == pytest.approx(0.0)
+    assert calls["order_send"][1]["sl"] == pytest.approx(5190.0)
+    assert resultado["ok"] is True, "o stop entrou -- a posicao NAO ficou nua"
+    assert resultado["sl"] == pytest.approx(5190.0)
+    assert "SO' COM O STOP" in resultado["note"]
+
+
+def test_desfecho_de_done_sem_fill_INSISTE_ate_o_deal_aparecer_no_historico(fake_mt5):
+    """O historico do terminal e' ASSINCRONO -- perguntar uma vez so' e' nao
+    perguntar.
+
+    2026-09-09 10:53:31 BRT: o fechamento a mercado da SHORT #02 voltou
+    `retcode=DONE` com `price=0.0, deal=0`. A consulta imediata nao achou o
+    ticket, o robo registrou "RECUSA DE FECHAMENTO #1" e seguiu se achando
+    vendido. A corretora tinha executado @ 5124,50. Dali sairam a ordem-limite
+    orfa e, em conta NETTING, os 2 contratos.
+
+    Aqui o historico so' responde na SEGUNDA pergunta -- exatamente o atraso
+    real -- e o desfecho tem de ser FILLED com o preco do DEAL, nunca SENT."""
+    class _HistoricoQueDemora(dict):
+        """`.get` devolve vazio na 1a consulta e o registro FILLED da 2a em
+        diante -- imita o deal que so' aparece ~2s depois do `order_send`."""
+
+        def __init__(self, registro):
+            super().__init__()
+            self._registro = registro
+            self.consultas = 0
+
+        def get(self, ticket, default=None):
+            self.consultas += 1
+            if self.consultas <= 1:
+                return []
+            return [self._registro]
+
+    historico = _HistoricoQueDemora(
+        types.SimpleNamespace(state=4, position_id=7001)  # 4 = ORDER_STATE_FILLED
+    )
+    deal = types.SimpleNamespace(ticket=99, order=888, entry=1, type=0, price=5124.5,
+                                 volume=1.0, profit=-5.0, commission=0.0, swap=0.0,
+                                 fee=0.0, time=1, time_msc=1000, comment="")
+    fake_mt5(symbol_info=_symbol_info(), tick=_tick(bid=5124.0, ask=5124.5),
+             order_send_result=_order_send_result(retcode=106, price=0.0, deal=0,
+                                                  order=888),
+             history_orders_by_ticket=historico,
+             history_deals_by_position={7001: [deal]})
+
+    broker = MT5Broker()
+    broker.ESPERAS_CONFIRMACAO_S = (0.0, 0.0, 0.0)  # sem dormir de verdade na suite
+
+    executada = broker.place(
+        Order(ticker="WDO@", side=OrderSide.SELL, quantity=1, order_type=OrderType.MARKET))
+
+    assert historico.consultas >= 2, "tem de perguntar de novo depois de esperar"
+    assert executada.status is OrderStatus.FILLED, (
+        "o historico CONFIRMOU o fill na 2a pergunta -- SENT aqui e' o bug que "
+        "fez o robo negar um fechamento que a corretora tinha executado")
+    assert executada.avg_price == pytest.approx(5124.5), "preco do DEAL, nao da crenca"

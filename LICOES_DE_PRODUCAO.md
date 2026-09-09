@@ -841,6 +841,138 @@ ruim: é medição ao contrário.
 > limite de saída que ele esqueceu no livro. Três causas, um desfecho.
 > **Pergunte à plataforma nova:** perguntas 68, 69 e 70 da Parte 8.
 
+### 1.25 A conferência de exposição era cega ao pior estado: comparava só a MAGNITUDE da posição, e um portão de "ordem em trânsito" a desligava por inteiro — 2 contratos NUS numa conta de R$375 — CORRIGIDO 2026-09-09
+
+Segundo dia do `wdo_grid_reload_maker` ao vivo com `fatiar_saida_alvo=True`,
+slot `dt-wdo_grid_reload_maker-wdo@-live`, conta real Rico (11724331),
+NETTING, capital R$375, WDO@ (WDOV26). É a MESMA família do item 1.24, um dia
+depois, por **três mecanismos novos**. Tudo abaixo foi reconstruído do
+histórico de DEALS+ORDENS do terminal (magic 862399285) cruzado com os
+`live_events` do `db/live.sqlite`. Horas do terminal (= BRT−3); entre
+parênteses, a hora que aparece no diário.
+
+| hora | evento | efeito na CORRETORA | o que o ROBÔ achava |
+|---|---|---|---|
+| 07:53:07 | BUY_LIMIT 5939226225 preenche @5122,0 | long 1 (pos 5939226225) | long 1 — correto |
+| 07:53:28 | SELL_LIMIT 5939228267 @5123,5 preenche | zerado, +R$15,00 bruto | idem — correto |
+| 07:53:30 | SELL_LIMIT 5939228272 @5124,0 (sl 5132,0) preenche | short 1 | short 1 — correto |
+| **07:53:33** | manda fechamento A MERCADO; `order_send` volta `DONE` com `price=0.0, deal=0` | **BUY 5939228664, deal 475959377, @5124,50, −R$5,00 → ZERADO** | **short 1** ← divergiu |
+| 07:54:05 | arma a limite de saída da SHORT #02 (BUY_LIMIT **5939230468** @5123,0) **e** a entrada LONG #03 (BUY_LIMIT **5939230472** @5122,5) | 2 limites vivas, conta zerada | short 1 + 1 entrada armada |
+| **07:54:17** | **5939230468 preenche @5123,0** | **ABRE long 1** — não fecha nada | conta o MESMO fill DUAS vezes: "TARGET SHORT #02" e "LONG #03" |
+| 07:54:25 | SELL_LIMIT 5939231337 @5123,5 fecha o long; SELL_LIMIT 5939231615 @5123,5 (sl 5131,5) abre short | short 1 | short 1 — concordam por um instante |
+| **07:55:07** | **5939230472**, a entrada órfã de 07:54:05 que ninguém cancelou, preenche @5122,5 e **fecha o short**; no MESMO segundo a fatia de saída da SHORT #04 (BUY_LIMIT 5939234311 @5122,5) preenche num book já zerado | **long 1** | short 1 |
+| 07:55:18 | re-arma a fatia de saída (BUY_LIMIT 5939236131 @5122,5), que preenche na hora | **long 2, SL=0, TP=0** | short 1 |
+| 07:55:09 em diante | a cada passo: `NAO CONSEGUI proteger a posicao de WDO@ ... MT5 recusou SL/TP (retcode=10016): Invalid stops` | `WDOV26 BUY vol=2.0 open=5122,5 SL=0.0 TP=0.0`, bid 5124,0 / ask 5124,5 | — |
+| 07:58:10 | **o DONO zera na mão**: SELL 2,0 @5122,5, magic=0 | zerado | — |
+
+**~3 minutos, 2 contratos, R$0 de proteção registrada na corretora, numa
+conta cujo teto por caixa é 1 contrato** (R$375 / margem R$150). Quem
+encerrou foi o dono, não o robô — de novo.
+
+**(A) O SL recusado era do LADO ERRADO, e `trade_stops_level = 0` desligou a
+única checagem que existia.** A máquina se achava SHORT #04 e mandava
+`current_stop = 5131,50` — o stop de uma posição VENDIDA — para uma posição
+COMPRADA com bid em 5124,00. SL acima do mercado num long é ordem a mercado
+disfarçada, e o servidor recusa. Não era proximidade: o WDOV26 na Rico
+reporta `trade_stops_level = 0`, isto é "sem distância mínima", e o código
+lia isso como `distancia_min = 0,0` e **pulava o afastamento inteiro**. Pior:
+`TRADE_ACTION_SLTP` é ATÔMICO — a perna inválida derrubava a válida junto, e
+a posição ficava sem NADA. Não foi "ficou sem alvo": foi ficar sem stop, que
+é o modo de morte da Parte 0.
+
+**(B) A conferência de exposição era cega ao pior estado, por dois motivos
+independentes.** `IntradayLiveRuntime._check_posicao_desconhecida` existe
+justamente para pegar o que o item 1.7 descreve, e não pegou:
+
+1. **Comparava só a MAGNITUDE.** `_Position.quantity` é magnitude — o sinal
+   mora em `.side`. Máquina SHORT 1 contra corretora LONG 1 dava `1 == 1` e
+   passava como "tudo certo". A **inversão PERFEITA**, que é exatamente o
+   desfecho do item 1.4, era o único caso que a checagem não conseguia ver.
+2. **Saía na PRIMEIRA linha quando `_tem_ordem_em_transito()` era `True`** — e
+   com uma fatia de saída pendurada isso é `True` o tempo todo. Durante os ~3
+   minutos do incidente ela **nunca comparou nada**.
+
+**(C) O diário gravou a crença, não o MT5, porque "a posição encolheu" era
+tratado como "minha fatia preencheu".** `MT5IntradayExecution.exit_fill`
+inferia o preenchimento do ENCOLHIMENTO da posição e carimbava o preço do
+LIMITE pedido, sem consultar deal nenhum. O número medido: gravou **"TARGET
+SHORT #02 @5123,00 — R$ +9,50"** para uma saída que a corretora executou a
+**5124,50 por −R$5,00** — **R$14,50 de erro num único trade, com o SINAL
+trocado**, no evento que estava sob observação. O balanço do diário na janela
+10:53–10:58 é **+R$14,50 +R$9,50 +R$4,50 = +R$28,50**; os deals reais da
+mesma janela somam **+R$25,00 bruto**, e a distribuição por trade não bate em
+nada: real foi **+15,00 / −5,00 / +5,00 / +10,00** — este último, o fill da
+órfã, nunca foi journalizado. Terceira vez seguida (1.17, 1.24, aqui) que o
+diário afirma o contrário do extrato, sempre para o lado bonito.
+
+**Correções aplicadas (cada uma com teste que falha no código antigo; suíte
+1820 passed / 1 skipped):**
+
+1. `MT5Broker._niveis_protecao`: **piso de 1 tick** na distância mínima,
+   sempre — `trade_stops_level = 0` significa "sem distância mínima", nunca
+   "aceita nível de qualquer lado".
+2. `MT5Broker.set_protection`: quando o pedido com as DUAS pernas é recusado,
+   **reenvia só com o stop** (`tp = tp_atual`). Ficar sem alvo custa um alvo;
+   ficar sem stop foi o que zerou a conta em 2026-08-28.
+3. `MT5Broker._desfecho_de_done_sem_fill`: pergunta ao histórico **4x ao longo
+   de 1,75s** (`ESPERAS_CONFIRMACAO_S`) em vez de 1x no mesmo instante — a
+   própria docstring já registrava que "no incidente o fill só apareceu 2
+   segundos depois".
+4. `IntradayLiveRuntime._check_posicao_desconhecida`: compara **LADO**, e a
+   comparação de lado **não passa pelo portão de trânsito**. Ordem em trânsito
+   explica quantidade diferente; nunca explica a corretora estar do lado
+   contrário.
+5. Mesma função: confere a quantidade da corretora contra o **teto por caixa**
+   (`_cap_capital_atual`) — R$375 / R$150 = 1 contrato, a corretora tinha 2 —
+   também **sem** portão, porque a máquina nunca MANDA além do teto, então
+   excedente não pode estar "a caminho".
+6. `_tenta_zerar_por_freio_duro`: com lado divergente, **não** tenta fechar a
+   posição sozinho (fechar às cegas em NETTING sai do lado e do tamanho
+   errados e INVERTE — item 1.4); cancela só as ordens vivas, que é
+   inequivocamente seguro.
+7. `MT5IntradayExecution.exit_fill`: a fatia só é dada como preenchida quando
+   os DEALS do NOSSO ticket de saída confirmam, e o preço é o do deal.
+
+> **Regra 1 — conferir posição contra a corretora é comparar LADO *e*
+> tamanho.** Comparar só tamanho deixa passar a inversão perfeita, que é o
+> pior estado que existe: exposição do dobro do tamanho aparente (a sua mais
+> a dela), proteção calculada para o lado errado, e todo teto de risco a
+> jusante rodando sobre o número errado. Uma checagem de divergência que não
+> consegue ver o pior caso não é uma checagem fraca — é ausência de checagem
+> no único caso que importa.
+> **Regra 2 — um filtro de "isso pode ser atraso normal" tem de ser aplicado
+> à grandeza que o atraso de fato explica.** Atraso explica QUANTIDADE.
+> **Nunca explica LADO**, e nunca explica quantidade ACIMA do que a máquina é
+> capaz de pedir. Colocar todas as comparações atrás do portão que só vale
+> para uma delas desliga o mecanismo inteiro pelo caminho mais comum — aqui,
+> uma fatia de saída pendurada, que é o estado NORMAL do robô. É o corolário
+> do 1.23 pelo outro lado: **guarda larga demais não falha ruidosamente; ela
+> só deixa de agir exatamente onde precisava.**
+> **Regra 3 — "sem distância mínima" nunca quer dizer "de qualquer lado".**
+> Todo nível de proteção tem um LADO obrigatório em relação ao mercado (stop
+> de long abaixo, stop de short acima), e esse lado não depende de nenhum
+> parâmetro da corretora. Parâmetro zerado é ausência de restrição
+> ADICIONAL, jamais permissão para violar a restrição estrutural.
+> **Regra 4 — pedido de proteção com duas pernas é atômico: se pode ser
+> recusado por uma, tem de existir caminho de degradar para a perna que
+> impede a RUÍNA.** Sem esse caminho, um alvo mal calculado apaga o stop e um
+> erro barato vira o erro caro. A ordem de prioridade é fixa: stop primeiro,
+> alvo se sobrar.
+> **Regra 5 — encolher não é preencher.** Atribuir a uma ordem NOSSA qualquer
+> redução da posição é inventar quem fechou e a que preço; em conta NETTING
+> quem "fechou" pode ter sido alguém que também ABRIU o lado contrário — foi
+> literalmente o caso, com o mesmo `broker_ref` 5939230468 gravado em duas
+> linhas de `live_orders` (id 964, `saida day trade (target)`, e id 965,
+> `entrada day trade`). Preenchimento de uma ordem só é confirmado pelos
+> DEALS daquele ticket, e o preço é o do deal (item 1.17, agora aplicado à
+> fatia de saída).
+> **Regra 6 — consulta a histórico assíncrono precisa de PRAZO, não de uma
+> pergunta.** Perguntar uma única vez no instante da resposta é não
+> perguntar: o histórico do terminal chega depois. Um "não achei" sem prazo é
+> o mesmo "não sei" virando "não há" do item 1.6, com o agravante de ser
+> autoinfligido.
+> **Pergunte à plataforma nova:** perguntas 71 a 75 da Parte 8.
+
 ---
 
 ## Parte 2 — Estado, reinício e duplicidade
@@ -4389,6 +4521,46 @@ dinheiro ou meses.
     programar essa checagem como alarme, porque ela detecta o estado em uma
     leitura. As perguntas 3 (1.4) e 61 (1.23) cobrem duas ordens que somam no
     fechamento; esta cobre a ordem que sobrevive à posição. (1.24, 1.4)
+
+71. Esta plataforma aceita stop/alvo do LADO ERRADO do mercado (stop de
+    compra acima do bid, stop de venda abaixo do ask), ou recusa? E, se
+    recusa, ela recusa o pedido INTEIRO — derrubando junto a perna válida — ou
+    só a perna inválida? A resposta define se o robô precisa de um caminho de
+    degradar o pedido de proteção: quando o pedido é atômico, um alvo mal
+    calculado apaga o STOP, e a prioridade tem de ser codificada (reenviar só
+    o stop, aceitar ficar sem alvo). Aqui foram ~3 minutos com 2 contratos e
+    `SL=0.0 TP=0.0` porque as duas pernas caíram juntas em `retcode=10016`.
+    (1.25, 1.2)
+72. Existe "distância mínima de stop" nesta plataforma, e quando ela vem
+    **0**, o servidor ainda exige que o nível esteja do LADO correto do
+    mercado? Zero é ausência de restrição ADICIONAL, nunca permissão para
+    violar a restrição estrutural — e um código que lê `distancia_min = 0` e
+    pula o afastamento inteiro só falha quando o nível já está do lado errado,
+    que é exatamente o momento em que a proteção era necessária. O piso é 1
+    tick, sempre. (1.25, 1.11)
+73. O histórico de execuções é SÍNCRONO com a resposta da ordem? Se não, qual
+    é o atraso típico e qual é o máximo observado? Consulta a histórico
+    assíncrono precisa de PRAZO (várias tentativas ao longo de N segundos),
+    não de uma pergunta única no instante da resposta — perguntar uma vez e
+    não achar nada é indistinguível de não perguntar, e vira "não executou"
+    aplicado a uma ordem que executou. A pergunta 32 (1.17) pede a consulta;
+    a 68 (1.24) diz QUANDO ela é obrigatória; esta diz que ela precisa de
+    JANELA. (1.25, 1.24, 1.17)
+74. Dá para marcar uma ordem como **"só reduz posição"** (reduce-only)? Sem
+    isso, toda ordem de saída que sobrevive à posição que ela deveria fechar é
+    uma ENTRADA nova em conta netting — e, pior, um mesmo preenchimento pode
+    ser contabilizado como saída de uma posição e entrada de outra (aqui o
+    mesmo `broker_ref` apareceu em duas linhas do banco, como alvo e como
+    entrada). Se a plataforma não tiver reduce-only, o cancelamento das órfãs
+    antes de qualquer ordem nova deixa de ser boa prática e vira invariante.
+    (1.25, 1.24, 1.8)
+75. A API deixa consultar quais DEALS foram gerados por UM ticket de ordem
+    específico, ou só por posição? Sem o vínculo ticket → deals, a única
+    forma de saber se "a minha fatia preencheu" é inferir do ENCOLHIMENTO da
+    posição — e encolher não é preencher: em conta netting quem reduziu pode
+    ter sido outra ordem, inclusive uma que ABRIU o lado contrário. A
+    inferência por encolhimento gravou +R$9,50 num trade que a corretora
+    executou por −R$5,00, com o sinal trocado. (1.25, 1.17)
 
 ---
 

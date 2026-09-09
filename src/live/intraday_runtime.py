@@ -768,6 +768,14 @@ class IntradayLiveRuntime:
         # e que a MAQUINA nao conhece -- avisados uma vez cada (ver
         # `_check_posicao_desconhecida`).
         self._posicao_desconhecida_avisada: set = set()
+        # A corretora esta' de um lado e a maquina do outro? Enquanto isto for
+        # True o freio duro NAO tenta fechar a posicao sozinho -- ver
+        # `_tenta_zerar_por_freio_duro`. Nao e' persistido de proposito: um
+        # processo novo re-descobre a divergencia no primeiro passo
+        # (`_check_posicao_desconhecida` roda antes de consumir barra) e
+        # levanta o flag de novo, entao persistir so' criaria um segundo
+        # estado para sair de sincronia com o primeiro.
+        self._lado_divergente: bool = False
         # Envios ja' recusados por margem da conta, para nao repetir a mesma
         # linha no diario a cada barra enquanto a conta segue apertada (ver
         # `_check_margem_da_conta`). So' em memoria: um processo novo alerta
@@ -2234,9 +2242,25 @@ class IntradayLiveRuntime:
             # detectar e falhar alto por conta propria.
             return
         ticket = real["ticket"]
+        pos = self.machine.positions[0]
+        if real.get("side") is not None and real["side"] != pos.side:
+            # A corretora esta' de um lado e a maquina do outro: os niveis que
+            # esta funcao mandaria sao os do lado ERRADO, e `TRADE_ACTION_SLTP`
+            # e' order_send como qualquer outro -- vale a regra de que nada
+            # sai enquanto os dois nao concordarem sobre lado e tamanho.
+            #
+            # Em 2026-09-09 isto mandou, a cada passo por ~3 minutos, o stop de
+            # uma SHORT (5131,50) para uma posicao LONG com bid em 5124,00, e
+            # colhia `retcode=10016` de volta. Ali a recusa da corretora salvou
+            # -- mas so' porque o preco estava ABAIXO do nivel. Com o mercado
+            # acima de 5131,50 o mesmo pedido seria ACEITO, e a posicao ficaria
+            # com um "stop" que nao tem relacao nenhuma com a exposicao real.
+            #
+            # Nao alarma aqui: `_check_posicao_desconhecida` roda logo em
+            # seguida NO MESMO PASSO, com o alarme especifico e o freio.
+            return
         sl_atual = float(real.get("sl") or 0.0)
         tp_atual = float(real.get("tp") or 0.0)
-        pos = self.machine.positions[0]
         alvo_sl = pos.current_stop
         # MESMA regra de `_alvo_atomico` (ver `_alvo_registravel`): posicao
         # com saida FATIADA nao pode ganhar TP da corretora, senao ele fecha
@@ -2715,8 +2739,40 @@ class IntradayLiveRuntime:
         exposicao para de crescer enquanto o dono decide.
 
         Roda so' em execucao REAL: em sombra nao existe corretora para
-        divergir."""
-        if self.executor is None or self._tem_ordem_em_transito():
+        divergir.
+
+        **LADO e QUANTIDADE sao conferidos com criterios DIFERENTES, e essa
+        assimetria e' o coracao deste metodo** (2026-09-09):
+
+          * QUANTIDADE so' e' comparada quando nao ha ordem em transito --
+            uma limite que preencheu na corretora e ainda nao passou pelo
+            `limit_fill` da maquina explica um numero diferente, e alarmar
+            nisso seria alarmar no funcionamento normal.
+          * LADO e' comparado SEMPRE. Nenhuma ordem em transito explica a
+            corretora estar do lado CONTRARIO ao da maquina: entre "vendido"
+            e "comprado" nao ha atraso, ha erro. Um robo que acha que esta
+            vendido enquanto a corretora o tem comprado calcula stop, alvo e
+            fechamento todos ao contrario.
+
+        Foi exatamente o que aconteceu, e o gate de transito era o que
+        escondia: 2026-09-09 10:55:09 BRT, slot `dt-wdo_grid_reload_maker-
+        wdo@-live`, conta real de R$375. A maquina tinha SHORT #04 1 @
+        5123,50 (stop 5131,50); a corretora tinha LONG 2 @ 5122,50 com
+        `sl=0.0 tp=0.0`. Como havia uma fatia de saida pendurada
+        (`pending_exit_order`), `_tem_ordem_em_transito()` era True e este
+        metodo voltava na primeira linha, a cada passo, durante ~3 minutos --
+        sem nunca comparar nada. Nesse intervalo o `_ensure_protecao` tentava
+        registrar o stop do SHORT (5131,50, ACIMA do mercado) numa posicao
+        LONG e levava `retcode=10016 (Invalid stops)` de volta em todo passo,
+        entao a posicao de 2 contratos ficou NUA ate' o dono zerar na mao.
+
+        E o alarme de quantidade sozinho nao teria pego o pior caso, mesmo
+        sem o gate: `_Position.quantity` e' MAGNITUDE (o sinal mora em
+        `.side` -- ver `_on_closed`), entao maquina SHORT 1 contra corretora
+        LONG 1 comparava `1 == 1` e passava como "tudo certo". A inversao
+        perfeita, que e' o desfecho do incidente de 2026-08-28 e do item 1.4,
+        era exatamente o caso INVISIVEL."""
+        if self.executor is None:
             return
         estado = self.broker.position_state(self.strategy.symbol)
         if not estado.get("ok"):
@@ -2727,6 +2783,94 @@ class IntradayLiveRuntime:
         real = estado.get("position")
         qtd_real = int((real or {}).get("quantity") or 0)
         qtd_maquina = int(sum(p.quantity for p in self.machine.positions))
+
+        # ---- LADO: sem gate de transito, e antes de tudo. ----
+        lado_real = (real or {}).get("side") if qtd_real > 0 else None
+        lado_maquina = self.machine.positions[0].side if self.machine.positions else None
+        divergiu = (lado_real is not None and lado_maquina is not None
+                    and lado_real != lado_maquina)
+        # Baixa o flag assim que os dois voltam a concordar (inclusive quando um
+        # dos lados fica FLAT). Sem isto ele ficaria levantado pelo resto da
+        # VIDA DO PROCESSO -- e o processo `loop` roda continuo, atravessando
+        # pregoes -- entao um freio duro de outro motivo, dias depois, se
+        # recusaria a zerar uma posicao que ninguem mais disputa.
+        if not divergiu:
+            self._lado_divergente = False
+        if divergiu:
+            ticket = (real or {}).get("ticket")
+            chave = f"lado:{ticket}:{lado_real}"
+            if chave in self._posicao_desconhecida_avisada:
+                return
+            self._posicao_desconhecida_avisada.add(chave)
+            motivo = (
+                f"a corretora reporta {qtd_real} {self.strategy.symbol} {lado_real} "
+                f"@ {(real or {}).get('price')} (ticket {ticket}, "
+                f"sl={(real or {}).get('sl')} tp={(real or {}).get('tp')}) enquanto a "
+                f"maquina se acha {lado_maquina} de {qtd_maquina} -- LADO INVERTIDO, "
+                "stop e alvo desta posicao estao sendo calculados ao contrario"
+            )
+            self._snapshot.disaster_halt = True
+            self._snapshot.disaster_reason = motivo
+            self._lado_divergente = True
+            self._log(conn, account.id, "error",
+                      f"LADO DIVERGENTE em {self.strategy.symbol}: {motivo}. Parei de "
+                      "abrir ordem nova. NAO vou fechar sozinho -- confira o terminal "
+                      "e decida (ver incidente 2026-09-09).",
+                      {"sessao": session.isoformat(), "ticket": ticket,
+                       "lado_corretora": lado_real, "lado_maquina": lado_maquina,
+                       "quantidade_corretora": qtd_real,
+                       "quantidade_maquina": qtd_maquina})
+            return
+
+        # ---- TETO DE CAIXA: tambem sem gate de transito. ----
+        #
+        # Ordem do dono, 2026-09-09: "a trava nao deve deixar para sempre 1
+        # contrato, e' so' para respeitar os limites de quando pode aumentar e
+        # quando tem que diminuir a quantidade de contratos com base no valor
+        # disponivel em caixa". `_cap_capital_atual()` ja faz a metade de
+        # DENTRO -- e' recalculado a cada chamada sobre
+        # `initial_capital + realized_pnl`, entao acompanha o caixa para cima e
+        # para baixo. O que faltava era a metade de FORA: ninguem conferia o
+        # teto contra o que a CORRETORA de fato tem.
+        #
+        # No incidente de 2026-09-09 o caixa era R$375 e
+        # `contracts_from_capital_operacional(375, 150)` da' 1 -- a corretora
+        # tinha 2. Nenhuma ordem em transito explica isso: a maquina nunca
+        # MANDA alem do teto, entao exposicao acima dele nao pode estar "a
+        # caminho", ela ja e' erro.
+        #
+        # `max(teto, qtd_maquina)` de proposito: uma posicao que a maquina
+        # CONHECE nunca vira alarme aqui, mesmo que o teto tenha encolhido
+        # depois de ela abrir (o dono re-sincronizar o caixa para baixo no
+        # painel, por exemplo). Este teto e' limitador de exposicao NOVA, nao
+        # de posicao ja aberta -- ver a docstring de `_cap_capital_atual`.
+        teto = self.machine._cap_capital_atual()
+        if teto is not None and qtd_real > max(int(teto), qtd_maquina):
+            ticket = (real or {}).get("ticket")
+            chave = f"teto:{ticket}:{qtd_real}"
+            if chave in self._posicao_desconhecida_avisada:
+                return
+            self._posicao_desconhecida_avisada.add(chave)
+            motivo = (
+                f"a corretora reporta {qtd_real} {self.strategy.symbol} "
+                f"{(real or {}).get('side')} (ticket {ticket}) -- acima do teto de "
+                f"{int(teto)} que o caixa atual sustenta E acima dos {qtd_maquina} que "
+                "a maquina conhece. Exposicao que o caixa NAO cobre"
+            )
+            self._snapshot.disaster_halt = True
+            self._snapshot.disaster_reason = motivo
+            self._log(conn, account.id, "error",
+                      f"EXPOSICAO ACIMA DO CAIXA em {self.strategy.symbol}: {motivo}. "
+                      "Parei de abrir ordem nova. NAO vou fechar sozinho -- confira o "
+                      "terminal e decida (ver incidente 2026-09-09).",
+                      {"sessao": session.isoformat(), "ticket": ticket,
+                       "quantidade_corretora": qtd_real, "teto_por_caixa": int(teto),
+                       "quantidade_maquina": qtd_maquina})
+            return
+
+        # ---- QUANTIDADE: so' quando nao ha fill legitimamente a caminho. ----
+        if self._tem_ordem_em_transito():
+            return
         if qtd_real == qtd_maquina:
             return
         if qtd_real == 0:
@@ -2983,6 +3127,25 @@ class IntradayLiveRuntime:
             or bool(self._snapshot.pending_entry_refs)
             or (self.executor is not None and bool(self.executor.pending_orders))
         )
+        if tem_posicao and self._lado_divergente:
+            # LADO divergente: a maquina e a corretora discordam sobre estar
+            # comprada ou vendida, e fechar "a posicao" nessa condicao e'
+            # fechar as cegas -- em conta NETTING a ordem sai do tamanho e do
+            # lado ERRADOS e o excedente nao vira zero, vira posicao invertida
+            # (item 1.4). Foi o que o proprio executor recusou a fazer no
+            # incidente de 2026-09-09, e ele estava certo: o log da conta real
+            # termina com dezenas de `BrokerExecutionError` justamente porque
+            # o freio insistia em zerar uma posicao cujo lado ele nao conhecia.
+            #
+            # ORDEM viva continua sendo cancelada abaixo, e essa parte nao tem
+            # ambiguidade nenhuma: ordem que ninguem vigia preenche sozinha e
+            # so' pode PIORAR a exposicao ja divergente.
+            tem_posicao = False
+            self._log(conn, account.id, "warn",
+                      f"nao vou zerar {self.strategy.symbol} sozinho: a corretora e a "
+                      "maquina discordam sobre o LADO da posicao. Cancelo o que estiver "
+                      "no book e espero voce conferir o terminal.",
+                      {"sessao": session.isoformat()})
         if not (tem_posicao or tem_ordem):
             return
         ultimo_preco = getattr(self.broker, "last_price", None)
@@ -3000,6 +3163,14 @@ class IntradayLiveRuntime:
             preco = 0.0
         agora = pd.Timestamp(datetime.now(timezone.utc))
         bar_sintetica = Bar(ts=agora, open=preco, high=preco, low=preco, close=preco, volume=0.0)
+        if not tem_posicao and self._lado_divergente:
+            # So' o cancelamento -- `force_flatten` fecharia a posicao que o
+            # bloco acima acabou de decidir NAO fechar.
+            if self.executor is not None and self._snapshot.pending_entry_refs:
+                self._aplica_cancelamento(conn, account, self.executor.cancel_stale_refs(
+                    self._snapshot.pending_entry_refs, ts=agora))
+            self._drena_orfas_de_saida(conn, account, agora)
+            return
         try:
             eventos = self.machine.force_flatten(agora, preco)
         except BrokerExecutionError as erro:

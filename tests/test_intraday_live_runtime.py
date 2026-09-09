@@ -32,7 +32,8 @@ from backtest.intraday.costs import IntradayCostModel
 from backtest.intraday.machine import IntradayBacktestConfig, IntradayTrade
 from backtest.intraday.profiles import FUTURES_PROFILES
 from core.config import slot_by_id
-from core.live_models import AccountState, LivePosition, OrderSide, OrderStatus, OrderType
+from core.live_models import (AccountState, LivePosition, Order, OrderSide, OrderStatus,
+                              OrderType)
 from core.models import IntradayExitReason
 from journal import live_store as store
 from live import clock as live_clock
@@ -4193,6 +4194,138 @@ def test_exposicao_maior_na_corretora_do_que_na_maquina_trava_e_avisa(tmp_path, 
     assert any("EXPOSICAO DIVERGENTE" in m for m in eventos), eventos
 
 
+def test_ensure_protecao_nao_manda_SLTP_quando_o_lado_diverge(tmp_path, pregao_aberto):
+    """`TRADE_ACTION_SLTP` e' `order_send` como qualquer outro: nada sai
+    enquanto a maquina e a corretora nao concordarem sobre o LADO.
+
+    Em 2026-09-09 esta funcao mandou, a cada passo por ~3 minutos, o stop de
+    uma SHORT (5131,50) para uma posicao LONG com bid em 5124,00, colhendo
+    `retcode=10016` de volta. Ali a recusa da corretora salvou -- mas so'
+    porque o preco estava ABAIXO do nivel. Com o mercado acima de 5131,50 o
+    mesmo pedido seria ACEITO, e a posicao ficaria com um "stop" sem relacao
+    nenhuma com a exposicao real."""
+    broker = _FakeMT5Broker()
+    rt, feed = _abre_posicao_scriptada(tmp_path, broker, quantity=1)
+
+    broker.protecoes.clear()
+    broker.posicao = {"side": "short", "price": 10.00, "quantity": 1, "ticket": 1,
+                      "sl": 0.0, "tp": 0.0}
+    feed._barras.append(_bar("13:03", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:03:00"))
+
+    assert broker.protecoes == [], (
+        "lado divergente: os niveis seriam os do lado ERRADO -- nao pode sair "
+        f"pedido nenhum, e saiu {broker.protecoes}")
+
+
+def test_lado_invertido_com_a_MESMA_quantidade_trava_e_avisa(tmp_path, pregao_aberto):
+    """A inversao PERFEITA era o caso INVISIVEL da conferencia.
+
+    `_Position.quantity` e' MAGNITUDE -- o sinal mora em `.side` -- e a
+    conferencia so' comparava numero. Maquina LONG 1 contra corretora SHORT 1
+    dava `1 == 1` e passava como "tudo certo", que e' o desfecho do incidente
+    de 2026-08-28 (item 1.4: em conta NETTING o excedente nao vira zero, vira
+    lado contrario). Um robo nesse estado calcula stop, alvo e fechamento
+    todos ao contrario."""
+    broker = _FakeMT5Broker()
+    rt, feed = _abre_posicao_scriptada(tmp_path, broker, quantity=1)
+
+    broker.posicao = {"side": "short", "price": 10.00, "quantity": 1, "ticket": 1,
+                      "sl": 0.0, "tp": 0.0}
+    feed._barras.append(_bar("13:03", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:03:00"))
+
+    assert rt._snapshot.disaster_halt is True, (
+        "lado invertido com a mesma quantidade tem de travar -- comparar so' "
+        "magnitude deixa passar exatamente o pior estado possivel")
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        eventos = [e["message"] for e in store.recent_events(conn, acc.id, limit=50)]
+    assert any("LADO DIVERGENTE" in m for m in eventos), eventos
+
+
+def test_lado_invertido_trava_MESMO_com_ordem_em_transito(tmp_path, pregao_aberto):
+    """O incidente 2026-09-09, 10:55:09 BRT, conta real de R$375.
+
+    A maquina tinha SHORT #04 1 @ 5123,50; a corretora tinha LONG 2 @ 5122,50
+    com `sl=0.0 tp=0.0`. Havia uma fatia de saida pendurada, entao
+    `_tem_ordem_em_transito()` era True e a conferencia voltava na PRIMEIRA
+    linha, a cada passo, por ~3 minutos -- sem comparar nada. Nesse intervalo
+    o `_ensure_protecao` tentava por o stop do SHORT (5131,50, ACIMA do
+    mercado) numa posicao LONG e levava `10016 Invalid stops` de volta, entao
+    os 2 contratos ficaram NUS ate' o dono zerar na mao.
+
+    Ordem em transito explica QUANTIDADE diferente (o fill que a maquina ainda
+    nao contabilizou). Nao explica, nunca, a corretora estar do lado
+    CONTRARIO: entre "vendido" e "comprado" nao ha atraso, ha erro."""
+    broker = _FakeMT5Broker()
+    rt, feed = _abre_posicao_scriptada(tmp_path, broker, quantity=1)
+
+    # a fatia de saida pendurada -- e' isto que ligava `_tem_ordem_em_transito`
+    # e desligava a conferencia inteira.
+    rt.executor.pending_exit_order = Order(
+        ticker=SYMBOL, side=OrderSide.SELL, quantity=1,
+        order_type=OrderType.LIMIT, limit_price=11.00, broker_ref="777")
+    assert rt._tem_ordem_em_transito() is True, "o teste precisa do gate LIGADO"
+
+    broker.posicao = {"side": "short", "price": 10.00, "quantity": 2, "ticket": 1,
+                      "sl": 0.0, "tp": 0.0}
+    feed._barras.append(_bar("13:03", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:03:00"))
+
+    assert rt._snapshot.disaster_halt is True, (
+        "uma ordem em transito nao pode calar a conferencia de LADO")
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        eventos = [e["message"] for e in store.recent_events(conn, acc.id, limit=50)]
+    assert any("LADO DIVERGENTE" in m for m in eventos), eventos
+
+
+def test_exposicao_acima_do_teto_de_caixa_trava_mesmo_com_ordem_em_transito(
+    tmp_path, pregao_aberto,
+):
+    """Os numeros REAIS de 2026-09-09: caixa R$375, margem do WDO@ R$150.
+
+    `contracts_from_capital_operacional(375, 150)` da **1** contrato -- e a
+    corretora tinha **2**, abertos por ordens-limite de SAIDA que preencheram
+    num book ja zerado e, em conta NETTING, viraram ENTRADA.
+
+    Nenhuma ordem em transito explica exposicao acima do teto: a maquina nunca
+    MANDA alem dele, entao o excedente nao pode estar "a caminho" -- ja e'
+    erro. Por isso esta conferencia, como a de LADO, nao pode ficar atras do
+    gate de `_tem_ordem_em_transito`.
+
+    Ordem do dono: "a trava nao deve deixar para sempre 1 contrato, e' so' para
+    respeitar os limites de quando pode aumentar e quando tem que diminuir a
+    quantidade de contratos com base no valor disponivel em caixa"."""
+    broker = _FakeMT5Broker()
+    rt, feed = _abre_posicao_scriptada(tmp_path, broker, quantity=1)
+
+    # caixa e margem REAIS do slot WDO@ -- teto por caixa = 1 contrato.
+    rt.machine.config = replace(rt.machine.config,
+                                margin_per_contract_brl=150.0, initial_capital=375.0)
+    assert rt.machine._cap_capital_atual() == 1, "premissa do teste: o caixa cobre 1"
+
+    # fatia de saida pendurada: o gate que escondia tudo.
+    rt.executor.pending_exit_order = Order(
+        ticker=SYMBOL, side=OrderSide.SELL, quantity=1,
+        order_type=OrderType.LIMIT, limit_price=11.00, broker_ref="777")
+    assert rt._tem_ordem_em_transito() is True, "o teste precisa do gate LIGADO"
+
+    # mesmo LADO da maquina, de proposito: isola a conferencia de TETO da de
+    # lado, senao este teste passaria pelo motivo errado.
+    broker.posicao = {"side": "long", "price": 10.00, "quantity": 2, "ticket": 1,
+                      "sl": 0.0, "tp": 0.0}
+    feed._barras.append(_bar("13:03", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:03:00"))
+
+    assert rt._snapshot.disaster_halt is True
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        eventos = [e["message"] for e in store.recent_events(conn, acc.id, limit=50)]
+    assert any("EXPOSICAO ACIMA DO CAIXA" in m for m in eventos), eventos
+
+
 def test_falha_de_LEITURA_da_posicao_nunca_vira_posicao_fechada(tmp_path, pregao_aberto):
     """`open_position` devolvia `None` tanto para "nao ha posicao" quanto
     para "nao consegui perguntar". No caminho de fechamento isso registrava
@@ -4954,7 +5087,12 @@ def test_falha_alto_em_barra_posterior_do_lote_nao_apaga_fill_real_confirmado_em
     feed._barras.append(_bar("13:02", 10.00, 10.00, 10.00, 10.00))
     feed._barras.append(_bar("13:03", 10.00, 10.00, 10.00, 10.00))
     broker.leituras = 0
-    broker.falha_a_partir_de = 2  # a leitura da barra 13:02 confirma; a da 13:03 "cai"
+    # 3, nao 2: a 1a leitura do passo e' a de `_check_posicao_desconhecida`
+    # (desde 2026-09-09 ela roda em TODO passo, porque a conferencia de LADO
+    # nao pode ficar atras do gate de `_tem_ordem_em_transito` -- ver a
+    # docstring dela). Depois dela, a leitura da barra 13:02 confirma e a da
+    # 13:03 "cai", que e' o cenario que este teste descreve.
+    broker.falha_a_partir_de = 3
 
     with pytest.raises(BrokerExecutionError):
         rt.run_once(now=_agora("13:04:00"))
@@ -5148,7 +5286,10 @@ def test_falha_alto_no_filho_de_entrada_nao_apaga_fatia_de_saida_ja_confirmada_n
     # dentro da MESMA barra, "cai".
     broker.posicao = {"side": "long", "price": 10.00, "quantity": 1, "ticket": 1}
     broker.leituras = 0
-    broker.falha_a_partir_de = 2  # 1a leitura (a fatia) confirma; a 2a (o filho) cai
+    # 3, nao 2: a 1a leitura do passo e' a de `_check_posicao_desconhecida`
+    # (ver o teste irmao acima e a docstring dela). Depois dela, a leitura da
+    # fatia confirma e a do filho de entrada cai -- o cenario deste teste.
+    broker.falha_a_partir_de = 3
     feed._barras.append(_bar("13:04", 11.00, 11.20, 10.90, 11.00))
 
     with pytest.raises(BrokerExecutionError):

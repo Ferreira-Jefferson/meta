@@ -81,6 +81,7 @@ from __future__ import annotations
 import logging
 import math
 import re
+import time
 from typing import Optional
 
 from core.live_models import Order, OrderSide, OrderStatus
@@ -109,6 +110,15 @@ class MT5Broker(Broker):
 
     name = "mt5"
     mode = "mt5"
+
+    #: Esperas (segundos) ENTRE as consultas de `_desfecho_de_done_sem_fill`.
+    #: Sao 4 perguntas ao todo (a primeira e' imediata) ao longo de 1,75s.
+    #: O historico do terminal e' assincrono e no incidente de 2026-09-09 o
+    #: deal apareceu ~2s depois do `order_send` -- perguntar UMA vez, no
+    #: instante da resposta, era garantir o desfecho INDETERMINADO. Atributo
+    #: de classe (e nao literal) para o teste conseguir zerar a espera sem
+    #: dormir de verdade na suite, que roda em paralelo.
+    ESPERAS_CONFIRMACAO_S: tuple = (0.25, 0.5, 1.0)
 
     def __init__(
         self,
@@ -535,9 +545,10 @@ class MT5Broker(Broker):
             enum com exatamente este sentido; nao inventamos estado novo.
 
         O caso "ainda viva" e' comum e esperado: no incidente o fill so'
-        apareceu 2 segundos depois da resposta. Por isso a resposta certa
-        aqui e' 'ainda nao sei', e a decisao fica com quem pode esperar a
-        proxima barra."""
+        apareceu 2 segundos depois da resposta. Por isso este metodo INSISTE
+        (ver `ESPERAS_CONFIRMACAO_S`) antes de desistir -- e, se ainda assim
+        nao souber, a resposta certa e' 'ainda nao sei', e a decisao fica com
+        quem pode esperar a proxima barra."""
         preco = float(getattr(result, "price", 0.0) or 0.0)
         deal = getattr(result, "deal", None)
         comentario = getattr(result, "comment", "")
@@ -554,44 +565,69 @@ class MT5Broker(Broker):
             return order
 
         order.broker_ref = str(ticket)
-        estado = self.order_history_state(ticket)
-        if not estado.get("ok"):
-            order.status = OrderStatus.SENT
-            order.note = (f"{contexto}; a consulta do desfecho da ordem {ticket} "
-                          f"tambem falhou ({estado.get('note')}). INDETERMINADO -- "
-                          "nao trate como recusa.")
-            return order
+        # PERGUNTA MAIS DE UMA VEZ, esperando entre as tentativas. O historico
+        # do terminal e' ASSINCRONO: `order_send` volta ANTES de o deal
+        # existir em `history_deals_get`. A versao anterior consultava UMA
+        # vez, no mesmo instante, sem esperar nada -- entao o desfecho caia em
+        # INDETERMINADO justamente no caso que este metodo existe para
+        # resolver, e a propria docstring acima ja registrava que "no
+        # incidente o fill so' apareceu 2 segundos depois".
+        #
+        # O que a consulta unica custou, medido: 2026-09-09 10:53:31 BRT,
+        # slot `dt-wdo_grid_reload_maker-wdo@-live`, conta real. O fechamento
+        # a mercado da SHORT #02 voltou DONE sem fill, a consulta imediata nao
+        # achou nada, e o robo registrou "RECUSA DE FECHAMENTO #1". A
+        # corretora tinha executado @ 5124,50 (deal 475959377). O robo seguiu
+        # se achando vendido, armou a ordem-limite de saida de uma posicao que
+        # ja nao existia, e em conta NETTING essa limite virou ENTRADA nova --
+        # o primeiro elo da cadeia que terminou em LONG 2 contratos, sem
+        # SL/TP, numa conta de R$375.
+        ultimo = None
+        esperas = list(self.ESPERAS_CONFIRMACAO_S)
+        for tentativa in range(len(esperas) + 1):
+            estado = self.order_history_state(ticket)
+            situacao = estado.get("state") if estado.get("ok") else None
 
-        situacao = estado.get("state")
-        if situacao in ("canceled", "rejected", "expired"):
-            order.status = OrderStatus.REJECTED
-            order.note = (f"{contexto}; o historico CONFIRMA que a ordem {ticket} "
-                          f"terminou como {situacao} sem preencher.")
-            return order
-
-        if situacao in ("filled", "partial"):
-            resolvido = self._fill_real_da_ordem(ticket, estado.get("position_id"))
-            if resolvido is not None:
-                order.filled_qty = resolvido["quantity"]
-                order.avg_price = resolvido["price"]
-                order.status = (OrderStatus.FILLED
-                                if order.filled_qty >= order.quantity
-                                else OrderStatus.PARTIAL)
-                order.note = (f"{contexto}; o historico mostra {situacao} e os deals "
-                              f"da ordem {ticket} dao o preco REAL "
-                              f"{order.avg_price:.4f} ({order.filled_qty}).")
+            if situacao in ("canceled", "rejected", "expired"):
+                order.status = OrderStatus.REJECTED
+                order.note = (f"{contexto}; o historico CONFIRMA que a ordem {ticket} "
+                              f"terminou como {situacao} sem preencher.")
                 return order
-            order.status = OrderStatus.SENT
-            order.note = (f"{contexto}; o historico diz {situacao} mas os deals da "
+
+            if situacao in ("filled", "partial"):
+                resolvido = self._fill_real_da_ordem(ticket, estado.get("position_id"))
+                if resolvido is not None:
+                    order.filled_qty = resolvido["quantity"]
+                    order.avg_price = resolvido["price"]
+                    order.status = (OrderStatus.FILLED
+                                    if order.filled_qty >= order.quantity
+                                    else OrderStatus.PARTIAL)
+                    order.note = (f"{contexto}; o historico mostra {situacao} e os deals "
+                                  f"da ordem {ticket} dao o preco REAL "
+                                  f"{order.avg_price:.4f} ({order.filled_qty}).")
+                    return order
+                ultimo = (f"{contexto}; o historico diz {situacao} mas os deals da "
                           f"ordem {ticket} ainda nao apareceram -- sem eles o preco "
                           "seria inventado. INDETERMINADO, reconcilie na proxima barra.")
-            return order
+            elif situacao is None:
+                ultimo = (f"{contexto}; a consulta do desfecho da ordem {ticket} "
+                          f"tambem falhou ({estado.get('note')}). INDETERMINADO -- "
+                          "nao trate como recusa.")
+            else:
+                # "pending" (ainda no book) ou "unknown".
+                ultimo = (f"{contexto}; a ordem {ticket} esta {situacao} na corretora. "
+                          "INDETERMINADO -- ela pode preencher a qualquer instante; "
+                          "nao decida nada por cima dela.")
 
-        # "pending" (ainda no book) ou "unknown".
+            if tentativa < len(esperas):
+                espera = float(esperas[tentativa])
+                if espera > 0:
+                    time.sleep(espera)
+
         order.status = OrderStatus.SENT
-        order.note = (f"{contexto}; a ordem {ticket} esta {situacao} na corretora. "
-                      "INDETERMINADO -- ela pode preencher a qualquer instante; "
-                      "nao decida nada por cima dela.")
+        total = sum(float(e) for e in esperas)
+        order.note = (ultimo or f"{contexto}; desfecho INDETERMINADO.") + (
+            f" (perguntei {len(esperas) + 1}x ao longo de {total:.2f}s)")
         return order
 
     def _fill_real_da_ordem(self, ticket, position_id) -> Optional[dict]:
@@ -1328,6 +1364,26 @@ class MT5Broker(Broker):
                 passos = getattr(info, "stops_level", 0) or 0
             ponto = float(getattr(info, "point", 0.0) or 0.0) or tick_size
             distancia_min = float(passos) * float(ponto)
+            # PISO DE UM TICK, sempre -- mesmo com `trade_stops_level = 0`.
+            #
+            # Incidente 2026-09-09, 10:55:09 BRT, slot `dt-wdo_grid_reload_
+            # maker-wdo@-live`, conta real: posicao LONG 2 @ 5122,50 ficou
+            # com `sl=0.0 tp=0.0` na corretora por ~3 minutos, ate' o dono
+            # zerar na mao. O `set_protection` era recusado a cada passo com
+            # `retcode=10016 (Invalid stops)` -- e o WDOV26 na Rico reporta
+            # `trade_stops_level = 0`, entao `distancia_min` dava 0,0 e o
+            # `_afasta` abaixo saia pela porta dos fundos SEM CONFERIR NADA.
+            #
+            # `trade_stops_level = 0` quer dizer "a corretora nao exige
+            # distancia MINIMA". Nao quer dizer "aceita nivel de qualquer
+            # lado": um SL de posicao LONG continua tendo de ficar ABAIXO do
+            # mercado, e um TP, ACIMA. Nivel do lado errado nao e' protecao
+            # frouxa, e' ordem a mercado disfarcada -- o servidor recusa, e
+            # uma protecao recusada e' protecao NENHUMA. Com o piso de 1
+            # tick o `_afasta` volta a ser exercido em todo instrumento, e o
+            # nivel impossivel vira nivel valido + aviso no diario em vez de
+            # posicao nua.
+            distancia_min = max(distancia_min, float(tick_size or 0.0))
 
         avisos: list[str] = []
         sl_atual = float(sl_atual or 0.0)
@@ -1461,9 +1517,40 @@ class MT5Broker(Broker):
                 return {"ok": False, "sl": sl, "tp": tp,
                         "note": f"order_send (SLTP) devolveu None (last_error={code}: {desc})"}
             if result.retcode != mt5.TRADE_RETCODE_DONE:
-                return {"ok": False, "sl": sl, "tp": tp,
-                        "note": (f"MT5 recusou SL/TP (retcode={result.retcode}): "
-                                 f"{getattr(result, 'comment', '')}")}
+                recusa = (f"MT5 recusou SL/TP (retcode={result.retcode}): "
+                          f"{getattr(result, 'comment', '')}")
+                # SEGUNDA TENTATIVA SO' COM O STOP -- o alvo e' desejavel, o
+                # stop e' o que impede a ruina, e um `TRADE_ACTION_SLTP` e'
+                # ATOMICO: uma perna invalida derruba a outra junto.
+                #
+                # Incidente 2026-09-09 (slot `dt-wdo_grid_reload_maker-wdo@-
+                # live`): a posicao LONG 2 @ 5122,50 passou ~3 minutos com
+                # `sl=0.0 tp=0.0` porque o pedido inteiro voltava
+                # `retcode=10016 (Invalid stops)` a cada passo. Registrar o
+                # stop sozinho e ficar sem alvo custa, no maximo, um alvo; o
+                # que custou dinheiro de verdade (2026-08-28, conta zerada)
+                # foi a posicao SEM STOP.
+                #
+                # So' vale a pena quando o pedido de fato mexia nas DUAS
+                # pernas: reenviar `tp=tp_atual` e' pedir "deixa o alvo como
+                # esta'", entao se o alvo ja' estava assim a recusa nao veio
+                # dele e repetir seria so' gastar requisicao.
+                if abs(float(tp) - float(tp_atual)) > 1e-9:
+                    # Dicionario NOVO, nao `request["tp"] = ...`: mutar o
+                    # dict ja entregue ao `order_send` anterior reescreveria
+                    # o registro do que foi de fato enviado na 1a tentativa.
+                    result = mt5.order_send(dict(request, tp=float(tp_atual)))
+                    if result is not None and result.retcode == mt5.TRADE_RETCODE_DONE:
+                        nota = (f"protecao registrada SO' COM O STOP: sl={sl:.4f} "
+                                f"(alvo {tp:.4f} mantido em {tp_atual:.4f} -- o pedido "
+                                f"com as duas pernas foi recusado: {recusa})")
+                        if avisos:
+                            nota += " (" + "; ".join(avisos) + ")"
+                        return {"ok": True, "note": nota,
+                                "sl": float(sl), "tp": float(tp_atual)}
+                    recusa += (" -- e o reenvio so' com o stop tambem nao passou "
+                               f"({'order_send devolveu None' if result is None else result.retcode})")
+                return {"ok": False, "sl": sl, "tp": tp, "note": recusa}
             nota = f"protecao registrada: sl={sl:.4f} tp={tp:.4f}"
             if avisos:
                 nota += " (" + "; ".join(avisos) + ")"

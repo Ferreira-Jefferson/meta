@@ -174,6 +174,11 @@ class MT5IntradayExecution:
         # incidente de 2026-08-28, nao pode passar em silencio.
         self.protecao_ausente_no_fechamento: Optional[tuple] = None
         self._exit_baseline_qty: float = 0.0
+        # Quanto da fatia de saida CORRENTE ja foi confirmado por deal real e
+        # ja' foi devolvido por `exit_fill`. Zerado junto com
+        # `pending_exit_order` em `place_exit_limit` -- fatia nova, contagem
+        # nova. Ver o comentario longo em `exit_fill`.
+        self._exit_confirmado_qty: float = 0.0
         # Recibos do ultimo fill de entrada e da ultima saida, para o runtime
         # gravar `broker_ref`/`fees` REAIS no diario em vez de `None`. A
         # maquina so devolve preco e quantidade (o que ela precisa para o
@@ -502,6 +507,7 @@ class MT5IntradayExecution:
             )
         self.pending_exit_order = enviada
         self._exit_baseline_qty = float(current_position_qty)
+        self._exit_confirmado_qty = 0.0
         return enviada
 
     def cancel_exit_limit(self, ts: pd.Timestamp, reason: str) -> Optional[Order]:
@@ -551,12 +557,43 @@ class MT5IntradayExecution:
         return devolvida
 
     def exit_fill(self, position_side: str, bar) -> Optional[dict]:
-        """A fatia de saida vigiada (`place_exit_limit`) encolheu a posicao
-        desde que foi posicionada? `{"price", "quantity"}` do que fechou (o preco
-        e' o LIMITE pedido -- uma ordem-limite so' preenche nesse nivel ou
-        melhor, e sem consultar deal a deal no terminal nao ha como saber
-        "melhor"; usar o limite e' o numero conhecido, nunca inventado), ou
-        `None` se a posicao nao mudou."""
+        """A fatia de saida vigiada (`place_exit_limit`) preencheu?
+        `{"price", "quantity"}` REAIS do que fechou, ou `None` enquanto nao
+        der para AFIRMAR que foi ela.
+
+        **A posicao ter encolhido nao prova que foi a nossa fatia** -- e essa
+        confusao ja gravou um numero invertido no diario, no evento que estava
+        justamente sob observacao. Ate' 2026-09-09 este metodo fazia duas
+        inferencias, as duas erradas:
+
+          1. QUEM fechou: qualquer encolhimento da posicao entre duas barras
+             era atribuido a fatia vigiada.
+          2. A QUE PRECO: devolvia o LIMITE pedido, sem consultar deal nenhum,
+             sob o argumento de que uma limite so' preenche "nesse nivel ou
+             melhor".
+
+        O que isso produziu, medido (slot `dt-wdo_grid_reload_maker-wdo@-live`,
+        conta real, 2026-09-09 10:54:03 BRT). A SHORT #02 tinha sido fechada A
+        MERCADO as 10:53:33 @ 5124,50 (deal 475959377, -R$5,00) -- fechamento
+        que o robo tinha marcado como recusado. Na barra seguinte a posicao
+        estava menor, este metodo concluiu "minha fatia preencheu" e carimbou o
+        preco do LIMITE, 5123,00. O diario gravou **"TARGET SHORT #02 @ 5123,00
+        - R$ +9,50"** para uma saida que a corretora executou a **5124,50, -R$
+        5,00**: R$14,50 de erro num trade so', e com o SINAL trocado. O dono
+        pediu, textualmente, "que o frontend e o sistema reflita de fato o que
+        acontece no mt5".
+
+        A regra agora: a fatia so' e' dada como preenchida quando os DEALS do
+        NOSSO ticket de saida (`pending_exit_order.broker_ref`) dizem que ela
+        preencheu, e o preco e o do deal. Encolhimento sem deal nosso nao e'
+        fill nosso -- e' divergencia, e quem trata divergencia e'
+        `IntradayLiveRuntime._check_posicao_desconhecida`, nao um fill
+        inventado aqui. Mesma politica do item 1.6: "nao sei" nunca vira um
+        resultado.
+
+        Broker antigo (dublê sem `deals_for_position`) mantem o comportamento
+        anterior -- sem historico nao ha o que confirmar, e o caminho novo so'
+        existe contra o MT5 de verdade."""
         posicao = self._read_position()
         qtd_atual = 0.0 if posicao is None else float(posicao["quantity"])
         diminuiu = self._exit_baseline_qty - qtd_atual
@@ -569,9 +606,72 @@ class MT5IntradayExecution:
                 f"posicao {position_side}. Nao vou assumir que esta posicao e' minha "
                 "nem opera-la: confira o terminal antes de religar este slot."
             )
+
+        confirmado = self._fatia_de_saida_confirmada()
+        if confirmado is not None:
+            # `- self._exit_confirmado_qty`: os deals sao CUMULATIVOS por
+            # ticket, e este metodo roda a cada barra -- sem descontar o que
+            # ja foi devolvido, uma fatia que preencheu em duas pernas seria
+            # contada duas vezes pelo total.
+            nova_qty = confirmado["quantity"] - self._exit_confirmado_qty
+            if nova_qty <= 0:
+                # A posicao encolheu, mas NAO foi a nossa fatia. Anda o
+                # baseline (senao este mesmo encolhimento reapareceria em toda
+                # barra) e nao devolve fill nenhum.
+                self._exit_baseline_qty = qtd_atual
+                return None
+            self._exit_confirmado_qty = confirmado["quantity"]
+            self._exit_baseline_qty = qtd_atual
+            return {"price": float(confirmado["price"]),
+                    "quantity": int(round(min(nova_qty, diminuiu)))}
+
+        if self._pode_confirmar_saida_por_deal():
+            # Da' para perguntar ao historico, e ele ainda nao confirmou nada.
+            # NAO mexe no baseline: o deal pode aparecer na proxima barra (o
+            # historico do terminal e' assincrono) e ai o encolhimento
+            # continua sendo o nosso.
+            return None
+
         self._exit_baseline_qty = qtd_atual
         preco = self.pending_exit_order.limit_price if self.pending_exit_order is not None else None
         return {"price": preco, "quantity": int(round(diminuiu))}
+
+    def _pode_confirmar_saida_por_deal(self) -> bool:
+        """Este broker sabe responder por deals E temos ticket de saida para
+        procurar? Separado de `_fatia_de_saida_confirmada` porque a diferenca
+        entre "perguntei e ainda nao ha" e "nao tenho como perguntar" decide
+        coisas opostas em `exit_fill`."""
+        return (getattr(self.broker, "deals_for_position", None) is not None
+                and bool(self.last_entry_ref)
+                and self.pending_exit_order is not None
+                and bool(getattr(self.pending_exit_order, "broker_ref", None)))
+
+    def _fatia_de_saida_confirmada(self) -> Optional[dict]:
+        """`{"price", "quantity"}` acumulados dos deais de SAIDA gerados pelo
+        ticket da fatia vigiada, ou `None` quando ainda nao da' para afirmar.
+
+        Filtra por `d["order"] == broker_ref` de proposito: numa conta NETTING
+        varios tickets diferentes fecham a MESMA posicao (o `sl` registrado, um
+        fechamento a mercado, uma limite orfa de outra rodada), e todos
+        aparecem em `deals_for_position`. Sem o filtro por ticket este metodo
+        atribuiria a nossa fatia o preco de um fechamento que nao foi dela --
+        que e' exatamente o erro que ele existe para impedir."""
+        if not self._pode_confirmar_saida_por_deal():
+            return None
+        resposta = self.broker.deals_for_position(self.last_entry_ref)
+        if not resposta.get("ok"):
+            return None
+        alvo = str(self.pending_exit_order.broker_ref)
+        meus = [d for d in (resposta.get("deals") or [])
+                if d.get("entry") == 1
+                and d.get("order") is not None and str(d["order"]) == alvo
+                and float(d.get("price") or 0.0) > 0.0
+                and float(d.get("quantity") or 0.0) > 0.0]
+        if not meus:
+            return None
+        total = sum(float(d["quantity"]) for d in meus)
+        preco = sum(float(d["price"]) * float(d["quantity"]) for d in meus) / total
+        return {"price": preco, "quantity": total}
 
     def exit_por_protecao(self, position, ts: pd.Timestamp,
                           reason: IntradayExitReason) -> dict:
