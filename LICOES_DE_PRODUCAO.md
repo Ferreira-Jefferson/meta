@@ -2552,6 +2552,18 @@ correria o risco de ser aplicada em dobro por cada um.
 > derivativo é cotação (precisa de multiplicador) ou já vem em reais por
 > unidade? Existe UM lugar só de onde todo código lê esse multiplicador, ou
 > cada tela/função tem sua própria cópia da fórmula?
+> **Reapareceu em 5.19** (2026-09-09), num terceiro caminho de código — a
+> rotina de REMOÇÃO do robô, que nenhuma das correções de 2026-08-31 tinha
+> visitado: R$375,00 de caixa simulado viraram −R$4.706,00.
+> **E em 5.21** (2026-09-09), num QUARTO — `build_runtime` do painel, afirmando
+> "1 ponto = R$1,00" para qualquer símbolo. A causa comum dos quatro está lá: o
+> multiplicador morava no catálogo de ROBÔS, não no do INSTRUMENTO, então cada
+> caminho novo o buscava onde desse.
+> **Um QUINTO e um SEXTO no mesmo dia**: **5.22** — a economia lida do
+> terminal podia chegar zerada (`trade_tick_value=0`) e nada validava isso
+> antes de dividir; **5.23** — o `tick_size`, o terceiro número da mesma
+> família, estava redigitado como default de construtor de robô, com um
+> comentário afirmando que produção nunca usava aquele default.
 
 ### 5.8 Quantidade com sinal marca o LADO, não o valor do ativo — CORRIGIDO 2026-08-31
 
@@ -2590,6 +2602,17 @@ teve esse bug; só "Carteira"/"Patrimônio" e a tabela de posições liam
 > ser a INVERSA exata de qual dos dois débitos/créditos a abertura realmente
 > fez — não uma convenção genérica de "venda é negativo" copiada de outro
 > instrumento.
+>
+> **Reapareceu em 5.19** (2026-09-09): o mesmo sinal de quantidade, agora
+> multiplicado por um delta que o código JÁ tinha invertido por ser short —
+> dupla inversão, prejuízo de 52 pontos gravado como lucro.
+> **E em 5.21** (2026-09-09): a quarta aparição da família fecha o ciclo pela
+> causa, não pelo sintoma — constante do instrumento guardada fora do
+> instrumento.
+> **5.22 e 5.23 (2026-09-09) fecham mais dois ângulos da mesma causa**: a
+> economia nunca validada na fronteira (o terminal podia devolver zero) e a
+> constante de instrumento redigitada como default de construtor de robô,
+> com um comentário que afirmava o contrário.
 
 ### 5.9 O custo de uma chamada escala com a GRANULARIDADE do feed — a mesma constante é barata em barra e ruinosa em tick
 
@@ -3245,6 +3268,386 @@ sumiu.
 > congelamento — senão o painel mente sobre dinheiro por tempo indeterminado e
 > ninguém percebe. Vale igual em qualquer stack: web, terminal, ou o painel
 > nativo da plataforma nova. (5.18)
+
+### 5.19 Encerrar um contrato de futuro devolvendo o NOCIONAL ao caixa: R$375,00 viraram −R$4.706,00 numa única remoção de robô — e numa posição COMPRADA o mesmo código teria INFLADO o caixa em ~R$5.100
+
+2026-09-09. O dono removeu pelo painel o robô de SOMBRA do mini-dólar
+(`dt-wdo_grid_reload_maker-wdo@-shadow`), com a intenção de guardar os dados e
+religar depois. A rotina de remoção fecha localmente a posição simulada que
+estava aberta — short de **1 contrato de WDO@, entrada 5133,0**, gravada com
+`quantity = -1`. O caixa simulado, que estava em **R$375,00**, foi para
+**−R$4.706,00**. A aritmética inteira cabe numa linha:
+
+```
+375,00  +  (5133,00 × -1)  +  52,00  =  -4.706,00
+```
+
+São **três defeitos empilhados, todos da mesma raiz: conta de AÇÃO aplicada a
+FUTURO**.
+
+1. **O crédito de fechamento devolvia o NOCIONAL** (`preço de entrada ×
+   quantidade`). Para 100 ações a preço em reais isso está certo — o dinheiro
+   preso na posição É o preço cheio. Para 1 contrato de futuro, **nada do
+   nocional foi caixa em momento nenhum**: o que ficou preso foi a MARGEM
+   (R$150 no WDO@). Como a quantidade era negativa (short), o crédito virou um
+   **débito de R$5.133,00**.
+2. **O sinal foi aplicado duas vezes.** O código inverte o delta de preço
+   porque o lado é short E multiplica por uma quantidade que já carrega o
+   sinal. Uma **perda de 52 pontos virou "lucro de R$52,00"**. E faltava ainda
+   o valor do ponto: 52 pontos de WDO são **R$520,00**, não R$52,00 — o mesmo
+   multiplicador ausente do item 5.7, num terceiro caminho de código.
+3. **O preço de saída veio de um cache.** A rotina pediu "o último preço do
+   WDO@" e recebeu **5185,0 de 2026-08-28** — fechamento de minuto salvo em
+   arquivo, **12 dias velho**, enquanto o mercado negociava a ~5133. Nenhum
+   erro, nenhum aviso: um preço antigo tem exatamente a mesma forma de um
+   preço atual.
+
+**O que salva e o que assusta.** O estrago ficou no ledger SIMULADO
+(`cash_sombra`), nunca no caixa real: o caminho do robô de dinheiro de verdade
+não faz essa conta de "liberado", então nenhum real foi contabilizado errado.
+Mas o sinal do erro **depende do lado da posição**. Numa posição COMPRADA
+(`quantity = +1`) a mesma expressão **credita ~R$5.100 de nocional inexistente**
+em vez de debitar. **Caixa inflado é pior que caixa negativo**, porque não chama
+atenção — o negativo pelo menos parou o dono e gerou esta investigação — e o
+caixa é justamente o número que dimensiona quantos contratos o robô abre no
+pregão seguinte. O bug simétrico de 5.7 já tinha ensinado isso: erro que se
+cancela no round-trip só aparece na posição AINDA ABERTA.
+
+É a terceira aparição da mesma família em dois lugares diferentes do sistema —
+5.7 (nocional em vez de multiplicador), 5.8 (sinal da quantidade invertendo
+capital comprometido) — agora num caminho que nenhuma das duas correções tinha
+visitado: o **desmonte**. Rotina de encerramento/limpeza é onde a contabilidade
+menos é olhada e onde o erro fica gravado.
+
+> **Regra, em três partes:**
+> **(a) Encerrar posição de DERIVATIVO não devolve nocional ao caixa: devolve
+> MARGEM.** Nocional de contrato futuro nunca foi caixa, então nunca pode
+> voltar como caixa. Toda rotina de contabilidade que multiplica preço por
+> quantidade tem de saber, no ponto do cálculo, se o instrumento é ação
+> (nocional = capital comprometido) ou contrato (margem = capital
+> comprometido) — e o **valor do ponto entra na conta**, não é detalhe de
+> exibição. Se existir mais de um lugar no sistema capaz de creditar caixa por
+> fechamento, todos leem a mesma função; um deles esquecido é este item.
+> **(b) Quantidade com sinal (negativo = vendido) e um campo de lado separado
+> ("short") são DUAS representações da mesma informação.** Usar as duas na
+> mesma expressão inverte o sinal duas vezes e devolve lucro onde houve
+> prejuízo. Escolha UMA convenção e **afirme a escolha no ponto de leitura**
+> (normalize a quantidade para magnitude, ou ignore o campo de lado) — nunca
+> deixe as duas vivas na mesma linha de aritmética.
+> **(c) Preço "salvo" não é preço "atual".** Toda rotina que fecha, avalia ou
+> dimensiona posição a partir de um preço em cache precisa carregar a **IDADE**
+> desse preço junto com o valor, e **recusar ou avisar** quando ele for velho
+> demais para a decisão que está tomando. Um cache sem carimbo de tempo é uma
+> afirmação sobre o mercado que ninguém pode auditar — o mesmo modo de falha do
+> feed cego de 5.17 e da ordem-limite ancorada em preço defasado de 4.17, aqui
+> com 12 dias de defasagem.
+> **Pergunte à plataforma nova:** ao encerrar um contrato futuro, o que
+> exatamente volta para o saldo disponível — e a plataforma distingue margem de
+> nocional em algum lugar, ou isso é responsabilidade nossa? (5.19)
+>
+> **Rendeu dois itens no mesmo dia**, os dois achados varrendo o padrão em vez
+> de só consertar esta rotina: **5.20** (a mesma rota de desmonte também não
+> cobrava corretagem nem emolumentos — duas contabilidades para o mesmo
+> fechamento) e **5.21** (a causa comum: o valor do ponto morava no catálogo de
+> ROBÔS, não no do INSTRUMENTO — quarta aparição da família).
+> **E mais dois, ainda 2026-09-09**: **5.22** (o mesmo `trade_tick_value` podia
+> chegar zerado do terminal, sem validação nenhuma antes da primeira divisão)
+> e **5.24** (o defeito nº 3 desta lista — o preço de saída veio de um cache —
+> fechado por RECUSA em vez de aviso: a mesma barra de 28/08 era, além de
+> velha, anterior à própria abertura da posição).
+
+### 5.20 Fechar pelo caminho do robô cobrava corretagem; fechar removendo o robô pelo painel não cobrava nada — R$0,50 de diferença num contrato de WDO@, e o número pequeno é justamente o problema
+
+2026-09-09, achado na mesma varredura que produziu o item 5.19. O mesmo evento
+econômico — encerrar uma posição aberta — tinha **duas rotas** no sistema, com
+contabilidades diferentes:
+
+- **Rota operacional** (o robô fecha a posição): `IntradayTrade.pnl_brl`
+  subtrai `fees_total`, e `_on_closed` credita no caixa o resultado
+  **LÍQUIDO** de corretagem e emolumentos.
+- **Rota administrativa** (o dono remove o robô pelo painel com posição
+  aberta): a rotina de desmonte marcava a mercado, calculava o resultado
+  **BRUTO** e creditava isso no caixa. Nenhuma taxa.
+
+A diferença por remoção, medida:
+
+| instrumento | posição | crédito a mais |
+|---|---|---|
+| WDO@ | 1 contrato | **R$0,50** (corretagem fixa de futuro, R$0,25 por perna) |
+| PMAM3 | 100 ações | **R$0,01** (emolumentos percentuais sobre o nocional) |
+
+Corrigido fazendo as **três** rotas chamarem a mesma função de custo do motor
+(`backtest.intraday.costs.fees_round_trip_brl`, montada a partir do perfil do
+símbolo): o desmonte da conta sombra, a limpeza da conta do robô real, e a
+**estimativa mostrada no popup de confirmação** — que é a terceira e a mais
+fácil de esquecer, porque ela não move dinheiro, só promete um número que o
+passo seguinte tem de honrar.
+
+**Por que um item por R$0,01.** O valor é ridículo de propósito, e é isso que
+torna o caso instrutivo: o dano nunca foi o centavo. O dano é o caixa do painel
+**divergir em silêncio** do que a mesma operação teria custado — e neste sistema
+o caixa não é um relatório, é uma **variável de realimentação**: é ele que
+dimensiona quantos contratos o robô abre no pregão seguinte
+(`contracts_from_capital_operacional`). Um erro pequeno, sistemático e sempre no
+mesmo sentido (a rota manual é a generosa) alimenta a entrada do
+dimensionamento. Erro pequeno numa malha fechada não fica pequeno: ele integra.
+E, diferente do erro de 5.19, este não estoura a tela — R$0,50 nunca faz o dono
+estranhar nada, então ele só apareceria por conferência de extrato contra
+extrato, que é exatamente a conferência que ninguém faz.
+
+Vale registrar o que ficou de fora **por decisão declarada, não por
+esquecimento**: a *slippage*. No motor ela é um ajuste no PREÇO de execução de
+uma saída a mercado, e no desmonte não há execução nenhuma — o preço é marcação
+a mercado pelo melhor preço conhecido. Piorá-lo em 1 tick seria inventar um
+preenchimento que ninguém observou. A diferença entre "custo que a rota omitia"
+e "custo que a rota não pode conhecer" tem de estar escrita no ponto do
+cálculo; senão a próxima varredura fecha a lacuna errada.
+
+> **Regra:** **todo caminho que encerra posição — normal, de emergência,
+> manual, ou de desmonte — passa pela MESMA função de custo.** Se existir mais
+> de uma rota para o mesmo evento econômico, elas convergem no ponto em que o
+> dinheiro é contado, nunca em cópias paralelas que "fazem a mesma conta". Uma
+> rota **administrativa** que não cobra o que a rota **operacional** cobra é um
+> vazamento estrutural: só aparece quando alguém compara os dois extratos, e
+> ninguém compara os dois extratos. Corolário de desenho: quando um caminho
+> precisar omitir uma parcela do custo por impossibilidade física (aqui, o
+> deslize de um preenchimento que não existe), a omissão é **declarada no ponto
+> do cálculo** — custo ausente sem justificativa escrita é indistinguível de
+> bug. É a família de 5.7/5.19 vista pelo lado do CUSTO: lá eram duas fórmulas
+> de "quanto voltou ao caixa", aqui são duas fórmulas de "quanto custou para
+> sair".
+> **Pergunte à plataforma nova:** pergunta 78. (5.19, 5.7)
+
+### 5.21 O valor do ponto morava no catálogo de ROBÔS, não no do INSTRUMENTO — e um quarto caminho de código afirmava "1 ponto = R$1,00" para qualquer símbolo, WDO@ incluído
+
+2026-09-09. O valor do ponto de cada futuro (**R$10,00** no WDO@, **R$0,20** no
+WIN@) estava declarado no registro de **robôs** (`strategy/daytrade/registry.py`),
+ao lado de parâmetros que de fato pertencem a um robô — alvo, stop, risco por
+trade. Duas consequências reais, encontradas no mesmo dia:
+
+1. **A contabilidade de remoção não conseguia apurar o resultado de uma conta
+   cujo robô saísse do catálogo.** Para converter pontos em reais ela precisava
+   perguntar ao robô — e conta órfã (robô renomeado, aposentado ou removido) é
+   exatamente o caso em que alguém remove o slot. O dado necessário para fechar
+   a conta dependia de um objeto que já não existia.
+2. **Um QUARTO caminho de código montava a config de qualquer símbolo com
+   "1 ponto = R$1,00".** `dashboard/live_service.py::build_runtime` passava
+   `trade_tick_value=0.01, trade_tick_size=0.01` — verdade em ação, **erro de
+   10×** num WDO@ e de 5× num WIN@. Inofensivo **hoje** apenas porque nada
+   naquele runtime lia `config.costs`: basta alguém passar a ler, e o erro vira
+   número na tela sem nenhuma mudança na linha errada. Lacuna que só é
+   inofensiva por acidente de leitura é lacuna aberta.
+
+Corrigido movendo o valor do ponto para o **perfil do símbolo**
+(`SymbolProfile.point_value_brl`), onde já moravam o tamanho do tick e a margem,
+e tornando-o **obrigatório** em perfil de futuro — perfil de futuro sem valor do
+ponto passou a levantar erro em vez de assumir 1,0. `config_for` confere o valor
+declarado contra o `trade_tick_value/trade_tick_size` lido do terminal e
+**recusa a config** se os dois divergirem: é a amarração que faz a duplicação
+inevitável (nosso perfil × o que a corretora reporta) falhar alto em vez de
+divergir em silêncio.
+
+**Esta é a QUARTA aparição da mesma família neste documento**, sempre num
+caminho de código que a correção anterior não tinha visitado:
+
+| item | data | onde | o que estava errado |
+|---|---|---|---|
+| 5.7 | 2026-08-31 | contabilidade de caixa ao vivo e cards do painel | nocional em vez de multiplicador (preço de futuro tratado como reais) |
+| 5.8 | 2026-08-31 | `LivePosition.market_value` | quantidade com sinal invertendo capital comprometido |
+| 5.19 | 2026-09-09 | rotina de REMOÇÃO do robô | nocional devolvido ao caixa + sinal duplo + valor do ponto ausente |
+| **5.21** | **2026-09-09** | **catálogo de robôs e `build_runtime`** | **a constante do instrumento não morava no instrumento** |
+
+5.7 e 5.8 foram corrigidos como bugs de dois caminhos. 5.19 achou um terceiro.
+Este achou o quarto — e, mais importante, achou a **causa comum** aos quatro:
+enquanto o valor do ponto for um número que cada caminho busca onde der, cada
+caminho novo tem chance de buscá-lo errado.
+
+> **Regra:** **valor do ponto, tamanho do tick e margem são propriedades do
+> INSTRUMENTO, não do robô.** Dois robôs no mesmo símbolo têm obrigatoriamente
+> os mesmos três números — logo esses números não podem morar em nenhum lugar
+> que pertença a um robô, a uma tela, a um script ou a uma sessão. Onde a
+> arquitetura obrigar a duplicar, tem de existir **teste ou checagem em runtime
+> que FALHE quando as cópias divergirem** — duplicação sem amarração é
+> divergência agendada, não risco hipotético. E o corolário mais caro, agora
+> provado quatro vezes neste arquivo: **corrigir uma instância de um padrão sem
+> varrer todas as outras não corrige o padrão — só move a data da próxima
+> ocorrência.** Depois de achar a causa raiz, a pergunta não é "onde estava o
+> bug?", é "que outros lugares respondem a mesma pergunta por conta própria?"
+> (7.1, 5.7, 5.8, 5.19)
+
+**Rendeu mais dois itens no mesmo dia**, fechando o rollout de
+`core.instruments` para além da contabilidade de caixa: **5.22** (a leitura
+CRUA do terminal nunca era validada antes da primeira divisão — o mesmo
+número podia chegar zerado e ninguém percebia) e **5.23** (o `tick_size`, o
+terceiro número da mesma família, estava redigitado como default de
+construtor de robô, com um comentário afirmando o contrário havia 13 dias).
+
+### 5.22 O terminal pode devolver economia inválida, e ninguém conferia — `trade_tick_value=0` zera o P&L inteiro em silêncio
+
+2026-09-09, achado durante o mesmo fechamento do rollout de
+`core.instruments`. `market_data_intraday.mt5_source.symbol_economics`
+devolvia `float(info.trade_tick_value)` e `float(info.trade_tick_size)` direto
+do MT5, sem validar nada. O MT5 reporta **`trade_tick_value = 0`** para um
+símbolo que ainda não foi selecionado/sincronizado no Market Watch do
+terminal — situação comum (terminal recém-aberto, símbolo novo, reconexão),
+não hipotética.
+
+Num perfil de **AÇÃO** — onde `_confere_valor_do_ponto` (item 5.21) nem roda,
+por ser checagem só-para-futuro — o zero passava direto para dentro de
+`config_for` e zerava o P&L da rodada inteira, **em silêncio**: nenhuma
+exceção, nenhum aviso, todo trade valendo R$0,00. Num **futuro**, a mesma
+divisão `trade_tick_value / trade_tick_size` — usada tanto por
+`_confere_valor_do_ponto` quanto por `IntradayCostModel.from_symbol_info` —
+estourava um `ZeroDivisionError` cru, sem dizer o símbolo nem a causa.
+
+O que faz isto pertencer à mesma família dos itens 5.7/5.19/5.21: o mesmo
+número que zera alimenta **três proteções ao mesmo tempo** — P&L, portão de
+capital (quantos contratos cabem no caixa) e disjuntor (quanto de perda é
+tolerável antes de parar). Zerar `point_value_brl` desliga as três de uma vez,
+e a tela continua mostrando uma rodada plausível: nada pisca vermelho porque
+nada excedeu limite nenhum — o limite em si é que ficou mudo.
+
+Corrigido em 2026-09-09 por `_checa_economia_do_terminal`
+(`backtest/intraday/profiles.py`), chamada dentro de `config_for` ANTES de
+qualquer divisão: recusa `trade_tick_value`/`trade_tick_size` não-finito ou
+≤0 para **todo** perfil — ação incluída, não só futuro, que é a diferença
+para `_confere_valor_do_ponto` — com mensagem nomeando a causa mais comum
+(símbolo fora do Market Watch) em vez de deixar o `ZeroDivisionError` explicar
+sozinho.
+
+> **Regra:** todo dado numérico que sai da corretora/feed e vai alimentar
+> dinheiro é validado na FRONTEIRA, antes de virar conta — não no ponto de
+> uso, três chamadas depois. E trate **"0" como o valor mais perigoso que
+> existe**, não o mais inofensivo: ele não levanta exceção, não aparece
+> esquisito em tela nenhuma, e ainda assim silencia toda proteção que
+> dependa dele. Prefira falhar alto com mensagem que nomeia a causa comum a
+> deixar um `ZeroDivisionError` cru explicar o problema para quem estiver de
+> plantão.
+> **Pergunte à plataforma nova:** o que exatamente a API devolve para um
+> instrumento que existe mas não está "carregado"/selecionado no terminal —
+> zero, `None`, um erro explícito, ou o valor do último símbolo consultado?
+> Dá para distinguir, na resposta, "este instrumento vale zero" de "eu não
+> sei o valor deste instrumento"? Se não der, todo número lido de lá exige um
+> guard de sanidade ANTES do primeiro uso — validado por VALOR (finito e
+> maior que zero), nunca só por tipo. (5.21, pergunta 79)
+
+### 5.23 O `tick_size` que a produção realmente usava vinha do default do construtor — e um comentário afirmava o contrário havia 13 dias
+
+2026-09-09, mesma investigação que produziu o item 5.21. O `tick_size` (passo
+de preço) do WDO F1 (`wdo_grid_reload_maker.WDO_TICK_SIZE`) e do CopaWin
+(`tick_size=5.0` no construtor) estava duplicado em relação à fonte real do
+motor (`SymbolProfile.price_tick_size`), e nada amarrava as duas cópias — o
+mesmo padrão de 5.21, agora no PARÂMETRO DE CONSTRUÇÃO do robô, não na
+contabilidade de caixa.
+
+O detalhe que torna este item mais grave do que "só mais uma constante
+redigitada": **ninguém passa `tick_size=` explícito ao construtor de nenhum
+robô de produção** — nem `strategy.daytrade.registry._KWARGS_PADRAO`, nem
+`scripts/run_live.py::build_intraday`. Logo a grade de ordens que o robô AO
+VIVO efetivamente usa vinha do **DEFAULT da classe** (`WDO_TICK_SIZE = 0.5`,
+`CopaWin.__init__(tick_size=5.0)`), nunca de uma config lida do perfil. E o
+comentário ao lado do default de `WDO_TICK_SIZE`, escrito em 2026-08-28 e
+sem mudar por **13 dias**, afirmava exatamente o contrário: *"só um DEFAULT
+de conveniência para quem instancia sem passar o valor do perfil — rodar de
+verdade sempre passa `tick_size=` explícito, vindo de
+`profile_for("WDO@").price_tick_size`"*. Era falso, e nenhum teste checava a
+afirmação — só o comentário garantia que ela fosse verdade.
+
+Nenhum teste ligava esse default ao `SymbolProfile.price_tick_size` que o
+MOTOR (backtest e execução real) usa para avaliar a MESMA ordem. Se as duas
+cópias divergissem — a corretora republicando a especificação do contrato de
+forma diferente, por exemplo — o robô posicionaria a ordem numa grade e o
+motor a avaliaria em outra, sem nada quebrar: só um preenchimento fora da
+grade real, silencioso, a mesma classe de defeito do item 5.7.
+
+Corrigido em 2026-09-09 pela criação de `src/core/instruments.py`
+(`InstrumentEconomics`, tabela `FUTUROS`, `economics_for()`), que virou fonte
+única de `point_value_brl`, `price_tick_size` e `margin_per_contract_brl`
+para as duas pontas — `backtest.intraday.profiles.SymbolProfile` de um lado,
+`strategy.daytrade.registry`/os construtores dos robôs do outro. O default de
+`WDO_TICK_SIZE` e de `CopaWin.tick_size` passou a ler
+`economics_for(...).price_tick_size` em vez de um número digitado, e o
+comentário foi reescrito para dizer a verdade: é ESTE número que posiciona a
+grade em produção.
+
+> **Regra:** um comentário que afirma COMO o código é chamado ("isto nunca
+> roda sem X explícito") **não é verificação** — é uma alegação sem teste, e
+> alegação sem teste tem a mesma taxa de erro que qualquer outro código não
+> testado. Ou existe um teste que amarra as duas pontas (o valor que o robô
+> de fato usa == o valor que o perfil do motor declara), ou as duas pontas
+> leem a MESMA fonte — nunca duas cópias com um comentário prometendo que
+> elas nunca vão divergir. Corolário mais caro: **um default de construtor
+> que a produção efetivamente usa não é "default de conveniência" — é a
+> configuração de produção, escondida no lugar onde ninguém procura
+> configuração.** Antes de descrever qualquer parâmetro como "default para
+> quem não passar o valor certo", confira quem de fato chama o construtor e
+> o que cada chamador passa.
+> Não gera pergunta nova na Parte 8 — é regra de arquitetura do NOSSO código
+> (onde mora a constante, quem lê o quê), não uma pergunta sobre o
+> comportamento da plataforma nova. Reforça a pergunta 28 (5.7, 5.21): valor
+> do instrumento vem de UM lugar indexado pelo INSTRUMENTO, nunca redigitado
+> por robô, tela ou script.
+> **Quinta aparição da mesma família** — 5.7, 5.8, 5.19, 5.21 e esta.
+
+### 5.24 Aviso não substitui recusa: uma barra anterior à própria abertura da posição quase virou caixa simulado
+
+2026-09-09, mesmo dia e mesma rotina do item 5.19. O desmonte de robô
+encerrava a posição simulada contra a barra mais recente salva em parquet,
+sem julgar a idade dela — e o caso real que abriu o item 5.19 é exatamente
+essa barra: **5185,0 de 28/08 marcando uma posição de WDO@ aberta em
+09/09**. Trocar só a FONTE do preço (item 5.19 — cotação ao vivo do terminal
+primeiro, parquet como retaguarda) não fecha a lacuna: a retaguarda CONTINUA
+existindo, e o código, ao cair nela, emitia um **aviso** e creditava o
+resultado do mesmo jeito. Aviso não serve para isto: quando ele aparece na
+tela, o número **já entrou** no `cash_sombra` — e o caixa não é relatório, é
+a variável que dimensiona quantos contratos o robô abre no pregão seguinte
+(mesmo argumento do item 5.20). Uma barra de 28/08 marcando uma posição
+aberta em 09/09 não é só "velha": é uma barra **ANTERIOR à própria abertura
+da posição**, uma impossibilidade lógica — não existe preço de saída que
+anteceda a entrada.
+
+A correção (`_preco_velho_demais`, `src/dashboard/live_teardown.py`) não
+escolheu entre as duas saídas que pareciam ser as únicas — "encerrar com o
+preço velho mesmo assim" ou "travar a remoção e pedir intervenção do dono"
+(essa segunda também é modo de falha caro: o robô fica preso no painel, com o
+ativo bloqueado para qualquer outro robô, por causa de um terminal que o
+dono talvez nem consiga abrir agora). Existe uma terceira que domina as
+duas, e o módulo já a tinha escrita para o caso vizinho ("não veio preço
+nenhum"): **encerra pelo PRÓPRIO preço de entrada**, credita só o custo
+conhecido (corretagem + valor do ponto), e diz por quê. Resultado bruto zero
+erra, no máximo, pelo que a posição realmente andou; um preço de outra
+quinzena erra pelo que o MERCADO andou em duas semanas — e no caso real
+aquele único número decidia R$520,00 num caixa simulado de R$375,00.
+
+Dois critérios de recusa, e só o segundo tem constante para discutir: **(1)**
+a barra salva é anterior à data de abertura da própria posição —
+impossibilidade lógica, dispensa qualquer julgamento sobre "quão velho é
+demais";
+**(2)** mais de `_IDADE_MAXIMA_DO_PRECO_DIAS = 5` dias corridos — cobre a
+maior distância NORMAL entre dois pregões da B3 (feriado emendado num fim de
+semana, quinta a terça), de modo que "o terminal estava fechado no fim de
+semana" nunca cai na recusa, e "o parquet não é atualizado há mais de uma
+semana" sempre cai.
+
+Duas ressalvas registradas por serem honestas, não por serem confortáveis:
+os 5 dias são **escolha** de calendário, não medição de defasagem — um WDO@
+anda mais que a conta inteira num ÚNICO pregão, então um preço dentro do
+limite ainda pode estar materialmente errado; ele só deixa de ser absurdo. E
+a recusa não cobre a rota REAL de propósito: lá o preço vem de
+`broker.last_price`, que é "agora" ou `None` — não existe "velho" nesse
+caminho, então não há o que recusar.
+
+> **Regra:** dado externo que vai virar um LANÇAMENTO no ledger tem
+> VALIDADE, e a validade é checada ANTES do lançamento — nunca avisada
+> depois. Quando o dado falhar a checagem, a saída correta raramente é o par
+> binário "usar mesmo assim" × "travar a operação inteira": procure primeiro
+> o fallback que o código já escreveu para o caso vizinho de "dado ausente"
+> — ele costuma ser conservador por desenho (aqui, "sem preço" já caía no
+> preço de entrada), e a mesma saída geralmente serve para "preço presente,
+> mas inválido".
+> **Pergunte à plataforma nova:** ver pergunta 77, estendida — a API expõe a
+> IDADE do dado que devolve, distinguindo "última cotação conhecida" de
+> "cotação de agora"? (5.19, 5.20)
 
 ---
 
@@ -4060,6 +4463,12 @@ cada método de cancelamento.
 > mesmo campo / fazem a mesma coisa da mesma forma errada?" e corrija todos antes
 > de declarar terminado.
 
+A família 5.7 → 5.8 → 5.19 → **5.21** é a prova mais cara disto no arquivo: o
+mesmo defeito (constante do instrumento buscada onde der) foi corrigido três
+vezes em três caminhos diferentes antes de alguém perguntar por que ele
+reaparecia. **Corrigir uma instância de um padrão sem varrer todas as outras não
+corrige o padrão — só move a data da próxima ocorrência.**
+
 ### 7.2 Verifique contra a instância viva, não contra a documentação
 
 Um texto de tela escrito a partir de docstrings **inverteu uma regra de saída** e
@@ -4248,7 +4657,10 @@ dinheiro ou meses.
     ou é cotação (pontos de índice, pontos de dólar, ticks) que exige um
     multiplicador para virar dinheiro? Se exige, o débito/crédito de caixa
     lê esse multiplicador do MESMO lugar que o cálculo de P&L, ou é uma
-    segunda cópia da fórmula? (5.7)
+    segunda cópia da fórmula? E esse lugar é indexado pelo INSTRUMENTO — não
+    pelo robô, pela tela nem pelo script? Dois robôs no mesmo símbolo têm
+    obrigatoriamente o mesmo multiplicador; se ele puder ser declarado por
+    robô, ele vai divergir. (5.7, 5.21)
 29. Um reinício no meio do pregão detecta e repõe (por replay) o estado de
     JANELA/indicador intra-sessão de QUALQUER estratégia, ou só das que
     alguém lembrou de marcar com um atributo especial? Um portão de warm
@@ -4665,6 +5077,52 @@ dinheiro ou meses.
     o mesmo sem nem levantar exceção — o dono só descobriu porque estranhou os
     números parados. (5.18)
 
+77. Ao ENCERRAR um contrato futuro nesta plataforma, o que exatamente volta
+    para o saldo disponível — a margem que estava bloqueada, o nocional, ou só
+    o resultado da operação? E a plataforma distingue margem de nocional em
+    algum campo consultável, ou essa distinção é responsabilidade nossa em
+    cada rotina que credita caixa? A resposta define se pode existir mais de
+    um lugar no sistema calculando "quanto voltou": aqui existiam três
+    (abertura, fechamento normal, remoção do robô) e o terceiro devolveu o
+    nocional de um contrato ao caixa, levando R$375,00 a −R$4.706,00. Vale
+    perguntar junto: existe uma consulta que devolva a margem BLOQUEADA por
+    posição, para o robô nunca precisar recalculá-la de memória? **Estendida
+    (2026-09-09):** o preço usado para marcar essa posição a mercado antes de
+    encerrar carrega a IDADE junto com o valor — dá para distinguir "última
+    cotação conhecida" de "cotação de agora"? Uma rotina de encerramento que
+    cai num preço em cache sem carimbo de tempo pode creditar o movimento de
+    MERCADO de duas semanas como se fosse desta posição; aqui uma barra de
+    12 dias sozinha decidia R$520,00 num caixa de R$375,00, e uma segunda
+    dessas barras chegou a ser anterior à própria abertura da posição — uma
+    impossibilidade lógica que dispensa até medir "quão velho é demais".
+    (5.19, 5.7, 5.24)
+78. Quantas rotas de FECHAMENTO esta plataforma oferece — ordem do robô,
+    botão de "fechar posição" do terminal, encerramento manual pela mesa,
+    liquidação compulsória no fim do dia — e **todas custam o mesmo e chegam
+    ao robô do mesmo jeito**? Especificamente: um fechamento que NÃO partiu do
+    robô aparece no histórico com corretagem e emolumentos discriminados, ou
+    só como um deal sem custo? A resposta define se dá para ter um único ponto
+    de contabilização no nosso lado, ou se cada rota precisa de tradução
+    própria — e rota com tradução própria é o lugar onde a conta diverge. Aqui
+    a rota administrativa (remover o robô pelo painel) creditava o resultado
+    BRUTO enquanto a operacional creditava o LÍQUIDO: **R$0,50 por contrato de
+    WDO@, R$0,01 em 100 ações**, sempre a favor de quem removeu. O tamanho não
+    é o ponto — o caixa é o que dimensiona a próxima posição, então erro
+    pequeno e sistemático entra numa malha fechada e integra. A pergunta 77
+    (5.19) cobre o CRÉDITO devolvido ao saldo; esta cobre o CUSTO cobrado na
+    saída. (5.20, 5.19)
+79. O que exatamente a API devolve para um instrumento que existe mas ainda
+    não está "carregado"/selecionado no terminal — zero, `None`, um erro
+    explícito, ou o valor do último símbolo consultado? Dá para distinguir,
+    na resposta, "este instrumento vale zero" de "eu não sei o valor deste
+    instrumento"? Se não der, todo número lido de lá que alimenta P&L, portão
+    de capital ou disjuntor precisa de um guard de sanidade — finito e maior
+    que zero, validado por VALOR e não por tipo — ANTES da primeira divisão
+    ou uso. Aqui o terminal reportava `trade_tick_value=0` para símbolo fora
+    do Market Watch, e o zero silenciava as três proteções ao mesmo tempo sem
+    levantar exceção nenhuma em ação, e explodia um `ZeroDivisionError` sem
+    contexto em futuro. (5.21, 5.22)
+
 ---
 
 ## O resumo, se sobrar só um parágrafo
@@ -4776,5 +5234,18 @@ ordem-limite de saída ficou órfã no livro e preencheu 3 segundos depois: shor
 de 2 contratos numa conta de R$375 dimensionada para 1, `price_open` em
 5113,75 (fora da grade de 0,5 do WDO), stop de −R$80,00, pregão de −R$65,00, e
 o diário registrando o trade que estava sob medição como "+R$9,50 no alvo"
-quando o real foi +R$5,00 a mercado (1.24). Mais o registro acumulado do projeto. Quando um item aqui contradisser o código, o código ganha — e este
+quando o real foi +R$5,00 a mercado (1.24). Mais 3 itens em 2026-09-09,
+fechando o rollout de `core.instruments` além da contabilidade de caixa e a
+lacuna deixada em aberto pelo item 5.19: 5.22 (o terminal podia devolver
+`trade_tick_value=0` para símbolo fora do Market Watch, e nada validava isso
+antes de dividir — zero silencioso em ação, `ZeroDivisionError` mudo em
+futuro), 5.23 (o `tick_size` que o robô ao vivo de fato usava vinha do
+default do construtor, não do perfil, e um comentário afirmava o contrário
+havia 13 dias sem nenhum teste checar a afirmação) e 5.24 (a rotina de
+desmonte fechada em 5.19 ainda avisava-e-creditava um preço em cache velho
+demais em vez de recusar — a mesma barra de 12 dias era, além de velha,
+anterior à própria abertura da posição, e a correção passou a fechar pelo
+preço de entrada nesse caso, como já fazia para "sem preço nenhum"). Mais o
+registro acumulado do projeto. Quando um item aqui contradisser o código, o
+código ganha — e este
 arquivo está desatualizado.*
