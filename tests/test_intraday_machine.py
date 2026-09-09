@@ -1922,3 +1922,121 @@ def test_flatten_de_fim_de_pregao_continua_saindo_a_mercado():
     assert [e for e in ev if isinstance(e, PositionClosed)]
     assert execucao.market_calls == [IntradayExitReason.FORCED_FLATTEN]
     assert execucao.protecao_calls == []
+
+
+# ---------- preenchimento favoravel + ancoragem no fill --------------------
+#
+# Dois flags de `IntradayBacktestConfig`, ambos DESLIGADOS por default
+# (2026-09-08, pergunta do dono: "e se o robo considerasse o preco em que
+# ENTROU DE FATO para posicionar alvo e stop?"):
+#
+#   * `limit_fill_at_bar_open` -- a ordem-limite que a barra ATRAVESSA
+#     preenche na abertura (melhor que o nivel), nao no nivel exato.
+#   * `anchor_exits_at_fill`   -- alvo e stop transladam para o preco
+#     preenchido, preservando a distancia declarada pela estrategia.
+#
+# O segundo e' NO-OP sem o primeiro (no motor de sempre o fill E' o nivel);
+# os testes abaixo fixam exatamente isso, alem do comportamento novo.
+
+def _abre_posicao(cfg, *, side="long", limit_price=9.80, alvo=9.90, stop=9.00,
+                  barra_do_fill):
+    """Arma uma `EnterLimit` na barra 0 e resolve o fill na barra 1
+    (`barra_do_fill`). Devolve o `PositionOpened` -- ou `None` se nao houve
+    fill."""
+    strat = _Scripted({0: [EnterLimit(side=side, limit_price=limit_price,
+                                      initial_target=alvo, initial_stop=stop)]})
+    m = IntradaySessionMachine(strat, cfg)
+    m.begin_session(pd.Timestamp("2026-01-05").date())
+    m.on_closed_bar(_bar(0, 10.00, 10.00, 10.00, 10.00))
+    eventos = m.on_closed_bar(barra_do_fill)
+    abertos = [e for e in eventos if isinstance(e, PositionOpened)]
+    return (abertos[0], m) if abertos else (None, m)
+
+
+def test_fill_no_nivel_e_o_default_mesmo_quando_a_barra_atravessa():
+    """Sem flag nenhum: motor de sempre. Uma barra que abre 10 ticks ABAIXO
+    do nivel de compra ainda preenche no nivel -- premissa pessimista que
+    todas as medicoes deste repo ate 2026-09-08 carregam."""
+    ev, _ = _abre_posicao(_config(), barra_do_fill=_bar(1, 9.70, 9.75, 9.65, 9.72))
+    assert ev.price == pytest.approx(9.80)
+    assert ev.stop == pytest.approx(9.00)
+    assert ev.target == pytest.approx(9.90)
+
+
+def test_fill_na_abertura_preenche_melhor_quando_a_barra_atravessa_o_nivel():
+    """`limit_fill_at_bar_open=True`: compra cujo nivel ja' foi atravessado
+    na abertura enche em `bar.open` (9,70), nao no nivel pedido (9,80) --
+    e' o que a corretora faz de verdade."""
+    ev, _ = _abre_posicao(_config(limit_fill_at_bar_open=True),
+                          barra_do_fill=_bar(1, 9.70, 9.75, 9.65, 9.72))
+    assert ev.price == pytest.approx(9.70)
+    # sem `anchor_exits_at_fill`, os niveis continuam os PEDIDOS
+    assert ev.stop == pytest.approx(9.00)
+    assert ev.target == pytest.approx(9.90)
+
+
+def test_fill_na_abertura_nunca_e_pior_que_o_nivel_pedido():
+    """Barra que abre ACIMA do nivel de compra e so' depois desce ate' ele:
+    o fill continua no nivel. Ordem-limite nao executa pior que o preco
+    pedido -- se executasse, o flag estaria inventando custo."""
+    ev, _ = _abre_posicao(_config(limit_fill_at_bar_open=True),
+                          barra_do_fill=_bar(1, 9.95, 9.98, 9.79, 9.85))
+    assert ev.price == pytest.approx(9.80)
+
+
+def test_fill_na_abertura_vale_para_venda_com_o_sinal_invertido():
+    """Venda: atravessar e' abrir ACIMA do nivel, e o melhor preco e' o
+    MAIOR."""
+    ev, _ = _abre_posicao(_config(limit_fill_at_bar_open=True),
+                          side="short", limit_price=10.20, alvo=10.10, stop=11.00,
+                          barra_do_fill=_bar(1, 10.35, 10.40, 10.30, 10.32))
+    assert ev.price == pytest.approx(10.35)
+
+
+def test_ancoragem_no_fill_e_no_op_quando_o_fill_sai_no_nivel():
+    """`anchor_exits_at_fill=True` SOZINHO nao muda nada -- a distancia
+    ancorada no fill e' a mesma ancorada no nivel quando os dois sao o mesmo
+    preco. E' essa a razao de o flag so' significar algo junto de
+    `limit_fill_at_bar_open` (ou de execucao REAL)."""
+    barra = _bar(1, 9.70, 9.75, 9.65, 9.72)
+    ev_sem, _ = _abre_posicao(_config(), barra_do_fill=barra)
+    ev_com, _ = _abre_posicao(_config(anchor_exits_at_fill=True), barra_do_fill=barra)
+    assert (ev_com.price, ev_com.stop, ev_com.target) == (
+        pytest.approx(ev_sem.price), pytest.approx(ev_sem.stop),
+        pytest.approx(ev_sem.target))
+
+
+def test_ancoragem_no_fill_preserva_a_distancia_alvo_e_stop():
+    """Nivel 9,80 / alvo 9,90 (+0,10) / stop 9,00 (-0,80). Fill em 9,70:
+    alvo vai para 9,80 e stop para 8,90 -- as MESMAS distancias, ancoradas
+    no preco pago. E a posicao em `positions_view()` nasce com elas, nao so'
+    o evento."""
+    cfg = _config(limit_fill_at_bar_open=True, anchor_exits_at_fill=True)
+    ev, m = _abre_posicao(cfg, barra_do_fill=_bar(1, 9.70, 9.75, 9.65, 9.72))
+    assert ev.price == pytest.approx(9.70)
+    assert ev.target == pytest.approx(9.80)
+    assert ev.stop == pytest.approx(8.90)
+    pos = m.positions_view()[0]
+    assert pos.current_target == pytest.approx(9.80)
+    assert pos.current_stop == pytest.approx(8.90)
+
+
+def test_ancoragem_no_fill_preserva_a_distancia_na_venda():
+    cfg = _config(limit_fill_at_bar_open=True, anchor_exits_at_fill=True)
+    ev, _ = _abre_posicao(cfg, side="short", limit_price=10.20, alvo=10.10,
+                          stop=11.00,
+                          barra_do_fill=_bar(1, 10.35, 10.40, 10.30, 10.32))
+    assert ev.price == pytest.approx(10.35)
+    assert ev.target == pytest.approx(10.25)   # -0,10 do fill
+    assert ev.stop == pytest.approx(11.15)     # +0,80 do fill
+
+
+def test_ancoragem_no_fill_mantem_alvo_aberto_como_none():
+    """Alvo `None` (trailing/alvo aberto) nao tem distancia para preservar --
+    continua `None` em vez de virar um numero inventado."""
+    cfg = _config(limit_fill_at_bar_open=True, anchor_exits_at_fill=True)
+    ev, _ = _abre_posicao(cfg, alvo=None,
+                          barra_do_fill=_bar(1, 9.70, 9.75, 9.65, 9.72))
+    assert ev.price == pytest.approx(9.70)
+    assert ev.target is None
+    assert ev.stop == pytest.approx(8.90)

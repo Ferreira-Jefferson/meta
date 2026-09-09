@@ -182,6 +182,57 @@ class IntradayBacktestConfig:
     # `backtest.intraday.profiles.config_for`, o caminho que TODO backtest/
     # sombra real usa para montar a config.
     limit_fill_capped_by_volume: bool = False
+    # `True`: uma ordem-limite parada (`EnterLimit`) que a barra ATRAVESSA
+    # preenche na ABERTURA da barra, nao no nivel pedido -- compra em
+    # `min(limit_price, bar.open)`, venda em `max(limit_price, bar.open)`.
+    # Modela o que a corretora faz de verdade: uma BUY_LIMIT em R$5,500 num
+    # papel que abre a barra em R$5,480 nao executa em 5,500 (ninguem vende
+    # a 5,480 e recebe 5,500 sem motivo) -- ela e' executada ao preco
+    # corrente, que e' MELHOR para quem comprou. O motor sempre assumiu
+    # preenchimento no nivel exato, o que e' PESSIMISTA nesse caso.
+    #
+    # `bar.open` nao e' look-ahead: a ordem ja' estava RESTING antes desta
+    # barra comecar (`EnterLimit` so' vira `resting_limit` no passo (5) do
+    # `on_closed_bar` ANTERIOR), entao a abertura desta barra e' o primeiro
+    # preco negociavel com a ordem no book. O cap por volume
+    # (`limit_fill_capped_by_volume`) e o modelo de fila (`queue_ahead_qty`)
+    # continuam valendo identicos: isto muda so' o PRECO de um fill que ja'
+    # teria acontecido, nunca SE ele acontece.
+    #
+    # So' vale no caminho SIMULADO -- em execucao REAL o preco de fill vem
+    # da corretora (`self.execution.limit_fill`), que ja' e' o preco de
+    # verdade.
+    #
+    # Default `False` DE PROPOSITO: ligar isto muda o preco de entrada de
+    # toda medicao ja' feita neste repo, e portanto tornaria incomparaveis
+    # numeros novos com numeros antigos (mesmo problema do deslize do alvo
+    # nativo, item 4.8 de LICOES_DE_PRODUCAO.md). Quem liga declara
+    # explicitamente e carimba a premissa na linha da tabela.
+    limit_fill_at_bar_open: bool = False
+    # `True`: ao ABRIR a posicao a partir de uma `EnterLimit`, alvo e stop
+    # sao recalculados preservando a DISTANCIA original ao nivel pedido,
+    # ancorados no preco REALMENTE preenchido:
+    #
+    #     stop_novo  = fill + (initial_stop   - limit_price)
+    #     alvo_novo  = fill + (initial_target - limit_price)
+    #
+    # A distancia sai da propria ordem (diferenca entre os niveis que a
+    # estrategia mandou), nunca de `profit_ticks`/`stop_ticks` -- o motor
+    # NAO conhece os parametros da estrategia (regra 2 de AGENTS.md), so'
+    # os precos que ela declarou. `initial_target=None` (trailing, alvo
+    # aberto) continua `None`.
+    #
+    # Sem isto, o robo mede o risco/retorno a partir do nivel que PEDIU e
+    # nao do preco que PAGOU. Enquanto o fill acontece sempre no nivel
+    # exato (motor antigo, `limit_fill_at_bar_open=False`) isto e' NO-OP
+    # por construcao -- a distancia ancorada no fill e' a mesma ancorada no
+    # nivel. So' passa a significar alguma coisa junto de
+    # `limit_fill_at_bar_open=True` (ou de execucao REAL, onde a corretora
+    # decide o preco).
+    #
+    # Default `False` pelo mesmo motivo do flag acima: e' mudanca de
+    # geometria, e geometria antiga tem de continuar reproduzivel.
+    anchor_exits_at_fill: bool = False
     # `True`: no INICIO de cada sessao, `run_intraday_backtest` (`backtest.
     # intraday.engine`) recusa operar o dia inteiro se o caixa disponivel
     # (`initial_capital + realized_pnl`) nao cobrir `strategy.daytrade.base.
@@ -549,6 +600,25 @@ def _limit_touched(order: EnterLimit, bar: Bar) -> bool:
     high/low). Compra: `bar.low <= limit_price`; venda: `bar.high >=
     limit_price`."""
     return bar.low <= order.limit_price if order.side == "long" else bar.high >= order.limit_price
+
+
+def _limit_fill_price(order: EnterLimit, bar: Bar, at_bar_open: bool) -> float:
+    """Preco de preenchimento SIMULADO da ordem-limite nesta barra.
+
+    `at_bar_open=False` (default do motor): o nivel exato -- premissa
+    historica, e a PESSIMISTA quando a barra atravessa o nivel.
+
+    `at_bar_open=True` (`IntradayBacktestConfig.limit_fill_at_bar_open`): a
+    barra que ja' ABRE do lado bom do nivel preenche na abertura, que e' o
+    preco melhor. Compra `min(limit_price, bar.open)`, venda
+    `max(limit_price, bar.open)` -- nunca PIOR que o nivel, porque uma
+    ordem-limite por definicao nao executa pior que o preco pedido. So' e'
+    chamado depois de `_limit_touched`, entao a barra que nao encosta no
+    nivel nao chega aqui."""
+    if not at_bar_open:
+        return order.limit_price
+    return (min(order.limit_price, bar.open) if order.side == "long"
+            else max(order.limit_price, bar.open))
 
 
 class IntradaySessionMachine:
@@ -1420,6 +1490,10 @@ class IntradaySessionMachine:
                                 ts, order.side, fill_qty, "limit"))
                             continue
                         self.ordens_aceitas += 1
+                        # Alvo/stop DESTA entrada -- ancorados no nivel
+                        # pedido (motor de sempre) ou no preco de fato
+                        # preenchido, ver `_niveis_da_entrada`.
+                        stop_pos, alvo_pos = self._niveis_da_entrada(order, fill_price)
                         if self.execution is not None and self.positions:
                             pos = self.positions[0]
                             nova_qty = pos.quantity + fill_qty
@@ -1433,16 +1507,16 @@ class IntradaySessionMachine:
                                 entry_ts=ts,
                                 entry_price=fill_price,
                                 quantity=fill_qty,
-                                current_stop=order.initial_stop,
-                                current_target=order.initial_target,
+                                current_stop=stop_pos,
+                                current_target=alvo_pos,
                                 metadata=dict(order.metadata or {}),
                                 exit_split_unit=order.exit_split_unit,
                                 exit_ttl_bars=order.exit_ttl_bars,
                             ))
                         events.append(PositionOpened(
                             ts=ts, side=order.side, price=fill_price,
-                            quantity=fill_qty, stop=order.initial_stop,
-                            target=order.initial_target, order_kind="limit",
+                            quantity=fill_qty, stop=stop_pos,
+                            target=alvo_pos, order_kind="limit",
                             reason=order.reason, bar=bar,
                         ))
                     self._resting_children_qty = restantes
@@ -1957,6 +2031,13 @@ class IntradaySessionMachine:
         if not _limit_touched(order, bar):
             return [], children_qty
 
+        # PRECO do fill -- ver `_limit_fill_price` e
+        # `IntradayBacktestConfig.limit_fill_at_bar_open`. Nao interfere em
+        # SE o fill acontece (fila e cap por volume continuam mandando
+        # nisso), so' em a QUANTO.
+        preco_fill = _limit_fill_price(
+            order, bar, self.config.limit_fill_at_bar_open)
+
         orcamento = bar.volume
         if self._queue_ahead_remaining > 0.0:
             consumido = min(orcamento, self._queue_ahead_remaining)
@@ -1975,17 +2056,49 @@ class IntradaySessionMachine:
             # premissa otimista de sempre sobre o volume do proprio evento,
             # so que agora depois de pagar o pedagio da fila, nao antes.
             total = sum(children_qty)
-            return ([(order.limit_price, total)] if total else []), []
+            return ([(preco_fill, total)] if total else []), []
 
         fills: list[tuple[float, int]] = []
         remaining: list[int] = []
         for qty in children_qty:
             if orcamento >= qty:
-                fills.append((order.limit_price, qty))
+                fills.append((preco_fill, qty))
                 orcamento -= qty
             else:
                 remaining.append(qty)
         return fills, remaining
+
+    def _niveis_da_entrada(self, order: EnterLimit,
+                           fill_price: float) -> tuple[float | None, float | None]:
+        """`(stop, alvo)` com que a posicao aberta por `order` nasce.
+
+        Default (`anchor_exits_at_fill=False`): exatamente os niveis que a
+        estrategia declarou (`initial_stop`/`initial_target`) -- o motor de
+        sempre.
+
+        `anchor_exits_at_fill=True`: os mesmos niveis TRANSLADADOS para o
+        preco realmente preenchido, preservando a DISTANCIA original ao
+        nivel pedido. A distancia sai da propria ordem (`initial_* -
+        limit_price`), nunca dos parametros da estrategia -- o motor nao
+        conhece `profit_ticks`/`stop_ticks` e nao pode conhecer (regra 2 de
+        AGENTS.md: a logica de sinal e' pura e vive em `strategy/`).
+
+        Responde a pergunta do dono (2026-09-08): "e se o robo considerasse
+        o preco em que ENTROU DE FATO para posicionar alvo e stop?". Com o
+        motor preenchendo sempre no nivel exato isto e' NO-OP -- so' muda
+        alguma coisa junto de `limit_fill_at_bar_open=True` ou em execucao
+        REAL (onde quem escolhe o preco e' a corretora).
+
+        `initial_target=None` (alvo aberto/trailing) continua `None`: nao ha'
+        distancia para preservar."""
+        stop, alvo = order.initial_stop, order.initial_target
+        if not self.config.anchor_exits_at_fill:
+            return stop, alvo
+        delta = fill_price - order.limit_price
+        if delta == 0.0:
+            return stop, alvo
+        return (None if stop is None else stop + delta,
+                None if alvo is None else alvo + delta)
 
     # ---------- fechamento -------------------------------------------------
 

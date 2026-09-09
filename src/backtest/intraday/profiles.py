@@ -374,6 +374,8 @@ def config_for(
     enforce_capital_cap: bool | None = None,
     margin_buffer: float = MARGIN_BUFFER_FUTUROS,
     target_slippage_ticks: float | None = None,
+    limit_fill_at_bar_open: bool = False,
+    anchor_exits_at_fill: bool = False,
 ) -> IntradayBacktestConfig:
     """Monta o `IntradayBacktestConfig` de um perfil + a economia do simbolo
     lida do terminal (`market_data_intraday.mt5_source.symbol_economics`).
@@ -489,6 +491,19 @@ def config_for(
     sensibilidade -- a amostra que ancora o 1,0 tem n=8, entao a
     sensibilidade importa.
 
+    `limit_fill_at_bar_open`/`anchor_exits_at_fill` (2026-09-08, pergunta do
+    dono: "e se o robo considerasse o preco em que ENTROU DE FATO para
+    posicionar alvo e stop?"): repassados crus para os campos de mesmo nome
+    de `IntradayBacktestConfig` -- o primeiro faz a ordem-limite atravessada
+    preencher na ABERTURA da barra (melhor que o nivel) em vez de no nivel
+    exato; o segundo translada alvo e stop para o preco preenchido,
+    preservando a distancia original. Os dois ficam DESLIGADOS por default,
+    ao contrario de `target_slippage_ticks` acima: aquele corrige um custo
+    MEDIDO que o motor nao cobrava (nao ligar seria continuar otimista);
+    estes dois mudam a GEOMETRIA de toda medicao ja' feita, e ligar por
+    default tornaria numero novo incomparavel com numero antigo sem ninguem
+    perceber. Ver as docstrings dos campos.
+
     O teto por capital NUNCA aumenta `max_open_contracts` (o campo que este
     montador resolve logo acima, via `teto`) -- so' pode ENCOLHER o que a
     run permitiria durante a execucao, dinamicamente, conforme o caixa muda
@@ -567,4 +582,6 @@ def config_for(
         max_open_contracts=teto,
         margin_per_contract_brl=(profile.margin_per_contract_brl if enforce_capital_cap else None),
         margin_buffer=margin_buffer,
+        limit_fill_at_bar_open=limit_fill_at_bar_open,
+        anchor_exits_at_fill=anchor_exits_at_fill,
     )
