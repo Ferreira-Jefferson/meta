@@ -42,7 +42,7 @@ import subprocess
 import sys
 import threading
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -1125,9 +1125,26 @@ def start(config: ProcessConfig) -> dict:
         # universo/símbolo, ver docstring da função) — por isso checado
         # DEPOIS do guard acima, nunca antes.
         _assert_slots_disjuntos(slot, config.strategy, config.execution_mode)
+        # CONTRATO REAL do futuro contínuo (`WDO@` -> `WDOV26`): sem ele o
+        # servidor recusa TODA ordem de futuro (retcode 10017
+        # `TRADE_DISABLED`, achado ao vivo em 2026-08-28). A detecção morava
+        # SÓ no handler HTTP (`dashboard/app.py`), então qualquer outro
+        # chamador de `start()` — script, restart automatizado, linha de
+        # comando — subia o robô sem mapa e só descobriria na primeira ordem
+        # real recusada. Em sombra passa despercebido (não manda ordem), que
+        # é o que torna a armadilha pior: o slot parece saudável.
+        #
+        # Fica AQUI, e não só lá, porque é invariante de "subir o robô", não
+        # de "clicar no botão". Só detecta quando o chamador não trouxe mapa
+        # — o caminho do painel já traz, então nada muda para ele e a
+        # consulta (lenta, vai ao terminal) não roda duas vezes.
+        if config.mt5_symbol_map is None:
+            detectado = detect_futures_symbol_map(config.slot, config.strategy)
+            if detectado:
+                config = replace(config, mt5_symbol_map=detectado)
         if config.mt5_shares_per_lot is None or config.mt5_shares_per_lot <= 0:
             raise RuntimeError(
-                "modo mt5 exige 'ações por lote' (mt5_shares_per_lot) — não foi "
+                "modo mt5 exige 'ações por lote' (mt5_shares_per_lot) — não foi"
                 "possível detectar automaticamente via detect_shares_per_lot() "
                 "(terminal MT5 fechado/deslogado, ou símbolos da watchlist com "
                 "contract_size diferente entre si)."
