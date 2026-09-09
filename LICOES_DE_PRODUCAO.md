@@ -3186,6 +3186,66 @@ velha não vira ordem); este ataca a INVISIBILIDADE.
 > MT5, 4 de 4 travamentos de 08/09 liberaram dentro de 5 s do topo da hora.
 > (5.17)
 
+### 5.18 Um `@` no símbolo do instrumento congelou o painel de dinheiro — a tela mostrou os números do instante em que a página abriu, sem erro e sem aviso, por tempo indeterminado — CORRIGIDO 2026-09-09
+
+O painel `/operacao` parou de se atualizar sozinho para o robô do WDO. O dono
+precisava dar **F5 na mão** para ver caixa, contagem de ordens (x/y), posições e
+diário mudarem — e operou assim sem saber por quanto tempo. Medido com navegador
+instrumentado contra o servidor real: o poll de 20 s do cartão disparava certo, o
+servidor respondia **HTTP 200 com o HTML novo e correto**, e a camada de troca no
+navegador **descartava a resposta inteira, 100% das vezes**. Nenhuma tela de erro,
+nenhum aviso, nenhuma cor diferente: o cartão simplesmente exibia os números do
+instante em que a página havia sido carregada.
+
+**A causa.** O resumo do cabeçalho do cartão (o `<summary>`, que mostra o caixa e
+"operando/parado") fica FORA do nó que carrega o gatilho de poll
+(`hx-trigger="every 20s"`), então ele viaja como troca fora-de-banda
+(`hx-swap-oob`). A biblioteca monta o alvo dessa troca como `"#" + id` **CRU**
+(`oobSwap`, htmx 1.9.12). O id era derivado do id do slot, o slot carrega o
+símbolo, e o símbolo do mini-dólar contínuo é `WDO@` — então a tela pedia
+`querySelectorAll('#ops-sum-dt-wdo_grid_reload_maker-wdo@-shadow')` e recebia
+`SyntaxError: ... is not a valid selector`, porque `@` não é caractere de
+identificador na linguagem de seleção. A exceção sobe como `htmx:swapError`
+DENTRO de um poll de fundo: ninguém escuta, e o navegador não tem por que
+reclamar. Um caractere do símbolo de mercado congelou o painel de dinheiro.
+
+É o item 5.17 do outro lado do sistema — lá o FEED cegou sem levantar erro, aqui
+a TELA cegou sem levantar erro — e nos dois casos o sintoma que o dono vê é o
+mesmo: "nada está acontecendo".
+
+**O agravante, que é a parte mais importante.** O sufixo `.SA` das ações seria a
+MESMA falha, mas em silêncio total e sem nem exceção:
+`#ops-sum-dt-gremah-pmam3.sa-shadow` é seletor **VÁLIDO** — só que significa "id
+`ops-sum-dt-gremah-pmam3` COM a classe `sa-shadow`", que não existe. Zero match,
+zero erro, zero atualização. A falha ruidosa do futuro foi sorte; a versão
+silenciosa já estava no mesmo código, esperando o próximo robô de ação.
+
+**A correção.** Um filtro `dom_id` em `src/dashboard/app.py`: todo id de HTML
+derivado de dado (slot, símbolo, robô) passa por uma tradução **injetiva** para o
+conjunto `[A-Za-z0-9_-]` — `_` é o escape, `_` literal vira `__`, qualquer outro
+caractere vira `_` + hexa (`@` vira `_40`) —, aplicada nos DOIS lados: no `id=` e
+em todo seletor `#...` que aponta para ele. Dois testes novos: um monta o cartão
+do slot `dt-wdo_grid_reload_maker-wdo@-shadow` e varre TODO `id=` e todo
+`hx-target="#..."` da página e do fragmento contra o conjunto aceitável; o outro
+fixa a **injetividade**, porque dois slots diferentes que virassem o mesmo id
+fariam a troca escrever o caixa de um robô no cartão de outro. Verificado no
+navegador real depois da correção: os 4 swaps por ciclo passam, `htmx:swapError`
+sumiu.
+
+> **Regra, em duas metades — e a segunda vale mais que a primeira:**
+> (a) nenhum identificador de TELA derivado de dado de mercado (símbolo, robô,
+> conta) pode carregar caractere que a camada de seleção da plataforma não saiba
+> ler. Símbolo de mercado tem `@`, `.`, `/`, `=`; o namespace da tela quase nunca
+> tem. E a tradução tem de ser **injetiva**, porque identificador colidido
+> escreve número de dinheiro no lugar errado — pior que não atualizar.
+> (b) **atualização automática de tela que falha em silêncio é pior que
+> atualização que não existe**: o dono não tem como distinguir "nada mudou no
+> robô" de "a tela parou de receber". Toda tela que se atualiza sozinha precisa
+> dizer QUANDO se atualizou com sucesso pela última vez, ou marcar visualmente o
+> congelamento — senão o painel mente sobre dinheiro por tempo indeterminado e
+> ninguém percebe. Vale igual em qualquer stack: web, terminal, ou o painel
+> nativo da plataforma nova. (5.18)
+
 ---
 
 ## Parte 6 — Método: os erros que custam meses, não reais
@@ -4594,6 +4654,16 @@ dinheiro ou meses.
     ter sido outra ordem, inclusive uma que ABRIU o lado contrário. A
     inferência por encolhimento gravou +R$9,50 num trade que a corretora
     executou por −R$5,00, com o sinal trocado. (1.25, 1.17)
+
+76. Como a plataforma nova identifica cada robô/instrumento no PAINEL, e esse
+    identificador passa por alguma camada que proíbe caracteres do símbolo
+    (seletor de tela, chave de dicionário, nome de arquivo, nome de objeto
+    gráfico)? O símbolo do contínuo (`WDO@`) e o sufixo de ação (`.SA`) cabem
+    nele? E a tela mostra o horário da última atualização BEM-SUCEDIDA, ou um
+    congelamento é invisível? Aqui o `@` derrubou a troca de conteúdo do cartão
+    em 100% dos ciclos com o servidor respondendo HTTP 200, e o `.SA` teria feito
+    o mesmo sem nem levantar exceção — o dono só descobriu porque estranhou os
+    números parados. (5.18)
 
 ---
 
