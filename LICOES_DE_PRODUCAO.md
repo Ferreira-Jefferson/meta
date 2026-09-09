@@ -2144,6 +2144,83 @@ do dono.
 > preserve prioridade? E qual é o teto de ordens por minuto da plataforma —
 > medido em que relógio? (1.20)
 
+### 4.20 A ENTRADA por ordem-limite NÃO desliza — 0 de 28 contra a posição, e é esse contraste que valida a medição da saída
+
+Mesma metodologia do item 4.8 (reconstrução de `history_orders_get` +
+`history_deals_get` do terminal, pareando `deal.order` → `order.price_open` =
+nível PEDIDO contra `deal.price` = preço EXECUTADO), aplicada agora ao lado da
+ENTRADA. População: janela 2026-08-20 a 2026-09-09, símbolos WDOU26 e WDOV26,
+magic 862399285, robô `wdo_grid_reload_maker` — os 3 pregões em que ele mandou
+ordem real (2026-08-28, 2026-09-04, 2026-09-08), **30 entradas, 28 delas por
+ordem-limite pendente** (17 BUY_LIMIT + 11 SELL_LIMIT).
+
+| deslize da ENTRADA (ticks, **+ = A FAVOR**) | 0 | +1 | +2 | +6 | +18 |
+|---|---|---|---|---|---|
+| n | 23 | 2 | 1 | 1 | 1 |
+
+**A favor 5 · exato 23 · CONTRA 0.** Excluindo os dois casos de causa conhecida
+(+6 e +18 são ordem-limite armada em preço morto — item 4.17, não deslize de
+execução): **n=26, média +0,154 tick, mediana 0,0, desvio 0,464, 25 de 26
+exatas (96,2%), ZERO contra.** Duas dessas ordens ficaram **240 s e 1.453 s
+(~24 min) paradas na fila** e ainda assim preencheram exatamente no nível
+pedido — o *resting* real não degradou o preço.
+
+O contraste com a SAÍDA pelo alvo nativo é o ponto do item. Mesma população,
+mesma metodologia, mesmo instrumento, mesmos pregões:
+
+| lado | mecanismo | n | a favor | exato | contra |
+|---|---|---|---|---|---|
+| ENTRADA | ordem-limite pendente, *resting* no livro | 28 | 5 | 23 | **0** |
+| SAÍDA | `tp` nativo, gatilho varrido a mercado (4.8) | 11 | 0 | 1 | **10** |
+
+Fisher exato bilateral: **p ≈ 1,7 × 10⁻⁸**. Não são duas amostras do mesmo
+fenômeno com sorte diferente — são dois mecanismos.
+
+**Ressalva honesta, que faz parte do achado:** 3 pregões, 1 contrato, 28
+entradas, 23 delas de um único dia. A DIREÇÃO (0 contra em 28) é forte;
+**"nunca desliza" NÃO está provado** — pela regra dos três, o limite superior
+de 95% para a taxa de preenchimento adverso ainda é **10,2%**.
+
+**Consequência de desenho, que é por que isto virou item.** A pergunta do dono
+no mesmo dia: valeria ancorar alvo e stop no preço REALMENTE preenchido, em vez
+do nível pedido, como é hoje? A resposta é não, e o motivo é este número.
+(a) Não existe deslize de entrada para corrigir. (b) Nos ~15% de fills
+FAVORÁVEIS a mudança PIORA a geometria nas duas pontas: com âncora no nível, um
+fill 1 tick melhor deixa o alvo a 3 ticks efetivos (pedido: 2) e o stop a 15
+(pedido: 16) — ganha mais quando ganha e perde menos quando perde. Ancorar no
+fill devolve exatamente esse ganho ao mercado. Houve UM caso (2026-09-08
+12:00:02, fill 18 ticks melhor) em que a âncora no nível fez o stop nascer JÁ
+VIOLADO, do lado errado do preço — mas a causa é a ordem armada em preço morto
+(4.17), tratada na raiz pelo `MAX_ATRASO_PARA_ORDEM_SEGUNDOS` (commit
+`60034e3`), não pela escolha de âncora.
+
+**E o fill favorável não é presente.** As 5 posições com entrada melhor que o
+nível foram fechadas pelo próprio robô NO MESMO SEGUNDO, por saída a mercado
+(`reason=EXPERT`) — **todas negativas**. O ganho nominal de R$20,00 da
+população limpa virou prejuízo por reversão imediata. O mecanismo é direto: ser
+preenchido MELHOR que o nível significa que o mercado já passou do nível — o
+estado da grade estava velho (4.17 em versão branda), e o que se ganha em
+preço de entrada se perde na tese. São os round-trips de execução do item 4.16,
+vistos pelo outro lado.
+
+> **Regra:** ordem-limite parada no livro e gatilho varrido a mercado são
+> mecanismos DIFERENTES de preenchimento e não podem herdar a mesma premissa
+> num modelo de custo. Quem FORNECE liquidez preenche no nível ou melhor; o
+> alvo/stop nativo, que a corretora executa como gatilho, preenche pior. Meça
+> cada lado separadamente, contra a MESMA população — foi essa separação que
+> mostrou que o motor dava o alvo de graça (6.18) sem estar errado na entrada,
+> e um número único de "deslize" teria diluído os dois. Um modelo que trata
+> "limite" como uma coisa só erra num dos dois lados por construção, e o erro
+> tem o tamanho do edge inteiro. Corolário de desenho: enquanto o lado que não
+> desliza tiver fills FAVORÁVEIS, reancorar a geometria no preço executado
+> devolve esse ganho — a âncora certa é o nível PEDIDO. Stop que nasce violado
+> é sintoma de âncora defasada (4.17), nunca argumento contra a âncora no
+> nível. E o corolário de amostra: 0 em 28 estabelece DIREÇÃO, não ausência —
+> escreva o limite superior junto do zero, sempre.
+> **Pergunte à plataforma nova:** a ordem-limite dela, quando fica de fato
+> parada no livro, preenche no nível pedido ou melhor — e isso foi medido
+> SEPARADAMENTE do alvo/stop nativo, na mesma população? (pergunta 63)
+
 ---
 
 ## Parte 5 — Dados, relógio e instrumento
@@ -3508,6 +3585,125 @@ nada no número denuncia isso.
 > que não estiver na lista é um subsídio que a varredura de parâmetros vai
 > encontrar e explorar sozinha.
 
+### 6.19 O custo que apagou o edge não era constante da natureza — era o MECANISMO de execução, e trocá-lo levou o robô de −R$242,50 CENSURADO para +R$239.936,50 operante
+
+O item 6.18 fechou com um veredito e uma conta de amostra: T2/S16 não tem edge
+depois de cobrar 1 tick de deslize no alvo, o ponto de virada está em 0,905
+tick, o IC 95% do deslize medido (n=11) é [0,700 ; 1,300] e **atravessa** esse
+ponto — logo "rodar mais janela, mais geometria ou mais capital não move a
+resposta; a incerteza inteira está do lado do custo, num n=11". As três
+alternativas listadas eram mesmo inúteis, e mesmo assim a conclusão estava
+errada: **a lista estava incompleta.** Existia uma quarta — trocar o
+MECANISMO de execução que GERA o custo.
+
+**O que é o mecanismo.** O `tp` nativo (o que viaja amarrado no request da
+entrada) não fica *resting* no livro: a corretora o executa como **gatilho
+varrido a mercado** (item 4.8 — n=11, 10 saídas piores que o nível pedido, 0
+melhores, média −1,000 tick). Com alvo de 2 ticks, 1 tick de deslize é
+**metade do bruto do trade**: foi isso que levou o breakeven de 90,00% para
+95,00% e condenou o T2/S16. Mas derrapagem é, por definição, "executou pior do
+que eu pedi" — e uma ordem-limite parada no livro **recusa** preço pior. O
+custo não era propriedade do instrumento nem da corretora: era consequência de
+ter escolhido o tipo de ordem que aceita preço pior.
+
+**A correção** foi declarar `EnterLimit.exit_split_unit` (parâmetro novo
+`fatiar_saida_alvo=True` em `WdoGridReloadMaker`), que troca o gatilho por
+ordem-limite REAL parada no livro — exatamente o caminho que o motor já não
+cobrava deslize, porque ali ele não estava sendo otimista: a saída fatiada
+posiciona limite de verdade. O custo some **por construção**, não por
+otimismo de modelo.
+
+Medido em `scripts/daytrade/wdof1_fatiar_saida_alvo_is_oos_2026_09_08.py`
+(commit `317e839`), config real de produção, capital R$375,00, T2/S16, nas
+mesmas duas janelas congeladas do item 6.18:
+
+| janela | alvo NATIVO (gatilho) | alvo FATIADO (limite no livro) |
+|---|---|---|
+| IS (72 pregões) | −R$242,50 · **71/72 pregões sem trade** | **+R$239.936,50** · **0/72 sem trade** |
+| OOS (51 pregões) | −R$273,50 · **49/51 pregões sem trade** | **+R$77.833,50** · **0/51 sem trade** |
+
+A janela sai de **CENSURADA** (itens 6.15/6.16 — o robô morria de caixa em
+poucos pregões e o líquido media o portão de capital, não o edge) para
+operante nas duas. E a troca não é indiferente à geometria: **T3 fatiado NÃO
+acompanha** (−R$248,50 no IS, 70/72 pregões sem trade). É o T2 que sustenta.
+
+**O que se paga pela troca — três riscos abertos, registrados de propósito:**
+
+1. **O alvo perde a proteção registrada na corretora.** `_alvo_atomico` recusa
+   amarrar `tp` em posição fatiada de propósito: em conta NETTING, dois
+   fechamentos do tamanho total INVERTEM o lado (itens 1.4 e 1.23 — é o
+   desfecho do incidente de 2026-08-28). Só o **stop** continua no broker; o
+   alvo passa a depender do processo do robô vivo reenviando a limite a cada
+   barra. Trocou-se um custo de execução por uma dependência de disponibilidade.
+2. **Ordem-limite pode não preencher.** É para isso que existe o
+   `exit_ttl_bars` (prazo; estourado, o restante sai a mercado) — e o prazo
+   tem preço próprio, medido no item 6.20.
+3. **A fila REAL de saída nunca foi medida.** O backtest assume que a limite
+   preenche quando o volume da barra cobre a fatia. Medida existe só do lado da
+   ENTRADA (item 4.20: n=26, 0 contra a posição). Esta é a aposta que fica
+   aberta, e ela é exatamente a mesma classe de suposição que o item 6.18
+   pegou do outro lado.
+
+> **Regra:** antes de aceitar um custo de execução como dado do problema,
+> pergunte **por que** ele custa, não só **quanto**. Todo custo medido tem um
+> mecanismo por trás, e mecanismo é escolha de implementação — o tipo de ordem,
+> quem fornece e quem consome liquidez, o que a corretora faz com uma proteção
+> registrada. Um número medido com rigor (n, IC, direção, significância) engana
+> mais que um chute, porque o rigor da MEDIÇÃO se confunde com a
+> inevitabilidade do FENÔMENO. O sintoma de que isto está acontecendo é uma
+> frase da forma "a incerteza inteira está do lado do custo, e só dinheiro real
+> a resolve": ela declara o custo exógeno sem nunca ter examinado o mecanismo.
+> Quando a lista de próximos passos só contém variações do MESMO experimento
+> (mais janela, mais parâmetro, mais capital), a lista está incompleta —
+> falta o passo que muda o experimento. Corolário operacional: preferir
+> FORNECER liquidez na saída a consumi-la é uma decisão de risco, não de custo
+> puro — ela troca deslize garantido por risco de não-preenchimento e por
+> proteção que sai da corretora e volta para o processo; registre as duas
+> pontas.
+> **Pergunte à plataforma nova:** o take-profit dela é ordem-limite *resting*
+> ou gatilho varrido a mercado; dá para posicionar a saída de lucro como limite
+> real e reposicioná-la a cada barra; e, com essa limite em pé, o STOP continua
+> registrado na corretora sem risco de execução dupla? (perguntas 64, 65 e 66)
+
+### 6.20 Parâmetro emprestado de outro instrumento é hipótese, não default — `exit_ttl_bars=8` veio da `gremah` e virou o T3 fatiado de +R$12.928,50 em −R$248,50
+
+Ao ligar a saída fatiada (item 6.19), o WDO F1 herdou `exit_ttl_bars=8`, o
+prazo de vida da ordem-limite de saída. Esse 8 foi calibrado na `gremah`, que
+opera **PMAM3 — ação de centavos, fila lenta, book raso**. O WDO F1 opera
+**futuro líquido**. Não era detalhe de configuração: trocar `None` (sem prazo)
+por 8 barras virou o T3 fatiado de **+R$12.928,50 para −R$248,50** — inverteu
+o sinal do resultado.
+
+Varredura própria depois (11 valores de `exit_ttl_bars`, T2, 10 pregões do IS):
+`ttl=1` é claramente ruim (**R$9,6 mil** contra R$13–16 mil de todo o resto);
+de 2 para cima a curva é **SERRILHADA** — 5: R$13,7 mil · 6: R$14,8 mil · 10:
+R$16,5 mil · 12: R$14,7 mil. Vizinhos diferem entre si mais do que a tendência
+da faixa inteira, que é a assinatura de ruído: **10 pregões não separam este
+parâmetro.** Decisão do dono: manter 8 — não porque venceu, mas porque nada
+venceu.
+
+O que a varredura mediu com clareza foi o **preço da válvula**, não o valor
+ótimo dela: `ttl=8` dá **R$14,9 mil** contra **R$21,0 mil** do "sem prazo".
+Cerca de **30% do lucro é o que se paga** para que uma ordem-limite de saída
+não fique pendurada indefinidamente. "Sem prazo" não é alternativa — é
+referência não-operável (item 6.19, risco 2: sem prazo, a saída depende
+eternamente de a fila andar).
+
+> **Regra:** parâmetro que atravessa de um robô para outro é **hipótese**, não
+> default — e a distância que importa não é a de código, é a de INSTRUMENTO.
+> Um prazo, um teto de fila, um número de barras foram calibrados contra a
+> velocidade do book onde nasceram; num book com outra liquidez o mesmo número
+> pode inverter o sinal do resultado, e vai fazer isso em silêncio, porque
+> herdar um default não gera evento nenhum. Ao transplantar: varra o parâmetro
+> no instrumento NOVO antes de ele virar produção. E quando a varredura sair
+> serrilhada — vizinhos diferindo mais que a tendência da faixa —, a leitura
+> correta é "a janela não separa este parâmetro", jamais "o pico é o ótimo":
+> escolher o máximo de uma curva de ruído é o item 6.5 outra vez. O que a
+> varredura ainda entrega nesse caso é o **preço da restrição** (aqui: ~30% do
+> lucro pela válvula de segurança), e esse número é decisão do dono, não do
+> otimizador. O mesmo erro já apareceu no eixo do risco (item 3.12: o % de
+> risco por trade não atravessa de um robô para outro).
+
 ---
 
 ## Parte 7 — Disciplina de trabalho
@@ -4007,6 +4203,38 @@ dinheiro ou meses.
     terminal ainda guardava o `tp` do request de entrada. Com o crítico em
     0,905 tick e o IC de n=11 em [0,700 ; 1,300], são ~40 a 50 saídas para
     tirar o crítico de dentro do intervalo. (6.18, 4.8)
+
+63. A ordem-limite desta plataforma, quando fica de fato parada no livro,
+    preenche no nível PEDIDO ou melhor — e isso foi medido SEPARADAMENTE do
+    alvo/stop nativo, na mesma população? As duas coisas costumam ser
+    chamadas de "minha ordem" e são mecanismos diferentes: aqui a ENTRADA
+    (limite de verdade no livro) deu 0 de 28 contra a posição, enquanto a
+    SAÍDA por alvo nativo (gatilho varrido a mercado) deu 10 de 11 contra —
+    a mesma conta, o mesmo dia, o mesmo robô. Medir os dois juntos teria
+    dado uma média sem sentido e escondido qual dos dois lados custa. E ao
+    escrever o resultado: 0 em N estabelece DIREÇÃO, não ausência — anote o
+    limite superior junto do zero (regra de três: 3/N). (4.20)
+
+64. A corretora executa o take-profit REGISTRADO como ordem-limite *resting*
+    no livro, ou como GATILHO varrido a mercado? Se for gatilho, todo alvo
+    curto está pagando deslize invisível, e a fração que ele come é
+    (deslize / alvo) — num alvo de 2 ticks, 1 tick é metade do bruto. Esta
+    pergunta vem antes da 62 (quantas saídas acumular para estreitar o IC do
+    deslize): se a resposta for "gatilho", a medição pode ser desnecessária,
+    porque o custo pode ser eliminado em vez de estimado. (6.19, 4.8)
+65. Dá para posicionar a saída de LUCRO como ordem-limite real parada no
+    livro — e a plataforma aceita cancelar/reposicionar essa ordem a cada
+    barra, na cadência que o robô precisa? As perguntas 42, 50 e 54 (teto de
+    cadência e perda de posição na fila ao reenviar) definem se essa saída é
+    operável na prática; sem elas a resposta "sim, dá" é teórica. (6.19, 4.2)
+66. Com uma ordem-limite de saída em pé, a plataforma ainda permite manter o
+    STOP registrado na corretora ao mesmo tempo, sem risco de dupla
+    execução? Em conta NETTING, dois fechamentos do tamanho total não zeram:
+    INVERTEM o lado. Enquanto a resposta não existir, trocar o alvo nativo
+    por limite no livro significa que o alvo deixa de ter proteção do lado da
+    corretora e passa a depender do processo do robô estar vivo — é troca de
+    custo de execução por dependência de disponibilidade, e ela precisa ser
+    declarada, não descoberta. (6.19, 1.23, 1.4)
 
 ---
 
