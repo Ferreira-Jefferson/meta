@@ -957,3 +957,81 @@ def test_reordenar_sem_ordem_nao_muda_nada(isolated_journal, client):
         assert [c.name for c in live_store.accounts_with_symbol(conn)] == [
             DAYTRADE, "dt-outro-robo-pmam3-shadow",
         ]
+
+
+# ---------- painel e' LEITURA: nunca segura ponte de execucao -------------
+
+WDO_LIVE = "dt-wdo_grid_reload_maker-wdo@-live"
+
+
+def test_build_intraday_runtime_em_modo_real_nao_monta_ponte_de_execucao():
+    """O runtime do painel reporta o modo de verdade ("live"), mas nasce SEM
+    `MT5IntradayExecution` -- e a máquina dele, portanto, sem `execution`.
+
+    Não é economia de objeto: com a ponte setada,
+    `IntradaySessionMachine.restore` FALHA ALTO ao topar uma fatia de saída
+    posicionada (o ticket dela só vive na memória do processo do robô), e
+    essa recusa -- correta para quem vai voltar a operar -- derrubava
+    `GET /operacao` inteira em 500. Ver o teste de regressão abaixo."""
+    from core.config import slot_by_id
+
+    rt = live_service._build_intraday_runtime(
+        slot_by_id(WDO_LIVE), 375.0, "live", "wdo_grid_reload_maker")
+
+    assert rt.somente_leitura is True
+    assert rt.execution_mode == "live", "o cartão continua mostrando o modo REAL"
+    assert rt.executor is None
+    assert rt.machine.execution is None
+
+
+def test_runtime_de_leitura_recusa_dar_passo_de_operacao():
+    """Contrapartida do teste acima: sem ponte, um `run_once` neste runtime
+    simularia os fills pela barra (o caminho da SOMBRA) enquanto a tela diz
+    que há dinheiro em jogo. Recusa alto em vez disso -- quem opera é o
+    supervisor."""
+    from core.config import slot_by_id
+
+    rt = live_service._build_intraday_runtime(
+        slot_by_id(WDO_LIVE), 375.0, "live", "wdo_grid_reload_maker")
+
+    with pytest.raises(RuntimeError, match="somente para LEITURA"):
+        rt.run_once()
+
+
+def test_status_com_fatia_de_saida_posicionada_em_modo_real_nao_quebra_o_painel(
+    isolated_journal, monkeypatch,
+):
+    """REGRESSÃO (2026-09-10, achado do dono): com o WDO@ real parado numa
+    posição cuja fatia de saída estava no book, `GET /operacao` respondia
+    500 -- `machine.restore` recusava reidratar a fatia e a exceção subia
+    pelo `_slot_ctx`, derrubando TODOS os cartões junto, justamente quando o
+    dono mais precisa do painel para saber o que conferir no terminal."""
+    from live import clock as _clock
+
+    _create_daytrade_account(isolated_journal, capital=375.0,
+                             investment_robot="wdo_grid_reload_maker",
+                             name=WDO_LIVE, symbol="WDO@")
+    hoje = _clock.intraday_session().isoformat()
+    with live_store.live_journal(isolated_journal) as conn:
+        acc = live_store.load_account(conn, WDO_LIVE)
+        acc.policy_state = {"intraday": {"session": hoje, "machine": {
+            "session_date": hoje, "session_pnl": 0.0, "realized_pnl": 0.0,
+            "flattened": False,
+            "positions": [{
+                "side": "long", "entry_ts": f"{hoje}T12:00:57", "entry_price": 5144.0,
+                "quantity": 1, "current_stop": 5136.0, "current_target": 5145.0,
+                "bars_held": 2432, "metadata": {}, "exit_split_unit": 1,
+                "exit_ttl_bars": 10**9, "exit_resting_qty": 1,
+                "exit_resting_bars_waited": 2352,
+            }],
+        }}}
+        live_store.save_account(conn, acc)
+    # O modo REAL vem da última config do supervisor -- é ele que fazia o
+    # painel montar a ponte de execução.
+    monkeypatch.setattr(live_control, "last_config",
+                        lambda slot: {"execution_mode": "live"})
+
+    status = live_service.get_status(WDO_LIVE)
+
+    assert status["existe"] is True
+    assert status["daytrade"]["execution_mode"] == "live"

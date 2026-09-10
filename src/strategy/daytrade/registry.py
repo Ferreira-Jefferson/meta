@@ -266,6 +266,23 @@ _KWARGS_PADRAO: dict[str, dict] = {
         risco_pct_por_trade=0.01,
         point_value_brl=economics_for("WDO@").point_value_brl,
         fatiar_saida_alvo=True,
+        # 2026-09-09, ORDEM DO DONO: "remova do codigo em producao o ttl".
+        # A fatia do alvo deixa de ter prazo -- fica parada no livro ate' o
+        # mercado PAGAR o alvo, e nunca mais sai a mercado por impaciencia.
+        # O motivo, os numeros do dia real que motivaram e o porque de ser um
+        # numero gigante em vez de `None` estao na constante, em
+        # `wdo_grid_reload_maker.EXIT_TTL_BARS_SEM_PRAZO`. Em uma linha: 34
+        # operacoes reais com prazo 60 deram -R$3,00 por operacao porque so'
+        # 26% das saidas pegaram o alvo inteiro -- as outras estouraram o
+        # prazo e sairam a mercado por 0 ou +-1 tick.
+        #
+        # NAO fica repetido aqui: 2026-09-09, segunda ordem do dono ("o
+        # default deve ser sem prazo"), o proprio default da classe virou
+        # `EXIT_TTL_BARS_SEM_PRAZO`. Repetir o valor nesta tabela criaria
+        # duas fontes para o mesmo numero, que e' como um lado muda e o
+        # outro nao. Quem constroi `WdoGridReloadMaker()` direto -- script
+        # de laboratorio, teste, sweep -- passa a herdar o sem-prazo junto,
+        # que e' o ponto: backtest e producao descrevendo o MESMO robo.
     ),
     CopaWin.name: dict(
         # `alvo_vol`/`stop_vol` e os demais campos abaixo são

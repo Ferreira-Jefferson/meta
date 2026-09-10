@@ -141,6 +141,28 @@ class IntradayCostModel:
     # Default `0.0` preserva o comportamento antigo para quem monta o modelo
     # na mao (todo teste sintetico); `config_for` liga o valor real.
     target_slippage_ticks: float = 0.0
+    # PROCEDENCIA da fila que esta run assumiu, nao um parametro: o motor NAO
+    # le' este campo e nada na simulacao muda com ele. `True` = o simbolo tem
+    # calibracao medida em `backtest.intraday.fidelidade.FIDELIDADE` (hoje so'
+    # o WDO@); `False` = nao tem, e a run rodou sem fila por AUSENCIA de
+    # medicao; `None` = ninguem informou (modelo montado a mao em teste ou
+    # script de laboratorio, e resultado antigo desserializado).
+    #
+    # Mora AQUI, e nao em `IntradayBacktestConfig` (onde vivem os dois
+    # numeros de fila), por uma razao de encanamento e uma de significado. A
+    # de encanamento: `config_for` e' quem consulta a tabela, e o modelo de
+    # custo e' o unico objeto que ele monta e que chega inteiro ao
+    # `IntradayBacktestResult` -- e' o caminho por onde a TABELA PADRAO
+    # consegue carimbar `fila NAO CALIBRADA` sem que cada script lembre de
+    # passar isso a mao. A de significado: este dataclass ja e' o carregador
+    # das PREMISSAS de execucao da run (`slippage_ticks`,
+    # `target_slippage_ticks`), e nao so' de tarifa.
+    #
+    # Por que existir: sem ele, `queue_ahead_qty=0.0` de uma acao nunca
+    # medida sai IDENTICO ao `0.0` deliberado de quem reproduz o motor antigo
+    # -- e uma linha de tabela indistinguivel de "ninguem sabe se esta certa"
+    # foi como o `queue_ahead_qty` ficou um mes desligado sem ninguem notar.
+    fidelidade_calibrada: bool | None = None
 
     @classmethod
     def from_symbol_info(
@@ -151,6 +173,7 @@ class IntradayCostModel:
         slippage_ticks: float = 1.0,
         exchange_fee_pct_per_leg: float = 0.0,
         target_slippage_ticks: float = 0.0,
+        fidelidade_calibrada: bool | None = None,
     ) -> "IntradayCostModel":
         point_value_brl = trade_tick_value / trade_tick_size
         return cls(
@@ -160,6 +183,7 @@ class IntradayCostModel:
             slippage_ticks=slippage_ticks,
             exchange_fee_pct_per_leg=exchange_fee_pct_per_leg,
             target_slippage_ticks=target_slippage_ticks,
+            fidelidade_calibrada=fidelidade_calibrada,
         )
 
 

@@ -112,6 +112,28 @@ class IntradayBacktestResult:
     # `0.0` = nao cobrou nada (motor antigo, ou alvo que ja paga
     # `slippage_ticks` por ser a mercado).
     deslize_alvo_ticks: float = 0.0
+    # FILA na frente da nossa ordem-limite que ESTA run cobrou, na ENTRADA e
+    # na SAIDA (`config.queue_ahead_qty`/`config.exit_queue_ahead_qty`),
+    # copiadas da config no fim da run. Existem pelo MESMO motivo que
+    # `deslize_alvo_ticks` logo acima: e' premissa de PREENCHIMENTO, ela muda
+    # o veredito, e a TABELA PADRAO precisa poder carimba-la na linha sem que
+    # cada script lembre de passar isso a mao. `0.0` = nenhuma fila (o motor
+    # de ate 2026-09-08, que enchia toda limite no primeiro toque do nivel --
+    # ver `backtest.intraday.fidelidade`, onde o mesmo pregao real da +R$3,82
+    # por operacao sem fila contra -R$3,00 de verdade).
+    fila_entrada_qty: float = 0.0
+    fila_saida_qty: float = 0.0
+    # A fila acima veio de MEDICAO ou de ausencia dela?
+    # `True` = o simbolo tem calibracao em `backtest.intraday.fidelidade`
+    # (hoje so' o WDO@); `False` = nao tem, e o `0.0` acima significa "ninguem
+    # mediu", nao "premissa deliberada"; `None` = a run nao informou (config
+    # montada a mao em teste/laboratorio, ou resultado antigo).
+    #
+    # Existe porque as duas leituras do zero NAO podem sair iguais na tabela.
+    # Uma linha sem carimbo nenhum e' indistinguivel de uma linha que ninguem
+    # sabe se esta certa -- e foi assim que `queue_ahead_qty` ficou um mes
+    # inteiro desligado sem ninguem notar.
+    fila_calibrada: bool | None = None
 
 
 def _bar_volume(row: pd.Series) -> float:
@@ -335,4 +357,7 @@ def run_intraday_backtest(
                                    ordens_recusadas_por_teto=machine.ordens_recusadas_por_teto,
                                    ordens_recusadas_por_capital=machine.ordens_recusadas_por_capital,
                                    deslize_alvo_ticks=(config.costs.target_slippage_ticks
-                                                       if config.target_fills_as_maker else 0.0))
+                                                       if config.target_fills_as_maker else 0.0),
+                                   fila_entrada_qty=float(config.queue_ahead_qty or 0.0),
+                                   fila_saida_qty=float(config.exit_queue_ahead_qty or 0.0),
+                                   fila_calibrada=config.costs.fidelidade_calibrada)

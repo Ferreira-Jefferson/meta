@@ -1147,13 +1147,20 @@ def test_live_saida_dividida_confirma_fatia_e_estoura_prazo_pro_resto_a_mercado(
     assert "PMAM3" not in acc.positions
 
 
-def test_restart_com_fatia_de_saida_posicionada_em_execucao_real_falha_alto(tmp_path, pregao_aberto):
+def test_restart_com_fatia_de_saida_posicionada_em_execucao_real_para_o_robo(tmp_path, pregao_aberto):
     """Gap de restart no meio de uma fatia posicionada (2026-08-23): o PROCESSO
     inteiro reinicia (novo `IntradayLiveRuntime`, mesmo banco) enquanto a 1a
     fatia da saida dividida ainda esta pendente na corretora, sem fill
     confirmado. O ticket dessa ordem vivia so' em memoria no processo velho --
-    o processo novo tem de falhar alto em vez de arriscar rearmar uma segunda
-    ordem de saida por cima da que pode ainda estar viva no book."""
+    o processo novo tem de PARAR em vez de arriscar rearmar uma segunda
+    ordem de saida por cima da que pode ainda estar viva no book.
+
+    A parada continua total: nenhuma ordem sai. O que mudou em 2026-09-10 e'
+    a FORMA de parar -- `machine.restore` segue recusando, mas `run_once`
+    carimba a recusa como IMPEDIMENTO na conta (o painel le' de la') em vez
+    de deixar a excecao subir nua ate' o supervisor, onde o motivo so'
+    aparecia no log do processo. Ver
+    `test_restart_com_fatia_de_saida_orfa_vira_impedimento_no_painel`."""
     broker = _FakeMT5Broker()
     script = {
         0: [EnterLimit(side="long", limit_price=10.00, initial_stop=9.00,
@@ -1184,8 +1191,19 @@ def test_restart_com_fatia_de_saida_posicionada_em_execucao_real_falha_alto(tmp_
         db_path=rt.db_path, execution_mode="live", initial_capital=100.0,
     )
 
-    with pytest.raises(RuntimeError, match="FATIA DE SAIDA"):
-        rt_novo.run_once(now=_agora("13:04:00"))
+    pendentes_antes = len(broker.pendentes_enviadas)
+    mercado_antes = len(broker.ordens_a_mercado)
+
+    passos = rt_novo.run_once(now=_agora("13:04:00"))
+
+    assert [p.action for p in passos] == ["daytrade_skip"]
+    assert "FATIA DE SAIDA" in passos[0].detail["erro"]
+    assert len(broker.pendentes_enviadas) == pendentes_antes,         "nenhuma segunda ordem de saida foi por cima da que pode estar viva"
+    assert len(broker.ordens_a_mercado) == mercado_antes
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+    assert acc.policy_state["impedimento"]["motivo"] == (
+        "fatia de saída órfã — confira a ordem-limite no MT5")
 
 
 def test_live_saida_dividida_sem_prazo_falha_alto(tmp_path, pregao_aberto):
@@ -6634,3 +6652,75 @@ def test_espelho_da_posicao_acompanha_bars_held_e_stop_da_maquina(tmp_path, preg
     assert linha["current_stop"] == pytest.approx(9.50), (
         "o painel le `live_positions.current_stop` -- stop desatualizado na tela e' "
         "informacao errada sobre RISCO, nao so' cosmetica")
+
+
+# ---------- restart com fatia de saida orfa: o painel tem de SABER --------
+
+def _snapshot_com_fatia_de_saida_posicionada(rt) -> None:
+    """Grava na conta de `rt` o estado que um processo morto teria deixado:
+    posicao aberta com a fatia de saida DE PE no book (o ticket dela nunca e'
+    persistido -- ver `IntradaySessionMachine.restore`)."""
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        acc.policy_state = {"intraday": {"session": SESSION.isoformat(), "machine": {
+            "session_date": SESSION.isoformat(), "session_pnl": 0.0,
+            "realized_pnl": 0.0, "flattened": False,
+            "positions": [{
+                "side": "long", "entry_ts": f"{SESSION.isoformat()}T13:00:00",
+                "entry_price": 9.80, "quantity": 100, "current_stop": 9.60,
+                "current_target": 9.90, "bars_held": 3, "metadata": {},
+                "exit_split_unit": 100, "exit_ttl_bars": 2,
+                "exit_resting_qty": 100, "exit_resting_bars_waited": 1,
+            }],
+        }}}
+        store.save_account(conn, acc)
+
+
+def test_restart_com_fatia_de_saida_orfa_vira_impedimento_no_painel(tmp_path, pregao_aberto):
+    """`machine.restore` recusa reidratar uma fatia de saida posicionada em
+    execucao REAL, e a recusa esta CERTA (o ticket nao sobrevive ao restart;
+    resumir arriscaria uma segunda ordem de saida por cima). O que estava
+    errado era ela subir como excecao nua: o supervisor imprimia no log do
+    processo e o painel seguia verde escrito "operando" -- a mesma queixa de
+    25/08/2026 que o IMPEDIMENTO existe para resolver.
+
+    O robo continua PARADO (nenhum passo de operacao acontece); ele so'
+    passou a dizer por que, na tela onde o dono olha."""
+    broker = _FakeMT5Broker()
+    rt, _feed = _runtime_live(tmp_path, [_bar("13:00", 10.00, 10.00, 10.00, 10.00)],
+                              broker, semente=[])
+    _snapshot_com_fatia_de_saida_posicionada(rt)
+
+    passos = rt.run_once(now=_agora("13:05:00"))
+
+    assert [p.action for p in passos] == ["daytrade_skip"]
+    assert passos[0].detail["motivo"] == "fatia de saida orfa"
+    assert "FATIA DE SAIDA" in passos[0].detail["erro"]
+    assert broker.pendentes_enviadas == [] and broker.ordens_a_mercado == [], \
+        "robo parado nao manda nada para a corretora"
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+    assert acc.policy_state["impedimento"] == {
+        "motivo": "fatia de saída órfã — confira a ordem-limite no MT5",
+        "pregao": SESSION.isoformat(),
+    }
+
+
+def test_impedimento_de_fatia_orfa_e_registrado_uma_vez_so(tmp_path, pregao_aberto):
+    """O supervisor passa por aqui a cada 5s o pregao inteiro: o diario tem
+    de receber a linha UMA vez, nao 4.000. Quem decide isso e' o `True`/
+    `False` de `_gravar_impedimento` (so' escreve quando MUDA)."""
+    broker = _FakeMT5Broker()
+    rt, _feed = _runtime_live(tmp_path, [_bar("13:00", 10.00, 10.00, 10.00, 10.00)],
+                              broker, semente=[])
+    _snapshot_com_fatia_de_saida_posicionada(rt)
+
+    rt.run_once(now=_agora("13:05:00"))
+    rt.run_once(now=_agora("13:05:05"))
+    rt.run_once(now=_agora("13:05:10"))
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        eventos = store.recent_events(conn, acc.id, limit=200)
+    linhas = [e for e in eventos if "FATIA DE SAIDA" in (e.get("message") or "")]
+    assert len(linhas) == 1, f"esperava 1 linha no diario, veio {len(linhas)}"

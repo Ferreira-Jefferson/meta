@@ -621,6 +621,7 @@ class IntradayLiveRuntime:
         initial_capital: float = 0.0,
         clock_feed=None,
         perda_maxima_dia_brl: Optional[float] = None,
+        somente_leitura: bool = False,
     ) -> None:
         if execution_mode not in ("shadow", "live"):
             raise ValueError(
@@ -678,9 +679,21 @@ class IntradayLiveRuntime:
         # exatamente o que o modo sombra existe para medir contra a realidade
         # (ver `penetration_ticks`). Ver `live/intraday_execution.py` para por
         # que a fonte de verdade tem de trocar quando ha dinheiro em jogo.
+        #
+        # `somente_leitura` e' o runtime do PAINEL (`live_service.
+        # _build_intraday_runtime`), que reporta o modo de verdade -- inclusive
+        # "live" -- mas nunca da um passo. Ele tambem nao pode segurar a ponte:
+        # com `execution` setada, `IntradaySessionMachine.restore` FALHA ALTO ao
+        # topar uma fatia de saida posicionada (o ticket dela so' vive em
+        # memoria do processo do robo), e essa recusa -- correta para quem vai
+        # voltar a operar -- derrubava a pagina `/operacao` INTEIRA em 500,
+        # todos os slots junto, justamente quando o dono mais precisa ver o
+        # painel para saber o que conferir no terminal. Uma pagina de leitura
+        # nao tem o que fazer com uma ponte de ordens.
+        self.somente_leitura = bool(somente_leitura)
         self.executor = (
             MT5IntradayExecution(broker, strategy.symbol)
-            if execution_mode == "live" else None
+            if execution_mode == "live" and not self.somente_leitura else None
         )
         # `self.config`, nunca o `config` recebido: e' a versao com o capital
         # real do slot (ver o bloco acima). Passar o argumento cru aqui era
@@ -1284,7 +1297,7 @@ class IntradayLiveRuntime:
         return gravado.get("motivo") or None
 
     def _gravar_impedimento(self, conn, account: AccountState,
-                           motivo: Optional[str], pregao: date) -> None:
+                           motivo: Optional[str], pregao: date) -> bool:
         """Grava (ou apaga) o IMPEDIMENTO corrente -- o motivo pelo qual este
         robo nao esta operando agora, apesar de o processo estar de pe.
 
@@ -1302,18 +1315,21 @@ class IntradayLiveRuntime:
         "operando" -- foi a queixa do dono em 25/08/2026.
 
         So' escreve quando MUDA: o supervisor passa aqui a cada 5s, e
-        reescrever a mesma linha o pregao inteiro so' castiga o disco."""
+        reescrever a mesma linha o pregao inteiro so' castiga o disco.
+        Devolve `True` quando de fato MUDOU -- e' o que permite a quem chama
+        registrar o evento no diario UMA vez em vez de a cada 5 segundos."""
         estado = dict(account.policy_state or {})
         atual = estado.get("impedimento")
         novo = {"motivo": motivo, "pregao": pregao.isoformat()} if motivo else None
         if atual == novo:
-            return
+            return False
         if novo is None:
             estado.pop("impedimento", None)
         else:
             estado["impedimento"] = novo
         account.policy_state = estado
         store.save_account(conn, account)
+        return True
 
     # ---------- calibracao ao ligar no meio do pregao ---------------------
 
@@ -1785,6 +1801,16 @@ class IntradayLiveRuntime:
     def run_once(self, now: Optional[datetime] = None) -> list[StepReport]:
         """Um passo. Seguro para chamar em loop, a qualquer hora — so age
         quando ha barra M1 nova FECHADA dentro de um pregao aberto."""
+        if self.somente_leitura:
+            # Runtime de painel nunca opera. Recusa aqui e nao la' na frente
+            # porque ele nasce SEM ponte de execucao: deixado passar, um
+            # runtime montado como "live" simularia os fills pela barra (o
+            # caminho da sombra) enquanto a tela diz que ha dinheiro em jogo.
+            raise RuntimeError(
+                f"{self.account_name}: este IntradayLiveRuntime foi montado "
+                "somente para LEITURA (painel) e nao pode dar passo de operacao "
+                "-- quem opera e' o processo do supervisor (scripts/run_live.py)."
+            )
         now = now or datetime.now(timezone.utc)
         fase = self._fase_do_instrumento(now)
         hoje = clock.intraday_session(now)
@@ -1816,7 +1842,28 @@ class IntradayLiveRuntime:
                                            "alarme": alarme_auto})]
 
             if self._calibrated_for != hoje:
-                self._restore(account, hoje)
+                try:
+                    self._restore(account, hoje)
+                except RuntimeError as erro:
+                    # `IntradaySessionMachine.restore` recusa reidratar uma
+                    # FATIA DE SAIDA posicionada em execucao real -- o ticket
+                    # dela nao sobrevive ao restart e so' a corretora sabe se
+                    # a ordem ainda esta no book. A recusa esta certa (a
+                    # alternativa e' mandar uma segunda saida por cima), mas
+                    # ate' aqui ela subia como excecao: o supervisor imprimia
+                    # no log do processo e o painel seguia verde escrito
+                    # "operando", que e' exatamente a queixa de 25/08/2026
+                    # que o IMPEDIMENTO existe para resolver. O robo continua
+                    # parado -- so' passou a dizer por que, na tela onde o
+                    # dono olha.
+                    mudou = self._gravar_impedimento(
+                        conn, account,
+                        "fatia de saída órfã — confira a ordem-limite no MT5", hoje)
+                    if mudou:
+                        self._log(conn, account.id, "error", str(erro))
+                    return [StepReport("daytrade_skip", hoje, phase=fase,
+                                       detail={"motivo": "fatia de saida orfa",
+                                               "erro": str(erro)})]
                 if self._snapshot.disaster_halt:
                     # Freio duro persistido de uma sessao ANTERIOR do MESMO
                     # pregao (restart no meio do freio, gap g) -- nao faz

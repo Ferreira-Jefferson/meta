@@ -134,6 +134,13 @@ def _build_intraday_runtime(slot: Slot, capital: float, execution_mode: str, rob
         broker=MT5Broker(magic=slot.magic),
         execution_mode=execution_mode,
         initial_capital=capital,
+        # LEITURA: reporta o modo real (o cartao mostra "real"/"sombra" como
+        # ele e'), mas nao instancia `MT5IntradayExecution` e recusa
+        # `run_once`. Ver o bloco de `somente_leitura` em
+        # `IntradayLiveRuntime.__init__` -- era a ponte de execucao deste
+        # runtime de tela que fazia `machine.restore` recusar uma fatia de
+        # saida posicionada e derrubar `/operacao` inteira em 500.
+        somente_leitura=True,
     )
 
 

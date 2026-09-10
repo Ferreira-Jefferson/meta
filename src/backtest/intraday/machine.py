@@ -111,6 +111,23 @@ class _Position:
     # split_exit`/`_resolve_live_split_exit`.
     exit_resting_qty: int = 0
     resting_exit_bars_waited: int = 0
+    # Q_frente DA SAIDA -- quanto ainda tem de negociar NO NIVEL DO ALVO,
+    # contra quem chegou antes, para a fatia desta posicao virar a primeira
+    # da fila. Espelha `_queue_ahead_remaining` do lado da entrada, mas mora
+    # na POSICAO porque cada posicao independente tem a sua propria fatia
+    # parada no book. Comeca em `IntradayBacktestConfig.exit_queue_ahead_qty`
+    # toda vez que uma fatia NOVA e' armada. Ver `_resolve_simulated_split_
+    # exit`.
+    exit_queue_ahead_remaining: float = 0.0
+    # A fatia parada JA viu o preco chegar no nivel dela pelo menos uma vez?
+    # E' o que decide se o prazo (`exit_ttl_bars`) esta correndo: o prazo foi
+    # calibrado como "quanto espero NO NIVEL", nao "quanto espero a posicao
+    # inteira". Com `exit_arms_at_fill` a fatia entra no book no fill da
+    # entrada, muito antes do preco chegar la' -- contar o prazo desde o arme
+    # transformaria o alvo num time-stop e mediria DUAS mudancas de uma vez.
+    # Sem `exit_arms_at_fill` isto vira True no mesmo instante do arme (o arme
+    # E' o toque), preservando o motor antigo byte a byte.
+    exit_touched_once: bool = False
 
 
 @dataclass(frozen=True)
@@ -334,6 +351,52 @@ class IntradayBacktestConfig:
     # NOVA) reseta para `queue_ahead_qty` outra vez. E' exatamente o custo
     # que o motor antigo cobrava ZERO e este parametro passa a cobrar.
     queue_ahead_qty: float = 0.0
+    # O MESMO modelo de fila, do lado da SAIDA (2026-09-09). Ate aqui o motor
+    # nao tinha nenhum: a fatia de alvo preenchia por TOQUE + volume da barra,
+    # como se ninguem estivesse na frente dela no book. E' a mesma otimismo
+    # que `queue_ahead_qty` corrigiu do lado da entrada em 2026-08-26, um mes
+    # depois, do outro lado da operacao.
+    #
+    # O numero que forcou isto: 2026-09-09, WDO@ real, 7 saidas por alvo num
+    # pregao -- 1 preencheu como limite, 6 estouraram o prazo e sairam a
+    # mercado. O backtest da mesma geometria previa +R$36,00; o dia deu
+    # -R$14,00. A tabela de calibracao de `exit_ttl_bars` dizia 92,8% de fill
+    # em ttl=60; o real deu 14%. A tabela nao estava errada sobre o que
+    # mediu -- ela mediu num simulador sem fila.
+    #
+    # Mecanica: ao armar uma fatia, `_Position.exit_queue_ahead_remaining`
+    # comeca aqui. Cada barra que TOCA o alvo consome o volume da barra desse
+    # acumulado ANTES de qualquer coisa sobrar para preencher a fatia -- so' o
+    # EXCEDENTE preenche, e a fatia continua sendo FOK (precisa caber
+    # inteira). Barra que nao toca nao consome nada: por identidade, volume no
+    # nivel do alvo antes do primeiro toque e' ZERO -- chegar cedo nao ANDA na
+    # fila, compra tempo DEPOIS que o preco chega.
+    #
+    # INOBSERVAVEL no dado deste repo, igual ao da entrada (tick MT5 nao tem
+    # profundidade de book): e' PARAMETRO, nunca fato. Quem usa faz
+    # sensibilidade. A coleta de DOM de 2026-09-09 deu ordem de grandeza de
+    # 400 (1o nivel) a 800 (2o/3o) contratos no WDO@ -- ordem de grandeza,
+    # nao constante.
+    exit_queue_ahead_qty: float = 0.0
+    # A fatia de saida entra no book no FILL DA ENTRADA, em vez de so' quando
+    # o preco TOCA o alvo (2026-09-09).
+    #
+    # E' uma mudanca de MECANISMO, nao de geometria. Hoje o motor (e a
+    # execucao real, ver `_resolve_live_split_exit`) so' posiciona a
+    # ordem-limite de saida no primeiro toque -- ou seja, chega no nivel no
+    # instante em que ele virou o topo do book, atras de todo mundo que ja
+    # estava la'. Armar no fill poe a ordem no book enquanto o alvo ainda e' o
+    # 2o/3o nivel, na frente de quem so' vai chegar depois.
+    #
+    # O que NAO muda de proposito: o prazo (`exit_ttl_bars`) continua contando
+    # a partir do primeiro TOQUE (ver `_Position.exit_touched_once`). Fazer o
+    # prazo correr desde o fill viraria um time-stop e mediria duas coisas de
+    # uma vez.
+    #
+    # O que muda por construcao: a fatia pode preencher na PROPRIA barra do
+    # primeiro toque, porque ja estava parada. Sem isto, o motor tem um atraso
+    # estrutural de 1 barra (arma no toque, so' pode preencher na seguinte).
+    exit_arms_at_fill: bool = False
     # Margem exigida por 1 contrato, em REAIS -- liga o TETO DINAMICO de
     # exposicao agregada por CAPITAL (2026-08-28, incidente REAL: ver a nota
     # longa em `strategy.daytrade.base.RESERVA_CAIXA_SEGURANCA`). `None`
@@ -385,6 +448,14 @@ class IntradayTrade:
     capital_base: float
     fees_total: float = 0.0
     slippage_total: float = 0.0
+    #: Sub-motivo, quando o `exit_reason` sozinho esconde duas coisas que
+    #: pagam custos diferentes. Hoje so' `"target_timeout"`: a fatia de saida
+    #: estourou `exit_ttl_bars` sem preencher e foi fechada a MERCADO. Continua
+    #: carimbada como `TARGET` (o gatilho FOI o alvo, e mudar o enum quebraria
+    #: diario, relatorio e o caminho ao vivo), mas nao e' um fill maker -- e'
+    #: exatamente a saida que, ao vivo em 2026-09-09, aconteceu 6 vezes em 7.
+    #: `None` em todo o resto.
+    exit_detail: str | None = None
 
     @property
     def pnl_brl(self) -> float:
@@ -898,6 +969,12 @@ class IntradaySessionMachine:
                     "exit_ttl_bars": pos.exit_ttl_bars,
                     "exit_resting_qty": pos.exit_resting_qty,
                     "exit_resting_bars_waited": pos.resting_exit_bars_waited,
+                    # Fila do nivel e "ja tocou?" fazem parte do estado da
+                    # fatia parada: sem eles um restart devolveria a fatia ao
+                    # book com a fila ZERADA (preenchimento instantaneo no
+                    # proximo toque) e com o prazo correndo desde ja.
+                    "exit_queue_ahead_remaining": pos.exit_queue_ahead_remaining,
+                    "exit_touched_once": pos.exit_touched_once,
                 }
                 for pos in self.positions
             ],
@@ -967,6 +1044,9 @@ class IntradaySessionMachine:
                 exit_ttl_bars=bloco.get("exit_ttl_bars"),
                 exit_resting_qty=qtd_pendente,
                 resting_exit_bars_waited=int(bloco.get("exit_resting_bars_waited") or 0),
+                exit_queue_ahead_remaining=float(
+                    bloco.get("exit_queue_ahead_remaining") or 0.0),
+                exit_touched_once=bool(bloco.get("exit_touched_once")),
             ))
 
     # ---------- marcacao de patrimonio -----------------------------------
@@ -1823,38 +1903,57 @@ class IntradaySessionMachine:
         stop_hit, target_hit = _stop_target_touch(pos, bar)
 
         if stop_hit:
-            pos.exit_resting_qty = 0
-            pos.resting_exit_bars_waited = 0
+            self._desarmar_fatia_de_saida(pos)
             ref_price = _exit_fill_price(pos, bar, "stop")
             events: list[MachineEvent] = [self._close_position(pos, ts, ref_price, IntradayExitReason.STOP)]
             self._clear_stale_enter()
             return events, orcamento
 
+        # Fatia parada no book desde o FILL da entrada, nao desde o toque
+        # (`exit_arms_at_fill`) -- arma aqui, antes de qualquer avaliacao,
+        # para que a PROPRIA barra que tocar o alvo ja possa preenche-la.
+        if (self.config.exit_arms_at_fill and pos.exit_resting_qty == 0
+                and pos.quantity > 0):
+            self._armar_fatia_de_saida(pos)
+
         events = []
         if pos.exit_resting_qty > 0:
-            if target_hit and orcamento >= pos.exit_resting_qty:
+            if target_hit:
+                pos.exit_touched_once = True
+                # A fila do NIVEL come o volume da barra antes de sobrar
+                # qualquer coisa para esta fatia -- ver `exit_queue_ahead_qty`.
+                if pos.exit_queue_ahead_remaining > 0.0:
+                    consumido = min(orcamento, pos.exit_queue_ahead_remaining)
+                    pos.exit_queue_ahead_remaining -= consumido
+                    orcamento -= consumido
+            cabe = (target_hit
+                    and pos.exit_queue_ahead_remaining <= 0.0
+                    and orcamento >= pos.exit_resting_qty)
+            if cabe:
                 fechado = pos.exit_resting_qty
                 orcamento -= fechado
                 ref_price = _exit_fill_price(pos, bar, "target")
                 events.append(self._close_position(
                     pos, ts, ref_price, IntradayExitReason.TARGET, quantity_override=fechado,
                 ))
-                pos.exit_resting_qty = 0
-                pos.resting_exit_bars_waited = 0
+                self._desarmar_fatia_de_saida(pos)
                 if pos not in self.positions:  # fechou inteira agora
                     self._clear_stale_enter()
                 # senao: fechou uma fatia, esta posicao (menor) continua
                 # aberta -- a proxima fatia so' arma numa barra FUTURA que
                 # tocar o alvo de novo (bloco abaixo, ja que `exit_resting_
-                # qty == 0`).
-            else:
+                # qty == 0`), ou ja' na proxima barra com `exit_arms_at_fill`.
+            elif pos.exit_touched_once:
+                # O prazo so' corre depois que o preco chegou no nivel -- ver
+                # `_Position.exit_touched_once`. Sem `exit_arms_at_fill` isto
+                # e' verdade desde o arme, e o motor antigo fica identico.
                 pos.resting_exit_bars_waited += 1
                 if pos.resting_exit_bars_waited >= pos.exit_ttl_bars:
                     fechado = pos.exit_resting_qty
-                    pos.exit_resting_qty = 0
-                    pos.resting_exit_bars_waited = 0
+                    self._desarmar_fatia_de_saida(pos)
                     events.append(self._close_position(
-                        pos, ts, bar.close, IntradayExitReason.TARGET, quantity_override=fechado,
+                        pos, ts, bar.close, IntradayExitReason.TARGET,
+                        quantity_override=fechado, timed_out=True,
                     ))
                     if pos not in self.positions:  # essa fatia era o que sobrava
                         self._clear_stale_enter()
@@ -1867,10 +1966,38 @@ class IntradaySessionMachine:
             return events, orcamento
 
         if target_hit:
-            pos.exit_resting_qty = min(pos.exit_split_unit, pos.quantity)
-            pos.resting_exit_bars_waited = 0
+            self._armar_fatia_de_saida(pos)
+            # O arme ACONTECEU no toque: o prazo ja pode correr a partir da
+            # proxima barra, exatamente como antes de `exit_touched_once`
+            # existir.
+            pos.exit_touched_once = True
 
         return events, orcamento
+
+    def _armar_fatia_de_saida(self, pos: _Position) -> None:
+        """Poe UMA fatia de saida no book: tamanho, relogio do prazo e fila
+        do nivel, os tres do zero.
+
+        Existe como metodo porque o arme passou a ter DOIS gatilhos
+        (`exit_arms_at_fill`: no fill da entrada; senao: no primeiro toque do
+        alvo) e tres campos que precisam andar juntos. `exit_touched_once`
+        NAO e' zerado aqui de proposito: quem arma no toque marca True logo
+        em seguida; quem arma no fill deixa False ate' o preco chegar."""
+        pos.exit_resting_qty = min(pos.exit_split_unit or pos.quantity, pos.quantity)
+        pos.resting_exit_bars_waited = 0
+        pos.exit_queue_ahead_remaining = self.config.exit_queue_ahead_qty
+        pos.exit_touched_once = False
+
+    @staticmethod
+    def _desarmar_fatia_de_saida(pos: _Position) -> None:
+        """Tira a fatia do book (preencheu, estourou o prazo, ou o stop levou
+        a posicao). Zera os quatro campos juntos -- deixar
+        `exit_queue_ahead_remaining` para tras faria a PROXIMA fatia herdar
+        uma fila ja cortada que ela nunca esperou."""
+        pos.exit_resting_qty = 0
+        pos.resting_exit_bars_waited = 0
+        pos.exit_queue_ahead_remaining = 0.0
+        pos.exit_touched_once = False
 
     # ---------- saida dividida em execucao REAL (Fase 2, 2026-08-22) --------
 
@@ -1964,7 +2091,8 @@ class IntradaySessionMachine:
                     # (a decisao continua sendo "sair no alvo"), so' que a
                     # ultima fatia nao esperou a vez dela na fila e saiu pelo
                     # caminho de urgencia.
-                    events.append(self._close_position(pos, ts, bar.close, IntradayExitReason.TARGET))
+                    events.append(self._close_position(
+                        pos, ts, bar.close, IntradayExitReason.TARGET, timed_out=True))
                     self.pending = None
                     orfa = self._cancelar_resting_orfa(ts)
                     if orfa is not None:
@@ -2121,6 +2249,7 @@ class IntradaySessionMachine:
     def _close_position(self, position: _Position, exit_ts: pd.Timestamp, exit_ref_price: float,
                         reason: IntradayExitReason,
                         quantity_override: int | None = None,
+                        timed_out: bool = False,
                         already_filled_at: float | None = None) -> PositionClosed:
         """Fecha (total ou parcialmente) `position` -- que precisa estar em
         `self.positions` (2026-08-24: cada posicao e' independente, entao o
@@ -2173,8 +2302,19 @@ class IntradaySessionMachine:
         # Cobrar isto e' pre-requisito de qualquer medicao de `profit_ticks`:
         # com alvo de 2 ticks, 1 tick de deslize e' METADE do bruto do trade,
         # e o motor pagava os 2 ticks cheios.
+        #  * fatia que ESTOUROU o prazo (`timed_out`): o motor cancela a
+        #    ordem-limite e fecha a MERCADO. Ela carimba `TARGET` porque o
+        #    gatilho foi o alvo, mas nao preencheu no nivel -- e' uma saida a
+        #    mercado como qualquer outra e paga `slippage_ticks`. Ate
+        #    2026-09-09 ela caia no ramo maker e saia de graca, exatamente ao
+        #    preco de fechamento da barra. Custo de esconder isso: ao vivo, no
+        #    primeiro dia do T2/S6, 6 das 7 saidas por alvo foram por prazo --
+        #    o backtest previa +R$36,00 no dia e o dia deu -R$14,00. Mesma
+        #    familia do desmonte de robo que creditava BRUTO (item 5.20): o
+        #    custo de fechar existe nas duas rotas ou em nenhuma.
         is_maker_target = (reason == IntradayExitReason.TARGET
-                           and cfg.target_fills_as_maker)
+                           and cfg.target_fills_as_maker
+                           and not timed_out)
         if is_maker_target and position.exit_split_unit is None:
             exec_px = apply_deslize_alvo_nativo(
                 exit_ref_price, _exit_side(position), cfg.costs)
@@ -2275,6 +2415,7 @@ class IntradaySessionMachine:
             capital_base=cfg.initial_capital,
             fees_total=fees,
             slippage_total=abs(exec_px - exit_ref_price) * qty * cfg.costs.point_value_brl,
+            exit_detail=("target_timeout" if timed_out else None),
         )
         pnl = trade.pnl_brl
         self.session_pnl += pnl

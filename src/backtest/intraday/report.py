@@ -42,6 +42,31 @@ comparaveis, e antes disto elas sairiam identicas na tabela. Ver o item 4.8
 de `LICOES_DE_PRODUCAO.md` para a medicao (8 de 8 saidas por alvo nativo do
 WDO F1 executaram pior que o nivel pedido em 2026-09-08).
 
+## O aviso `fila E/S`
+
+O irmao do anterior, do outro lado da execucao: quanta FILA a run assumiu na
+frente da nossa ordem-limite, ENTRADA/SAIDA (`IntradayBacktestConfig.queue_
+ahead_qty` / `exit_queue_ahead_qty`, ligados por default em `config_for`
+desde 2026-09-09 a partir de `backtest.intraday.fidelidade`).
+
+Tambem e' PREMISSA, nao alerta, e pela mesma razao esta' no `aviso` e nao
+numa coluna. O tamanho do que ele denuncia: simulando o pregao real de
+2026-09-09 (WDO F1, 34 operacoes, -R$3,00 cada), o motor sem fila devolvia
++R$3,82 por operacao -- errava o SINAL, nao a magnitude.
+
+Ele tem TRES estados, e o terceiro e' o que faz diferenca:
+
+| carimbo | significa |
+|---|---|
+| `fila 438/489` | a calibracao medida do simbolo (hoje so' o WDO@) |
+| `fila 0/0` | simbolo medido, mas a run zerou de proposito (reproduz o motor de ate 2026-09-08) |
+| `fila NAO CALIBRADA` | ninguem mediu este simbolo -- Gremah em acao B3, CopaWin em WIN@ |
+
+Sem o terceiro, a linha de um simbolo nunca medido sairia IGUAL a uma linha
+sem premissa nenhuma. Uma linha sem carimbo e' indistinguivel de uma linha
+que ninguem sabe se esta certa, e foi exatamente assim que `queue_ahead_qty`
+passou um mes inteiro no default 0,0 sem ninguem notar.
+
 ## Duas escolhas que valem explicacao
 
 **`lucro/DD` no lugar do Calmar anualizado.** `backtest.metrics.calmar`
@@ -225,6 +250,33 @@ def linha_de_resultado(
     deslize = float(getattr(result, "deslize_alvo_ticks", 0.0) or 0.0)
     if deslize:
         avisos.append(f"desliz.alvo {num_br(deslize, 1)}t")
+    # MESMO motivo do aviso acima, do outro lado da execucao: quanta FILA a
+    # run assumiu na frente da nossa ordem-limite, entrada/saida. Ate
+    # 2026-09-09 o motor enchia toda limite no PRIMEIRO TOQUE do nivel, dos
+    # dois lados, e nenhuma tabela deste repo avisava disso -- o mesmo pregao
+    # real do WDO F1 rendia +R$3,82 por operacao no motor sem fila contra
+    # -R$3,00 no extrato (ver `backtest.intraday.fidelidade`). Duas linhas
+    # com o mesmo `liquido R$` e premissas de PREENCHIMENTO diferentes nao
+    # sao comparaveis, e sem o carimbo elas sairiam identicas.
+    #
+    # TRES estados, nao dois, e o terceiro e' o que importa: `fila 438/489`
+    # (calibrado), `fila 0/0` (premissa deliberada -- reproduzir o motor
+    # antigo num simbolo QUE FOI medido) e `fila NAO CALIBRADA` (ninguem
+    # mediu este simbolo -- Gremah em acao B3, CopaWin em WIN@). Sem o
+    # terceiro, a linha de um simbolo nunca medido sai igual a uma linha sem
+    # premissa nenhuma, que e' o mesmo silencio de sempre.
+    fila_ent = float(getattr(result, "fila_entrada_qty", 0.0) or 0.0)
+    fila_sai = float(getattr(result, "fila_saida_qty", 0.0) or 0.0)
+    calibrada = getattr(result, "fila_calibrada", None)
+    if fila_ent or fila_sai:
+        carimbo = f"fila {num_br(fila_ent, 0)}/{num_br(fila_sai, 0)}"
+        # Numero de fila num simbolo sem medicao e' sensibilidade/chute do
+        # chamador, e nao pode passar por calibracao na leitura da tabela.
+        avisos.append(carimbo + (" (nao calibrada)" if calibrada is False else ""))
+    elif calibrada is False:
+        avisos.append("fila NAO CALIBRADA")
+    elif calibrada is True:
+        avisos.append("fila 0/0")
 
     return LinhaResultado(
         variante=variante,

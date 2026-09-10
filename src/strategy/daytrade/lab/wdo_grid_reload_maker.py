@@ -106,6 +106,42 @@ RESSALVAS que continuam abertas, todas informadas ao dono antes da decisao:
    de prazo fecha a mercado com `reason=TARGET` e nao paga deslize). Os
    numeros comparam celulas entre si; nao descrevem retorno.
 
+2026-09-09 (noite), decisao do dono: `stop_ticks` volta de 6 para **16**
+(T2/S16), com `profit_ticks=2` intacto. A ressalva 5 logo acima ERA a
+propria previsao do que aconteceu: aquela varredura rodou num motor que
+enchia ordem-limite no primeiro TOQUE do nivel dos DOIS lados, e o
+otimismo do TTL era exatamente o que ela listava como risco aberto. Os dois
+foram corrigidos no mesmo dia (`exit_queue_ahead_qty` novo; `queue_ahead_qty`
+da entrada existia desde 2026-08-26 e NUNCA tinha sido ligado, ficara no
+default 0,0), e as duas filas foram calibradas contra o extrato real por
+Kaplan-Meier -- 438 na entrada, 489 na saida (ver
+`backtest.intraday.fidelidade`). Isso INVALIDA a varredura de 21 pregoes
+que escolheu o S6, e nao so' desloca os numeros dela: o motor antigo
+previa +R$3,82 por operacao para o pregao de 2026-09-09, que deu -R$3,00.
+Errava o SINAL.
+
+Remedido no pregao de 2026-09-09 (o unico dia com base de tick e extrato
+real ao mesmo tempo), sem prazo, capital R$375, fila 438/489 -- T2 contra
+os tres stops, R$ por operacao: **S16 +1,11**, S10 -1,37, S6 -3,06. O T2/S16
+foi a UNICA celula positiva das seis rodadas (T2/T3 x S6/S10/S16) e tambem a
+unica cujo caixa nao furou a margem crua de R$150 (minimo R$217; S6 caiu a
+R$136, T3/S10 a R$95).
+
+O CONFLITO QUE ESTA DECISAO ACEITA, e que precisa ser lido junto: o
+argumento que escolheu o S6 de manha era de SOBREVIVENCIA e ele nao foi
+refutado, porque nao e' backtest -- e' aritmetica. A perda por stop volta de
+R$35,50 para R$85,50, e o numero de derrotas SEGUIDAS que R$375 aguenta cai
+de 7 para **2**. O S16 sobreviveu ao pregao de 2026-09-09 porque levou 6
+stops em 62 operacoes (win 90,3%), nao porque a aritmetica mudou. Duas
+derrotas seguidas continuam calando o robo, como calaram na fatia de
+13-26/03. O dono foi avisado disto antes de mandar aplicar.
+
+RESSALVAS DESTA decisao: (1) UM pregao, contra os 21 que escolheram o S6 --
+a base e' menor, nao maior, e so' o motor melhorou; (2) a celula inverte de
+sinal na sensibilidade: com fila de saida 600 em vez de 489 o T2/S16 vai de
++R$1,11 para -R$10,27 por operacao, e 489 tem n=25; (3) a calibracao da fila
+saiu de um pregao que rodou COM prazo, e a producao agora roda SEM.
+
 EFEITO COLATERAL no dimensionamento, consequencia direta e desejada: o teto
 por RISCO (`risco_pct_por_trade=0,01`) e' `1% do caixa / risco em R$ por
 contrato`, e o risco por contrato cai de R$80,00 (16 ticks) para R$30,00 (6
@@ -553,7 +589,56 @@ ReanchorMode = Literal["fixed_session_open", "rolling_last_price"]
 #: em 2026-09-09 (item 1.24). Menos estouro e' menos exposicao a esse modo de
 #: falha -- e o guard de `machine._resolve_live_split_exit` (nao manda mercado
 #: sem cancelamento CONFIRMADO) e' a outra metade da correcao.
+#: **APOSENTADO como default em 2026-09-09** (ordem do dono: "o default
+#: deve ser sem prazo"). O valor e a tabela acima ficam porque explicam o
+#: que o prazo custava e porque a calibracao que escolheu 60 nao valia --
+#: ela mediu taxa de fill num motor SEM fila do lado da saida. Ninguem
+#: mais o le: o default da classe e o robo de producao usam
+#: `EXIT_TTL_BARS_SEM_PRAZO`. Serve para reproduzir medicao antiga.
 EXIT_TTL_BARS_PADRAO_FATIA = 60
+
+#: Prazo grande o bastante para NUNCA estourar: a fatia de saida fica parada
+#: no livro ate' o mercado PAGAR o alvo. Ordem do dono, 2026-09-09 ("remova do
+#: codigo em producao o ttl").
+#:
+#: POR QUE UM NUMERO GIGANTE E NAO `None`. `exit_ttl_bars=None` parece a forma
+#: obvia de dizer "sem prazo" e e' a ERRADA aqui, por duas razoes
+#: independentes:
+#:
+#:   1. Em EXECUCAO REAL, `None` levanta `NotImplementedError` em
+#:      `machine._resolve_live_split_exit`. O robo simplesmente nao opera.
+#:   2. Em BACKTEST, `None` troca de CAMINHO no motor -- cai em
+#:      `_resolve_target_partial_fill`, que preenche na PROPRIA barra do
+#:      toque e nao passa pela fila da saida (`exit_queue_ahead_qty`). Ou
+#:      seja: `None` nao mede "sem prazo", mede "sem fila", que e' exatamente
+#:      o otimismo corrigido em 2026-09-09. Um numero gigante mantem o robo
+#:      no caminho com fila e so' desliga o relogio.
+#:
+#: ISTO NAO E' "POSICAO EXPOSTA PARA SEMPRE", e vale registrar porque foi essa
+#: a objecao que manteve o prazo ate' hoje. Continuam valendo, sem alteracao:
+#: o STOP a mercado (registrado na corretora, nunca depende deste caminho) e o
+#: achatamento forcado no fim do pregao, que CANCELA a limite em pe' antes de
+#: zerar (`machine.on_closed_bar`, bloco "(2) flatten forcado"). Sem prazo, as
+#: saidas passam de quatro para tres: alvo preenchido como limite, stop, ou
+#: fim de pregao. O que some e' so' a saida a MERCADO por impaciencia.
+#:
+#: O QUE MOTIVOU. 2026-09-09, dia real completo do T2/S6 com prazo 60: 34
+#: operacoes, bruto -R$85,00, liquido -R$102,00, **-R$3,00 por operacao**.
+#: Das 34 saidas, so' 9 (26%) pegaram o alvo inteiro de 2 ticks -- 18 (53%)
+#: estouraram o prazo e sairam a mercado por 0 ou +-1 tick, e 7 bateram stop.
+#: O robo pagava o stop de 6 ticks inteiro e quase nunca recebia o alvo de 2
+#: ticks inteiro. A tabela de `EXIT_TTL_BARS_PADRAO_FATIA` acima previa 92,8%
+#: de preenchimento para o prazo 60; o real deu 26%. Ela nao mentiu sobre o
+#: que mediu -- mediu num motor SEM fila do lado da saida, onde bastava o
+#: preco tocar o nivel para a fatia preencher.
+#:
+#: RISCO ABERTO, dono avisado antes de aplicar: quando esta linha foi
+#: escrita, o unico apoio quantitativo do "sem prazo" com fila no modelo era
+#: um smoke de 3 pregoes (T2/S6: +R$0,63/operacao, 1.200 operacoes, 0 de 3
+#: pregoes sem trade, contra 2 de 3 no prazo 60). A bateria de 2 meses
+#: (`scripts/daytrade/wdof1_geometria_2meses_2026_09_09.py`) estava rodando.
+#: Se ela contradisser o smoke, este valor volta atras.
+EXIT_TTL_BARS_SEM_PRAZO = 10 ** 9
 
 
 class WdoGridReloadMaker(IntradayStrategy):
@@ -721,7 +806,7 @@ class WdoGridReloadMaker(IntradayStrategy):
         tick_size: float = WDO_TICK_SIZE,
         level_spacing_ticks: int = 1,   # "x1"
         profit_ticks: int = 2,          # "T2" -- ver nota 2026-09-04 no topo do modulo (mudou de T1)
-        stop_ticks: int | None = 6,     # "S6" -- ver nota 2026-09-09 no topo do modulo (era S16)
+        stop_ticks: int | None = 16,    # "S16" -- ver nota 2026-09-09 (noite) no topo do modulo (voltou de S6)
         reanchor_mode: ReanchorMode = "rolling_last_price",
         reancora_min_segundos: float = 10.0,
         reancora_min_ticks: int = 2,   # histerese anti-pingue-pongue -- ver 2026-09-08 no topo
@@ -742,7 +827,7 @@ class WdoGridReloadMaker(IntradayStrategy):
         gate_volume_min: float | None = None,
         gate_janela_segundos: int = 15,
         fatiar_saida_alvo: bool = False,
-        exit_ttl_bars: int | None = EXIT_TTL_BARS_PADRAO_FATIA,
+        exit_ttl_bars: int | None = EXIT_TTL_BARS_SEM_PRAZO,
     ):
         """Ver a docstring do modulo para a mecanica completa e para os
         parametros existentes acima (`tick_size`, `level_spacing_ticks`,
@@ -1294,19 +1379,22 @@ class WdoGridReloadMaker(IntradayStrategy):
         # assim (a fatia REAL fica parada no livro para sempre sem isto).
         # So' vale enquanto `fatiar_saida_alvo=True` (linha do EnterLimit
         # abaixo); backtest/sombra funcionam sem ele (caminho sem prazo).
-        # Valor default EMPRESTADO de `EXIT_TTL_BARS_PADRAO` da `gremah.py`
-        # (8 barras de 1 min) -- NAO foi varrido para o WDO F1: e' ponto de
-        # partida, nao calibracao. Antes de operar real, sweep proprio.
+        # DEFAULT desde 2026-09-09: `EXIT_TTL_BARS_SEM_PRAZO` (ordem do dono,
+        # "o default deve ser sem prazo"). A fatia fica parada no livro ate' o
+        # mercado PAGAR o alvo -- ver a constante para os numeros do dia real
+        # que motivaram e para o porque de ser um inteiro gigante.
         #
-        # `None` = SEM prazo: a fatia espera indefinidamente pelo fill. E'
-        # outro CAMINHO no motor (`machine._resolve_target_partial_fill`, que
-        # preenche na propria barra do toque) e nao so' outro numero -- o com
-        # prazo (`_resolve_simulated_split_exit`) tem 1 barra de atraso
-        # estrutural no arme e cai a MERCADO no estouro. Medido 2026-09-08:
-        # trocar None por 8 virou o T3 fatiado de +R$12.928,50 para
-        # -R$248,50. VALE SO' EM BACKTEST: em execucao real
-        # `machine._resolve_live_split_exit` exige prazo (assert) -- uma
-        # ordem-limite real sem prazo nenhum e' posicao exposta para sempre.
+        # CUIDADO COM `None`, que parece ser a mesma coisa e NAO e'. `None`
+        # troca de CAMINHO no motor: cai em
+        # `machine._resolve_target_partial_fill`, que preenche na PROPRIA
+        # barra do toque e nao passa pela fila da saida
+        # (`exit_queue_ahead_qty`). Ou seja, `None` nao mede "sem prazo",
+        # mede "sem fila" -- e' o otimismo corrigido em 2026-09-09, e foi ele
+        # que produziu o +R$12.928,50 do T3 fatiado medido em 2026-09-08
+        # (contra -R$248,50 com prazo 8). Em EXECUCAO REAL `None` nem roda:
+        # `machine._resolve_live_split_exit` levanta `NotImplementedError`.
+        # Para "sem prazo" de verdade, use o inteiro gigante -- ele mantem o
+        # robo no caminho COM fila e so' desliga o relogio.
         self.exit_ttl_bars = None if exit_ttl_bars is None else int(exit_ttl_bars)
 
         self._state = _SessionState()

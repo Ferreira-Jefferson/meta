@@ -45,6 +45,7 @@ from backtest.intraday.costs import (
     DESLIZE_ALVO_NATIVO_TICKS,
     IntradayCostModel,
 )
+from backtest.intraday.fidelidade import fidelidade_ou_none
 from backtest.intraday.machine import IntradayBacktestConfig
 
 
@@ -602,6 +603,9 @@ def config_for(
     target_slippage_ticks: float | None = None,
     limit_fill_at_bar_open: bool = False,
     anchor_exits_at_fill: bool = False,
+    queue_ahead_qty: float | None = None,
+    exit_queue_ahead_qty: float | None = None,
+    exit_arms_at_fill: bool = False,
 ) -> IntradayBacktestConfig:
     """Monta o `IntradayBacktestConfig` de um perfil + a economia do simbolo
     lida do terminal (`market_data_intraday.mt5_source.symbol_economics`).
@@ -730,10 +734,47 @@ def config_for(
     default tornaria numero novo incomparavel com numero antigo sem ninguem
     perceber. Ver as docstrings dos campos.
 
+    `queue_ahead_qty`/`exit_queue_ahead_qty` (2026-09-09): quanta FILA existe
+    na frente da nossa ordem-limite, na ENTRADA e na SAIDA. `None` (default)
+    RESOLVE SOZINHO pela calibracao do simbolo em `backtest.intraday.
+    fidelidade.FIDELIDADE` -- WDO@ recebe 438/489, medidos em operacao real
+    por Kaplan-Meier; simbolo sem medicao fica em 0,0 (o motor otimista de
+    ate 2026-09-08), nunca herdando a fila de outro instrumento.
+
+    LIGADO POR DEFAULT pelo MESMO precedente de `target_slippage_ticks` acima
+    (item 3.8 de LICOES_DE_PRODUCAO.md: "parametro de seguranca opcional e'
+    parametro desligado"), e pelo mesmo motivo concreto: `queue_ahead_qty`
+    existia desde 2026-08-26 e ficou UM MES no default 0,0 porque nenhum
+    chamador o passava -- todo robo maker medido nesse periodo encheu entrada
+    de graca. Aqui e' este montador que decide, entao backtest, sombra e
+    producao (`scripts/run_live.py::build_intraday`) herdam juntos.
+
+    O tamanho do erro que isso corrige nao e' de magnitude, e' de SINAL:
+    simulando o pregao real de 2026-09-09 (WDO F1, 34 operacoes, -R$3,00 por
+    operacao), o motor sem fila devolvia +R$3,82 por operacao com 97,8% de
+    preenchimento; com 438/489 devolve -R$3,48 com 44,1%. Passe `0.0`
+    EXPLICITO nos dois para reproduzir o motor antigo (a linha "sem fila" de
+    uma comparacao), ou outro numero para sensibilidade -- a amostra da saida
+    tem n=25, entao a sensibilidade importa. Ver a docstring de
+    `backtest.intraday.fidelidade` para o metodo, o refinamento REFUTADO (so'
+    o agressor contrario consome a fila: 99,3% do volume no nosso nivel ja'
+    e' dele) e as quatro limitacoes declaradas.
+
     O teto por capital NUNCA aumenta `max_open_contracts` (o campo que este
     montador resolve logo acima, via `teto`) -- so' pode ENCOLHER o que a
     run permitiria durante a execucao, dinamicamente, conforme o caixa muda
     (ver a docstring do campo em `IntradayBacktestConfig`)."""
+    # A fila resolve ANTES de qualquer outra coisa porque depende do SIMBOLO,
+    # e o simbolo so' existe pela identidade do perfil nas tabelas deste
+    # modulo (`SymbolProfile` nao carrega o proprio simbolo). Perfil montado
+    # a mao (teste, laboratorio) devolve "?" e cai no ramo "sem calibracao",
+    # que e' a resposta certa: um perfil sintetico nao tem pregao real
+    # medido, e emprestar a fila do WDO@ para ele seria inventar numero.
+    fid = fidelidade_ou_none(_symbol_do_perfil(profile))
+    if queue_ahead_qty is None:
+        queue_ahead_qty = fid.queue_ahead_qty if fid else 0.0
+    if exit_queue_ahead_qty is None:
+        exit_queue_ahead_qty = fid.exit_queue_ahead_qty if fid else 0.0
     if target_slippage_ticks is None:
         target_slippage_ticks = (DESLIZE_ALVO_NATIVO_TICKS if target_fills_as_maker else 0.0)
     if enforce_capital_cap is None:
@@ -809,6 +850,7 @@ def config_for(
         fee_round_trip_brl=profile.fee_round_trip_brl,
         exchange_fee_pct_per_leg=profile.exchange_fee_pct_per_leg,
         target_slippage_ticks=target_slippage_ticks,
+        fidelidade_calibrada=fid is not None,
     )
     return IntradayBacktestConfig(
         costs=costs,
@@ -824,6 +866,9 @@ def config_for(
         margin_buffer=margin_buffer,
         limit_fill_at_bar_open=limit_fill_at_bar_open,
         anchor_exits_at_fill=anchor_exits_at_fill,
+        queue_ahead_qty=queue_ahead_qty,
+        exit_queue_ahead_qty=exit_queue_ahead_qty,
+        exit_arms_at_fill=exit_arms_at_fill,
     )
 
 

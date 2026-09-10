@@ -1155,7 +1155,7 @@ def test_producao_declara_o_teto_por_RISCO_e_nao_so_o_de_margem():
     strat = _robo_de_producao()
     assert strat.risco_pct_por_trade == 0.01
     assert strat.point_value_brl == 10.0
-    assert strat.stop_ticks == 6       # o risco em R$ por contrato depende dele
+    assert strat.stop_ticks == 16      # o risco em R$ por contrato depende dele
     assert strat.margin_per_contract_brl == 150.0
     assert strat.hard_cap_contratos == 5
 
@@ -1166,11 +1166,11 @@ def test_producao_declara_o_teto_por_RISCO_e_nao_so_o_de_margem():
         (150.0,    1, "margem crua -- piso de SOBREVIVENCIA, 1 contrato"),
         (375.0,    1, "piso de PARTIDA do painel; risco ainda so' paga 1"),
         (750.0,    1, "MARGEM ja' pagaria 2 (750 / 375); o RISCO segura em 1"),
-        (2_999.0,  1, "1% = R$29,99 < R$30 do stop de 1 contrato"),
-        (5_999.0,  1, "1% = R$59,99 < R$60 do stop de 2 contratos"),
-        (6_000.0,  2, "MARCO do 2o contrato: 1% = R$60 = 2 x R$30"),
-        (9_000.0,  3, "MARCO do 3o"),
-        (15_000.0, 5, "MARCO do 5o -- e' o hard cap regulatorio"),
+        (7_999.0,  1, "1% = R$79,99 < R$80 do stop de 1 contrato"),
+        (15_999.0, 1, "1% = R$159,99 < R$160 do stop de 2 contratos"),
+        (16_000.0, 2, "MARCO do 2o contrato: 1% = R$160 = 2 x R$80"),
+        (24_000.0, 3, "MARCO do 3o"),
+        (40_000.0, 5, "MARCO do 5o -- e' o hard cap regulatorio"),
         (1_000_000.0, 5, "hard cap de 5 continua valendo por cima de tudo"),
     ],
 )
@@ -1178,18 +1178,20 @@ def test_marcos_de_escala_de_contrato_na_config_de_producao(caixa_brl, contratos
     """A tabela de marcos que o dono precisa conseguir prever de cabeca.
 
     Regra: um stop NUNCA pode consumir mais que 1% do caixa. O stop deste
-    robo e' fixo -- `6 ticks x 0,5 x R$10 = R$30` por contrato (era R$80 com
-    o S16 de ate 2026-09-09) -- entao cada contrato exige **R$3.000 de
-    caixa**, e o teto vale `min(margem, risco)`. O caixa e' recalculado a
-    cada entrada (`on_capital_update(initial_capital + realized_pnl)`),
-    entao os mesmos marcos valem DESCENDO: caixa abaixo de R$6.000 volta a
-    1 contrato.
+    robo e' fixo -- `16 ticks x 0,5 x R$10 = R$80` por contrato -- entao cada
+    contrato exige **R$8.000 de caixa**, e o teto vale `min(margem, risco)`.
+    O caixa e' recalculado a cada entrada
+    (`on_capital_update(initial_capital + realized_pnl)`), entao os mesmos
+    marcos valem DESCENDO: caixa abaixo de R$16.000 volta a 1 contrato.
 
-    Este teste e' o lugar que registra o EFEITO COLATERAL da troca de stop:
-    encolher o stop para 6 ticks derruba o marco do 2o contrato de R$16.000
-    para R$6.000, ou seja o robo escala MUITO mais cedo. E' coerente (cada
-    contrato arrisca menos), mas e' mudanca de exposicao -- ver a nota de
-    2026-09-09 no topo de `wdo_grid_reload_maker.py`."""
+    Este teste e' o lugar que registra o EFEITO COLATERAL da troca de stop, e
+    ele ja' foi virado duas vezes no mesmo dia: 2026-09-09 de manha o stop
+    caiu de 16 para 6 ticks e o marco do 2o contrato desabou de R$16.000 para
+    R$6.000 (o robo escalava MUITO mais cedo); na mesma noite voltou para 16
+    e o marco voltou para R$16.000. Nao e' detalhe de teste -- e' o tamanho da
+    exposicao mudando junto com a geometria, sem ninguem ter pedido isso
+    explicitamente. Ver as duas notas de 2026-09-09 no topo de
+    `wdo_grid_reload_maker.py`."""
     strat = _robo_de_producao()
     strat.on_capital_update(caixa_brl)
     assert strat._quantidade_da_entrada() == contratos, porque
