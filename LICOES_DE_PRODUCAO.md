@@ -1133,6 +1133,74 @@ fica para o dono decidir): trocar o gatilho de `_needs_warm_start()` de "tem
 `fixed_anchor_until`?" para algo que valha para qualquer estratégia com
 sessão em andamento.
 
+### 2.7 Um portão de segurança pensado para forçar inspeção humana morava no caminho de LEITURA — a tela que diria o que conferir foi a que caiu, exatamente com dinheiro exposto e o robô morto — CORRIGIDO 2026-09-10 (parcial)
+
+Achado pelo dono ao subir o `dev.bat` em 2026-09-10: `GET /operacao`
+respondia **HTTP 500 em toda renderização**, traceback terminando em
+`RuntimeError` de `IntradaySessionMachine.restore` ("reinicio encontrou uma
+FATIA DE SAIDA posicionada ... em execucao REAL"). Situação real no momento:
+o slot `dt-wdo_grid_reload_maker-wdo@-live` tinha **1 contrato long aberto em
+WDO@ @5144,0** (stop 5136,0 / alvo 5145,0), com fatia de saída de 1 contrato
+registrada como posicionada no book (`exit_resting_qty=1`,
+`exit_resting_bars_waited=2352`, `exit_ttl_bars=1e9` — o desenho "sem prazo"
+adotado em 2026-09-09), e o **processo do robô estava morto** (pid null,
+heartbeat parado às 09:03). O painel caiu justamente no instante em que havia
+dinheiro exposto e o robô fora do ar — a tela que diria o que conferir no
+terminal era a que não abria. E o estrago não era parcial:
+`dashboard/app.py::_operacao_ctx` monta os slots numa list comprehension, e
+**um slot nesse estado derrubava TODOS os cartões da página**, inclusive os
+saudáveis.
+
+Causa: o runtime de LEITURA do painel
+(`dashboard/live_service.py::_build_intraday_runtime`) instanciava
+`MT5IntradayExecution` sempre que a última config do slot dizia
+`execution_mode="live"` — apesar da própria docstring do builder já afirmar
+"Não conecta em nada" e "este runtime nunca posiciona nenhuma". Com
+`machine.execution` setada, o portão de segurança do `restore` — que está
+CERTO para quem vai voltar a OPERAR, porque o ticket da ordem-limite de saída
+só vive na memória do processo do robô e resumir arriscaria mandar uma
+segunda saída por cima numa conta NETTING — disparava também no caminho de
+quem só queria MOSTRAR a tela. A ponte de execução no painel era acidente de
+implementação, não desenho.
+
+**Correção aplicada:** `IntradayLiveRuntime(..., somente_leitura=True)` no
+painel — reporta o modo real na tela, mas não instancia a ponte de execução e
+recusa `run_once`. O portão do `restore` agora vira **IMPEDIMENTO** carimbado
+na conta (`policy_state["impedimento"]`, o mecanismo criado em 2026-08-25
+exatamente para "robô parado e painel verde" — item 1.9) em vez de exceção
+nua que só aparecia no log do processo. O robô continua PARADO; só passou a
+dizer por quê, na tela onde o dono olha. Testes:
+`tests/test_dashboard_daytrade_robot.py` (3 novos) e
+`tests/test_intraday_live_runtime.py` (2 novos + o antigo `..._falha_alto`
+reescrito como `..._para_o_robo`).
+
+**Lacuna que fica em aberto (NÃO corrigida):** o portão não tem caminho de
+saída no MESMO pregão. A mensagem manda "cancele a ordem-limite no MT5 antes
+de religar este slot", mas religar reencontra o mesmo `exit_resting_qty`
+persistido em `policy_state` — nada no repo limpa esse marcador, e ele só
+some na virada do pregão (o snapshot de outro dia é descartado). Some-se a
+isso uma assimetria já registrada no item 2.2: o lado da ENTRADA reconcilia
+com a corretora depois de um restart (`resolve_orphaned_entry`,
+`cancel_stale_refs`), o lado da SAÍDA não tem equivalente — ninguém pergunta
+à corretora se aquela ordem-limite de saída ainda está no book. Um aviso sem
+caminho de saída é uma parada permanente disfarçada de aviso.
+
+> **Regra 1 — um portão de segurança que existe para obrigar inspeção humana
+> não pode morar no caminho de LEITURA.** Reconstruir estado para EXIBIR e
+> reconstruir estado para OPERAR são duas operações com regras diferentes:
+> quem só exibe não pode carregar a camada que manda ordem, nem herdar as
+> recusas dela.
+> **Regra 2 — uma tela de operação nunca pode ter um slot capaz de derrubar
+> os outros.** Renderização de N robôs é N falhas independentes, não uma; uma
+> `list comprehension` sem isolamento por item transforma qualquer exceção
+> local em apagão total, no pior momento possível para o apagão acontecer.
+> **Regra 3 — um aviso que exige ação humana precisa de caminho de saída no
+> MESMO ciclo em que apareceu**, ou ele é uma parada permanente com nome de
+> aviso. E a reconciliação pós-restart tem de cobrir os DOIS lados da ordem —
+> só a entrada reconciliar sozinha (2.2) deixa a saída, que é o lado de maior
+> risco, sem ninguém perguntando à corretora o que sobrou.
+> **Pergunte à plataforma nova:** pergunta 83 da Parte 8.
+
 ---
 
 ## Parte 3 — Dimensionamento e capital
@@ -2429,6 +2497,352 @@ vistos pelo outro lado.
 > **Pergunte à plataforma nova:** a ordem-limite dela, quando fica de fato
 > parada no livro, preenche no nível pedido ou melhor — e isso foi medido
 > SEPARADAMENTE do alvo/stop nativo, na mesma população? (pergunta 63)
+
+### 4.21 O motor não tinha fila do lado da SAÍDA, e o estouro de prazo (TTL) saía a mercado mas era precificado como maker — dia real: backtest previa +R$36,00, saiu −R$14,00; 1 de 7 preenchimentos (14%) contra 92,8% calibrado
+
+2026-09-09, primeiro dia do WDO F1 T2/S6 ao vivo com dinheiro real, saída
+fatiada (item 6.19): **7 saídas por alvo no pregão, UMA preencheu como
+ordem-limite, seis estouraram `exit_ttl_bars=60` e saíram a mercado.** O
+backtest da mesma geometria previa **+R$36,00** no dia; o dia deu **−R$14,00**.
+A tabela que calibrou `exit_ttl_bars=60` (item 6.20, DESFECHO) dizia **92,8%**
+de preenchimento; o real deu **14% (1/7)**.
+
+Dois defeitos, não um:
+
+**(a) `IntradaySessionMachine` não tinha NENHUM modelo de fila do lado da
+SAÍDA.** Bastava o preço TOCAR o nível e haver volume na barra para a fatia
+preencher. O lado da ENTRADA já tinha esse modelo (`queue_ahead_qty`, item
+4.1, criado em 2026-08-26 depois do achado da PMAM3: 12 ordens reais, 0
+fills, contra 7 trades do gêmeo em sombra no mesmo pregão). Ninguém varreu o
+outro lado da mesma operação — um mês inteiro entre corrigir um lado e
+descobrir o outro. É o item 7.1 cobrando de novo, e cobrando da MESMA
+operação (entrada e saída de um round-trip), não de um módulo qualquer
+lembrado por analogia.
+
+**(b) A fatia que ESTOURAVA o prazo era fechada a mercado mas caía no ramo
+`is_maker_target` e saía exatamente no preço de fechamento da barra, sem
+pagar `slippage_ticks`.** O motor dava de graça justamente a saída que, ao
+vivo, acontece em 6 de 7 casos. Mesma família do item 5.20 (o desmonte de
+robô que creditava BRUTO pela rota administrativa): o custo de fechar a
+mercado existe nas duas rotas ou em nenhuma — aqui as duas rotas eram a mesma
+função, e uma delas se disfarçava de maker por causa do rótulo herdado
+(`is_maker_target`), não do mecanismo real de preenchimento.
+
+**O que a medição deu depois de corrigir os dois** (IS 72 pregões + OOS 51,
+capital real R$375, T2/S6, 12 células, 149 min de máquina):
+
+| motor | IS (72 pregões) | OOS (51 pregões) |
+|---|---|---|
+| SEM fila de saída (o que vinha decidindo tudo) | **+R$244.429** · 0/72 sem trade | **+R$148.760** · 0/51 sem trade |
+| COM fila de saída (400 contratos) | **−R$226 a −R$250 em TODAS as células** · 71/72 sem trade, caixa mín. R$124–148 | **idem** · 50/51 sem trade |
+
+O caixa mínimo (R$124–148) fica **abaixo da margem crua de R$150** — o robô
+morre de caixa, a mesma catraca de ruína do item 6.15.
+
+As duas células com n grande o bastante para dizer algo (IS, `ttl=240`,
+n=2.741 e n=4.920): R$/trade = **−R$0,086** e **−R$0,050**. Somando de volta a
+corretagem de R$0,50/round-trip, o BRUTO por trade é **+R$0,41** e **+R$0,45**
+— **o edge existe e é menor que a corretagem**, a mesma assinatura do item 4.5
+(edge sub-tick) vista em reais.
+
+Aumentar o prazo de 60 para 240 barras subiu a taxa de fill de ~48% para ~77%
+— a suspeita do dono sobre o prazo ser curto estava certa — **mas os fills a
+mais não viraram dinheiro.** Posicionar a saída no FILL da entrada em vez de
+no toque não resgatou: sem diferença consistente de sinal entre as duas
+mecânicas.
+
+**A profundidade real do livro do WDO@**, coletada no mesmo dia (4.393 fotos,
+16h05–18h32, regime dominante de spread 1 tick):
+
+| nível | venda | compra |
+|---|---|---|
+| 1º | 338 | 320 |
+| 2º | 596 | 627 |
+| 3º | 646 | 683 |
+
+Com alvo de 2 ticks, no instante do fill da entrada o alvo é o **2º NÍVEL** —
+~596 na frente, quase o dobro do 1º nível. A hipótese de que chegar cedo pega
+uma fila menor é **FALSA**; o que chegar cedo compra é estar na fila enquanto
+ela encolhe de 596 para 338, e uma foto estática não distingue "cancelaram na
+minha frente" de "chegou gente nova depois".
+
+Isso fecha, com resposta ruim, o risco 3 deixado aberto pelo item 6.19 ("a
+fila REAL de saída nunca foi medida... é a mesma classe de suposição que o
+item 6.18 pegou do outro lado") — e **invalida a tabela de calibração do item
+6.20**: as taxas de fill de 84,1%/88,9%/92,8%/93,6% que escolheram
+`exit_ttl_bars=60` saíram do motor SEM fila de saída, o mesmo motor que este
+item mostrou dar de graça o preenchimento. A calibração de `exit_ttl_bars`
+precisa ser refeita sobre o motor COM fila — e o resultado acima já antecipa
+que ela não vai salvar a geometria: mais prazo compra taxa de fill, não
+compra sobrevivência de caixa nem edge acima da corretagem.
+
+> **Regra:** um simulador de execução tem DOIS lados, e corrigir o realismo
+> de UM deles não corrige o outro — toda premissa de preenchimento tem de ser
+> auditada na ENTRADA e na SAÍDA, com a mesma severidade, mesmo quando as duas
+> pertencem à mesma posição e ao mesmo commit de correção. Corolário, que é o
+> que mais custou aqui: quando um mesmo `motivo de saída` esconde dois
+> caminhos que pagam custos diferentes (preencheu no nível × desistiu e foi a
+> mercado), o simulador precisa DISTINGUI-LOS — a mistura entre eles não é
+> constante, ela depende exatamente do parâmetro que se está calibrando
+> (aqui, o prazo). Calibrar um prazo com um modelo que dá o fill de graça mede
+> o modelo, não o mercado.
+>
+> **Nota de método:** uma taxa de fill medida num simulador sem fila NÃO é uma
+> previsão — é uma tautologia: ela só repete a regra de preenchimento que o
+> próprio simulador usa. A única medição que vale é a do extrato.
+> **Pergunte à plataforma nova:** pergunta 24 (estendida) e pergunta 32
+> (estendida). (4.1, 4.8, 5.20, 6.15, 6.19, 6.20, 7.1)
+
+### 4.22 A fila da ENTRADA existia no motor havia um mês e nunca foi LIGADA — ficou no default `0.0`, e o motor previa **+R$3,82 por operação** num pregão real que deu **−R$3,00**
+
+Irmão do item 4.21, e a outra metade da mesma história. Lá o defeito era uma
+fila que **nunca foi escrita** (lado da SAÍDA). Aqui é pior de uma forma
+específica: a fila do lado da ENTRADA **foi escrita, tem docstring, tem
+parâmetro — e nunca foi ligada em lugar nenhum**.
+
+`IntradayBacktestConfig.queue_ahead_qty` nasceu em 2026-08-26, logo depois do
+caso PMAM3 do item 4.1 (12 ordens reais, ZERO preenchimentos, contra 7 trades
+do gêmeo em sombra no mesmo pregão, mesmo ativo, mesmos preços). Em 2026-09-09
+descobriu-se que **nenhum ponto do repositório jamais atribuiu valor a ele**:
+ficou no default `0.0` por um mês inteiro. Toda medição de robô maker feita
+nesse período encheu ordem de entrada no **primeiro toque do nível, de graça** —
+exatamente o defeito que o parâmetro foi criado para consertar.
+
+**Um parâmetro de realismo desligado é pior do que a ausência dele**, porque a
+existência do parâmetro (com nome, docstring e teste) dá a impressão de que o
+risco está coberto. Ninguém volta a perguntar sobre uma pergunta que parece
+respondida.
+
+**A aferição contra o extrato.** WDO@ / WDOV26, pregão de 2026-09-09, magic
+862399285, robô rodando continuamente das 14:47 às 18:03: **34 operações,
+líquido −R$102,00, −R$3,00 por operação, 33,3% de preenchimento, 7 stops.**
+Simulando o mesmo trecho com T2/S6 e prazo 60:
+
+| configuração do motor | trades | R$/trade | fill% |
+|---|---|---|---|
+| **REAL (extrato da corretora)** | 34 | **−3,00** | 33,3 |
+| sem fila nenhuma — o motor que decidia tudo até 2026-09-08 | — | **+3,82** | 97,8 |
+| só fila da SAÍDA, Q=400 chutado (item 4.21) | 63 | −0,50 | 44,4 |
+| **as duas filas calibradas (438 entrada / 489 saída)** | 42 | **−3,48** | 44,1 |
+
+O motor sem fila não errava a magnitude: **errava o SINAL.** Previa
++R$3,82/operação num dia que deu −R$3,00.
+
+**O efeito numa decisão desta mesma sessão.** Com a fila de entrada em zero, a
+varredura "sem prazo" dava **+R$506,50** para o T2/S6 no pregão de hoje. Com a
+fila ligada, a MESMA célula dá **−R$239,00**. O lucro inteiro vinha de entradas
+que a vida real não teria preenchido.
+
+#### O viés de sobrevivência na estimativa da fila
+
+Esta é a lição de método do item, e ela vale muito além do caso. A primeira
+estimativa de Q usou só as ordens-limite que **preencheram**: mediana 374 na
+saída, 346 na entrada. Está errada, e erra **sempre para o mesmo lado**: ordem
+que preencheu é ordem que **ganhou** a fila. As que não preencheram tinham fila
+maior e foram jogadas fora — censura à direita clássica, o mesmo erro de quem
+estima a vida média de um equipamento olhando só os que já quebraram.
+
+Refeito com **Kaplan-Meier**, no eixo "volume acumulado negociado no nível":
+
+| lado | esperaram | preencheram (evento) | canceladas (censuradas) | **KM mediana** | ingênua | quartil 1 |
+|---|---|---|---|---|---|---|
+| ENTRADA | 67 (de 186 ordens) | 30 | 37 | **438** | 346 | 194 |
+| SAÍDA | 25 (de 34 ordens) | 8 | 17 | **489** | 374 | 207 |
+
+A estimativa ingênua subestima a fila em **21% na entrada e 31% na saída** — e
+subestimar fila é exatamente o erro que faz o backtest preencher o que a vida
+real não preenche.
+
+**O método da medição, escrito para ser refeito em qualquer plataforma:** a
+corretora informa o instante em que a ordem-limite entrou no livro e o instante
+em que preencheu ou foi cancelada; a série de negócios informa preço e volume.
+`Q_frente` = volume que negociou **no preço da ordem** entre esses dois
+instantes. Ordem que preencheu em menos de 0,5 s é descartada — já estava
+agressiva ao postar e nunca entrou em fila (item 4.17).
+
+#### Um refinamento MEDIDO E REFUTADO — não refaça
+
+Hipótese plausível: só o volume do **agressor do lado contrário** consome a
+nossa fila (uma limite de venda parada na oferta só é executada por quem compra
+agredindo). Se fosse verdade, o motor estaria descontando fila **duas vezes**
+mais rápido do que deveria, e a calibração inteira estaria pessimista.
+
+Medido: no dia inteiro o fluxo é 50,1% comprador / 50,1% vendedor, mas **no
+nível da nossa própria ordem 99,3% do volume é do lado que executa contra nós**.
+Faz sentido a posteriori — a nossa limite está na melhor oferta, então negócio
+naquele preço é, por definição, alguém agredindo a nossa ponta. **O motor já
+está certo ao descontar o volume inteiro da barra.** Refutado em 2 minutos,
+nenhuma mudança de motor necessária.
+
+#### As limitações, que fazem parte do achado
+
+**Um pregão só.** A contagem de operações simuladas ainda fica ~30% acima da
+real (42 contra 34). E o par que melhor encaixou no dia (`Q_saída=600`) foi
+escolhido **depois** de ver o resultado — isso é ajuste, não validação; por isso
+o valor adotado é o **489 do Kaplan-Meier**, estimativa com método, e não o que
+melhor encaixa em n=34. Cada pregão real novo quase dobra a amostra da saída.
+
+#### E a produção mudou no MESMO dia: a fatia de saída passou a rodar SEM PRAZO
+
+Ordem do dono, ainda em 2026-09-09 (`EXIT_TTL_BARS_SEM_PRAZO`). Duas
+consequências sobre a própria medição acima, e as duas são lição de método.
+
+**A calibração do LIVRO sobrevive à troca de mecanismo; a do MECANISMO morre
+junto.** Q é propriedade do livro — quantos contratos estão na frente da nossa
+ordem naquele preço não muda porque *nós* desistimos depois de 22 segundos.
+Os 438/489 continuam valendo. Já a derrapagem do estouro de prazo (as 18 saídas
+a mercado de 2026-09-09, única observação com dinheiro real daquele caminho)
+deixa de ser medível — **e deixa de importar, porque o robô parou de pagá-la.**
+Antes de lamentar a perda de uma amostra, pergunte se o custo que ela media
+ainda existe.
+
+**O prazo curto era o que ESTRAGAVA a medição, não o que a permitia.** Das 25
+ordens de saída do pregão, **17 saíram censuradas** — canceladas pelo prazo
+(~22 s) antes de sabermos a fila delas. Foi exatamente isso que obrigou ao
+Kaplan-Meier. Sem prazo, essas observações correm até o preenchimento e viram
+**eventos**: a mesma quantidade de operações passa a dar uma estimativa muito
+mais firme.
+
+> **Regras** (quatro, e as quatro valem em qualquer corretora e qualquer
+> linguagem):
+>
+> **1. Parâmetro de realismo que nasce desligado é dívida, não proteção.** Ao
+> criar um, ou ele já entra ligado com um valor MEDIDO, ou existe um teste que
+> FALHA enquanto ele estiver no default neutro. Um default neutro silencioso é
+> um subsídio do simulador com aparência de rigor (item 3.8, "parâmetro de
+> segurança opcional é parâmetro desligado", agora do lado da MEDIÇÃO em vez do
+> lado da execução).
+>
+> **2. Fila estimada só com as ordens que preencheram é viés de sobrevivência.**
+> As que NÃO preencheram são observações **censuradas**, não lixo: entram na
+> estimativa pelo tempo/volume que esperaram sem completar. Kaplan-Meier (ou
+> qualquer estimador que aceite censura) em vez de mediana das completas. Vale
+> para qualquer coisa que se estime a partir de tentativas com desfecho
+> incompleto — tempo até preencher, tempo até tocar, tempo até quebrar.
+>
+> **3. Backtest maker nunca aferido contra o extrato é hipótese, não previsão.**
+> E a aferição mínima é **por operação** — R$/operação e taxa de
+> preenchimento —, nunca pelo líquido agregado: o líquido esconde compensação
+> entre preço e quantidade, e foi justamente onde o motor errou o sinal
+> enquanto acertava a ordem de grandeza.
+>
+> **4. Um mecanismo que desiste cedo CENSURA a própria medição.** Quem mede
+> fila precisa saber se o número pequeno que observou é *fila pequena* ou
+> *paciência pequena* — as duas produzem a mesma observação curta e significam
+> o oposto. Corolário prático: curvas de sobrevivência de pregões COM prazo e
+> SEM prazo não se misturam numa estimativa só sem declarar o regime, porque a
+> natureza da censura é diferente. E, ao trocar o mecanismo, separe o que a
+> medição dizia sobre o MERCADO (sobrevive: a fila é do livro) do que ela dizia
+> sobre o CAMINHO escolhido (morre junto, e não faz falta — ninguém mais paga
+> aquele custo). É o item 6.19 outra vez, agora aplicado à AMOSTRA em vez de ao
+> custo.
+>
+> **Pergunte à plataforma nova:** pergunta 80 (nova) e pergunta 24 (estendida).
+> (3.8, 4.1, 4.17, 4.21, 6.19, 6.20, 7.1)
+
+**A terceira reincidência do item 7.1, na mesma operação.** O padrão "modelo de
+fila ausente/desligado" foi corrigido na ENTRADA em agosto (4.1), descoberto na
+SAÍDA na manhã de 2026-09-09 (4.21), e descoberto **de novo na ENTRADA — que já
+estava "corrigida" — na noite do mesmo dia** (este item). Não são três módulos
+distantes lembrados por analogia: são as duas pontas do MESMO round-trip do
+MESMO robô. Corrigir uma instância de um padrão sem varrer todas as outras não
+corrige o padrão; e "já corrigimos isso" precisa significar *"medi que está
+LIGADO"*, não *"o código existe"*. Isso também invalida, pela segunda vez, a
+tabela de calibração de taxa de preenchimento do item 6.20 — que o 4.21 já tinha
+invalidado pelo lado da saída.
+
+### 4.23 `anchor_exits_at_fill` é silenciosamente inerte para entrada a mercado
+
+Em 2026-09-10, um teste rodou uma estratégia de entrada A MERCADO com
+`anchor_exits_at_fill=True` e com `False`. As 16 células saíram byte a byte
+idênticas. A causa mora no motor: a flag só é lida num único ponto
+(`machine.py`, dentro de `_niveis_da_entrada`), e essa função tem um único
+chamador — o caminho de preenchimento de `EnterLimit`. `_entrar_a_mercado`
+abre a posição com `initial_stop`/`initial_target` direto e nunca passa por
+ali. Ligar a flag numa estratégia que entra a mercado não dá erro, não avisa
+e não muda nada.
+
+Reimplementando a ancoragem à mão no caminho de mercado (translação de stop e
+alvo pelo delta fill − sinal), o breakeven empírico das células saiu de
+39,6%–43,9% para 71,2%–82,2% (perto do 80% nominal, sem o ruído do gap) e o
+R$/operação caiu de +R$20,14 para +R$8,59 numa célula e de +R$16,69 para
+−R$2,74 na outra: metade do "edge" aparente numa célula, e a totalidade dele
+na outra, era só o descasamento entre o preço do sinal e o preço do fill.
+
+> **Regra.** Parâmetro de realismo tem de valer em TODOS os caminhos de
+> execução, ou recusar explicitamente os que não cobre. Um flag que é no-op
+> silencioso para uma classe de ordem é um default zero disfarçado — mesma
+> família do item 3.8 e do item 4.22, agora achada num terceiro lugar do
+> mesmo motor. Ao adicionar ou revisar qualquer parâmetro de fidelidade,
+> enumere os caminhos de execução (ordem a mercado, ordem-limite, saída por
+> prazo, achatamento de fim de pregão) e confirme, um a um, que o parâmetro é
+> consultado — ou que o motor levanta erro quando pedem para ligá-lo onde ele
+> não vale.
+>
+> **Pergunte à plataforma nova:** pergunta 84 (nova).
+> (3.8, 4.22)
+
+### 4.24 Nunca entrar a mercado, nunca sair no alvo a mercado — ordem do dono, e toda medição obedece
+
+**Este item vem de ordem direta do dono (2026-09-10), não de uma observação —
+e é o mais importante desta leva.** Ele constatou que uma rodada inteira de
+pesquisa — cinco setups públicos (Wyckoff/SMC, IFR2 do Stormer, pullback na
+VWAP, Setup 123/Ross, Ondas de Wolfe), ~50 células ao longo de dias — foi
+medida com `Enter` (entrada A MERCADO) e `target_fills_as_maker=False` (alvo a
+mercado). **Esse desenho não tem caminho de execução real neste projeto.** O
+motor recusa de propósito: `EntradaAMercadoNaoSuportada` (`machine.py`, no
+caminho de `_entrar_a_mercado`), cujo comentário diz que falhar alto ali é
+melhor que simular o fill a mercado com o open da barra e mandar dinheiro real
+contra um preço inventado. Só `EnterLimit` tem caminho confirmado pela
+corretora.
+
+A mesma falha atingiu a ORB, a única candidata viva da rodada e a que produziu
+o primeiro veredito POSITIVO da investigação — ela também entra a mercado:
+mesmo se tivesse sobrevivido à validação, não teria como operar.
+
+**Por que a proibição existe, com os números que a sustentam.** O alvo a
+mercado (`tp` nativo, gatilho varrido) foi medido em execução real: n=11
+saídas, média **−1,000 tick**, **10 contra a posição e ZERO a favor** (sob
+moeda justa, p ≈ 0,001), R$ 55,00 de deslize contra R$ 95,00 de bruto teórico
+— **57,9% do lucro** (item 4.8). Com alvo de 2 ticks o breakeven sobe de
+90,00% para 95,00% e o robô sai do ar em poucos pregões partindo do capital
+real (item 6.18). Trocar o alvo nativo por ordem-limite real parada no livro
+(saída fatiada) faz o custo sumir por construção — derrapagem é "executou pior
+do que pedi", e ordem-limite recusa pior (item 6.19).
+
+> **Regra — quatro pontos; o 1º e o 4º são o que este item acrescenta:**
+>
+> **1. Entrada por ordem-limite, nunca a mercado.** Uma estratégia que só faz
+> sentido entrando a mercado é uma estratégia que este projeto não pode
+> operar — medi-la é tempo de máquina gasto respondendo a uma pergunta que
+> ninguém tem.
+>
+> **2. Alvo por ordem-limite parada no livro (saída fatiada), nunca gatilho a
+> mercado.** Sair no alvo a mercado consome o lucro inteiro e aumenta a
+> incerteza da medição ao mesmo tempo (itens 4.8, 6.18, 6.19).
+>
+> **3. Níveis ancorados no FILL, não no sinal.** Se o preço deslizou entre a
+> decisão e o preenchimento, stop e alvo acompanham o preço realmente obtido —
+> é o item 4.23 do outro lado: a mesma ancoragem precisa valer em TODO caminho
+> de execução.
+>
+> **4. Exceção única: o STOP continua a mercado.** Proteção não espera fila, e
+> ele não desliza como o alvo — medido em 5 de 5 saídas reais, nunca pior que
+> o nível pedido (item 4.8).
+>
+> **A lição de método, que é o que sobrevive à troca de plataforma:** o custo
+> de execução não é um detalhe a acertar depois que a estratégia "funcionar"
+> — ele determina QUAIS desenhos existem. Semanas de pesquisa foram gastas
+> varrendo parâmetro de um desenho de execução que a corretora não aceita, e
+> nenhum resultado daquela varredura — positivo ou negativo — respondia à
+> pergunta que importava. Antes de varrer parâmetro de estratégia, congele o
+> desenho de execução e confirme que ele tem caminho real confirmado. Se o
+> motor recusa aquele caminho em produção, ele tem de recusar no backtest
+> também, ou no mínimo carimbar a linha — um backtest capaz de simular o que
+> a produção proíbe é uma máquina de gastar tempo.
+>
+> **Pergunte à plataforma nova:** pergunta 85 (nova).
+> (4.8, 4.23, 6.18, 6.19)
 
 ---
 
@@ -4259,6 +4673,16 @@ nada no número denuncia isso.
 
 ### 6.19 O custo que apagou o edge não era constante da natureza — era o MECANISMO de execução, e trocá-lo levou o robô de −R$242,50 CENSURADO para +R$239.936,50 operante
 
+> **SUPERADO EM PARTE, 2026-09-09 (noite) — leia o item 6.21 antes desta
+> tabela.** A troca de mecanismo descrita aqui está correta e continua
+> valendo: o alvo nativo desliza, a ordem-limite *resting* não. O que **não**
+> vale mais são os números da coluna "alvo FATIADO" — +R$239.936,50 (IS) e
+> +R$77.833,50 (OOS) —, medidos num motor que enchia ordem-limite no primeiro
+> toque, **de graça, nos dois lados** (itens 4.21 e 4.22). O risco 3 da lista
+> abaixo ("a fila REAL de saída nunca foi medida") era, ele mesmo, o que
+> sustentava o resultado: medida a fila, o T2 fatiado dá **0 de 21 pregões
+> positivos** (6.21).
+
 O item 6.18 fechou com um veredito e uma conta de amostra: T2/S16 não tem edge
 depois de cobrar 1 tick de deslize no alvo, o ponto de virada está em 0,905
 tick, o IC 95% do deslize medido (n=11) é [0,700 ; 1,300] e **atravessa** esse
@@ -4448,6 +4872,374 @@ eternamente de a fila andar).
 > **Pergunte à plataforma nova:** os prazos e contadores dela são medidos em
 > tempo de relógio, em barras de tempo fixo, ou em eventos/negócios — e o mesmo
 > campo muda de unidade conforme a granularidade do feed? (pergunta 67)
+
+### 6.21 Todo o lucro que a família maker já mostrou morava na suposição de fila zero — com a fila real medida, 0 de 21 pregões positivos
+
+> **Este é o DESFECHO da cadeia 4.20 → 4.21 → 4.22.** Aqueles três acharam o
+> modelo de fila que faltava (saída), o que existia e nunca foi ligado
+> (entrada), e o viés de sobrevivência que subestimava os dois. Este responde
+> a pergunta que o conserto abriu e que ninguém tinha feito ainda: **com o
+> motor corrigido, o robô ganha?** Não ganha — e o que não ganha não é uma
+> célula, é a família inteira.
+
+Depois de calibrar a fila dos dois lados contra execução real (entrada **438**,
+saída **489**, Kaplan-Meier — itens 4.21/4.22), rodou-se a medição que nunca
+tinha sido feita com o motor corrigido: **1 mês do IS — 21 pregões,
+2026-02-27 a 2026-03-27 —, caixa de R$375,00 REPOSTO a cada pregão**, saída
+fatiada sem prazo, T2 contra quatro stops.
+
+**Repor o caixa a cada pregão é o que torna esta medição diferente de todas as
+anteriores.** Com o caixa correndo, o robô quebra o piso logo no primeiro dia e
+a janela inteira vira uma amostra de UM pregão repetida 21 vezes — é a censura
+dos itens 6.15/6.16, e é exatamente o que vinha impedindo qualquer leitura de
+edge perto do capital real. Com o caixa reposto, cada pregão é uma observação
+independente da geometria, e a ruína deixa de mascarar a expectativa.
+
+O veredito usa o IC 95% de **Wilson** do win% contra o **breakeven
+aritmético** — ganho e perda são fixos em ticks mais corretagem, então o
+breakeven não é estimado, é conta:
+
+| stop | n ops | win% | IC 95% | breakeven | veredito | R$/op | pregões positivos |
+|---|---|---|---|---|---|---|---|
+| S6  | 584 | 55,99% | [51,94 ; 59,97] | 78,89% | **NEGATIVA** | −8,86 | **0/21** |
+| S10 | 918 | 73,75% | [70,81 ; 76,49] | 85,38% | **NEGATIVA** | −5,71 | **0/21** |
+| S16 | 998 | 82,16% | [79,67 ; 84,41] | 90,00% | **NEGATIVA** | −5,34 | **0/21** |
+| S21 | 949 | 85,88% | [83,52 ; 87,95] | 92,08% | **NEGATIVA** | −5,18 | **1/21** |
+
+Os quatro intervalos ficam **inteiros abaixo** do breakeven. **1 pregão
+positivo em 84.** E o `R$/op` converge para ≈ **−R$5,00** conforme o stop
+alarga (−8,86 → −5,71 → −5,34 → −5,18), **não para zero**: alargar o stop não
+é o caminho, porque o limite não é o stop.
+
+#### A sensibilidade que fecha o argumento
+
+O veredito acima poderia ser acusado de depender de uma calibração com n=25 do
+lado da saída — a limitação que o próprio item 4.22 registrou. Mesma janela,
+mesmas 21 sessões, mesmos sinais, variando **só a fila assumida**:
+
+| fila assumida | S16: win% / R$/op / pregões+ | S21: win% / R$/op / pregões+ | veredito |
+|---|---|---|---|
+| **0 / 0** — o motor de até 2026-09-08 | 94,46% / **+4,46** / **19/21** | 95,87% / **+4,80** / **21/21** | **POSITIVA** |
+| 200 / 200 | 87,83% / −0,94 / 4/21 | 90,34% / −0,41 / 6/21 | NEGATIVA |
+| **438 / 489** — medida (4.22) | 82,16% / **−5,34** / **0/21** | 85,88% / **−5,18** / **1/21** | NEGATIVA |
+
+O ponto de virada fica em torno de **170 contratos de fila**. O livro real tem
+438/489 — **2,6 a 2,9 vezes** isso. **O veredito não depende da precisão da
+calibração:** ela poderia estar errada por um fator de dois e a conclusão seria
+a mesma. A resposta útil não foi "a fila é 489"; foi **"o ponto de virada é 170
+e a realidade é 438"** — a segunda sobrevive a estar errado sobre a primeira.
+
+#### A leitura inversa é o achado de verdade
+
+**Com fila zero o robô ganha em 21 de 21 pregões.** Não em 12, não em 15: em
+todos. Todo resultado positivo que esta família já produziu saiu desse motor —
+inclusive os **+R$239.936,50 (IS)** e **+R$77.833,50 (OOS)** da tabela do item
+6.19, e os pregões que escolheram o T2/S6 para produção em 2026-09-09.
+
+Não era uma estratégia boa com um erro de custo na margem. **Era um artefato do
+simulador do começo ao fim** — o lucro inteiro vinha de ordens que a vida real
+não teria preenchido, dos dois lados do mesmo round-trip.
+
+> **Registrado de propósito, porque é fonte viva de erro:** a seção "O motor
+> COBRA o deslize do TP nativo" do `CLAUDE.md` cita esses mesmos
+> +R$239.936,50 / +R$77.833,50 como o DESFECHO que salvava o T2. Aqueles
+> números foram medidos com fila 0/0 nos dois lados, e **este item os
+> invalida**. Corrigir o `CLAUDE.md` é tarefa separada; o registro fica aqui
+> para que ninguém os cite de novo achando que continuam de pé.
+
+#### Por que ninguém percebeu antes: a morte parecia falta de caixa
+
+Uma autópsia operação a operação (primeiros pregões do IS, capital real) já
+tinha mostrado que a morte do caixa **não era sequência de stops**: o T2/S17
+nunca teve dois stops seguidos e mesmo assim foi de **R$375,00 a R$111,00 num
+único pregão**, com **93 vitórias contra 14 derrotas**. Não era azar
+concentrado — era **desgaste**: cada stop apaga de 9 a 12 vitórias, e o robô
+ganha ~7 seguidas entre stops.
+
+Enquanto isso era lido como "censura por falta de caixa" (6.15/6.16), a
+conclusão que se tirava era **"falta capital"** — quando o problema era
+expectativa negativa por operação, que capital nenhum conserta. É o item 6.17
+outra vez (T4: mais caixa PIORA o resultado), agora atingindo a geometria de
+PRODUÇÃO em vez de uma célula já descartada. **Um win% de 87% contra um
+breakeven de 90% mata devagar e parece pouco dinheiro.**
+
+#### O limitador de risco que era letra morta
+
+Achado lateral da mesma rodada, e ele pertence à família do item 3.8.
+`risco_pct_por_trade=0,01` — 1% do caixa por operação, o parâmetro adotado em
+produção pelo item 3.9 — **não fazia nada a R$375,00**: a conta
+`caixa × pct ÷ risco_por_contrato` dava **zero** contratos, e o `max(1, ...)`
+que existe para nunca devolver tamanho nulo assumia. O robô arriscava de **9% a
+30% por operação achando que arriscava 1%**, sem nenhum aviso — porque o
+parâmetro estava lá, tinha nome, e o resultado (1 contrato) era idêntico ao que
+ele devolveria se estivesse funcionando.
+
+> **Regras** (quatro; as quatro valem em qualquer corretora e qualquer
+> linguagem):
+>
+> **1. Antes de atribuir a morte de um backtest à falta de capital, meça a
+> expectativa POR OPERAÇÃO com o caixa REPOSTO.** Ruína e expectativa negativa
+> produzem a mesma curva descendente e pedem decisões OPOSTAS — uma pede mais
+> caixa, a outra pede abandonar a estratégia. Repor o caixa a cada sessão
+> separa as duas em uma rodada, e é mais barato que qualquer escada de capital
+> (6.17). Corolário: enquanto a janela estiver censurada, ela não responde nem
+> "sim" nem "não" — ela não responde.
+>
+> **2. Quando um resultado depende de um parâmetro que você não observa, meça
+> o resultado AO LONGO desse parâmetro antes de defender o resultado.** O
+> entregável não é o valor calibrado: é o **ponto de virada** e a distância
+> dele até a realidade medida. Uma conclusão que sobrevive à calibração estar
+> errada por um fator de dois é robusta; uma que precisa do número exato é
+> aposta com aparência de medição. Aqui: virada em 170, realidade em 438.
+>
+> **3. Uma família inteira de estratégias pode ser artefato de UMA premissa do
+> simulador.** Ao encerrar uma linha por erro de modelo, o que se encerra não é
+> a célula medida — é **tudo o que aquele modelo aprovou**. E também o que ele
+> REPROVOU: hipóteses refutadas pelo mesmo motor foram descartadas com o mesmo
+> viés e podem ter morrido por motivo errado. Refazer a lista do que aquele
+> motor tocou faz parte do conserto, não é zelo extra (7.1).
+>
+> **4. Percentual de risco tem PISO implícito, e o piso pode engolir o
+> percentual inteiro.** `caixa × pct ÷ risco_unitário` truncado para baixo dá
+> zero em capital pequeno, e o `max(1, ...)` que impede tamanho nulo troca
+> silenciosamente o limite pedido pelo MAIOR risco possível. Um limitador que
+> pode ser substituído por um piso sem avisar não é limitador: ou ele **recusa
+> operar** quando o próprio limite não cabe, ou ele **declara** qual risco
+> efetivo está sendo assumido. Mesma família do 3.8 (parâmetro opcional é
+> parâmetro desligado) e do 3.12 (o % de risco não atravessa de um robô para
+> outro), agora no eixo do CAPITAL em vez do eixo do robô.
+>
+> **Pergunte à plataforma nova:** perguntas 81 e 82 (novas).
+> (3.8, 3.9, 3.12, 4.20, 4.21, 4.22, 6.15, 6.16, 6.17, 6.18, 6.19, 7.1)
+
+### 6.22 O nulo geométrico: win% alto em alvo pequeno não é evidência de nada
+
+Num teste de pullback na VWAP no WDO@, a primeira rodada reportou "o gatilho
+acerta a direção — win% 74–82%" e isso motivou um follow-up inteiro (rodar a
+mesma VWAP com alvo grande, 16–40 ticks). O follow-up era desnecessário: com
+geometria T4/S16, um passeio aleatório SEM DRIFT acerta `stop/(alvo+stop)` =
+16/20 = **80,00%** das vezes. O 81,58% observado era +1,58pp sobre o acaso,
+dentro de um IC de ±9pp. Somando as 24 células das duas rodadas, o setup
+ficou em média **2,4pp ABAIXO** do passeio aleatório.
+
+`stop/(alvo+stop)` é ao mesmo tempo o win% de um passeio aleatório sem drift
+com aquela geometria e o breakeven a custo zero — coincidem porque é isso que
+"expectativa zero" significa. Se o win% observado não bate esse nulo, não
+existe edge nem a atrito zero, e não adianta atacar o custo depois (foi assim
+que um teste de Wyckoff/SMC ficou refutado de forma independente de custo:
+máx |z| = 1,23 em 16 células, desvio médio +0,21pp do passeio aleatório).
+
+> **Regra.** Nunca reporte win% de uma geometria alvo/stop sem reportar
+> `stop/(alvo+stop)` ao lado, e a diferença win% − nulo. Um win% de 90% num
+> alvo de 2 ticks contra stop de 16 é 1,1pp ABAIXO do acaso. Antes de investir
+> em reduzir atrito, verifique se sobra alguma coisa depois de subtrair o
+> nulo — reduzir custo de uma estratégia que não bate o nulo é otimizar o
+> preço de uma coisa que não vale nada. Mesma família do item 6.9 (correlação
+> de ordenação também engana perto do zero) e do item 6.8 (calibração nula).
+
+### 6.23 Quando o payoff foge do nominal, o nulo certo é o breakeven EMPÍRICO
+
+Continuação direta do item 6.22, e a armadilha do nível seguinte. Num teste de
+Ondas de Wolfe no WDO@ (geometria nominal T4/S16, nulo nominal 80,00%), o
+relatório concluiu "as quatro células ficam ABAIXO do nulo, reforça o prior de
+que reversão não funciona". Estava errado: o payoff REALIZADO não era 4:16 —
+o breakeven empírico das mesmas células era **39,6% e 43,9%** (ganho médio
+~1,5× a perda média), porque o gap entre o fechamento do sinal e a abertura
+do fill, mais o achatamento de fim de pregão, mudaram a geometria efetiva.
+Contra o nulo certo, as células estavam **+33,7pp e +26,3pp ACIMA**, não
+abaixo. O veredito inverteu.
+
+Para um processo sem drift, expectativa zero exige `win% · ganho_médio =
+(1−win%) · perda_média`, ou seja `win% = perda_média / (ganho_médio +
+perda_média)` — a fórmula do breakeven empírico. Vale qualquer que seja a
+regra de saída, inclusive corte de tempo e gap de entrada: o breakeven
+empírico É o nulo geométrico casado com a execução real. O nulo nominal só é
+o nulo certo quando o payoff realizado bate com o nominal.
+
+Corolário de conferência: `R$/operação > 0` e `win% > breakeven empírico` são
+a MESMA afirmação. Um relatório em que as duas discordam não tem uma "tensão
+a explicar" — tem um nulo no lugar errado.
+
+> **Regra.** Reporte sempre as duas colunas: o nulo nominal (a geometria
+> PEDIDA) e o breakeven empírico (a geometria RECEBIDA). O veredito sai
+> contra o empírico. Quando os dois divergem muito, a divergência é o
+> achado — mede o quanto a execução real deformou a geometria pedida, e essa
+> deformação costuma ser artefato de modelo, não edge.
+
+Complemento do item 6.27, que é o caso simétrico: aqui o breakeven empírico
+divergiu do nominal por causa da EXECUÇÃO e o veredito inverteu para melhor;
+lá ele acompanha o acerto por causa da própria CONDIÇÃO DE SELEÇÃO — quando
+o filtro que aumenta a acurácia também aumenta a magnitude, ganho e perda
+crescem juntos, a razão não se move e o ganho aparente evapora.
+
+### 6.24 O controle-oráculo: meça o look-ahead em vez de jurar que não tem
+
+Setups baseados em pivô só confirmam o pivô N barras depois de ele acontecer;
+marcar o pivô na barra em que ocorreu usa o futuro e o resultado é ficção. Em
+vez de só declarar "não tem look-ahead", passou a se rodar um gêmeo
+deliberadamente trapaceiro — idêntico em tudo, exceto que marca o pivô na
+barra do evento — só para quantificar quanto de edge um bug de look-ahead
+FABRICARIA.
+
+Dois testes, dois resultados opostos: no Setup 123/Ross, o oráculo dobrou o
+número de sinais, subiu o win% em 15–20pp e moveu o R$/operação em +R$20 a
++R$34, virando duas células de negativo para positivo — uma implementação
+descuidada teria reportado "quase empata". Nas Ondas de Wolfe, o mesmo
+controle deu apenas +0,9pp e +2,8pp de win%.
+
+O ponto que faz o método valer: o controle responde nos DOIS sentidos. Um
+oráculo muito acima do honesto diz "esta família é uma armadilha de
+look-ahead, qualquer descuido fabrica edge"; um oráculo colado no honesto diz
+"esta família é robusta nesse eixo, pode confiar no número". Sem rodar o
+controle não se sabe em qual dos dois casos se está — e a intuição erra: os
+dois casos acima vieram de setups de pivô parecidos.
+
+> **Regra.** Sempre que a decisão depender de um evento só confirmado depois
+> de acontecer (pivô, topo/fundo de zigzag, rompimento validado, padrão de N
+> barras), rode um controle-oráculo e publique a diferença como número. O
+> oráculo nunca é o resultado; é a régua de quanto o resultado honesto
+> custaria se você tivesse errado. Rode o controle ANTES de comemorar um
+> resultado positivo, não depois de alguém desconfiar.
+
+### 6.25 Antes de ler o veredito de uma grade, confirme que cada eixo mexeu em alguma coisa
+
+Numa rodada de cinco setups públicos, três grades tinham eixo morto — um
+parâmetro varrido que não mudava nada:
+
+- **Setup 123/Ross**: o eixo "correção mínima ≥25%" nunca rejeitou um único
+  trio em toda a amostra (razão correção/perna anterior: mediana 1,18–1,30,
+  p05 0,39–0,60), porque pivôs de zigzag têm pernas de tamanho comparável por
+  construção. Grade anunciada de 6 células era de 3.
+- **Ondas de Wolfe**: o eixo "tolerância de contenção do canal" (estrita vs.
+  folga de 20%) deu números idênticos nas duas larguras de pivô — o teste ou
+  passava folgado ou violava muito, nunca caía na zona intermediária. Grade
+  de 4 era de 2.
+- **ORB no WDO@**: o eixo "múltiplo do alvo" ({1,5×, 2,0×, 3,0×}) produziu
+  exatamente o mesmo win% de 48,61% — os mesmos 35 acertos em 72 trades — nas
+  três células, porque o alvo quase nunca é atingido (21%, 10% e 2,8% das
+  saídas). Subir o múltiplo só troca "alvo" por corte de tempo. Grade de 6
+  era de ~3.
+
+A regra deste projeto para ler grade é "o veredito é da grade, não da melhor
+célula: com 6 células, uma positiva por acaso é esperada" (itens 6.4/6.8).
+Essa aritmética assume 6 tentativas independentes. Com um eixo morto, 6
+células são 3 tentativas duplicadas — o que muda a conta nas duas direções:
+por um lado houve menos tentativas do que se pensa (uma positiva isolada é
+MAIS surpreendente); por outro, a "concordância entre células" que parecia
+confirmar o resultado era só a mesma célula contada duas vezes.
+
+> **Regra.** Ao varrer uma grade, instrumente cada eixo com uma contagem que
+> prove que ele agiu: quantos sinais o filtro rejeitou, quantas saídas
+> mudaram de motivo, quantos trades trocaram de resultado. Se um eixo não
+> moveu nada, declare a grade pelo número de células EFETIVAS, não pelo
+> número de combinações. Um eixo morto não é neutro: ele consome orçamento de
+> teste e infla a aparência de robustez.
+
+### 6.26 Sinal num timeframe, execução supervisionada no menor disponível
+
+Um teste de pullback na VWAP alimentou o motor com barras M5 e M15 enquanto
+media uma geometria de alvo de 4 ticks. Stop e alvo só eram checados a cada 5
+ou 15 minutos, então dentro de uma barra o preço passeava muito além dos dois
+níveis antes de qualquer saída ser avaliada. Efeito medido: as DUAS caudas
+infladas — ganho médio chegou a **R$63** e perda média a **R$112**, contra os
+R$19,50 e R$85,50 que a geometria nominal comporta. O erro foi detectado e a
+grade inteira refeita com execução supervisionada em M1; o veredito não
+mudou, mas os números confiáveis passaram a ser os outros.
+
+> **Regra.** O timeframe do SINAL e o timeframe da EXECUÇÃO são decisões
+> separadas. Gere o sinal na barra que a estratégia pede, mas supervisione
+> stop, alvo e achatamento na menor barra disponível. Regra de bolso: se a
+> geometria alvo/stop for menor que a amplitude típica da barra de execução,
+> o resultado é ficção nas duas pontas — infla ganho e perda ao mesmo tempo,
+> então nem o líquido nem o win% denunciam sozinhos. Mesma preocupação de
+> fidelidade do item 4.7 (o gêmeo em simulação não é estimativa do real),
+> agora no eixo do TIMEFRAME em vez do eixo da fila.
+
+### 6.27 Acurácia direcional isolada não é evidência — e quando a condição que seleciona ACERTO também seleciona TAMANHO, os dois sobem juntos e se anulam
+
+**Este item não custou dinheiro real. Custou direção de pesquisa**, e o erro
+é do agente principal, cometido na mesma conversa em que foi descoberto — o
+registro só vale se essa distinção ficar explícita, porque um item de método
+lido como incidente de execução manda procurar o bug no lugar errado.
+
+**O que aconteceu.** Uma análise inteira foi conduzida e apresentada ao dono
+medindo **acurácia direcional** — o relatório falava em frequência de acerto
+("depois de três ocorrências seguidas, 43,8% das vezes vem outra, contra
+baseline de 39,1%"), e a conclusão saiu daí. Ela só ficou correta quando
+alguém, depois, mediu a **razão ganho/perda**. Nada no relatório original
+estava aritmeticamente errado; faltava a segunda coluna, e sem ela a primeira
+não tem significado econômico nenhum.
+
+**Os números** (100.704 barras M1, 177 pregões, script
+`scripts/daytrade/wdo_cor_magnitude_mae_2026_09_10.py`, verificado de forma
+independente). A condição testada prevê **tamanho** com força quase 6× maior
+do que prevê **direção**:
+
+| grandeza prevista | maior \|z\| entre as células |
+|---|---:|
+| **tamanho** do movimento | **52,64** |
+| **direção** (acerto%) | 8,40 |
+
+E a razão ganho/perda fica praticamente colada em 1: **mediana 1,017**, faixa
+0,957–1,073 nas 16 células com n ≥ 1.000.
+
+| estado | acerto | ganho médio | perda média | razão |
+|---|---:|---:|---:|---:|
+| BASELINE | 40,61% | R$13,00 | R$13,17 | 0,987 |
+| condição, seq ≥ 3 | 40,91% | R$15,19 | R$14,78 | 1,028 |
+| condição, seq ≥ 6 | 43,69% | R$16,35 | R$17,31 | 0,945 |
+
+**O mecanismo, que é o coração do item.** A condição que aumenta a acurácia é
+a MESMA que aumenta a magnitude do movimento. Então o tamanho entra no ganho
+**e** na perda ao mesmo tempo: os dois crescem juntos, a razão não se move, e
+o breakeven empírico (item 6.23) sobe junto com o acerto. Na célula `seq ≥ 3`
+o acerto sobe **0,30pp** (40,61% → 40,91%) enquanto o breakeven sobe
+**1,06pp** (40,50% → 41,56%) — ou seja, **acertar mais deixou a célula pior**.
+Resultado final: **0 de 21 células** têm EV líquido excluindo o zero depois da
+correção de Bonferroni, e **18 de 21** não pagam a corretagem em nenhum dos
+dois lados.
+
+Isto é o item 6.23 visto pelo outro lado. Lá o breakeven empírico divergia do
+nominal por causa da execução, e o veredito INVERTEU para melhor. Aqui ele
+acompanha o acerto por causa da própria condição de seleção, e o ganho
+aparente EVAPORA. Nos dois casos a lição é a mesma: o win% não é uma
+grandeza interpretável sozinha, é metade de um par.
+
+**Segundo achado do mesmo trabalho: a intuição de ruína apontava para a cauda,
+e quem mata é a acumulação.** A hipótese do dono era que uma conta de R$375
+morreria por um movimento grande demais para o caixa. É falso, e o número é
+claro: só **7 das 100.704 barras (0,007%)** têm excursão adversa acima dos
+**R$225** de folga que a conta tem até bater a margem crua de R$150. A conta
+morre de pedágio somado — a regra `seq ≥ 3` perde **R$244,48 em 229 trades**,
+e **R$114,50 disso (47%) é corretagem pura**. Num robô de muitas operações
+pequenas, a cauda da distribuição de excursão adversa é a suspeita errada; o
+custo por operação é a certa.
+
+> **Regra 1.** Acurácia direcional só é evidência acompanhada da razão
+> ganho/perda. Uma taxa de acerto isolada não tem significado econômico,
+> porque o breakeven depende da razão — acerto e breakeven podem subir juntos
+> e se cancelar. Relatório que traz win% sem `ganho médio / perda média` ao
+> lado não está incompleto: está potencialmente invertido. (Casa com 6.22 e
+> 6.23; a régua é sempre o breakeven empírico.)
+
+> **Regra 2.** Desconfie especialmente quando a condição que seleciona acerto
+> também seleciona **magnitude** — volatilidade, tamanho de corpo, horário
+> agitado, sequência de barras "fortes". Nesses casos os dois efeitos são o
+> mesmo efeito, e a melhora aparente é contábil, não econômica. O teste é
+> barato e cabe numa coluna: **a razão ganho/perda mudou junto com o acerto?**
+> Se ela ficou em ~1,0, o ganho de acurácia foi anulado, e não há o que
+> otimizar depois.
+
+> **Regra 3.** Ao avaliar ruína, separe **cauda** de **acumulação**, e meça as
+> duas: (a) que fração dos eventos individualmente estoura a folga da conta;
+> (b) quanto o custo por operação drena ao longo da amostra inteira. Num robô
+> de muitos trades pequenos a segunda domina com folga, e a intuição —
+> inclusive a de quem conhece o robô — aponta para a primeira. Mais caixa
+> resolve cauda; só menos operações ou menos custo por operação resolvem
+> acumulação, e tratar uma pela outra gasta uma escada de capital inteira
+> (mesma armadilha do item 6.17).
+
+Perguntas 86 e 87 da Parte 8 carregam a parte que depende de plataforma.
 
 ---
 
@@ -4647,7 +5439,22 @@ dinheiro ou meses.
     robô inerte com ordem viva no book. (3.15)
 
 **Sobre a medida**
-24. O simulador modela posição na fila? Se não, o que ele está respondendo? (4.1)
+24. O simulador modela posição na fila? Se não, o que ele está respondendo? E
+    ele modela ENTRADA e SAÍDA com o MESMO rigor, ou só um dos dois lados?
+    Aqui a entrada tinha modelo de fila desde 2026-08-26 e a saída não tinha
+    nenhum até 2026-09-09 — a mesma pergunta feita de um lado só deixou
+    passar 43 pregões de calibração otimista do outro. **Estendida:** a
+    plataforma expõe profundidade de book (não só volume agregado por
+    barra), de forma que dá para estimar a posição da MINHA ordem
+    especificamente — quantos contratos/ações estão na frente dela, não só
+    quantos negociaram no nível? Sem isso, todo modelo de fila é calibrado
+    por proxy (volume da barra), nunca pela fila real observada.
+    **Estendida (2026-09-09, noite):** e o modelo de fila que existe está
+    LIGADO? Aqui o parâmetro do lado da ENTRADA existia desde 2026-08-26, com
+    nome e docstring, e nunca foi atribuído em lugar nenhum — ficou no default
+    neutro `0.0` por um mês. "O simulador modela fila?" tem de ser respondida
+    medindo o valor EFETIVO em uso na rodada, nunca lendo o código que declara
+    o parâmetro. (4.1, 4.21, 4.22)
 25. O horário de sessão que ele usa é fixo ou segue o instrumento? (5.2)
 26. Qual é o edge da estratégia **em ticks** neste instrumento? (4.5)
 27. Uma sequência de stops cabe no capital real? Se o tamanho da posição
@@ -4685,7 +5492,13 @@ dinheiro ou meses.
     por um identificador estável? Sem ela, um ciclo inteiro (preenche +
     fecha) que aconteça dentro do intervalo entre duas consultas fica
     invisível para sempre, e todo fechamento "recusado" que na verdade
-    executou vira número inventado no diário. (1.17)
+    executou vira número inventado no diário. **Estendida (2026-09-09):** essa
+    consulta — ou o meu próprio diário — distingue "a ordem-limite de saída
+    preencheu no nível" de "a ordem-limite estourou o prazo e o RESTANTE saiu
+    a mercado"? As duas coisas podem chegar com o MESMO `motivo de saída`
+    (aqui, "alvo") e pagam custos diferentes — 1 de 7 preencheu por limite,
+    6 saíram a mercado no mesmo pregão, e um simulador que rotula as duas do
+    mesmo jeito mede o modelo, não o mercado. (1.17, 4.21)
 33. A ordem de take-profit fica RESTING no livro como limite de verdade
     (preço pedido ou melhor) ou é gatilho varrido a mercado no toque (pode
     deslizar)? Meça o preço EXECUTADO contra o nível PEDIDO em pelo menos 10
@@ -5123,6 +5936,105 @@ dinheiro ou meses.
     levantar exceção nenhuma em ação, e explodia um `ZeroDivisionError` sem
     contexto em futuro. (5.21, 5.22)
 
+80. Esta plataforma informa **o instante em que a minha ordem-limite entrou no
+    livro** e **o instante em que ela preencheu ou foi cancelada**, com
+    resolução suficiente para eu somar o volume negociado NAQUELE PREÇO entre
+    os dois? Sem esse par de carimbos, a fila não é calibrável a partir do
+    extrato, e todo backtest maker fica sem aferição possível — o número dele
+    passa a ser hipótese, não previsão. Três exigências que só aparecem na hora
+    de medir: (a) o carimbo tem de existir também para a ordem que **NÃO**
+    preencheu (foi cancelada/expirou), senão a amostra vira só de vencedoras e
+    a fila sai subestimada por viés de sobrevivência — 346 contra os 438 do
+    Kaplan-Meier na entrada, 374 contra 489 na saída; (b) a série de negócios
+    tem de dar preço e volume no mesmo relógio dos carimbos da ordem, senão não
+    dá para recortar a janela; (c) a ordem que preenche em menos de ~0,5 s tem
+    de ser identificável e descartada — ela já estava agressiva ao postar e
+    nunca entrou em fila (4.17); e **(d)** a amostra tem de declarar o REGIME em
+    que foi colhida, porque um prazo curto de cancelamento censura a própria
+    medição (17 das 25 saídas de 2026-09-09 foram canceladas antes de revelarem
+    a fila) — observações COM prazo e SEM prazo não entram na mesma curva de
+    sobrevivência. A pergunta 24 pergunta se o SIMULADOR modela
+    fila; a 51 pergunta se o preenchimento diz se fui agressor ou passivo; esta
+    pergunta se o extrato permite ESTIMAR o número que alimenta o simulador.
+    (4.22, 4.1, 4.21)
+
+81. Dá para rodar uma janela de backtest com o caixa **REPOSTO ao valor
+    inicial a cada sessão** (pregões isolados), além da corrida contínua? Sem
+    isso, toda janela com capital no piso mistura duas coisas que pedem
+    decisões opostas — **ruína por capital** (pede mais caixa) e **expectativa
+    negativa por operação** (pede abandonar a estratégia) — e as duas produzem
+    exatamente a mesma curva descendente. Exigências mínimas para a resposta
+    servir: (a) a saída tem de trazer **R$ por operação** e **quantos pregões
+    foram positivos**, não só o líquido agregado da janela; (b) o win% observado
+    e o breakeven aritmético da geometria, lado a lado, com intervalo de
+    confiança (pergunta 53). Sem o caixa reposto, gasta-se uma escada de
+    capital inteira (6.17) perseguindo subcapitalização que não existe.
+    (6.21, decorre de 6.15/6.16/6.17)
+
+82. O dimensionamento por **percentual de risco** desta plataforma tem PISO
+    implícito — isto é, quando `caixa × pct ÷ risco_unitário` trunca para zero,
+    ele **recusa operar**, **avisa** qual risco efetivo está sendo assumido, ou
+    silenciosamente devolve o tamanho mínimo? A terceira resposta é a comum, e
+    é a que transforma um limite de 1% em 9% a 30% por operação sem nenhum
+    evento no caminho. Corolário a exigir do próprio robô, independente da
+    plataforma: o tamanho efetivamente enviado carrega, no diário, o risco em
+    % que ele representa — o parâmetro pedido não é evidência do risco corrido.
+    (6.21, 3.8, 3.9, 3.12)
+
+83. A plataforma permite perguntar à corretora QUAIS ordens pendentes existem
+    por símbolo+magic, para reconciliar uma ordem de SAÍDA órfã depois de um
+    restart (como já se faz com a de entrada)? E o painel de leitura consegue
+    reconstruir o estado do robô sem instanciar a camada que manda ordem? Sem
+    a primeira resposta, um portão de segurança pós-restart não tem caminho de
+    saída no mesmo pregão; sem a segunda, uma exceção de segurança pensada
+    para quem vai OPERAR pode derrubar a tela de quem só quer OLHAR — no pior
+    momento possível, que é justamente quando há dinheiro exposto e o robô
+    está fora do ar. (2.7)
+
+84. Um parâmetro de fidelidade de execução (ancoragem de saída no preço do
+    fill, fila, deslize) é consultado em TODOS os caminhos de ordem que este
+    robô usa nesta plataforma — a mercado e a limite —, ou existe caminho que
+    ignora o parâmetro em silêncio, sem erro e sem aviso? Ligar a flag e ver
+    o número mudar não prova cobertura: prove rodando o MESMO teste nos dois
+    caminhos e conferindo que os dois reagem. Foi assim que se descobriu que
+    `anchor_exits_at_fill` nunca era lido no caminho de entrada a mercado —
+    16 células saíram byte a byte idênticas com a flag ligada e desligada.
+    (4.23, 3.8, 4.22)
+
+85. Quais tipos de ordem desta plataforma nova têm caminho de execução
+    CONFIRMADO — não documentado, confirmado contra extrato real — e o
+    simulador dela recusa ou pelo menos MARCA a linha de resultado que usa um
+    tipo sem esse caminho? Aqui uma rodada inteira de pesquisa (cinco setups,
+    ~50 células) foi medida com entrada a mercado e alvo a mercado, dois
+    desenhos que o motor de produção recusa de propósito
+    (`EntradaAMercadoNaoSuportada`) — dinheiro de máquina inteiro gasto
+    respondendo a uma pergunta que a corretora nunca deixaria virar pergunta
+    real. Congelar o desenho de execução (que tipo de ordem entra, que tipo de
+    ordem sai) ANTES de varrer parâmetro de estratégia evita a mesma perda de
+    tempo em qualquer plataforma nova. (4.24, 4.8, 6.18, 6.19)
+
+86. O relatório de backtest desta plataforma traz **ganho médio** e **perda
+    média** (ou o breakeven empírico derivado deles) na MESMA linha em que
+    traz o win%, por célula — ou o win% sai sozinho e a razão precisa ser
+    reconstruída à mão depois? Se sair sozinho, o número é inutilizável como
+    veredito e tem de ser tratado como intermediário. Exigência adicional
+    quando a estratégia usa um FILTRO de entrada: dá para comparar a
+    distribuição de magnitude dos movimentos **com** e **sem** o filtro? É a
+    única forma de detectar que a condição escolhida seleciona tamanho junto
+    com direção — e quando ela seleciona, acerto e breakeven sobem juntos e a
+    melhora aparente é contábil (acerto +0,30pp contra breakeven +1,06pp:
+    acertar mais piorou a célula). (6.27, 6.23, 6.22, pergunta 53)
+
+87. Dá para extrair, por operação, a **excursão adversa máxima** (o pior ponto
+    contra a posição enquanto ela esteve aberta) e o **custo total cobrado**,
+    em colunas separadas do resultado? Sem as duas, não é possível separar as
+    duas causas de ruína, que pedem decisões opostas: **cauda** (um evento
+    individual estoura a folga da conta — pede mais caixa ou stop mais curto)
+    e **acumulação** (o pedágio somado drena o caixa — pede menos operações ou
+    menos custo por operação). Aqui só 0,007% dos eventos estouravam a folga,
+    enquanto 47% da perda total era corretagem pura: a intuição apontou para a
+    cauda e quem matava era a acumulação. (6.27, 6.17, 4.5)
+
 ---
 
 ## O resumo, se sobrar só um parágrafo
@@ -5245,7 +6157,29 @@ havia 13 dias sem nenhum teste checar a afirmação) e 5.24 (a rotina de
 desmonte fechada em 5.19 ainda avisava-e-creditava um preço em cache velho
 demais em vez de recusar — a mesma barra de 12 dias era, além de velha,
 anterior à própria abertura da posição, e a correção passou a fechar pelo
-preço de entrada nesse caso, como já fazia para "sem preço nenhum"). Mais o
+preço de entrada nesse caso, como já fazia para "sem preço nenhum"). Mais 1
+item no mesmo 2026-09-09, do primeiro dia real da saída fatiada (6.19): o
+motor não tinha modelo de fila do lado da SAÍDA (só a entrada tinha, desde
+2026-08-26) e o estouro de prazo saía a mercado precificado como maker —
+7 saídas por alvo no pregão, 1 preencheu por limite, 6 saíram a mercado; o
+backtest previa +R$36,00, o dia deu −R$14,00, e a taxa de fill calibrada em
+92,8% (item 6.20) deu 14% real. Corrigidos os dois defeitos e medido em duas
+janelas com capital real (R$375): o motor sem fila de saída, que vinha
+decidindo tudo, dava +R$244.429 (IS) e +R$148.760 (OOS); com fila de 400
+contratos, TODAS as células viraram −R$226 a −R$250, censuradas por caixa
+(6.15) — e as duas células com n grande o bastante (n=2.741 e n=4.920) deram
+edge bruto de +R$0,41 e +R$0,45 por trade, menor que a corretagem de R$0,50
+(4.21). Mais 1 item na noite do mesmo 2026-09-09, que é o DESFECHO daquela
+cadeia e o segundo mais caro do arquivo em resultado de pesquisa: com as duas
+filas calibradas (438/489), 1 mês do IS rodado com o **caixa reposto a cada
+pregão** — para separar ruína de expectativa — devolve **0 de 21 pregões
+positivos** em T2 contra quatro stops, os quatro intervalos de confiança do
+win% inteiros ABAIXO do breakeven, e R$/operação convergindo para −R$5,00 (não
+para zero) conforme o stop alarga. A sensibilidade fecha o argumento: a MESMA
+janela com fila 0/0 dá **21 de 21 pregões positivos**, o ponto de virada fica
+em ~170 contratos e o livro real tem 438. Todo lucro que esta família já
+mostrou — os +R$239.936,50 e +R$77.833,50 do item 6.19 incluídos — era
+artefato de uma única premissa do simulador (6.21). Mais o
 registro acumulado do projeto. Quando um item aqui contradisser o código, o
 código ganha — e este
 arquivo está desatualizado.*

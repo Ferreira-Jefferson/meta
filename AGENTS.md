@@ -42,6 +42,8 @@ orquestração. Se uma feature precisa de algo de outra, ou o dado sobe para
 - Python 3.11+, type hints obrigatórios em funções públicas.
 - Indicadores em `core/indicators.py` são funções puras `(pd.Series, ...) -> pd.Series`. Sem estado, sem classes.
 - Custos e slippage **sempre aplicados** no backtest. Nunca reportar métrica sem custo.
+- **Robô maker reporta métrica com modelo de FILA dos dois lados, ou não reporta.** Quem depende de ordem-limite preencher (`queue_ahead_qty` na entrada, `exit_queue_ahead_qty` na saída) tira o número de `backtest/intraday/fidelidade.py`, calibrado contra execução real com correção de censura (Kaplan-Meier — média sobre as ordens que preencheram é viés de sobrevivência). Até 2026-09-09 o motor enchia no primeiro toque, dos dois lados, e errava o SINAL do resultado: previu +R$3,82/operação num pregão que deu −R$3,00. Recalibrar é devido a cada pregão real novo, e curvas de regimes de execução diferentes (com prazo × sem prazo na fatia de saída) não entram na mesma estimativa sem declarar o regime — a natureza da censura é outra. Detalhe, números e limitações na seção "A base de fidelidade de execução" do `CLAUDE.md`.
+- **Resultado de backtest nunca aferido contra o extrato é hipótese, não previsão.** A aferição contra a operação real é o que separa as duas.
 - Persistência do diário sempre via `journal/writer.py` — não escreva SQL de fora do módulo.
 - Frontend: HTMX substitui trechos parciais, não faz full reload. Templates herdam de `base.html`.
 
@@ -128,6 +130,7 @@ script.
 
 - Não adicionar dependência sem justificativa (peso do projeto importa).
 - Não usar TA-Lib (dependência C — atrito no Windows).
+- **Não criar parâmetro de realismo (atrito, fila, deslize) com default que o desliga.** `queue_ahead_qty` nasceu em 2026-08-26 com default `0.0`, nunca foi setado em lugar nenhum do repo e viciou um mês inteiro de medição de robô maker. Parâmetro que existe mas nasce desligado é pior que parâmetro ausente: dá a impressão de estar coberto, e ninguém procura o que já achou.
 - Não trocar SQLite por outro DB nesta fase.
 - Não introduzir framework SPA (React/Vue). HTMX resolve.
 - Não misturar múltiplas estratégias em um arquivo — uma por arquivo em `strategy/`.

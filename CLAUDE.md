@@ -145,6 +145,8 @@ Use `config_for(..., preco_atual=preco_ref)` para ação e `contracts_from_capit
 
 > **DESFECHO, 2026-09-09 — leia isto antes do resto da seção.** O deslize abaixo é real e continua medido, mas ele **não é mais o custo que o robô paga**: era consequência de um MECANISMO de execução, não uma constante do mercado. O `tp` nativo é gatilho varrido a mercado; trocá-lo por ordem-limite real parada no livro (`fatiar_saida_alvo=True`, commit `317e839`) faz o custo sumir por construção — derrapagem é "executou pior do que pedi", e limite recusa pior. Com isso o T2/S16 vira **+R$239.936,50 no IS (0/72 pregões sem trade) e +R$77.833,50 no OOS (0/51)**, contra −R$242,50 e −R$273,50 do alvo nativo. **Está ligado em produção.** O que continua valendo desta seção: a proibição do T1, os números do deslize (que explicam por que o alvo nativo é inviável), e a lista de scripts antigos viciados. O que NÃO vale mais: o veredito "T2/S16 não tem edge" e o parágrafo "rodar mais nada move a resposta" — ver a correção no fim da seção. O risco que a troca cria (o alvo perde o TP registrado na corretora; a fila REAL de saída nunca foi medida) está no item novo de `LICOES_DE_PRODUCAO.md`.
 
+> **CONTINUA em _A base de fidelidade de execução_ (seção seguinte).** Trocar o alvo nativo por ordem-limite real resolveu o PREÇO da saída e criou na hora a pergunta seguinte, que ninguém tinha feito: *quem está na FRENTE dessa limite?* Até 2026-09-09 o motor respondia "ninguém" — dos dois lados da operação. As duas seções são o mesmo erro de modelo em dois pontos da mesma ordem.
+
 **Ordem do dono, 2026-09-08: `profit_ticks=1` (T1) não entra em nenhuma medição do WDO F1 nem da família maker — nem como candidato, nem como baseline, nem como "linha de referência" numa tabela.** Não é preferência de parâmetro. É uma geometria que o motor sabe simular e a corretora não sabe executar.
 
 **O número.** O `tp` nativo (o que viaja amarrado no request da entrada) não fica *resting* no livro: a corretora o executa como gatilho varrido a mercado. População completa de operação real do robô — 3 pregões, reconstruída do histórico de DEALS+ORDENS do terminal, **n=11 saídas por alvo nativo**:
@@ -190,6 +192,112 @@ Consequências que continuam valendo:
 1. O "padrão estrutural" da varredura de 250 células (*alvo=1 é o único regime saudável*) **descreve o motor antigo, não o mercado** — não cite como achado de estratégia. Aquela grade rodou sem cobrar o deslize e escolheu a célula que mais explorava a lacuna do modelo.
 2. Toda comparação T1×T2 feita antes de 2026-09-08 está viciada no mesmo eixo. Inclusive a de 2026-09-04.
 3. **7 scripts antigos de laboratório montam `IntradayCostModel` na mão** (`copa_lab.py`, `f8_win_lacuna_execucao_sweep.py`, `wdo_fillreal_study*.py`, `wdo_geo_sweep.py`, `wdo_geo_grid_rolling_market_sweep.py`, `wdo_grid_reload_f1_lab.py`) com `target_fills_as_maker=True` — eles **não** passam por `config_for` e continuam com o alvo de graça. Rodar um deles hoje produz número otimista de novo.
+4. **Os mesmos scripts que fogem de `config_for` também fogem da FILA** — nenhum deles passa por `backtest/intraday/fidelidade.py`, então rodam com `queue_ahead_qty=0.0` e `exit_queue_ahead_qty=0.0` (entrada E saída de graça). Somados os dois desvios, um número saído dali hoje é otimista em duas frentes independentes — e uma delas já se mostrou capaz de inverter o sinal do resultado.
+
+## A base de fidelidade de execução — obrigatória em toda medição de robô maker
+
+> **Mesma família do problema da seção acima, do outro lado da mesma ordem.** Lá o simulador dava um preço de saída que a corretora não dá; aqui ele dava uma FILA que a corretora não dá. Trocar o `tp` nativo por ordem-limite real resolveu o preço e criou imediatamente a pergunta seguinte: *quem está na FRENTE dessa limite?* Leia as duas juntas — a lição de método é a mesma, e desta vez o buraco vinha de um mês antes.
+
+**A partir de 2026-09-09, nenhuma medição de robô maker vale sem declarar a premissa de preenchimento que usou.** Os números por símbolo moram em **`src/backtest/intraday/fidelidade.py`** (tabela por símbolo, no molde de `core/instruments.py`), `config_for` os lê sozinho (então backtest, sombra e produção herdam juntos, mesmo precedente do deslize do alvo nativo) e a tabela padrão carimba a premissa na linha — `fila 438/489`. Não digite fila na mão dentro de um script: se o número não veio de `fidelidade.py`, ele não foi calibrado contra execução real. Itens **3.8** (parâmetro opcional é parâmetro desligado), **4.20**, **4.21** e **4.22** de `LICOES_DE_PRODUCAO.md`.
+
+### O que estava errado
+
+Até 2026-09-09 o motor enchia ordem-limite no **PRIMEIRO TOQUE** do nível, **dos dois lados da operação**. No livro de verdade, o preço ter negociado no seu nível significa que alguém negociou ali — quase sempre com quem estava na **FRENTE** da fila. Tocar não é preencher.
+
+Três buracos, todos fechados em 2026-09-09:
+
+| buraco | desde quando | efeito na medição |
+|---|---|---|
+| `exit_queue_ahead_qty` (fila da **SAÍDA**) não existia | sempre | alvo maker preenchia de graça, no toque |
+| `queue_ahead_qty` (fila da **ENTRADA**) existia desde 2026-08-26 e **nunca foi setado em lugar nenhum do repo** | 2026-08-26 → 2026-09-09 | ficou no default `0.0` por **um mês inteiro**; toda medição maker do período encheu entrada de graça |
+| a fatia que estourava o prazo saía a **MERCADO** mas era **precificada como maker** | sempre | a saída mais cara do robô entrava na conta com o custo da mais barata |
+
+**O do meio é o ponto mais importante desta seção**, e é o que tem de sobreviver à troca de linguagem/plataforma: **um parâmetro de realismo que existe mas nasce desligado é pior que não existir, porque dá a impressão de estar coberto.** Quem abrisse `machine.py` encontraria um modelo de fila implementado, documentado, com docstring longa — e concluiria (errado) que o backtest cobrava fila. Ninguém procura o que já achou. Um campo ausente ao menos provoca a pergunta; um campo presente em `0.0` encerra a pergunta.
+
+### Os números: calibração contra execução real
+
+Calibração do **WDO@** (contrato WDOV26), pregão de **2026-09-09**, `magic` 862399285. Método: `history_orders_get` dá o instante em que a ordem-limite entrou no livro e o instante em que preencheu ou foi cancelada; `copy_ticks_range` dá todo negócio do dia. **Q_frente = volume negociado NO PREÇO DA ORDEM entre os dois instantes.** Estimador **Kaplan-Meier**, porque a amostra é **censurada à direita** — ordem cancelada por prazo só informa "esperou pelo menos X", não quanto teria esperado.
+
+| lado | n que esperaram | preencheram | censuradas | **KM mediana** | ingênua (só fills) |
+|---|---|---|---|---|---|
+| **ENTRADA** | 67 | 30 | 37 | **438** | 346 |
+| **SAÍDA** | 25 | 8 | 17 | **489** | 374 |
+
+**Lição de método destacável, vale muito além deste caso: estimar fila só com as ordens que preencheram é viés de sobrevivência, e ele só anda para um lado.** Ordem que preencheu é, por definição, ordem que **ganhou** a fila; a que enfrentou fila grande foi cancelada e sumiu da amostra. Corrigir a censura moveu **346→438** na entrada e **374→489** na saída — sempre para cima, nunca para baixo. Qualquer estatística do tipo "quanto se espera até X acontecer" carrega esse viés embutido se as que não aconteceram forem jogadas fora.
+
+**Refinamento medido e REFUTADO — não refaça.** A hipótese era que só o volume do **agressor do lado contrário** consome a fila (uma compra parada no livro só anda quando alguém VENDE a mercado naquele nível), o que sugeriria descontar metade do volume da barra. No dia inteiro o fluxo é de fato equilibrado — 50,1% comprador / 50,1% vendedor. Mas **no nível da própria ordem, 99,3% do volume é do lado que executa contra nós**: a limite está na melhor oferta, então negócio naquele preço é por definição alguém agredindo a nossa ponta. **Descontar o volume inteiro da barra já estava certo.**
+
+### A aferição contra o extrato — o motor errava o SINAL
+
+O robô rodou de verdade em **2026-09-09, das 14:47 às 18:03**: **34 operações, líquido −R$102,00, −R$3,00 por operação**, **33,3% de preenchimento** (9 alvos preenchidos como limite contra 18 estouros de prazo) e 7 stops. Simulando o **mesmo trecho**, T2/S6, prazo 60:
+
+| configuração | trades | R$/trade | fill% |
+|---|---|---|---|
+| **REAL (extrato)** | 34 | **−3,00** | 33,3 |
+| motor **sem fila nenhuma** (até 2026-09-08) | — | **+3,82** | 97,8 |
+| Q_ent=0, Q_saí=400 (chute) | 63 | −0,50 | 44,4 |
+| **Q_ent=438, Q_saí=489 (adotado)** | 42 | **−3,48** | 44,1 |
+
+O motor antigo não errava a magnitude: **errava o sinal.** Previa **+R$3,82** por operação num dia que deu **−R$3,00**, e previa 97,8% de fill num dia que deu 33,3%. Não é "otimista na margem" — é resposta de direção oposta, e era esse motor que produzia todos os números de robô maker do repo.
+
+### As limitações, que fazem parte do achado
+
+Registrar só a metade boa repetiria exatamente o erro que a seção documenta:
+
+- **Um pregão só.** n=67 (entrada) e n=25 (saída) vêm de um único dia. A amostra da saída é pequena e **cada pregão real novo quase dobra ela** — recalibrar é barato e deve ser feito, não é tarefa opcional.
+- **A contagem de operações ainda fica ~30% acima da real** (42 simuladas contra 34). Sobra otimismo em algum lugar que a fila sozinha não explica.
+- **O par que melhor encaixa no dia (Q_saí=600) foi escolhido DEPOIS de ver o resultado — isso é ajuste, não validação.** Por isso o valor adotado é o **489 do Kaplan-Meier**, que é estimativa com método, e não o que melhor encaixa em n=34. Escolher o parâmetro que melhor reproduz a amostra já vista fabrica concordância em vez de medi-la, e concordância fabricada não sobrevive ao pregão seguinte.
+
+A quarta limitação seria a mais séria se fosse verdade — a produção trocou de mecanismo no MESMO dia (`exit_ttl_bars` → sem prazo), e calibração medida sob um mecanismo raramente sobrevive à troca dele. Aqui sobrevive, e a subseção seguinte explica exatamente por quê e o que **não** sobrevive junto.
+
+### Como a base se mantém viva — e o que a troca para "sem prazo" fez com ela
+
+A calibração de 438/489 foi medida num robô que rodava **com** prazo na fatia de saída; a produção passou a rodar **sem** prazo no mesmo 2026-09-09 (`EXIT_TTL_BARS_SEM_PRAZO = 10**9`). A calibração continua valendo, e a razão é o que impede esta seção de envelhecer numa semana: **Q é propriedade do LIVRO, não do nosso robô.** Quantos contratos estão na frente da nossa ordem naquele preço não muda porque nós desistimos depois de 22 segundos. O prazo determinava apenas por quanto tempo a gente conseguia **observar** a fila.
+
+E observar pouco era exatamente o problema: **17 das 25 ordens de saída de 2026-09-09 foram censuradas** — canceladas pelo prazo antes de sabermos qual era a fila delas. Foi isso que obrigou ao Kaplan-Meier. Sem prazo, essas mesmas observações correm até o preenchimento e viram **eventos**: a mesma quantidade de operações passa a produzir estimativa muito mais firme. **Tirar o prazo melhorou a mensurabilidade da fila, não piorou.**
+
+O que de fato deixa de ser mensurável é a **derrapagem do estouro de prazo** — as 18 saídas a mercado daquele pregão eram a única observação com dinheiro real daquele caminho, e não haverá outra. Não é perda: o robô parou de pagar esse custo, e calibrar custo que não se paga mais é desperdício. É a seção do deslize do TP nativo um degrau adiante — lá, perguntar *por que* custa fez o custo sumir; aqui, o custo que sumiu leva junto a própria necessidade de medi-lo.
+
+**O que passa a existir e nunca foi medido.** Estas três linhas estão **vazias**, e são a agenda de medição a partir do primeiro pregão sem prazo:
+
+| o que medir | por que | linha de base |
+|---|---|---|
+| saídas no achatamento de fim de pregão | caminho NOVO; limitado entre stop e alvo, mas nunca medido | **nenhuma** |
+| tempo de posição aberta (mediana / p90) | é o custo que **substituiu** a derrapagem: o motor não piramida, então enquanto a limite espera o robô não abre outra posição — paga em operações que não faz | **nenhuma** |
+| posições que o pregão inteiro não pagou | é a cauda do desenho sem prazo | **nenhuma** |
+
+**Como a calibração se refresca:** `scripts/daytrade/wdof1_calibra_fila_real_2026_09_09.py` reprocessa o extrato do terminal e devolve os números que `fidelidade.py` guarda. Cada pregão real novo quase dobra a amostra da saída (n=25), então rodar é barato e é devido, não opcional. **Mas curvas de regimes diferentes não se misturam numa estimativa só sem declarar o regime:** pregão COM prazo e pregão SEM prazo têm natureza de censura diferente — no primeiro a censura é imposta pelo relógio do robô e é maciça (17 de 25), no segundo ela quase desaparece. Somar os dois sem separar mistura duas populações e devolve um número que não descreve nenhuma das duas.
+
+> **O invariante portável: quando você troca o mecanismo de execução, a calibração do LIVRO sobrevive, mas a calibração do MECANISMO morre junto — e o que a substitui começa sem linha de base.** Antes de tratar a primeira semana pós-troca como evidência, confirme que as métricas do mecanismo NOVO já têm amostra. Enquanto a coluna "linha de base" da tabela acima estiver vazia, o resultado do robô sem prazo é observação, não validação.
+
+### A regra que fica (portável: vale em qualquer corretora e qualquer linguagem)
+
+1. **Antes de tratar qualquer resultado de backtest maker como previsão, verifique qual premissa de preenchimento ele usou** — fila na entrada, fila na saída, e como a saída forçada por prazo é precificada — **e confirme que essa premissa foi calibrada contra execução real, com correção de censura.** Sem as três respostas, a linha da tabela é aritmética, não previsão.
+2. **Um resultado de backtest que nunca foi aferido contra o extrato não é previsão, é hipótese.** A aferição é a única coisa que separa as duas, e custa um pregão de dado real — barato perto de um mês de números com o sinal trocado.
+3. **Parâmetro de realismo nasce ligado e calibrado, ou não nasce.** Default zero num campo que modela atrito é o mesmo que não modelar, com o agravante de parecer modelado.
+4. **Ao estimar "quanto se espera até X acontecer", conte também as que não aconteceram.** Kaplan-Meier ou equivalente; média sobre os sucessos é sempre otimista, e só para um lado.
+5. **Separe o que é do LIVRO do que é do MECANISMO.** Calibração do livro (fila, liquidez no nível) sobrevive à troca do jeito de executar; calibração do mecanismo (derrapagem de um caminho específico, taxa de fill sob um prazo específico) morre junto com ele, e a métrica que a substitui nasce sem linha de base.
+
+Na hora de portar a estratégia, o que viaja são essas cinco perguntas, não os números: a plataforma nova tem fila própria, então `fidelidade.py` é recalibrado lá do zero — o método é que é reaproveitável.
+
+## O desenho de execução é FECHADO: nunca a mercado, nem na entrada nem no alvo
+
+**Ordem do dono, 2026-09-10.** Toda medição deste projeto — backtest, sombra e produção — roda no mesmo desenho de execução. Ele não é parâmetro de busca; é o contorno de dentro do qual a busca acontece.
+
+| ponta | como | por quê |
+|---|---|---|
+| **entrada** | `EnterLimit` (ordem-limite parada no livro) | `Enter` a mercado **não tem caminho de execução real** — `machine._entrar_a_mercado` levanta `EntradaAMercadoNaoSuportada` de propósito, porque simular o fill com o `open` da barra manda dinheiro real contra um preço inventado |
+| **alvo** | ordem-limite real fatiada (`exit_split_unit`), sem prazo (`EXIT_TTL_BARS_SEM_PRAZO = 10**9`, nunca `None`) | o `tp` nativo é gatilho varrido a mercado: **R$55,00 de deslize contra R$95,00 de bruto teórico, 57,9%** (n=11, média −1,000 tick, 10 contra 0 a favor). Ver a seção do deslize do TP nativo |
+| **níveis** | `anchor_exits_at_fill=True` | se o preço deslizou entre o sinal e o preenchimento, stop e alvo acompanham o preço realmente obtido |
+| **stop** | **a mercado — exceção única** | proteção não espera fila. E ele não desliza como o alvo: medido em 5 de 5 saídas reais, nunca pior que o nível pedido |
+
+**O que isso custou por não estar escrito aqui.** Em 2026-09-10 uma rodada inteira de cinco setups públicos (Wyckoff/SMC, IFR2, VWAP, Setup 123/Ross, Ondas de Wolfe), ~50 células, foi medida com entrada e alvo a mercado. A ORB também — a única candidata viva do projeto, a que produziu o primeiro veredito POSITIVO da investigação. **Nenhum daqueles números responde à pergunta que importava**, porque descrevem um robô que a corretora recusa. A proibição do alvo a mercado já estava documentada (seção do deslize do TP) e mesmo assim não foi aplicada; a da entrada não estava em lugar nenhum, existia só como uma exceção dentro do motor que só dispara em execução real.
+
+**A lição de método, que é o que sobrevive à troca de plataforma:** o custo de execução não é um detalhe a acertar depois que a estratégia "funcionar" — ele determina **quais desenhos existem**. Antes de varrer parâmetro de estratégia, congele o desenho de execução e confirme que ele tem caminho real confirmado. Um backtest capaz de simular o que a produção proíbe é uma máquina de gastar tempo.
+
+**Consequência prática ao converter um setup para maker:** o custo não aparece no R$/op, aparece no **volume**. Medido na ORB (1 mês, IS): a expectativa por operação ficou em R$86-106 contra R$109 da versão a mercado — praticamente igual — mas **24% a 67% dos pregões passam em branco** porque o preço não voltou até a limite. A taxa de não-preenchimento é o número que decide, não o líquido.
+
+**E a ordem de entrada precisa de prazo.** Sem `ttl_bars` ela espera até o fim do pregão: medido um fill **269,7 minutos** depois do rompimento (rompeu 14:08, encheu 18:37). Isso não é o trade que a estratégia pediu, é uma ordem esquecida no livro que pegou o preço passando — e os fills atrasados foram justamente os piores resultados. Atenção: `ttl_bars` conta BARRAS, e em base de tick (barra degenerada, 1 negócio por barra) isso **não é tempo** — a base mede mediana de 336 barras/minuto, com p25 190 e p75 586. Calibre e reporte o atraso REALIZADO em minutos, nunca o prazo nominal.
 
 ## Testes rodam em paralelo — sempre
 
@@ -214,10 +322,22 @@ FastAPI + Jinja2 templates in `src/dashboard/templates/` (partials in `partials/
 
 ## What NOT to do (from AGENTS.md)
 
+- **Medir qualquer estratégia com entrada `Enter` (a mercado) ou alvo a mercado** — o desenho de execução é fechado, ver a seção "O desenho de execução é FECHADO". Já custou ~50 células e a única candidata viva do projeto.
+- **Deixar a ordem-limite de entrada sem prazo** (`ttl_bars=None`): ela espera até o fim do pregão e preenche horas depois do sinal (medido: 269,7 min). E **nunca traduza prazo em barras para prazo em tempo sem calibrar** — em base de tick são ~336 barras/minuto.
+- **Ligar `anchor_exits_at_fill` numa estratégia que entra a mercado e achar que cobriu**: a flag é lida só no caminho de preenchimento de `EnterLimit`, então é no-op silencioso para `Enter` (item 4.23 de `LICOES_DE_PRODUCAO.md`).
+- **Reportar win% de uma geometria alvo/stop sem o nulo ao lado.** O nulo nominal é `stop/(alvo+stop)` — que é exatamente o breakeven a custo zero. E quando o payoff realizado foge do nominal, o nulo certo passa a ser o **breakeven empírico** `perda_média/(ganho_médio+perda_média)`. Conferência: `R$/op > 0` e `win% > breakeven empírico` são a MESMA afirmação — se as duas leituras discordam no seu relatório, o nulo está no lugar errado. Itens 6.22 e 6.23.
+- **Ler o veredito de uma grade sem confirmar que cada eixo mexeu em alguma coisa.** Três grades desta rodada tinham eixo morto (item 6.25) — a de 6 células da ORB era de ~3, porque o múltiplo do alvo devolveu win% idêntico (48,61%, os mesmos 35 acertos em 72) nas quatro células com corte de tempo.
 - Medir `profit_ticks=1` (T1) no WDO F1 / família maker — nem como baseline (ver seção do deslize de TP).
 - Comparar um número medido **antes** de 2026-09-08 com um medido depois sem checar o aviso `desliz.alvo` da linha: são modelos de custo diferentes.
 - Ler um `líquido` de backtest sem antes conferir **trades** e **pregões sem trade**: janela onde o robô parou é censurada.
 - Tratar o piso de capital cheio (R$375 no WDO@) como condição de continuidade — ele é indicação de PARTIDA.
+- Ler um número de backtest **maker** medido **antes de 2026-09-09** como previsão: até essa data entrada E saída enchiam de graça no primeiro toque, e o motor chegou a errar o SINAL do resultado (+R$3,82/op previsto contra −R$3,00 realizado). Confira a premissa de fila carimbada na linha.
+- Digitar `queue_ahead_qty` / `exit_queue_ahead_qty` na mão num script — o número vem de `backtest/intraday/fidelidade.py`, que é o único lugar calibrado contra extrato real.
+- Escolher parâmetro de fila por "qual encaixa melhor no dia que eu já vi" (foi por isso que Q_saí=600 foi descartado a favor do 489 do Kaplan-Meier): encaixar depois de ver é ajuste, não calibração.
+- Estimar fila — ou qualquer tempo-até-evento — só com as ordens que **preencheram**: é viés de sobrevivência, e ele só anda para um lado (346→438 e 374→489 ao corrigir).
+- Criar parâmetro de realismo com default que o desliga e considerar o assunto coberto: `queue_ahead_qty` nasceu em 2026-08-26 e viciou um mês de medição justamente por parecer implementado.
+- Somar pregões COM prazo e SEM prazo numa estimativa de fila só, sem declarar o regime: a natureza da censura é outra (17 de 25 censuradas com prazo, quase nenhuma sem) e o número resultante não descreve nenhum dos dois.
+- Tratar a primeira semana do robô SEM prazo como validação: as três métricas do mecanismo novo (achatamento de fim de pregão, tempo de posição aberta, posições que o pregão não pagou) ainda têm linha de base VAZIA.
 - Add dependencies without justification (project weight matters).
 - Use TA-Lib.
 - Swap SQLite for another DB in this phase.
