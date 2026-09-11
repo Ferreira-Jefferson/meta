@@ -295,30 +295,64 @@ class CopaWin(IntradayStrategy):
     #:   * ESTE piso responde "eu sobrevivo ao que este robô perde antes de
     #:     recuperar?" -- e essa é propriedade do ROBÔ, não do contrato.
     #:
-    #: De onde saem os R$600. A configuração de produção (alvo_vol=9,5 + alvo
-    #: por ordem-limite real) é INVARIANTE ao capital de R$250 a R$750: 310
-    #: trades no IS e 130 no OOS em todos os níveis, mesmo líquido, 0 pregões
-    #: sem trade -- o robô abre 1 contrato e sempre cabe. Capital aqui não
-    #: compra desempenho, compra distância da parede. A queda máxima é a MESMA
-    #: em reais em qualquer nível (o tamanho da posição não muda): R$226,90 no
-    #: IS e R$84,80 no OOS. Logo:
+    #: De onde saem os R$3.000, e por que os dois numeros anteriores estavam
+    #: errados -- a historia fica porque os dois erros sao repetiveis.
     #:
-    #:   margem crua (R$100) + pior queda medida (R$226,90) = R$326,90 é o
-    #:   ponto em que a equity ENCOSTA na margem na pior janela já vista;
-    #:   R$600 deixa ~2,2x a pior queda de folga.
+    #: ERRO 1, "R$600" (margem crua R$100 + pior queda medida R$226,90). Os
+    #: R$226,90 sairam de rodar o robo com capital de R$250 e ler `capital -
+    #: equity_minima`. Uma conta de R$250 NAO CONSEGUE SOFRER a queda desta
+    #: estrategia: ela quebra antes, o portao de capital passa a recusar
+    #: entradas, e o que se mede e' a queda de uma conta que morreu cedo.
+    #: Janela CENSURADA dimensionando capital -- o pior lugar possivel para
+    #: ela, porque o numero censurado justifica exatamente o capital que
+    #: causou a censura.
     #:
-    #: Por que não R$326,90: dimensionar para o pior caso JÁ VISTO é ajustar
-    #: à amostra -- 184 pregões não esgotam o que o mercado faz. E há um
-    #: motivo específico deste motor para ser conservador aqui: o portão de
-    #: capital do backtest olha o caixa REALIZADO, então ele deixou o robô
-    #: seguir operando com equity de R$23,10 (R$250 de partida). Uma corretora
-    #: cobra margem contra a EQUITY, não contra o caixa realizado -- teria
-    #: liquidado. O backtest é mais permissivo que a realidade exatamente
-    #: nesse ponto, e o piso precisa compensar isso.
+    #: ERRO 2, medir a queda com 1 CONTRATO FIXO (deu R$2.892,70 de maxima em
+    #: 191 pregoes). Descreve uma estrategia que a producao nao roda: a
+    #: producao ESCALA contratos com o caixa. Piso nao se deriva de uma queda
+    #: medida num tamanho, porque o tamanho e' funcao do proprio capital.
     #:
-    #: `None` na maioria dos robôs: sem esta declaração vale só o piso do
+    #: E POR QUE NEM "rodar a config de producao no historico inteiro" basta:
+    #: a R$600, comecando em 2025-12-01, o robo atravessa os 191 pregoes com
+    #: 0 sem trade e +R$12.709,10 -- e, a R$600 comecando em 2026-09-08, ZERA
+    #: em dois pregoes. As duas medicoes estao certas. Quem comeca cedo
+    #: acumula caixa antes de encontrar a sequencia ruim; quem comeca na
+    #: vespera dela nao tem com o que paga-la. Um piso tirado de UMA data de
+    #: inicio mede o sorteio daquela data.
+    #:
+    #: O NUMERO CERTO vem da pergunta certa -- "com R$X, que FRACAO das datas
+    #: de inicio possiveis sobrevive?". Medido em `scripts/daytrade/copawin_
+    #: piso_por_data_de_inicio_2026_09_11.py`: 76 datas de inicio, horizonte
+    #: FIXO de 40 pregoes cada, morte = zerar OU calar por capital (os dois
+    #: sao absorventes na pratica -- o robo que trava no portao costuma nunca
+    #: mais voltar, itens 1.14/3.10/3.11):
+    #:
+    #:     capital     sobrevivem     liquido mediano
+    #:     R$   600         42,1%           -R$314,80   <- pior que cara-ou-coroa
+    #:     R$ 1.000         60,5%         +R$1.410,95
+    #:     R$ 1.500         86,8%         +R$2.722,00
+    #:     R$ 2.000         93,4%         +R$2.722,00
+    #:     R$ 3.000        100,0%         +R$2.812,45   <- primeiro 100%
+    #:     R$ 5.000        100,0%         +R$3.022,35
+    #:
+    #: A R$600 o resultado MEDIANO e' negativo, porque a conta normalmente
+    #: quebra antes de a estrategia se pagar.
+    #:
+    #: Confirmacao independente: o "erro 2" acima, corrigido pela margem crua
+    #: (R$2.892,70 + R$100 = R$2.992,70), cai praticamente em cima do primeiro
+    #: nivel com 100% de sobrevivencia. Dois metodos que erram de formas
+    #: diferentes convergindo no mesmo numero e' o que da' confianca nele --
+    #: nenhum dos dois sozinho daria.
+    #:
+    #: O QUE ISTO CUSTA, dito em voz alta: R$3.000 e' 12x o piso de tabela do
+    #: WIN@ (R$250) e 5x o que o dono tinha fixado. Se esse capital nao
+    #: existir, a conclusao honesta nao e' "baixar o piso" -- e' que este robo
+    #: nao cabe no capital disponivel. Baixar o piso nao torna a estrategia
+    #: mais segura; so' move a quebra para dentro da conta do dono.
+    #:
+    #: `None` na maioria dos robos: sem esta declaracao vale so' o piso do
     #: instrumento, comportamento de sempre.
-    capital_minimo_recomendado_brl: float | None = 600.0
+    capital_minimo_recomendado_brl: float | None = 3_000.0
     symbol = "WIN@"
     is_futuro = True
     # A saida por alvo e' ordem PARADA no nivel (maker, sem slippage); a

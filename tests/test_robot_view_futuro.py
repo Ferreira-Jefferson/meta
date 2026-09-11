@@ -120,14 +120,17 @@ def test_asset_futuro_nao_mostra_profit_pct_fabricado():
 # ---------- piso declarado pelo ROBO (2026-09-11) --------------------------
 
 def test_piso_do_robo_levanta_o_piso_do_instrumento():
-    """`copa_win` declara `capital_minimo_recomendado_brl=600` -- o piso do
+    """`copa_win` declara `capital_minimo_recomendado_brl=3.000` -- o piso do
     WIN@ por margem e' R$250, e o painel tem de mostrar o MAIOR dos dois.
 
+    R$3.000 e' o primeiro nivel em que 100% das datas de inicio testadas
+    sobrevivem 40 pregoes (a R$600 sobrevivem 42,1%).
+
     Os dois numeros respondem perguntas diferentes: R$250 e' "a corretora
-    deixa abrir?", R$600 e' "eu sobrevivo ao que este robo perde antes de
+    deixa abrir?", R$3.000 e' "eu sobrevivo ao que este robo perde antes de
     recuperar?". Nenhum isenta o outro."""
     assert capital_minimo_para(True, "WIN@", None) == 250.0
-    assert capital_minimo_para(True, "WIN@", None, "copa_win") == 600.0
+    assert capital_minimo_para(True, "WIN@", None, "copa_win") == 3_000.0
 
 
 def test_robo_sem_piso_declarado_nao_muda_nada():

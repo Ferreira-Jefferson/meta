@@ -1,0 +1,42 @@
+config de PRODUCAO (alvo_vol=9,5, alvo por ordem-limite real, dimensionamento por margem + risco)
+passada CRONOLOGICA continua, historico completo
+
+      5.000 concluido (32s)
+      7.500 concluido (33s)
+      1.000 concluido (34s)
+      2.000 concluido (34s)
+      4.000 concluido (34s)
+        600 concluido (34s)
+      3.000 concluido (34s)
+      2.500 concluido (34s)
+      1.500 concluido (35s)
+     10.000 concluido (35s)
+
+  capital  trades  s/trade      liquido  caixa min  queda max  contratos   zerou  criterio
+------------------------------------------------------------------------------------------
+      600     487    0/191    12.709,10     373,10   4.074,00        1-6     nao  PASSA
+    1.000     487    0/191    12.241,30     773,10   4.554,00        1-6     nao  PASSA
+    1.500     488    0/191    12.390,70   1.273,10   4.793,50        1-6     nao  PASSA
+    2.000     480    0/191    11.215,30   1.773,10   4.554,00        1-6     nao  PASSA
+    2.500     486    0/191    12.619,80   2.273,10   4.982,50        1-6     nao  PASSA
+    3.000     488    0/191    13.533,30   2.773,10   5.041,50        1-7     nao  PASSA
+    4.000     503    0/191    13.575,70   3.773,10   5.752,50        1-7     nao  PASSA
+    5.000     505    0/191    12.912,60   4.670,00   6.541,50        1-8     nao  PASSA
+    7.500     536    0/191    17.395,70   7.228,40   8.698,00       1-11     nao  PASSA
+   10.000     549    0/191    15.745,70   8.850,70   9.109,50       1-11     nao  PASSA
+
+menor nivel que PASSA: R$ 600 (caixa minimo R$ 373,10, queda maxima R$ 4.074,00)
+
+FOLGA de cada nivel que passa -- quanto do caixa inicial a pior
+queda ja' consumiu. Quanto MAIOR a folga, mais longe da parede:
+    capital   queda/capital   sobra no vale
+        600          679,0%          373,10
+      1.000          455,4%          773,10
+      1.500          319,6%        1.273,10
+      2.000          227,7%        1.773,10
+      2.500          199,3%        2.273,10
+      3.000          168,1%        2.773,10
+      4.000          143,8%        3.773,10
+      5.000          130,8%        4.670,00
+      7.500          116,0%        7.228,40
+     10.000           91,1%        8.850,70
