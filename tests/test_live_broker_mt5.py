@@ -18,6 +18,7 @@ import importlib.util
 import inspect
 import sys
 import types
+from datetime import date
 
 import pytest
 
@@ -1783,6 +1784,109 @@ def test_detect_futures_symbol_map_cai_para_tick_unico_quando_barras_indisponive
     broker = MT5Broker()
 
     assert broker.detect_futures_symbol_map(["WDO@"]) == {"WDO@": "WDOV26"}
+
+
+# ---------- criterio de CALENDARIO (incidente 2026-09-11) ----------------
+#
+# Ate 2026-09-11 o desempate era so' volume recente -- e numa madrugada de
+# mercado fechado (dois slots de WDO@ iniciados as 05:48-05:49 UTC) isso
+# escolheu WDOF27 (morto, vencimento jan/2027) em vez de WDOV26 (certo,
+# out/2026): um artefato de barra velha e esparsa bateu por acaso o
+# contrato certo, que tambem nao tinha negocio fresco aquela hora. A partir
+# de agora `front_month_contract` (calendario, `core.instruments`) e' o
+# criterio PRINCIPAL; volume so' entra se o contrato indicado pela data nao
+# tiver book de dois lados.
+
+def test_detect_futures_symbol_map_usa_calendario_mesmo_com_volume_menor(fake_mt5):
+    """Reproduz o incidente real: um contrato MORTO (WDOF27, fora da regra
+    de rolagem para 11/09/2026) tem volume MUITO maior que o certo
+    (WDOV26) -- o criterio de calendario tem de escolher o certo mesmo
+    assim, porque a data manda agora, nao o volume."""
+    mod, _calls = fake_mt5(initialize_ok=True)
+    _instala_futuros(
+        mod,
+        _futuro("WDOF27", volume=999999.0),  # o contrato que venceu o desempate errado
+        _futuro("WDOV26", volume=12.0),       # o certo, com pouco volume (madrugada)
+    )
+    broker = MT5Broker()
+
+    resultado = broker.detect_futures_symbol_map(["WDO@"], hoje=date(2026, 9, 11))
+
+    assert resultado == {"WDO@": "WDOV26"}
+
+
+def test_detect_futures_symbol_map_calendario_na_virada_do_mes(fake_mt5):
+    """Mesmos candidatos, so' a DATA muda: no dia seguinte ao rollover
+    (01/09/2026, mes de agosto ja fechou) o corrente e' WDOU26, nao
+    WDOV26 -- confirma que quem decide e' `hoje`, nao um contrato
+    preferido a priori."""
+    mod, _calls = fake_mt5(initialize_ok=True)
+    _instala_futuros(
+        mod,
+        _futuro("WDOU26", volume=10.0),
+        _futuro("WDOV26", volume=9500.0),
+    )
+    broker = MT5Broker()
+
+    assert broker.detect_futures_symbol_map(["WDO@"], hoje=date(2026, 8, 20)) == {
+        "WDO@": "WDOU26"
+    }
+    assert broker.detect_futures_symbol_map(["WDO@"], hoje=date(2026, 9, 1)) == {
+        "WDO@": "WDOV26"
+    }
+
+
+def test_detect_futures_symbol_map_win_tambem_usa_calendario(fake_mt5):
+    """Mesmo criterio para WIN@ -- rolagem bimestral, meses PARES."""
+    mod, _calls = fake_mt5(initialize_ok=True)
+    _instala_futuros(
+        mod,
+        _futuro("WING27", volume=999999.0),  # fora do ciclo corrente, nao deve ganhar
+        _futuro("WINV26", volume=5.0),
+    )
+    broker = MT5Broker()
+
+    assert broker.detect_futures_symbol_map(["WIN@"], hoje=date(2026, 9, 11)) == {
+        "WIN@": "WINV26"
+    }
+
+
+def test_detect_futures_symbol_map_cai_para_volume_quando_contrato_da_data_esta_morto(fake_mt5, caplog):
+    """Caso raro (feriado, atraso da B3): o contrato que o calendario indica
+    para `hoje` nao tem book de dois lados agora -- cai para o criterio de
+    volume ANTIGO entre os candidatos que sobrarem, e o caso anomalo fica
+    registrado no log (nunca silencioso)."""
+    mod, _calls = fake_mt5(initialize_ok=True)
+    _instala_futuros(
+        mod,
+        _futuro("WDOV26", volume=10.0, bid=0.0, ask=0.0),  # indicado pela data, mas MORTO
+        _futuro("WDOX26", volume=500.0),                    # unico candidato com book
+    )
+    broker = MT5Broker()
+
+    with caplog.at_level("WARNING", logger="live.broker_mt5"):
+        resultado = broker.detect_futures_symbol_map(["WDO@"], hoje=date(2026, 9, 11))
+
+    assert resultado == {"WDO@": "WDOX26"}
+    assert "calendario" in caplog.text.lower()
+    assert "WDOV26" in caplog.text
+
+
+def test_detect_futures_symbol_map_raiz_sem_regra_de_rolagem_cai_para_volume(fake_mt5):
+    """Uma raiz sem entrada em `FUTURES_ROLLOVER_MONTHS` (futuro novo, ainda
+    nao catalogado) nunca derruba a deteccao -- degrada pro criterio de
+    volume, exatamente como o resto do metodo degrada pra sintoma atual em
+    vez de quebrar."""
+    mod, _calls = fake_mt5(initialize_ok=True)
+    _instala_futuros(mod, _futuro("XYZZ99", volume=42.0))
+    broker = MT5Broker()
+
+    # "XYZ" nao tem entrada em `core.instruments.FUTURES_ROLLOVER_MONTHS` --
+    # `front_month_contract` levanta `KeyError`, capturado e tratado como
+    # "sem contrato esperado", caindo pro fallback de volume.
+    assert broker.detect_futures_symbol_map(["XYZ@"], hoje=date(2026, 9, 11)) == {
+        "XYZ@": "XYZZ99"
+    }
 
 
 # ---------- order_history_state / deals_for_position (gap medido ao vivo ---

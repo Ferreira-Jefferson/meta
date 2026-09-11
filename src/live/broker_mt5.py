@@ -82,8 +82,11 @@ import logging
 import math
 import re
 import time
+from datetime import date, datetime
 from typing import Optional
 
+from core.b3_session import SAO_PAULO
+from core.instruments import front_month_contract
 from core.live_models import Order, OrderSide, OrderStatus
 from live.broker import Broker
 
@@ -1949,8 +1952,10 @@ class MT5Broker(Broker):
             return None
 
     # Letra de mes de vencimento B3/CME: F=Jan G=Fev H=Mar J=Abr K=Mai M=Jun
-    # N=Jul Q=Ago U=Set V=Out X=Nov Z=Dez. `\d{1,2}` cobre ano de 1 ou 2
-    # digitos (corretoras variam).
+    # N=Jul Q=Ago U=Set V=Out X=Nov Z=Dez -- mesma tabela de
+    # `core.instruments.FUTURES_MONTH_LETTERS` (fonte da verdade; o
+    # regex aqui so' filtra formato de simbolo, nao decide qual e' o
+    # corrente). `\d{1,2}` cobre ano de 1 ou 2 digitos (corretoras variam).
     _PADRAO_CONTRATO_VENCIMENTO = "[FGHJKMNQUVXZ]\\d{1,2}$"
 
     #: Quantas barras M1 recentes somar para o desempate de liquidez em
@@ -1987,13 +1992,12 @@ class MT5Broker(Broker):
         tick = mt5.symbol_info_tick(nome)
         return float(getattr(tick, "volume", 0.0) or 0.0) if tick is not None else 0.0
 
-    def detect_futures_symbol_map(self, tickers) -> Optional[dict[str, str]]:
+    def detect_futures_symbol_map(
+        self, tickers, hoje: Optional[date] = None
+    ) -> Optional[dict[str, str]]:
         """Descobre, para cada ticker terminado em `"@"` (convencao do
         projeto para futuro B3 CONTINUO/ajustado -- `WDO@`, `WIN@`), qual e' o
-        contrato REAL com vencimento em aberto no terminal MT5 AGORA -- sem
-        depender de calendario de vencimento hardcoded em lugar nenhum,
-        porque a B3 rola WDO todo mes e WIN a cada dois meses e ninguem devia
-        precisar editar codigo/config toda vez que isso acontece.
+        contrato REAL com vencimento em aberto no terminal MT5 AGORA.
 
         Por que isto e' preciso: o simbolo `@` normalmente so' existe no
         terminal para dar COTACAO/HISTORICO continuo -- e' dele que vem o
@@ -2008,30 +2012,57 @@ class MT5Broker(Broker):
         tabela letra->mes; a letra/ano exatos dependem so' de QUANDO isto
         roda, nunca fixos aqui).
 
+        CRITERIO PRINCIPAL (desde 2026-09-11): calendario, via
+        `core.instruments.front_month_contract(raiz, hoje)` -- a B3 rola o
+        contrato num dia FIXO conhecido (1o dia util do mes do proprio
+        nome), entao dado o dia de hoje o codigo do contrato corrente e'
+        determinístico, sem precisar de nenhum negocio acontecendo. `hoje`
+        e' parametro (default: data real agora em `America/Sao_Paulo`, o
+        mesmo fuso que `core.b3_session`/`live.clock` usam) exatamente para
+        este calculo ser testavel com data fixa.
+
+        Por que o volume deixou de ser o criterio principal: esta funcao
+        roda uma vez por "Iniciar operacao" no painel, e nao ha garantia de
+        que isso aconteca com o mercado aberto. Incidente 2026-09-11: dois
+        slots de WDO@ foram iniciados as 05:48-05:49 UTC (madrugada,
+        mercado fechado em TODOS os contratos) -- sem negocio real
+        acontecendo em lugar nenhum, a comparacao de "volume recente" nao
+        tinha sinal confiavel, e um artefato de barras antigas e esparsas do
+        `WDOF27` (vencimento jan/2027, morto havia meses) bateu por acaso o
+        `WDOV26` (o certo, out/2026): os dois robos ficaram a manha inteira
+        sem barra nova. O proprio terminal MT5 sabia o certo o tempo todo
+        (`symbol_info("WDO@").description` = "... (WDOV26) ..."), so' esta
+        funcao errava.
+
+        FALLBACK (quando o contrato indicado pelo calendario nao tem BOOK
+        DE DOIS LADOS agora -- feriado, atraso da B3, caso raro): cai para o
+        criterio antigo, MAIOR VOLUME RECENTE (ver
+        `_volume_recente_do_contrato`) entre os candidatos que sobrarem do
+        filtro de `trade_mode`/book abaixo, e registra um
+        `_logger.warning` -- o caso anomalo nunca fica silencioso, so' nao
+        interrompe a deteccao (mesmo espirito de resiliencia do resto do
+        metodo).
+
         Estrategia de deteccao: lista todo simbolo do terminal que comeca com
         a RAIZ do ticker (`mt5.symbols_get(raiz + "*")`), filtra pelos que
         batem o padrao RAIZ+LETRA_DE_MES+ANO, descarta os com `trade_mode`
-        desabilitado E os SEM BOOK DE DOIS LADOS (`bid`/`ask` -- ver abaixo),
-        e entre os que sobram escolhe o de MAIOR VOLUME RECENTE (ver
-        `_volume_recente_do_contrato`) -- o contrato corrente (front month)
-        e' sempre o mais liquido por construcao (e' pra ele que a liquidez
-        migra antes do vencimento do anterior). Nao precisa saber QUAL mes
-        e' o corrente: o proprio mercado (via volume) responde isso a cada
-        chamada, entao o mapa se autocorrige sozinho a cada rolagem, sem
-        gente trocar codigo/config — e' chamado de novo a cada "Iniciar
-        operacao" no painel (ver `dashboard/live_control.py::
-        detect_futures_symbol_map`), entao um robo reiniciado no mes
-        seguinte ja pega o contrato novo sozinho.
-
+        desabilitado E os SEM BOOK DE DOIS LADOS (`bid`/`ask` -- ver abaixo).
         Exigir BOOK DE DOIS LADOS (`bid > 0` E `ask > 0`) e' o gap fechado
-        depois do incidente 2026-08-28: num restart, esta funcao escolheu
-        `WDOQ27` (maior volume no criterio antigo, de TICK UNICO) em vez do
-        contrato corrente correto -- confirmado depois, na mao, que `WDOQ27` tinha
-        `bid=0.0` (sem mercado real; o "volume" veio de um negocio velho
-        preso no ultimo tick). Um contrato sem book de dois lados e' um
+        depois do incidente 2026-08-28: num restart, o criterio de volume de
+        entao escolheu `WDOQ27` (maior volume, de TICK UNICO) em vez do
+        contrato corrente correto -- confirmado depois, na mao, que `WDOQ27`
+        tinha `bid=0.0` (sem mercado real; o "volume" veio de um negocio
+        velho preso no ultimo tick). Um contrato sem book de dois lados e' um
         contrato MORTO, mesmo com `trade_mode` habilitado e um numero de
         volume qualquer no tick -- nunca deve ser escolhido, custe o que
-        custar ao desempate.
+        custar ao desempate, tanto no criterio de calendario quanto no
+        fallback de volume.
+
+        E' chamado de novo a cada "Iniciar operacao" no painel (ver
+        `dashboard/live_control.py::detect_futures_symbol_map`), entao um
+        robo reiniciado no mes seguinte ja pega o contrato novo sozinho --
+        nem o calendario nem o fallback de volume precisam de config
+        editada a mao.
 
         Tickers que NAO terminam em `"@"` mapeiam para `symbol_for(ticker)`
         (comportamento de sempre, sem envolver deteccao nenhuma) -- mesmo
@@ -2040,7 +2071,9 @@ class MT5Broker(Broker):
         tradavel (ou sem NENHUM com book de dois lados) mapeia pra ele mesmo
         (degrada pro sintoma atual, `TRADE_DISABLED` ao mandar ordem, em vez
         de escolher um contrato morto ou derrubar a deteccao inteira por
-        causa de UM ticker).
+        causa de UM ticker). Raiz sem regra de rolagem declarada em
+        `core.instruments.FUTURES_ROLLOVER_MONTHS` (`KeyError`) tambem
+        degrada pro fallback de volume, nunca derruba a deteccao.
 
         Devolve `None` so' se a conexao falhar (mesmo padrao do resto da
         classe)."""
@@ -2051,6 +2084,7 @@ class MT5Broker(Broker):
         try:
             if not self.connect():
                 return None
+            data_de_hoje = hoje if hoje is not None else datetime.now(SAO_PAULO).date()
             result: dict[str, str] = {}
             disabled = getattr(mt5, "SYMBOL_TRADE_MODE_DISABLED", 0)
             for ticker in tickers:
@@ -2061,8 +2095,12 @@ class MT5Broker(Broker):
                 raiz = base[:-1]
                 candidatos = mt5.symbols_get(raiz + "*") or ()
                 padrao = re.compile(f"^{re.escape(raiz)}{self._PADRAO_CONTRATO_VENCIMENTO}")
-                melhor_nome = None
-                melhor_volume = -1.0
+                # nome -> tick, so' dos candidatos que passam trade_mode E
+                # book de dois lados (a rede de seguranca do incidente
+                # 2026-08-28 -- vale igual pro criterio de calendario novo e
+                # pro fallback de volume antigo, nenhum dos dois pode
+                # escolher um contrato morto).
+                validos: dict[str, object] = {}
                 for info in candidatos:
                     nome = getattr(info, "name", None)
                     if not nome or not padrao.match(nome):
@@ -2081,10 +2119,34 @@ class MT5Broker(Broker):
                     ask = float(getattr(tick, "ask", 0.0) or 0.0)
                     if bid <= 0.0 or ask <= 0.0:
                         continue
-                    volume = self._volume_recente_do_contrato(mt5, nome)
-                    if volume > melhor_volume:
-                        melhor_volume = volume
-                        melhor_nome = nome
+                    validos[nome] = tick
+
+                esperado: Optional[str] = None
+                try:
+                    esperado = front_month_contract(raiz, data_de_hoje)
+                except KeyError:
+                    esperado = None  # raiz sem regra conhecida -- cai pro fallback
+
+                if esperado is not None and esperado in validos:
+                    melhor_nome: Optional[str] = esperado
+                else:
+                    if esperado is not None:
+                        _logger.warning(
+                            "MT5Broker.detect_futures_symbol_map: o contrato indicado "
+                            "pelo calendario de rolagem (%s, para %s) nao tem book de "
+                            "dois lados agora -- caindo para o criterio de volume "
+                            "recente entre os candidatos validos (%s). Confira se e' "
+                            "feriado/atraso da B3 ou se a regra de rolagem precisa de "
+                            "ajuste.",
+                            esperado, ticker, sorted(validos),
+                        )
+                    melhor_nome = None
+                    melhor_volume = -1.0
+                    for nome in validos:
+                        volume = self._volume_recente_do_contrato(mt5, nome)
+                        if volume > melhor_volume:
+                            melhor_volume = volume
+                            melhor_nome = nome
                 result[ticker] = melhor_nome if melhor_nome is not None else base
             return result
         except Exception:

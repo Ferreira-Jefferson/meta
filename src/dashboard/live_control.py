@@ -642,8 +642,13 @@ def detect_futures_symbol_map(
     """Descobre, para o UNIVERSO do slot `slot_id` (robô `robot_key`, se
     informado), o CONTRATO REAL com vencimento em aberto de cada ticker de
     futuro contínuo (`"WDO@"`, `"WIN@"`) — ver
-    `MT5Broker.detect_futures_symbol_map` para o mecanismo (maior volume do
-    dia entre os contratos com `trade_mode` habilitado).
+    `MT5Broker.detect_futures_symbol_map` para o mecanismo: desde
+    2026-09-11, o CALENDÁRIO de rolagem da B3
+    (`core.instruments.front_month_contract`) decide qual é o contrato
+    corrente, com o critério antigo (maior volume recente entre os
+    candidatos com `trade_mode` habilitado e book de dois lados) só como
+    fallback para o caso raro de o contrato indicado pela data ainda não
+    ter book agora.
 
     Chamada a cada clique em "Iniciar operação" (`dashboard/app.py`), igual
     `detect_shares_per_lot`/`detect_fractional_symbol_map` — é isso que faz o

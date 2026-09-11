@@ -13,14 +13,18 @@ mora em `tests/test_intraday_profiles.py`.
 """
 from __future__ import annotations
 
+from datetime import date
+
 import pytest
 
 from core.instruments import (
     ACAO_B3_POINT_VALUE_BRL,
     ACAO_B3_PRICE_TICK_SIZE,
     FUTUROS,
+    FUTURES_ROLLOVER_MONTHS,
     InstrumentEconomics,
     economics_for,
+    front_month_contract,
 )
 
 
@@ -92,6 +96,70 @@ def test_toda_entrada_da_tabela_esta_completa_e_se_identifica():
         assert econ.symbol == chave, f"{chave}: entrada se identifica como {econ.symbol!r}"
         assert econ.point_value_brl > 0 and econ.price_tick_size > 0
         assert econ.margin_per_contract_brl > 0
+
+
+# ---------- regra de rolagem (incidente 2026-09-11) ----------------------
+#
+# `detect_futures_symbol_map` escolheu WDOF27 (morto, vencimento jan/2027)
+# em vez de WDOV26 (certo, out/2026) numa madrugada de mercado fechado,
+# porque o criterio antigo era volume recente -- sem negocio acontecendo em
+# lugar nenhum, um artefato de barra velha ganhou o desempate. A correcao
+# do dono: usar a DATA como criterio principal. WDO rola TODO MES (regra
+# publicada da B3: vence no 1o dia util do proprio mes-nome). WIN foi
+# CONFIRMADO contra o terminal MT5 real em 2026-09-11 -- ver a evidencia na
+# docstring de `FUTURES_ROLLOVER_MONTHS`.
+
+def test_front_month_contract_wdo_meio_do_mes():
+    """11/09/2026 (dia real do incidente): WDO rola todo mes, entao o
+    corrente em setembro e' sempre outubro -- confirmado contra o terminal
+    real (`symbol_info("WDO@").description` = "...(WDOV26)...")."""
+    assert front_month_contract("WDO", date(2026, 9, 11)) == "WDOV26"
+    assert front_month_contract("WDO", date(2026, 9, 30)) == "WDOV26"
+
+
+def test_front_month_contract_wdo_virada_do_mes():
+    """A rolagem so' muda na VIRADA do mes (dono, 2026-09-11) -- o dia do
+    mes dentro do mesmo mes-calendario nao muda o corrente."""
+    assert front_month_contract("WDO", date(2026, 8, 31)) == "WDOU26"
+    assert front_month_contract("WDO", date(2026, 9, 1)) == "WDOV26"
+
+
+def test_front_month_contract_wdo_dezembro_vira_o_ano():
+    """Dezembro nao tem mes seguinte no mesmo ano -- o corrente vira Janeiro
+    do ano SEGUINTE (WDO rola todo mes, sem excecao de virada de ano)."""
+    assert front_month_contract("WDO", date(2026, 12, 20)) == "WDOF27"
+
+
+def test_front_month_contract_win_regra_confirmada_contra_mt5_real():
+    """CONFIRMADO contra o terminal MT5 real em 2026-09-11 (nao suposto):
+    `symbol_info("WIN@").description` apontava WINV26 (out/2026) durante
+    setembro, e dos candidatos WIN com book de dois lados (WING27=fev/27,
+    WINV26=out/26, WINZ26=dez/26) nenhum mes IMPAR apareceu -- so' os
+    pares (fev/abr/jun/ago/out/dez), confirmando a rolagem BIMESTRAL."""
+    assert FUTURES_ROLLOVER_MONTHS["WIN"] == (2, 4, 6, 8, 10, 12)
+    assert front_month_contract("WIN", date(2026, 9, 11)) == "WINV26"
+
+
+def test_front_month_contract_win_virada_bimestral():
+    """WIN rola a cada DOIS meses -- o mesmo contrato (out/2026) e' o
+    corrente durante agosto E setembro inteiros, e so' muda para
+    dezembro/2026 na virada de setembro para outubro."""
+    assert front_month_contract("WIN", date(2026, 8, 1)) == "WINV26"
+    assert front_month_contract("WIN", date(2026, 9, 30)) == "WINV26"
+    assert front_month_contract("WIN", date(2026, 10, 1)) == "WINZ26"
+
+
+def test_front_month_contract_win_dezembro_vira_o_ano():
+    """Dezembro (mes par, cai no proprio ciclo) nao tem par seguinte no
+    mesmo ano -- vira Fevereiro do ano SEGUINTE."""
+    assert front_month_contract("WIN", date(2026, 12, 5)) == "WING27"
+
+
+def test_front_month_contract_raiz_desconhecida_levanta():
+    """Mesma politica de `economics_for`: sem regra declarada, `KeyError`
+    explicito -- nunca um default silencioso que chutaria um mes errado."""
+    with pytest.raises(KeyError, match="ZZZ"):
+        front_month_contract("ZZZ", date(2026, 9, 11))
 
 
 def test_core_nao_importa_nada_do_projeto():
