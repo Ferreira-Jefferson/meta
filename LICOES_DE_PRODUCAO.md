@@ -5241,6 +5241,73 @@ custo por operação é a certa.
 
 Perguntas 86 e 87 da Parte 8 carregam a parte que depende de plataforma.
 
+### 6.28 Um efeito de microestrutura pode ser estatisticamente gigantesco e ainda assim INEXEQUÍVEL como entrada nova — três mecanismos alternativos testados contra a fila, nenhum abre um caminho que o desenho já em produção não tivesse
+
+**Este item também não custou dinheiro real — é resposta a uma pergunta do
+dono.** A conclusão registrada era que o efeito de reversão do WDO@ depois de
+uma corrida de 3+ ticks na mesma direção "não dá para monetizar porque resolve
+mais rápido do que a fila real pode ser vencida", testado contra **um único**
+mecanismo: ordem nova colocada no instante exato da confirmação do sinal. O
+dono questionou a generalização — um mecanismo não testar não prova que
+nenhum mecanismo funciona — e pediu que se investigassem alternativas de
+execução antes de aceitar "inexequível" como veredito.
+
+**Reprodução do zero** (não a partir da memória do projeto), base
+`scripts/daytrade/wdo_tick_direcao_1semana_2026_09_10.csv`, 664.107 ticks, 5
+pregões, WDO@: **n=77.556 confirmações de corrida de 3 ticks, 60.437
+resultaram em reversão real**. O baseline (ordem nova no instante da
+confirmação) resolve com **mediana 298 ms / média 816,6 ms** até o próximo
+movimento real de preço, com volume mediano de apenas **7 contratos**
+negociados nesse intervalo (média 40,8, p90 100) — muito abaixo dos **330 a
+440 contratos** que `backtest/intraday/fidelidade.py` calibrou (Kaplan-Meier,
+item 4.22/pergunta 80) como fila real necessária para uma ordem nova alcançar
+o topo do book. Isso já era conhecido. O que faltava era testar se MUDAR o
+mecanismo — não só o timing reativo — abria algum caminho.
+
+**Três mecanismos alternativos, três resultados:**
+
+| # | mecanismo | resultado |
+|---|---|---|
+| 1 | Alvo mirando 2-3 ticks ALÉM do ponto de reversão (não o 1º tick de volta) | **não ajuda.** Mesmo em K=3 movimentos reais após a reversão, mediana ainda é só 40 contratos em 1,16 s; só 10,2% cruza 330, 7,0% cruza 440. O volume não cresce rápido o bastante nesta granularidade de tick — dar mais tempo ao sinal não dá mais fila |
+| 2 | Ordem repousando desde a PRIMEIRA visita do nível na sessão (não desde a confirmação do sinal) | **cruzaria a fila em 97,5%-98,3% dos casos** (volume pré-acumulado mediano 11.110 contratos, dwell mediano 2.134,8 s ≈ 35,6 min) — MAS 99,9% dos "topos" de corrida de 3 ticks já tinham negociado antes na mesma sessão (só 0,1% são extremos genuinamente novos). Uma ordem assim já teria preenchido numa visita ANTERIOR, sem relação com o sinal específico de reversão. Não é "explorar o sinal de reversão": é virar formador de mercado passivo na faixa de preço inteira da sessão — família já testada e ENCERRADA neste projeto pela mesma fila (item 6.21) |
+| 3 | Ordem de SAÍDA de uma posição JÁ aberta por outro motivo, repousando T segundos antes do evento de reversão | **único com chance real**, e cresce com o tempo de repouso |
+
+Mecanismo 3, detalhado — probabilidade de já ter cruzado a fila calibrada, por
+tempo de repouso T antes do evento:
+
+| T (repouso) | cruza 330 contratos | cruza 440 contratos |
+|---|---:|---:|
+| 5 s | 28,2% | 21,3% |
+| 15 s | 51,7% | 43,4% |
+| 30 s | 66,1% | 58,5% |
+| 60 s | 77,7% | 71,6% |
+| 120 s | 85,7% | 81,5% |
+
+Mas o mecanismo 3 **não é uma estratégia nova**: é exatamente o desenho de
+saída que o projeto já roda em produção (alvo fatiado, `exit_split_unit`, sem
+prazo — item 4.24). O efeito de reversão explica PARTE de por que um alvo
+assim às vezes enche; não cria caminho de ENTRADA nova executável.
+
+> **A regra (invariante portável).** Um efeito de microestrutura pode ser
+> estatisticamente enorme — aqui, reversão em ~78% das corridas de 3 ticks
+> confirmadas, n de dezenas de milhares — e mesmo assim inexequível como sinal
+> de ENTRADA nova sob QUALQUER mecanismo de fila reativa. Mudar o instante de
+> colocação da ordem para "mais cedo" (mecanismo 2) ou mudar o alvo para "mais
+> longe" (mecanismo 1) não resolve, se o volume que passa pelo nível no
+> intervalo relevante continua sendo dezenas de contratos, não centenas. A
+> ÚNICA forma de vencer uma fila calibrada em centenas de contratos é já estar
+> posicionado ali há dezenas de segundos a minutos — o que dilui a ideia em
+> "formador de mercado full-time na faixa inteira" (outra família, outro
+> risco, já refutada) ou em "isso já está coberto pelo desenho de saída
+> atual" (não é exploração nova do sinal). Antes de testar variações de
+> TIMING de colocação de ordem para vencer uma fila, meça se o volume/tempo
+> disponível de fato muda com a variação — se não muda (aqui, K=1→2→3 ticks
+> de alvo não moveu a agulha), pare de variar o timing e pergunte se o
+> problema é outro: aqui era "isto exige posição já aberta antes", não
+> "entrada nova".
+
+Pergunta 88 da Parte 8 carrega a parte que depende de plataforma.
+
 ---
 
 ## Parte 7 — Disciplina de trabalho
@@ -6034,6 +6101,22 @@ dinheiro ou meses.
     menos custo por operação). Aqui só 0,007% dos eventos estouravam a folga,
     enquanto 47% da perda total era corretagem pura: a intuição apontou para a
     cauda e quem matava era a acumulação. (6.27, 6.17, 4.5)
+
+88. Antes de aceitar "este sinal não dá para monetizar por causa da fila" como
+    veredito final, quantos mecanismos de execução DIFERENTES do "ordem nova
+    no instante do sinal" foram testados — e cada um mediu se o volume
+    disponível no intervalo relevante de fato muda com a variação, ou só
+    testou timing diferente sobre a mesma fila? Esta plataforma permite
+    calcular, por sinal candidato, o volume acumulado desde ANTES do instante
+    de confirmação (para testar entrada preexistente) e o volume necessário
+    para variações do alvo (para testar entrada mais longe)? Aqui um efeito
+    de reversão com n de dezenas de milhares resistiu a três mecanismos
+    alternativos — mirar mais longe, repousar desde o primeiro toque do
+    nível, sair de uma posição já aberta — e só o terceiro tinha chance real,
+    mas era exatamente o desenho de saída que já estava em produção, não uma
+    entrada nova. Um efeito estatisticamente enorme e uma fila estruturalmente
+    maior que o volume disponível não se resolvem testando mais variações de
+    TIMING sobre o mesmo mecanismo reativo. (6.28, 6.21, 4.22)
 
 ---
 
