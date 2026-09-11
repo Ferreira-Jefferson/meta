@@ -287,19 +287,42 @@ def test_fade_espelha_quando_o_primeiro_rompimento_foi_vendido():
     assert acao.limit_price == pytest.approx(5_118.5 + 2 * 0.5)
 
 
-def test_fade_so_dispara_UMA_vez_por_pregao():
+def test_fade_dispara_ate_3_vezes_por_pregao_e_para_na_4a():
+    """O teto subiu de 1 para 3 em 2026-09-11 (ver `max_fades_por_dia`): teto
+    3 ficou em 1o lugar nas DUAS janelas (IS +3.055,50 / OOS +839,00, contra
+    +2.843,50 / +385,50 do teto 1). A 4a chamada e' o que o teto existe para
+    cortar -- ela deu -496,00 no IS."""
     robo = WdoOrb()
     _faixa(robo, hi=5_117.5, lo=5_100.0)
     _rompe(robo, 5_118.5)
     _rompe(robo, 5_118.0, minuto=17.0, positions=[_posicao()])
     _rompe(robo, 5_110.0, minuto=30.0)
 
-    assert len(_rompe(robo, 5_099.0, minuto=45.0)) == 1             # dispara
+    minuto = 45.0
+    for n in (1, 2, 3):
+        assert len(_rompe(robo, 5_099.0, minuto=minuto)) == 1, f"fade #{n}"
+        robo.on_order_expired(ABERTURA + pd.Timedelta(minutes=minuto + 1))
+        minuto += 2.0
 
-    robo.on_order_expired(ABERTURA + pd.Timedelta(minutes=46))       # a fade tambem morre
-    assert _rompe(robo, 5_098.0, minuto=47.0) == [], (
-        "ja' usou a unica fade do dia -- nao ha' 3a operacao"
+    assert _rompe(robo, 5_098.0, minuto=minuto) == [], (
+        "3 fades ja' dispararam -- a 4a e' exatamente a que o teto corta"
     )
+
+
+def test_o_teto_do_fade_e_parametro_nao_numero_cravado():
+    """`max_fades_por_dia` existe para que mexer no teto seja uma DECISAO
+    explicita, com a medicao ao lado (ver a nota do campo), e nao uma edicao
+    de logica. Com teto 1 o robo reproduz o comportamento anterior a
+    2026-09-11."""
+    robo = WdoOrb(max_fades_por_dia=1)
+    _faixa(robo, hi=5_117.5, lo=5_100.0)
+    _rompe(robo, 5_118.5)
+    _rompe(robo, 5_118.0, minuto=17.0, positions=[_posicao()])
+    _rompe(robo, 5_110.0, minuto=30.0)
+
+    assert len(_rompe(robo, 5_099.0, minuto=45.0)) == 1
+    robo.on_order_expired(ABERTURA + pd.Timedelta(minutes=46))
+    assert _rompe(robo, 5_098.0, minuto=47.0) == []
 
 
 def test_fade_nao_dispara_antes_da_1a_operacao_fechar():
@@ -418,6 +441,11 @@ def test_o_robo_esta_no_podio_com_os_defaults_da_classe():
     assert robo.symbol == "WDO@"
     assert robo.fade_rompimento_oposto is True, (
         "o fade e' o que levou o IS a POSITIVO -- tem de vir ligado por default"
+    )
+    assert robo.max_fades_por_dia == 3, (
+        "teto 3 ficou em 1o lugar nas DUAS janelas (IS +3.055,50 / OOS "
+        "+839,00); teto 1 da' +2.843,50 / +385,50 e soltar de vez da' "
+        "+2.399,50 no IS -- ver a nota do campo"
     )
     assert robo.quantity == 1, (
         "1 contrato ate' o risco de capital achado no OOS (R$375 trava, "

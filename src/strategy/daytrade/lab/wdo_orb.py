@@ -1,8 +1,9 @@
 """ORB (Opening Range Breakout) do WDO@, no desenho de execucao FECHADO.
 
-Rompimento da faixa dos primeiros `range_minutos` do pregao, ATE' DUAS
-operacoes por pregao (a original, mais o fade do rompimento oposto -- ver
-`fade_rompimento_oposto`), geometria tirada do proprio tamanho da faixa.
+Rompimento da faixa dos primeiros `range_minutos` do pregao, ATE' QUATRO
+operacoes por pregao (a original, mais ate' 3 fades do rompimento oposto --
+ver `fade_rompimento_oposto` e `max_fades_por_dia`), geometria tirada do
+proprio tamanho da faixa.
 Todo o resto e' execucao -- e neste robo a execucao NAO e' detalhe: ela
 responde por praticamente todo o resultado.
 
@@ -40,6 +41,22 @@ passa acima do breakeven.** CONFIRMADO no OOS (51 pregoes, teste as cegas,
 nunca visto antes de 2026-09-11): as 28 operacoes que o fade adiciona la'
 deram win 67,86%, R$/op +34,50, liquido +966,00 -- mesma direcao do IS, sem
 nenhum ajuste entre as duas medicoes.
+
+O TETO DO FADE SUBIU DE 1 PARA 3 (2026-09-11, ver `max_fades_por_dia`).
+Medido nas duas janelas: teto 3 fica em 1o lugar nas duas (IS +3.055,50 e
+OOS +839,00, contra +2.843,50 e +385,50 do teto 1). Soltar o teto de vez e'
+PIOR que os dois (+2.399,50 no IS) -- o ganho nao e' "mais operacoes", e' um
+teto especifico. A explicacao por ordem da chamada NAO e' estavel entre as
+janelas e nao deve ser usada como justificativa; ver a nota do campo.
+
+O QUE O OOS DIZ SOBRE A BASE -- e e' desconfortavel: **o rompimento da faixa
+de abertura, sozinho, PERDE dinheiro na janela cega.** Base no OOS: 51
+operacoes, win 47,06%, R$/op -11,38, liquido -580,50. No mesmo OOS os fades
+dao +1.419,50 (61 operacoes, win 62,30%). Ou seja: fora da amostra, este nao
+e' um robo de rompimento com um complemento de reversao -- e' um robo de
+REVERSAO carregando um rompimento que nao se sustentou. O IS diz o contrario
+(base +1.649,00), e e' justamente por isso que o OOS existe. Quem for mexer
+na base tem de saber que esta' mexendo na perna fraca, nao na forte.
 
 RISCO DE CAPITAL, achado no MESMO teste OOS: a caminhada REAL de caixa (a
 sequencia cronologica de fato, nao a simulacao por-dia que reseta o
@@ -188,6 +205,30 @@ class WdoOrb(IntradayStrategy):
     #: classe para os numeros de IS e OOS.
     fade_rompimento_oposto: bool = True
 
+    #: quantas vezes o fade pode disparar num mesmo pregao. Era 1 (fixo, sem
+    #: parametro) ate' 2026-09-11; virou 3 depois da medicao abaixo.
+    #:
+    #: O teto foi escolhido pelo RANKING AGREGADO, que e' a unica coisa que as
+    #: duas janelas concordam -- teto 3 fica em 1o lugar nas duas:
+    #:
+    #:     teto        IS          OOS
+    #:     1       +2.843,50    +385,50     <- o que rodava ate' aqui
+    #:     2       +2.695,50    +830,00
+    #:     3       +3.055,50    +839,00     <- 1o nas duas
+    #:     ilim.   +2.399,50    (nao medido)
+    #:
+    #: NAO acredite na explicacao por ordem da chamada: ela NAO e' estavel.
+    #: No IS o 2o fade da' -133,50 e o 3o +460,00; no OOS o 2o da' +506,50 e o
+    #: 3o so' +9,00. As duas janelas discordam sobre QUAL fade paga -- os
+    #: baldes tem n de 12 a 40, pequeno demais para resolver atribuicao por
+    #: ordem. So' o agregado tem n suficiente, e e' nele que a decisao se
+    #: apoia. Quem for mexer neste numero mexe com base no agregado, nao na
+    #: quebra por ordem.
+    #:
+    #: Lacuna conhecida: o 4o fade so' foi medido no IS (-496,00, NEGATIVA).
+    #: O limite superior do teto se apoia numa janela so'.
+    max_fades_por_dia: int = 3
+
     _open_ts: pd.Timestamp | None = field(default=None, init=False, repr=False)
     _range_hi: float | None = field(default=None, init=False, repr=False)
     _range_lo: float | None = field(default=None, init=False, repr=False)
@@ -197,8 +238,8 @@ class WdoOrb(IntradayStrategy):
     #: lado do PRIMEIRO rompimento do dia -- o fade so' dispara no lado
     #: contrario a este.
     _lado_primeiro: str | None = field(default=None, init=False, repr=False)
-    #: uma fade por pregao, no maximo.
-    _fade_usado: bool = field(default=False, init=False, repr=False)
+    #: quantos fades ja' dispararam hoje -- o teto e' `max_fades_por_dia`.
+    _fades_no_dia: int = field(default=0, init=False, repr=False)
     #: tinha posicao na barra anterior? -- so' existe para detectar a
     #: transicao "tinha e agora nao tem mais" (a posicao original fechou),
     #: o gatilho que libera o fade.
@@ -207,7 +248,7 @@ class WdoOrb(IntradayStrategy):
     # ---------------- ficha do painel (`dashboard/robot_view.py`) ----------
 
     tagline: str = (
-        "Rompe a faixa dos 15 primeiros minutos do mini-dolar, ate' 2x por dia"
+        "Rompe a faixa dos 15 primeiros minutos do mini-dolar, ate' 4x por dia"
     )
 
     plain_summary: tuple[str, ...] = (
@@ -219,7 +260,8 @@ class WdoOrb(IntradayStrategy):
         "passa sem operacao (acontece em 1 de cada 5 pregoes).",
         "Depois que essa operacao fecha, se o preco romper a faixa para o "
         "lado OPOSTO ao primeiro rompimento, ele entra de novo apostando "
-        "que o dia volta ao meio. No maximo 2 operacoes por pregao.",
+        "que o dia volta ao meio. Isso pode se repetir ate' 3 vezes -- no "
+        "maximo 4 operacoes por pregao.",
         "Uma hora depois de entrar, se nem o alvo nem o stop tiverem sido "
         "atingidos, ele desiste da meta e passa a pedir o preco do momento -- "
         "por ordem parada, nunca a mercado.",
@@ -249,7 +291,8 @@ class WdoOrb(IntradayStrategy):
         "A ordem tem prazo. Morreu sem preencher, o robo rearma no rompimento "
         "seguinte do mesmo dia -- mas so' enquanto nenhuma operacao aconteceu.",
         "Depois da 1a operacao fechar, um rompimento pro lado OPOSTO ao "
-        "primeiro do dia abre uma 2a entrada (o fade). No maximo 2 por dia.",
+        "primeiro do dia abre uma entrada nova (o fade), sempre pro mesmo "
+        "lado e na mesma faixa. Ate' 3 vezes -- no maximo 4 por dia.",
     )
 
     exit_rules: tuple[str, ...] = (
@@ -283,7 +326,7 @@ class WdoOrb(IntradayStrategy):
         self._limite_posto = False
         self._preencheu_hoje = False
         self._lado_primeiro = None
-        self._fade_usado = False
+        self._fades_no_dia = 0
         self._tinha_posicao = False
 
     def on_order_rejected(self, ts: pd.Timestamp) -> None:
@@ -386,18 +429,20 @@ class WdoOrb(IntradayStrategy):
 
         # --- (4) o FADE: operacao do dia ja fechou, rompimento CONTRARIO ---
         # ao primeiro do dia. Mesma faixa (nunca refeita), mesma formula de
-        # geometria -- so' o lado inverte. Uma vez por pregao, no maximo.
-        if (self.fade_rompimento_oposto and not self._fade_usado
+        # geometria e sempre o MESMO lado (oposto ao primeiro rompimento) --
+        # ate' `max_fades_por_dia` vezes por pregao.
+        if (self.fade_rompimento_oposto
+                and self._fades_no_dia < self.max_fades_por_dia
                 and self._lado_primeiro is not None):
             stop_ticks, alvo_ticks = self._geometria()
             off = self.offset_ticks * self.tick_size
             if self._lado_primeiro == "long" and bar.close < self._range_lo:
-                self._fade_usado = True
+                self._fades_no_dia += 1
                 self._armou_hoje = True
                 return [self._ordem("long", bar.close - off, stop_ticks,
                                     alvo_ticks, "orb_fade_volta_a_faixa")]
             if self._lado_primeiro == "short" and bar.close > self._range_hi:
-                self._fade_usado = True
+                self._fades_no_dia += 1
                 self._armou_hoje = True
                 return [self._ordem("short", bar.close + off, stop_ticks,
                                     alvo_ticks, "orb_fade_volta_a_faixa")]
