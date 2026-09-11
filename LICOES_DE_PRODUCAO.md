@@ -5825,6 +5825,165 @@ que preenche de graça em todas as linhas acima).
 
 ---
 
+### 6.32 Três formas de errar um piso de capital, e a única que funciona — o erro mais perigoso é circular
+
+Ao definir o caixa mínimo do `copa_win` (WIN@) em 2026-09-11, o número foi
+errado DUAS vezes antes de acertar, e os dois erros são repetíveis por
+qualquer um.
+
+**Erro 1 — piso derivado de janela CENSURADA (o mais perigoso).** A conta
+foi "margem crua (R$100) + pior queda medida (R$226,90) = R$326,90",
+arredondado para R$600 por decisão do dono. Os R$226,90 saíram de rodar o
+robô com capital de R$250 e ler `capital − equity_mínima`. Mas uma conta de
+R$250 não consegue sofrer a queda desta estratégia: ela quebra antes, o
+portão de capital passa a recusar entradas, e o que se mediu foi a queda de
+uma conta que morreu cedo. É o erro de janela censurada que este documento
+já descreve (ver 6.15) — só que aplicado ao número que dimensiona o próprio
+capital, onde ele é circular e auto-confirmatório: o número censurado
+justifica exatamente o capital pequeno que causou a censura.
+
+**Erro 2 — medir a queda num tamanho de posição que a produção não roda.**
+A correção seguinte foi medir com 1 contrato fixo e sem portão: deu queda
+máxima de R$2.892,70 por contrato em 191 pregões. Melhor, mas ainda errado
+como piso: a produção ESCALA contratos com o caixa (`margin_per_contract_brl`
++ `risco_pct_por_trade`). Piso não se deriva de uma queda medida num
+tamanho fixo, porque o tamanho é função do próprio capital — uma conta
+maior não enfrenta a mesma queda em reais, ela abre mais contratos e a
+queda cresce junto.
+
+**Erro 3 — rodar a config de produção no histórico inteiro e achar que
+respondeu.** A R$600, começando em 2025-12-01, o robô atravessa os 191
+pregões com 0 pregões sem trade e +R$12.709,10. A R$600 começando em
+2026-09-08, ZERA em dois pregões (medido, `wiped_out_at` 2026-09-09
+21:01). As duas medições estão certas: quem começa cedo acumula caixa
+antes de encontrar a sequência ruim; quem começa na véspera dela não tem
+com o que pagá-la. Um piso tirado de UMA data de início mede o sorteio
+daquela data.
+
+**O método que funciona.** A pergunta não é "R$X sobrevive?", é "com R$X,
+que FRAÇÃO das datas de início possíveis sobrevive?". Medido em
+`scripts/daytrade/copawin_piso_por_data_de_inicio_2026_09_11.py`: 76 datas
+de início, horizonte FIXO de 40 pregões para cada uma (horizonte fixo é
+essencial — comparar uma começada que teve 150 pregões para se provar com
+outra que teve 10 favorece a primeira por construção), morte = ZERAR ou
+CALAR por capital (os dois são absorventes na prática: o robô que trava no
+portão costuma nunca mais voltar):
+
+| capital | sobrevivem | líquido mediano |
+|---|---|---|
+| R$ 600 | 42,1% | −R$ 314,80 |
+| R$ 1.000 | 60,5% | +R$ 1.410,95 |
+| R$ 1.500 | 86,8% | +R$ 2.722,00 |
+| R$ 2.000 | 93,4% | +R$ 2.722,00 |
+| R$ 3.000 | 100,0% | +R$ 2.812,45 |
+| R$ 5.000 | 100,0% | +R$ 3.022,35 |
+
+A R$600 o resultado MEDIANO é negativo, porque a conta normalmente quebra
+antes de a estratégia se pagar. O piso foi fixado em R$3.000
+(`CopaWin.capital_minimo_recomendado_brl`), primeiro nível com 100% de
+sobrevivência.
+
+**Confirmação independente, e é o que dá confiança no número:** o "erro 2"
+corrigido pela margem crua (R$2.892,70 + R$100 = R$2.992,70) cai
+praticamente em cima do primeiro nível com 100% de sobrevivência. Dois
+métodos que erram de formas diferentes convergindo no mesmo número vale
+mais que qualquer um deles sozinho.
+
+> **Regra (portável, é o que sobrevive à troca de plataforma):**
+> 1. Nunca derive piso de capital de uma medição feita NO capital
+>    candidato — se ele for insuficiente, a censura encolhe a queda medida
+>    e o número se auto-confirma.
+> 2. Nunca derive piso de uma queda medida num tamanho de posição fixo se
+>    o robô dimensiona pelo caixa: tamanho é função do capital, então a
+>    queda também é.
+> 3. Piso é uma afirmação sobre a DISTRIBUIÇÃO de datas de início, não
+>    sobre uma trajetória. Meça a fração de datas de início que sobrevive
+>    um horizonte FIXO, e conte "calar por capital" como morte, não só
+>    zerar.
+> 4. Se o piso resultante não couber no capital disponível, a conclusão é
+>    que o robô não cabe — baixar o piso não torna a estratégia mais
+>    segura, só move a quebra para dentro da conta do dono.
+>
+> Referência cruzada: mesma família de erro do item 6.15 (janela censurada
+> perto do piso de capital), aplicado desta vez ao próprio processo de
+> FIXAR o piso, não a uma medição de resultado.
+
+### 6.33 Uma lição já escrita neste registro não se aplica sozinha às outras estratégias — o prazo da ordem de ENTRADA do `copa_win` nunca tinha sido medido, e mexer nele valeu mais que uma grade de 152 células
+
+A lição já estava escrita, em dois lugares, com número real: **a ordem-limite
+de entrada precisa de prazo CURTO, senão ela espera até o fim do pregão e
+preenche horas depois do sinal** — medido no `wdo_orb` um preenchimento
+**269,7 minutos** depois do rompimento (rompeu 14:08, encheu 18:37), e os
+fills atrasados foram justamente os piores resultados. Estava no `AGENTS.md`,
+estava no `CLAUDE.md`, estava na lista de "o que NÃO fazer".
+
+E não tinha sido aplicada ao `copa_win`, que rodava com
+`entrada_ttl_barras=15` **desde sempre**, herdado do default do construtor,
+**sem nunca ter sido medido**. Ninguém escolheu 15. Ninguém comparou 15 com
+nada. Quem lesse o `registry.py` veria um número explícito ao lado dos outros
+parâmetros e concluiria (errado) que aquilo tinha sido decidido.
+
+**O número.** Numa varredura de constância pedida pelo dono em 2026-09-11,
+baixar esse prazo de **15 para 5 barras** produziu, sozinho, efeito MAIOR que
+a grade inteira de geometria — 4 alvos × 5 stops × 3 trailings = **120
+células**, mais **32** de extensão do eixo do stop. Combinado com `alvo_vol`
+9,5 → 7,6, no histórico de 191 pregões:
+
+| métrica | produção (a9,5 · ttl15) | candidato (a7,6 · ttl5) |
+|---|---|---|
+| líquido | +R$ 13.533,30 | **+R$ 18.322,40** |
+| MaxDD | 50,3% | **28,9%** |
+| lucro/DD | 2,68 | **6,70** |
+| blocos rolantes de 20 pregões positivos | 84% | **97%** |
+| meses positivos | 80% | **100%** |
+| datas de início que terminam positivas (76 datas, horizonte fixo de 40 pregões) | 89,5% | **100,0%** |
+| PIOR data de início | −R$ 888,40 | **+R$ 725,30** |
+
+A grade de geometria, que consumiu muito mais tempo de máquina, **refutou os
+dois ajustes "óbvios"** (trailing e stop mais curto) e não produziu nenhum
+ganho comparável. Scripts: `scripts/daytrade/copawin_grade_constancia_2026_09_11.py`
+(+ `..._extensao`), `copawin_filtro_entrada_2026_09_11`,
+`copawin_finalistas_robustez_2026_09_11.py`,
+`copawin_robustez_por_data_de_inicio_2026_09_11.py`.
+
+**Por que isso é um erro de MÉTODO e não uma sorte de parâmetro.** Um item
+deste registro descreve um **modo de falha**, não um robô. Quando um item
+entra aqui, ele passa a valer para **toda instância do mesmo padrão que já
+existe no repo** — e aplicar-se sozinho é justamente o que ele NÃO faz.
+Escrever a lição e seguir em frente deixa o repo num estado pior que o de
+antes de medir: agora existe a ilusão de cobertura. É o mesmo mecanismo do
+item 3.8 (parâmetro de realismo que existe mas nasce desligado é pior que não
+existir) e o mesmo do item 4.22 (a fila da entrada existia havia um mês e
+nunca foi ligada), só que num degrau acima: aqui o que não foi propagado não
+é um campo de código, é uma **lição já paga**.
+
+> **Regra (portável, vale em qualquer corretora e qualquer linguagem):**
+>
+> 1. **Ao adicionar — ou ao reler — um item que prescreve um parâmetro de
+>    EXECUÇÃO, varra as outras estratégias em busca do mesmo parâmetro e
+>    confirme que cada uma foi MEDIDA, ou registre explicitamente que não
+>    foi.** O item só está terminado quando a varredura está feita. É o item
+>    7.1 ("ao corrigir um bug, varra todas as instâncias do padrão") aplicado
+>    a lições em vez de a bugs.
+> 2. **Um parâmetro de execução herdado de um default que ninguém mediu é
+>    indistinguível de uma escolha deliberada quando alguém lê o código
+>    depois.** Um valor explícito no registro de estratégias não carrega a
+>    informação "isto nunca foi comparado com nada". Ou ele foi medido, ou o
+>    fato de não ter sido fica anotado junto dele.
+> 3. **Corolário de ordem de trabalho: antes de varrer geometria de
+>    estratégia (alvo, stop, trailing), confira que todo parâmetro de
+>    EXECUÇÃO já foi medido.** Eles são poucos, são baratos de varrer, e
+>    neste caso um deles valeu mais que a grade inteira de 152 células.
+>
+> Referência cruzada: itens 7.1 (varrer todas as instâncias do padrão), 3.8
+> (parâmetro opcional é parâmetro desligado), 4.22 (a fila da entrada nasceu
+> desligada e viciou um mês) e 6.20 (prazo em BARRAS não é prazo em tempo —
+> antes de copiar o prazo de um robô para outro, converta os dois para tempo
+> de relógio MEDIDO no feed de destino).
+
+
+---
+
 ## Parte 7 — Disciplina de trabalho
 
 ### 7.1 Ao corrigir um bug, varra todas as instâncias do padrão
@@ -6692,6 +6851,20 @@ dinheiro ou meses.
     nenhuma: o deslize consome o tick reservado antes de virar lucro, e o
     resultado colapsa para "só a corretagem", mesmo quando o código moveu o
     stop exatamente como pedido. (4.27, 4.8)
+
+94. Esta plataforma permite dar **prazo à ordem-limite de ENTRADA**, e o prazo
+    é contado em QUÊ — tempo de relógio, barras, ou negócios? Sem prazo, a
+    ordem espera até o fim do pregão e preenche horas depois do sinal (medido:
+    **269,7 minutos** entre o rompimento e o fill, e os fills atrasados foram
+    os piores resultados). Com prazo, a unidade decide o resto: "15" pode ser
+    15 minutos, 15 segundos ou 45 milissegundos conforme o feed, então o
+    número tem de ser convertido para tempo de relógio MEDIDO no feed de
+    destino antes de qualquer comparação (pergunta 67). E a pergunta que vem
+    junto, que é a que custou aqui: **para CADA estratégia que manda ordem-limite
+    de entrada, esse prazo já foi medido, ou é o default do construtor?** No
+    `copa_win` era o default (`entrada_ttl_barras=15`, nunca comparado com
+    nada); baixá-lo para 5 valeu mais que uma grade de 152 células de
+    geometria. (6.33, 6.20, 4.24)
 
 ---
 

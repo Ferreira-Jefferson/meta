@@ -568,8 +568,8 @@ def test_producao_do_copa_win_segue_o_desenho_de_execucao_fechado():
       * o alvo sai por ordem-limite REAL fatiada, nunca por `tp` nativo (que
         a corretora varre a mercado).
 
-    E fixa os dois numeros decididos em 2026-09-11, para uma mudanca neles
-    ser deliberada e nao um efeito colateral de outra edicao."""
+    E fixa os numeros decididos em 2026-09-11, para uma mudanca neles ser
+    deliberada e nao um efeito colateral de outra edicao."""
     from strategy.daytrade.registry import get_daytrade_robot
 
     robo = get_daytrade_robot("copa_win", symbol="WIN@")
@@ -577,9 +577,19 @@ def test_producao_do_copa_win_segue_o_desenho_de_execucao_fechado():
     assert robo.entrada_ttl_barras is not None and robo.entrada_ttl_barras > 0
     assert robo.fatiar_saida_alvo is True
     assert robo.exit_ttl_bars == EXIT_TTL_BARS_SEM_PRAZO
-    # alvo a 50% do que a calibracao de 2026-08-28 pedia (19,0), stop intacto
-    assert robo.alvo_vol == 9.5
+    # 2026-09-11, rodada de CONSTANCIA (ordem do dono "aplique a recomendada
+    # em producao"): alvo 9,5 -> 7,6 e prazo da entrada 15 -> 5. Os dois
+    # JUNTOS -- o prazo curto com o alvo antigo e' PIOR que o par anterior
+    # (96,1% das datas de inicio positivas contra 89,5%, mas com uma morte e
+    # pior inicio de -R$2.992,50). Ver o bloco no `registry.py`.
+    assert robo.alvo_vol == 7.6
+    assert robo.entrada_ttl_barras == 5
+    # `stop_vol` NAO muda: a grade mediu 4/6/8/10 (degradam monotonicamente) e
+    # 14/16/20 (tambem pioram) -- 12,0 e' OMBRO, medido dos dois lados.
     assert robo.stop_vol == 12.0
+    # trailing foi MEDIDO e REFUTADO nesta mesma rodada: com `trail_vol`
+    # ligado o win% cai para 33-38% e cola no breakeven em 40 de 40 celulas.
+    assert robo.trail_vol is None
     # a escada de perda foi MEDIDA e REFUTADA (perde em 8 de 8 combinacoes no
     # capital sem censura) -- fica implementada, opt-in, desligada
     assert robo.teto_perda_abs_brl is None

@@ -1,0 +1,260 @@
+grade de GEOMETRIA pontuada por CONSTANCIA -- capital R$ 3.000
+4 alvos x 5 stops x 3 trails x 2 janelas = 120 celulas
+producao = a9,5 s12 toff
+
+[  1/120] IS  a5,7 s6 t2       liq    1.340,90  bl20+   70%  indefinido  (14s)
+[  2/120] IS  a5,7 s4 toff     liq      385,00  bl20+   50%  indefinido  (18s)
+[  3/120] IS  a5,7 s8 t2       liq    1.459,20  bl20+   75%  indefinido  (18s)
+[  4/120] IS  a5,7 s8 toff     liq   -2.952,20  bl20+   14%  indefinido  (17s)
+[  5/120] IS  a5,7 s10 toff    liq   -2.930,50  bl20+   20%  indefinido  (20s)
+[  6/120] IS  a5,7 s4 t2       liq      -71,90  bl20+   53%  indefinido  (20s)
+[  7/120] IS  a5,7 s6 toff     liq   -2.930,00  bl20+   18%  indefinido  (20s)
+[  8/120] IS  a5,7 s8 t4       liq     -438,80  bl20+   58%  indefinido  (26s)
+[  9/120] IS  a5,7 s10 t4      liq       79,10  bl20+   63%  indefinido  (24s)
+[ 10/120] IS  a5,7 s10 t2      liq    1.636,60  bl20+   77%  indefinido  (25s)
+[ 11/120] IS  a5,7 s4 t4       liq   -2.912,40  bl20+    0%  indefinido  (27s)
+[ 12/120] IS  a5,7 s6 t4       liq     -106,70  bl20+   59%  indefinido  (30s)
+[ 13/120] IS  a7,6 s6 toff     liq   -2.838,80  bl20+   11%  indefinido  (8s)
+[ 14/120] IS  a5,7 s12 t2      liq    1.840,00  bl20+   76%  indefinido  (19s)
+[ 15/120] IS  a5,7 s12 toff    liq    2.804,40  bl20+   65%  indefinido  (22s)
+[ 16/120] IS  a7,6 s8 toff     liq   -2.851,70  bl20+   18%  indefinido  (9s)
+[ 17/120] IS  a7,6 s4 t4       liq   -2.901,20  bl20+    0%  indefinido  (19s)
+[ 18/120] IS  a5,7 s12 t4      liq     -237,80  bl20+   57%  indefinido  (21s)
+[ 19/120] IS  a7,6 s4 toff     liq   -2.904,60  bl20+    2%  indefinido  (20s)
+[ 20/120] IS  a7,6 s4 t2       liq     -504,40  bl20+   46%  indefinido  (21s)
+[ 21/120] IS  a7,6 s6 t2       liq      262,70  bl20+   55%  indefinido  (19s)
+[ 22/120] IS  a7,6 s8 t4       liq       85,00  bl20+   49%  indefinido  (16s)
+[ 23/120] IS  a7,6 s10 toff    liq    4.733,30  bl20+   73%  indefinido  (18s)
+[ 24/120] IS  a7,6 s8 t2       liq      368,30  bl20+   55%  indefinido  (18s)
+[ 25/120] IS  a7,6 s10 t2      liq      366,60  bl20+   55%  indefinido  (18s)
+[ 26/120] IS  a7,6 s6 t4       liq     -189,80  bl20+   55%  indefinido  (26s)
+[ 27/120] IS  a7,6 s10 t4      liq      497,20  bl20+   54%  indefinido  (18s)
+[ 28/120] IS  a9,5 s4 t2       liq     -667,30  bl20+   47%  indefinido  (16s)
+[ 29/120] IS  a9,5 s4 toff     liq      213,50  bl20+   52%  indefinido  (16s)
+[ 30/120] IS  a7,6 s12 t4      liq      760,70  bl20+   55%  indefinido  (18s)
+[ 31/120] IS  a7,6 s12 t2      liq      388,50  bl20+   55%  indefinido  (20s)
+[ 32/120] IS  a7,6 s12 toff    liq    9.185,60  bl20+   89%  POSITIVO  (23s)
+[ 33/120] IS  a9,5 s8 toff     liq    3.700,70  bl20+   58%  indefinido  (15s)
+[ 34/120] IS  a9,5 s4 t4       liq       32,20  bl20+   54%  indefinido  (23s)
+[ 35/120] IS  a9,5 s6 t2       liq     -107,30  bl20+   57%  indefinido  (21s)
+[ 36/120] IS  a9,5 s6 toff     liq      814,60  bl20+   49%  indefinido  (21s)
+[ 37/120] IS  a9,5 s6 t4       liq      582,80  bl20+   60%  indefinido  (23s)
+[ 38/120] IS  a9,5 s8 t2       liq      223,60  bl20+   59%  indefinido  (19s)
+[ 39/120] IS  a9,5 s10 toff    liq    4.919,70  bl20+   66%  indefinido  (18s)
+[ 40/120] IS  a9,5 s10 t2      liq      105,90  bl20+   58%  indefinido  (19s)
+[ 41/120] IS  a9,5 s8 t4       liq      192,10  bl20+   53%  indefinido  (20s)
+[ 42/120] IS  a9,5 s10 t4      liq      148,50  bl20+   53%  indefinido  (20s)
+[ 43/120] IS  a9,5 s12 t2      liq      105,90  bl20+   58%  indefinido  (18s)
+[ 44/120] IS  a9,5 s12 toff    liq    7.351,00  bl20+   76%  POSITIVO  (22s)
+[ 45/120] IS  a11,4 s4 t4      liq   -2.960,10  bl20+    1%  NEGATIVO  (15s)
+[ 46/120] IS  a11,4 s10 toff   liq   -2.841,40  bl20+   13%  indefinido  (9s)
+[ 47/120] IS  a11,4 s4 toff    liq     -225,40  bl20+   51%  indefinido  (19s)
+[ 48/120] IS  a11,4 s6 toff    liq      125,00  bl20+   51%  indefinido  (17s)
+[ 49/120] IS  a9,5 s12 t4      liq      263,80  bl20+   51%  indefinido  (24s)
+[ 50/120] IS  a11,4 s8 t2      liq      121,80  bl20+   51%  indefinido  (19s)
+[ 51/120] IS  a11,4 s6 t2      liq     -174,70  bl20+   48%  indefinido  (21s)
+[ 52/120] IS  a11,4 s6 t4      liq      442,50  bl20+   55%  indefinido  (21s)
+[ 53/120] IS  a11,4 s4 t2      liq     -705,50  bl20+   36%  indefinido  (27s)
+[ 54/120] IS  a11,4 s10 t2     liq      -12,50  bl20+   48%  indefinido  (15s)
+[ 55/120] IS  a11,4 s8 t4      liq      -53,60  bl20+   51%  indefinido  (20s)
+[ 56/120] IS  a11,4 s10 t4     liq      243,50  bl20+   51%  indefinido  (15s)
+[ 57/120] IS  a11,4 s8 toff    liq   -2.918,70  bl20+   15%  indefinido  (24s)
+[ 58/120] OOS a5,7 s4 toff     liq    9.414,00  bl20+   86%  indefinido  (9s)
+[ 59/120] OOS a5,7 s4 t4       liq    1.263,50  bl20+   67%  indefinido  (7s)
+[ 60/120] OOS a5,7 s4 t2       liq    1.682,90  bl20+   72%  indefinido  (9s)
+[ 61/120] OOS a5,7 s6 toff     liq    1.092,30  bl20+   67%  indefinido  (9s)
+[ 62/120] OOS a5,7 s6 t4       liq    1.027,30  bl20+   70%  indefinido  (8s)
+[ 63/120] OOS a5,7 s6 t2       liq    1.460,40  bl20+   72%  indefinido  (11s)
+[ 64/120] OOS a5,7 s8 t2       liq    1.673,10  bl20+   77%  indefinido  (8s)
+[ 65/120] IS  a11,4 s12 toff   liq    5.528,80  bl20+   75%  indefinido  (21s)
+[ 66/120] OOS a5,7 s8 toff     liq    2.319,20  bl20+   81%  indefinido  (10s)
+[ 67/120] IS  a11,4 s12 t4     liq      104,90  bl20+   51%  indefinido  (22s)
+[ 68/120] IS  a11,4 s12 t2     liq      -12,50  bl20+   48%  indefinido  (22s)
+[ 69/120] OOS a5,7 s8 t4       liq    1.504,00  bl20+   81%  indefinido  (11s)
+[ 70/120] OOS a5,7 s10 t4      liq    1.944,40  bl20+   93%  indefinido  (10s)
+[ 71/120] OOS a5,7 s10 t2      liq    1.582,00  bl20+   74%  indefinido  (10s)
+[ 72/120] OOS a5,7 s12 t2      liq    1.625,00  bl20+   74%  indefinido  (9s)
+[ 73/120] OOS a5,7 s12 toff    liq    1.967,40  bl20+  100%  indefinido  (11s)
+[ 74/120] OOS a7,6 s4 t2       liq    1.003,70  bl20+   58%  indefinido  (8s)
+[ 75/120] OOS a5,7 s12 t4      liq    2.095,80  bl20+  100%  indefinido  (11s)
+[ 76/120] OOS a7,6 s4 t4       liq      316,40  bl20+   23%  indefinido  (9s)
+[ 77/120] OOS a5,7 s10 toff    liq    2.183,80  bl20+   93%  indefinido  (17s)
+[ 78/120] OOS a7,6 s6 toff     liq       69,90  bl20+   42%  indefinido  (9s)
+[ 79/120] OOS a7,6 s6 t2       liq    1.519,20  bl20+   63%  indefinido  (9s)
+[ 80/120] OOS a7,6 s4 toff     liq    3.256,50  bl20+   63%  indefinido  (13s)
+[ 81/120] OOS a7,6 s6 t4       liq      808,80  bl20+   33%  indefinido  (13s)
+[ 82/120] OOS a7,6 s8 t4       liq    1.268,70  bl20+   51%  indefinido  (10s)
+[ 83/120] OOS a7,6 s12 t2      liq    1.703,30  bl20+   65%  indefinido  (7s)
+[ 84/120] OOS a7,6 s8 t2       liq    1.608,90  bl20+   65%  indefinido  (13s)
+[ 85/120] OOS a7,6 s10 t2      liq    1.742,40  bl20+   65%  indefinido  (9s)
+[ 86/120] OOS a7,6 s12 toff    liq    2.752,10  bl20+  100%  indefinido  (10s)
+[ 87/120] OOS a7,6 s12 t4      liq    1.450,10  bl20+   60%  indefinido  (9s)
+[ 88/120] OOS a7,6 s8 toff     liq    2.684,40  bl20+   86%  indefinido  (17s)
+[ 89/120] OOS a7,6 s10 t4      liq    1.425,40  bl20+   60%  indefinido  (13s)
+[ 90/120] OOS a9,5 s4 t4       liq       10,80  bl20+   33%  indefinido  (7s)
+[ 91/120] OOS a9,5 s4 toff     liq    1.148,90  bl20+   79%  indefinido  (13s)
+[ 92/120] OOS a9,5 s4 t2       liq    1.180,40  bl20+   65%  indefinido  (12s)
+[ 93/120] OOS a9,5 s6 toff     liq     -174,10  bl20+   53%  indefinido  (8s)
+[ 94/120] OOS a7,6 s10 toff    liq    1.326,20  bl20+   72%  indefinido  (18s)
+[ 95/120] OOS a9,5 s8 toff     liq    2.167,50  bl20+   74%  indefinido  (9s)
+[ 96/120] OOS a9,5 s6 t2       liq    1.253,10  bl20+   63%  indefinido  (12s)
+[ 97/120] OOS a9,5 s10 toff    liq    5.637,10  bl20+   95%  POSITIVO  (8s)
+[ 98/120] OOS a9,5 s6 t4       liq      499,30  bl20+   26%  indefinido  (13s)
+[ 99/120] OOS a9,5 s12 toff    liq    4.255,30  bl20+  100%  POSITIVO  (7s)
+[100/120] OOS a9,5 s10 t2      liq    1.493,40  bl20+   65%  indefinido  (9s)
+[101/120] OOS a9,5 s8 t4       liq    1.236,10  bl20+   53%  indefinido  (10s)
+[102/120] OOS a9,5 s8 t2       liq    1.297,40  bl20+   65%  indefinido  (14s)
+[103/120] OOS a11,4 s4 toff    liq   -1.271,00  bl20+   42%  indefinido  (7s)
+[104/120] OOS a9,5 s10 t4      liq    1.935,00  bl20+   67%  indefinido  (12s)
+[105/120] OOS a9,5 s12 t2      liq    1.420,40  bl20+   65%  indefinido  (11s)
+[106/120] OOS a11,4 s4 t2      liq      864,40  bl20+   60%  indefinido  (9s)
+[107/120] OOS a9,5 s12 t4      liq    2.146,90  bl20+   79%  indefinido  (11s)
+[108/120] OOS a11,4 s4 t4      liq      468,60  bl20+   40%  indefinido  (9s)
+[109/120] OOS a11,4 s8 toff    liq    1.360,80  bl20+   67%  indefinido  (9s)
+[110/120] OOS a11,4 s10 toff   liq    2.425,60  bl20+   91%  indefinido  (6s)
+[111/120] OOS a11,4 s8 t2      liq    1.249,10  bl20+   63%  indefinido  (9s)
+[112/120] OOS a11,4 s10 t4     liq    2.141,80  bl20+   86%  indefinido  (7s)
+[113/120] OOS a11,4 s6 t2      liq    1.212,70  bl20+   67%  indefinido  (12s)
+[114/120] OOS a11,4 s10 t2     liq    1.426,10  bl20+   72%  indefinido  (8s)
+[115/120] OOS a11,4 s6 t4      liq      709,30  bl20+   42%  indefinido  (12s)
+[116/120] OOS a11,4 s12 t2     liq    1.334,50  bl20+   65%  indefinido  (7s)
+[117/120] OOS a11,4 s6 toff    liq   -2.107,40  bl20+    0%  indefinido  (15s)
+[118/120] OOS a11,4 s8 t4      liq    1.399,80  bl20+   65%  indefinido  (11s)
+[119/120] OOS a11,4 s12 t4     liq    2.243,30  bl20+   81%  indefinido  (7s)
+[120/120] OOS a11,4 s12 toff   liq    1.462,10  bl20+   77%  indefinido  (11s)
+
+
+===== IS -- ordenado por bl20+ (blocos rolantes de 20 pregoes positivos), depois liquido =====
+alvo/stop/trail      liquido   ops   R$/dia  preg+  bl20+   mes+   top5 seq-    MaxDD  R$/stop  R$/alvo  alvo%   win%    BE%    veredito
+----------------------------------------------------------------------------------------------------------------------------------------
+a9,5 s12 toff       7.351,00   310    56,98    59%    76%    86%    22%    5    2.893     -337      302    17%  51,3%  45,0%    POSITIVO   <== PRODUCAO
+a7,6 s12 toff       9.185,60   362    71,21    58%    89%    86%    17%    6    2.297     -369      225    23%  57,2%  50,1%    POSITIVO
+a5,7 s10 t2         1.636,60  1150    12,69    51%    77%    71%    21%    5    2.330      -20      185     5%  37,0%  35,9%  indefinido
+a5,7 s12 t2         1.840,00  1148    14,26    51%    76%    71%    21%    6    2.250      -20      185     5%  36,9%  35,7%  indefinido
+a5,7 s8 t2          1.459,20  1150    11,31    51%    75%    57%    22%    5    2.418      -21      185     5%  37,0%  36,0%  indefinido
+a11,4 s12 toff      5.528,80   283    42,86    55%    75%    86%    23%    8    4.067     -352      335    12%  50,5%  45,5%  indefinido
+a7,6 s10 toff       4.733,30   376    36,69    55%    73%    57%    19%    9    4.051     -310      226    19%  53,5%  49,9%  indefinido
+a5,7 s6 t2          1.340,90  1155    10,39    53%    70%    57%    22%    6    2.747      -22      182     6%  37,2%  36,4%  indefinido
+a9,5 s10 toff       4.919,70   343    38,14    58%    66%    57%    21%    5    3.072     -288      293    14%  48,1%  44,2%  indefinido
+a5,7 s12 toff       2.804,40   427    21,74    54%    65%    71%    22%    8    4.527     -343      181    27%  55,3%  53,2%  indefinido
+a5,7 s10 t4            79,10  1104     0,61    49%    63%    71%    24%    7    3.283      -52      152    14%  35,9%  35,8%  indefinido
+a9,5 s6 t4            582,80  1120     4,52    49%    60%    71%    21%    6    3.263      -38      225     7%  34,6%  34,4%  indefinido
+a9,5 s8 t2            223,60  1143     1,73    50%    59%    43%    22%    6    2.155       -6      255     1%  36,1%  36,0%  indefinido
+a5,7 s6 t4           -106,70  1131    -0,83    47%    59%    57%    23%    7    3.802      -59      144    15%  37,5%  37,5%  indefinido
+a9,5 s8 toff        3.700,70   416    28,69    53%    58%    71%    23%    6    3.756     -243      297    12%  45,0%  42,5%  indefinido
+a9,5 s10 t2           105,90  1143     0,82    50%    58%    43%    22%    6    2.155       -7      255     1%  36,1%  36,1%  indefinido
+a9,5 s12 t2           105,90  1143     0,82    50%    58%    43%    22%    6    2.155       -7      255     1%  36,1%  36,1%  indefinido
+a5,7 s8 t4           -438,80  1114    -3,40    47%    58%    57%    24%   13    3.553      -55      149    14%  36,4%  36,6%  indefinido
+a9,5 s6 t2           -107,30  1143    -0,83    50%    57%    43%    22%    6    2.113       -7      255     1%  36,1%  36,2%  indefinido
+a5,7 s12 t4          -237,80  1096    -1,84    49%    57%    57%    25%    7    3.223      -52      155    13%  35,4%  35,5%  indefinido
+a11,4 s6 t4           442,50  1095     3,43    50%    55%    57%    24%    8    3.378      -25      247     4%  33,6%  33,4%  indefinido
+a7,6 s12 t2           388,50  1147     3,01    50%    55%    43%    24%    6    2.136      -11      246     3%  36,2%  35,9%  indefinido
+a7,6 s8 t2            368,30  1148     2,86    50%    55%    43%    24%    6    2.189      -11      246     3%  36,2%  36,0%  indefinido
+a7,6 s10 t2           366,60  1147     2,84    50%    55%    43%    24%    6    2.158      -11      246     3%  36,2%  35,9%  indefinido
+a7,6 s12 t4           760,70  1098     5,90    51%    55%    57%    23%    4    2.881      -41      211     8%  32,9%  32,5%  indefinido
+a7,6 s6 t2            262,70  1148     2,04    51%    55%    43%    24%    5    2.176      -12      246     3%  36,2%  36,1%  indefinido
+a7,6 s6 t4           -189,80  1110    -1,47    50%    55%    43%    22%    4    3.650      -46      202     9%  33,7%  33,8%  indefinido
+a7,6 s10 t4           497,20  1099     3,85    51%    54%    57%    23%    4    2.971      -41      211     8%  32,9%  32,7%  indefinido
+a9,5 s4 t4             32,20  1126     0,25    50%    54%    43%    25%    6    3.832      -48      226     7%  35,8%  35,8%  indefinido
+a9,5 s8 t4            192,10  1106     1,49    48%    53%    57%    23%    8    3.235      -34      236     6%  33,6%  33,5%  indefinido
+a9,5 s10 t4           148,50  1098     1,15    51%    53%    57%    24%    4    3.186      -32      245     6%  33,2%  33,1%  indefinido
+
+
+===== OOS -- ordenado por bl20+ (blocos rolantes de 20 pregoes positivos), depois liquido =====
+alvo/stop/trail      liquido   ops   R$/dia  preg+  bl20+   mes+   top5 seq-    MaxDD  R$/stop  R$/alvo  alvo%   win%    BE%    veredito
+----------------------------------------------------------------------------------------------------------------------------------------
+a9,5 s12 toff       4.255,30   151    68,63    60%   100%    75%    36%    5    1.855     -307      224    20%  58,9%  50,5%    POSITIVO   <== PRODUCAO
+a7,6 s12 toff       2.752,10   169    44,39    56%   100%    50%    38%    3    1.596     -314      201    27%  54,4%  49,0%  indefinido
+a5,7 s12 t4         2.095,80   507    33,80    56%   100%   100%    30%    3    1.459      -44      136    13%  38,7%  36,0%  indefinido
+a5,7 s12 toff       1.967,40   211    31,73    56%   100%    50%    39%    5    2.148     -333      158    31%  57,3%  53,9%  indefinido
+a9,5 s10 toff       5.637,10   164    90,92    61%    95%    75%    34%    5    1.751     -282      230    20%  59,1%  48,9%    POSITIVO
+a5,7 s10 toff       2.183,80   225    35,22    56%    93%    50%    42%    4    1.343     -257      155    31%  53,8%  50,0%  indefinido
+a5,7 s10 t4         1.944,40   511    31,36    53%    93%   100%    31%    3    1.547      -45      134    13%  39,1%  36,7%  indefinido
+a11,4 s10 toff      2.425,60   146    39,12    58%    91%    75%    35%    3    1.778     -265      296    12%  51,4%  46,6%  indefinido
+a5,7 s4 toff        9.414,00   482   151,84    55%    86%    75%    45%    3    5.296     -301      130    34%  61,6%  57,3%  indefinido
+a7,6 s8 toff        2.684,40   228    43,30    60%    86%    75%    34%    5    2.064     -239      194    27%  53,9%  50,1%  indefinido
+a11,4 s10 t4        2.141,80   502    34,55    52%    86%   100%    34%    3    1.538      -16      261     4%  35,9%  33,2%  indefinido
+a5,7 s8 toff        2.319,20   271    37,41    56%    81%    75%    36%    6    1.474     -225      151    31%  57,2%  54,0%  indefinido
+a11,4 s12 t4        2.243,30   500    36,18    53%    81%   100%    34%    3    1.329      -15      268     4%  35,6%  32,8%  indefinido
+a5,7 s8 t4          1.504,00   514    24,26    56%    81%    75%    32%    3    1.860      -48      132    13%  39,5%  37,7%  indefinido
+a9,5 s12 t4         2.146,90   510    34,63    56%    79%   100%    38%    3    1.437      -21      227     6%  35,3%  32,7%  indefinido
+a9,5 s4 toff        1.148,90   288    18,53    42%    79%    50%    42%    6    5.263     -175      199    16%  44,1%  43,0%  indefinido
+a5,7 s8 t2          1.673,10   539    26,99    48%    77%    75%    42%   10    1.234      -17      158     6%  37,7%  35,0%  indefinido
+a11,4 s12 toff      1.462,10   145    23,58    55%    77%    75%    37%    5    2.284     -281      302    13%  49,0%  46,1%  indefinido
+a9,5 s8 toff        2.167,50   191    34,96    53%    74%    75%    35%    5    1.917     -225      253    16%  51,8%  48,3%  indefinido
+a5,7 s12 t2         1.625,00   538    26,21    48%    74%    75%    41%   10    1.217      -17      158     6%  37,5%  34,9%  indefinido
+a5,7 s10 t2         1.582,00   538    25,52    48%    74%    75%    41%   10    1.217      -17      158     6%  37,5%  35,0%  indefinido
+a5,7 s4 t2          1.682,90   555    27,14    50%    72%    75%    41%    6    1.560      -23      143     8%  39,3%  37,1%  indefinido
+a5,7 s6 t2          1.460,40   542    23,55    50%    72%    75%    41%    9    1.388      -19      152     7%  38,0%  35,7%  indefinido
+a11,4 s10 t2        1.426,10   530    23,00    50%    72%    75%    48%   10    1.423       -1      256     1%  37,0%  34,6%  indefinido
+a7,6 s10 toff       1.326,20   180    21,39    55%    72%    50%    38%    5    1.594     -265      203    25%  49,4%  46,9%  indefinido
+a5,7 s6 t4          1.027,30   533    16,57    52%    70%    75%    35%    5    2.534      -59      123    15%  41,8%  40,8%  indefinido
+a9,5 s10 t4         1.935,00   510    31,21    52%    67%    75%    38%    3    1.470      -22      227     6%  35,7%  33,4%  indefinido
+a11,4 s8 toff       1.360,80   181    21,95    53%    67%    50%    35%    6    2.392     -213      313    12%  43,6%  41,5%  indefinido
+a5,7 s4 t4          1.263,50   577    20,38    48%    67%    75%    39%    5    3.592      -89      114    20%  46,4%  45,6%  indefinido
+a11,4 s6 t2         1.212,70   531    19,56    47%    67%    75%    50%   10    1.545       -3      242     2%  37,1%  35,2%  indefinido
+a5,7 s6 toff        1.092,30   312    17,62    52%    67%    25%    33%    6    2.610     -175      132    26%  53,8%  52,4%  indefinido
+
+
+===== CRUZAMENTO IS x OOS (quem e' bom nas duas janelas) =====
+alvo/stop/trail       IS liq  IS bl20+  IS win   IS BE      IS ver     OOS liq  OOS bl20+  OOS win  OOS BE     OOS ver   pior bl20+
+-----------------------------------------------------------------------------------------------------------------------------------
+a7,6 s12 toff       9.185,60       89%   57,2%   50,1%    POSITIVO    2.752,10       100%    54,4%   49,0%  indefinido          89%
+a9,5 s12 toff       7.351,00       76%   51,3%   45,0%    POSITIVO    4.255,30       100%    58,9%   50,5%    POSITIVO          76%   <== PRODUCAO
+a5,7 s8 t2          1.459,20       75%   37,0%   36,0%  indefinido    1.673,10        77%    37,7%   35,0%  indefinido          75%
+a11,4 s12 toff      5.528,80       75%   50,5%   45,5%  indefinido    1.462,10        77%    49,0%   46,1%  indefinido          75%
+a5,7 s10 t2         1.636,60       77%   37,0%   35,9%  indefinido    1.582,00        74%    37,5%   35,0%  indefinido          74%
+a5,7 s12 t2         1.840,00       76%   36,9%   35,7%  indefinido    1.625,00        74%    37,5%   34,9%  indefinido          74%
+a7,6 s10 toff       4.733,30       73%   53,5%   49,9%  indefinido    1.326,20        72%    49,4%   46,9%  indefinido          72%
+a5,7 s6 t2          1.340,90       70%   37,2%   36,4%  indefinido    1.460,40        72%    38,0%   35,7%  indefinido          70%
+a9,5 s10 toff       4.919,70       66%   48,1%   44,2%  indefinido    5.637,10        95%    59,1%   48,9%    POSITIVO          66%
+a5,7 s12 toff       2.804,40       65%   55,3%   53,2%  indefinido    1.967,40       100%    57,3%   53,9%  indefinido          65%
+a5,7 s10 t4            79,10       63%   35,9%   35,8%  indefinido    1.944,40        93%    39,1%   36,7%  indefinido          63%
+a5,7 s6 t4           -106,70       59%   37,5%   37,5%  indefinido    1.027,30        70%    41,8%   40,8%  indefinido          59%
+a9,5 s8 t2            223,60       59%   36,1%   36,0%  indefinido    1.297,40        65%    36,9%   34,8%  indefinido          59%
+a5,7 s8 t4           -438,80       58%   36,4%   36,6%  indefinido    1.504,00        81%    39,5%   37,7%  indefinido          58%
+a9,5 s8 toff        3.700,70       58%   45,0%   42,5%  indefinido    2.167,50        74%    51,8%   48,3%  indefinido          58%
+a9,5 s10 t2           105,90       58%   36,1%   36,1%  indefinido    1.493,40        65%    36,9%   34,4%  indefinido          58%
+a9,5 s12 t2           105,90       58%   36,1%   36,1%  indefinido    1.420,40        65%    36,9%   34,5%  indefinido          58%
+a5,7 s12 t4          -237,80       57%   35,4%   35,5%  indefinido    2.095,80       100%    38,7%   36,0%  indefinido          57%
+a9,5 s6 t2           -107,30       57%   36,1%   36,2%  indefinido    1.253,10        63%    37,0%   35,1%  indefinido          57%
+a7,6 s8 t2            368,30       55%   36,2%   36,0%  indefinido    1.608,90        65%    38,1%   35,4%  indefinido          55%
+a7,6 s10 t2           366,60       55%   36,2%   35,9%  indefinido    1.742,40        65%    38,0%   35,1%  indefinido          55%
+a7,6 s12 t2           388,50       55%   36,2%   35,9%  indefinido    1.703,30        65%    38,0%   35,1%  indefinido          55%
+a7,6 s6 t2            262,70       55%   36,2%   36,1%  indefinido    1.519,20        63%    38,5%   36,2%  indefinido          55%
+a7,6 s12 t4           760,70       55%   32,9%   32,5%  indefinido    1.450,10        60%    35,1%   33,3%  indefinido          55%
+a7,6 s10 t4           497,20       54%   32,9%   32,7%  indefinido    1.425,40        60%    35,1%   33,3%  indefinido          54%
+a5,7 s4 t2            -71,90       53%   37,9%   37,9%  indefinido    1.682,90        72%    39,3%   37,1%  indefinido          53%
+a9,5 s8 t4            192,10       53%   33,6%   33,5%  indefinido    1.236,10        53%    35,7%   34,2%  indefinido          53%
+a9,5 s10 t4           148,50       53%   33,2%   33,1%  indefinido    1.935,00        67%    35,7%   33,4%  indefinido          53%
+a9,5 s4 toff          213,50       52%   36,9%   36,8%  indefinido    1.148,90        79%    44,1%   43,0%  indefinido          52%
+a9,5 s12 t4           263,80       51%   33,0%   32,9%  indefinido    2.146,90        79%    35,3%   32,7%  indefinido          51%
+a11,4 s8 t2           121,80       51%   36,3%   36,2%  indefinido    1.249,10        63%    37,0%   34,9%  indefinido          51%
+a11,4 s8 t4           -53,60       51%   33,1%   33,1%  indefinido    1.399,80        65%    36,0%   34,3%  indefinido          51%
+a11,4 s10 t4          243,50       51%   32,9%   32,8%  indefinido    2.141,80        86%    35,9%   33,2%  indefinido          51%
+a11,4 s12 t4          104,90       51%   32,8%   32,7%  indefinido    2.243,30        81%    35,6%   32,8%  indefinido          51%
+a5,7 s4 toff          385,00       50%   47,4%   47,3%  indefinido    9.414,00        86%    61,6%   57,3%  indefinido          50%
+
+
+===== MAPA DO PLATO -- bl20+ no IS, trail=off =====
+alvo \ stop          s4       s6       s8      s10      s12
+a5,7                50%      18%      14%      20%      65%
+a7,6                 2%      11%      18%      73%      89%
+a9,5                52%      49%      58%      66%      76%
+a11,4               51%      51%      15%      13%      75%
+
+
+===== MAPA DO PLATO -- bl20+ no IS, trail=2 =====
+alvo \ stop          s4       s6       s8      s10      s12
+a5,7                53%      70%      75%      77%      76%
+a7,6                46%      55%      55%      55%      55%
+a9,5                47%      57%      59%      58%      58%
+a11,4               36%      48%      51%      48%      48%
+
+
+===== MAPA DO PLATO -- bl20+ no IS, trail=4 =====
+alvo \ stop          s4       s6       s8      s10      s12
+a5,7                 0%      59%      58%      63%      57%
+a7,6                 0%      55%      49%      54%      55%
+a9,5                54%      60%      53%      53%      51%
+a11,4                1%      55%      51%      51%      51%

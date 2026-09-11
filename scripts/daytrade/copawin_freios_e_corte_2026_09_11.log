@@ -1,0 +1,126 @@
+freios de CAUDA ESQUERDA, um eixo por vez -- capital R$ 3.000, geometria de PRODUCAO (alvo 9,5 / stop 12,0)
+18 variantes x 3 janelas = 54 celulas
+
+[ 1/54] IS   perda/dia R$150          liq    4.423,50  bl20+   68%  indefinido
+[ 2/54] IS   perda/dia R$900          liq    7.351,00  bl20+   76%  POSITIVO
+[ 3/54] IS   max 2 entradas/dia       liq    6.647,30  bl20+   76%  POSITIVO
+[ 4/54] IS   max 3 entradas/dia       liq    8.616,70  bl20+   76%  POSITIVO
+[ 5/54] IS   corte 0,9 / 5 barras     liq    5.044,00  bl20+   71%  indefinido
+[ 6/54] IS   corte 0,8 / 20 barras    liq   -2.744,30  bl20+   10%  indefinido
+[ 7/54] IS   perda/dia R$1.500        liq    7.351,00  bl20+   76%  POSITIVO
+[ 8/54] IS   max 1 entrada/dia        liq    2.424,70  bl20+   64%  indefinido
+[ 9/54] IS   PRODUCAO                 liq    7.351,00  bl20+   76%  POSITIVO
+[10/54] IS   perda/dia R$600          liq    7.176,00  bl20+   75%  POSITIVO
+[11/54] IS   corte 0,7 / 10 barras    liq   -2.899,00  bl20+   13%  indefinido
+[12/54] IS   max 5 entradas/dia       liq    7.061,80  bl20+   76%  POSITIVO
+[13/54] IS   corte 0,8 / 10 barras    liq   -2.881,60  bl20+    7%  indefinido
+[14/54] IS   corte 0,8 / 5 barras     liq   -2.524,90  bl20+   24%  indefinido
+[15/54] OOS  perda/dia R$150          liq    1.036,30  bl20+   74%  indefinido
+[16/54] OOS  perda/dia R$600          liq    4.306,30  bl20+  100%  POSITIVO
+[17/54] IS   corte 0,9 / 20 barras    liq   -2.960,80  bl20+   15%  indefinido
+[18/54] IS   corte 0,9 / 10 barras    liq   -2.936,30  bl20+   11%  indefinido
+[19/54] IS   corte 0,6 / 10 barras    liq      772,90  bl20+   51%  indefinido
+[20/54] OOS  max 2 entradas/dia       liq    3.086,50  bl20+   95%  indefinido
+[21/54] OOS  perda/dia R$900          liq    4.255,30  bl20+  100%  POSITIVO
+[22/54] OOS  max 3 entradas/dia       liq    3.561,80  bl20+   95%  indefinido
+[23/54] OOS  PRODUCAO                 liq    4.255,30  bl20+  100%  POSITIVO
+[24/54] OOS  perda/dia R$300          liq    2.700,40  bl20+   88%  indefinido
+[25/54] OOS  corte 0,9 / 20 barras    liq    2.584,90  bl20+   84%  indefinido
+[26/54] OOS  corte 0,9 / 10 barras    liq    2.401,80  bl20+   93%  indefinido
+[27/54] OOS  corte 0,9 / 5 barras     liq    2.033,10  bl20+   79%  indefinido
+[28/54] IS   perda/dia R$300          liq    7.507,70  bl20+   76%  POSITIVO
+[29/54] OOS  max 5 entradas/dia       liq    4.100,00  bl20+  100%  POSITIVO
+[30/54] OOS  corte 0,7 / 10 barras    liq      331,90  bl20+   51%  indefinido
+[31/54] OOS  max 1 entrada/dia        liq      795,00  bl20+   63%  indefinido
+[32/54] OOS  perda/dia R$1.500        liq    4.255,30  bl20+  100%  POSITIVO
+[33/54] OOS  corte 0,8 / 5 barras     liq    1.710,20  bl20+   88%  indefinido
+[34/54] OOS  corte 0,8 / 20 barras    liq    2.141,20  bl20+   95%  indefinido
+[35/54] OOS  corte 0,8 / 10 barras    liq      734,20  bl20+   70%  indefinido
+[36/54] OOS  corte 0,6 / 10 barras    liq    3.854,10  bl20+   84%  POSITIVO
+[37/54] TUDO perda/dia R$150          liq    5.221,50  bl20+   66%  indefinido
+[38/54] TUDO perda/dia R$600          liq   11.232,70  bl20+   83%  POSITIVO
+[39/54] TUDO perda/dia R$1.500        liq   13.595,30  bl20+   84%  POSITIVO
+[40/54] TUDO PRODUCAO                 liq   13.533,30  bl20+   84%  POSITIVO
+[41/54] TUDO max 2 entradas/dia       liq   10.178,50  bl20+   85%  POSITIVO
+[42/54] TUDO corte 0,8 / 10 barras    liq   -2.881,60  bl20+    5%  indefinido
+[43/54] TUDO corte 0,8 / 5 barras     liq   -2.524,90  bl20+   15%  indefinido
+[44/54] TUDO perda/dia R$900          liq   14.590,30  bl20+   85%  POSITIVO
+[45/54] TUDO perda/dia R$300          liq    9.482,30  bl20+   75%  POSITIVO
+[46/54] TUDO corte 0,8 / 20 barras    liq   -2.744,30  bl20+    6%  indefinido
+[47/54] TUDO max 1 entrada/dia        liq    3.009,90  bl20+   66%  indefinido
+[48/54] TUDO corte 0,9 / 20 barras    liq   -2.960,80  bl20+    9%  indefinido
+[49/54] TUDO corte 0,7 / 10 barras    liq   -2.899,00  bl20+    8%  indefinido
+[50/54] TUDO corte 0,9 / 10 barras    liq   -2.936,30  bl20+    7%  indefinido
+[51/54] TUDO max 5 entradas/dia       liq   12.203,70  bl20+   83%  POSITIVO
+[52/54] TUDO max 3 entradas/dia       liq   15.280,30  bl20+   84%  POSITIVO
+[53/54] TUDO corte 0,9 / 5 barras     liq    7.191,30  bl20+   71%  indefinido
+[54/54] TUDO corte 0,6 / 10 barras    liq    5.004,20  bl20+   65%  indefinido
+
+
+===== TUDO =====
+variante                     liquido   ops  preg+  bl20+   pior dia     MaxDD  R$/stop  stop%   win%    BE%    veredito
+-----------------------------------------------------------------------------------------------------------------------
+PRODUCAO                   13.533,30   488    59%    84%  -1.986,50     5.042     -438    14%  54,7%  48,4%    POSITIVO   <== PRODUCAO
+perda/dia R$150             5.221,50   365    52%    66%    -605,40     3.090     -343    17%  51,8%  48,1%  indefinido
+perda/dia R$300             9.482,30   407    57%    75%    -693,00     2.882     -385    15%  53,1%  47,4%    POSITIVO
+perda/dia R$600            11.232,70   466    58%    83%  -1.113,00     3.727     -421    15%  53,6%  48,0%    POSITIVO
+perda/dia R$900            14.590,30   485    59%    85%  -1.342,00     3.984     -431    14%  55,1%  48,1%    POSITIVO
+perda/dia R$1.500          13.595,30   487    59%    84%  -1.924,50     4.980     -438    14%  54,8%  48,4%    POSITIVO
+max 1 entrada/dia           3.009,90   177    53%    66%    -540,50     2.221     -310    24%  53,1%  48,9%  indefinido  s/trade 14/191
+max 2 entradas/dia         10.178,50   317    59%    85%  -1.342,00     2.922     -400    17%  56,8%  49,6%    POSITIVO  s/trade 2/191
+max 3 entradas/dia         15.280,30   426    60%    84%  -1.783,00     4.960     -472    14%  57,7%  50,1%    POSITIVO
+max 5 entradas/dia         12.203,70   471    58%    83%  -1.924,50     4.946     -431    15%  54,8%  48,8%    POSITIVO
+corte 0,9 / 5 barras        7.191,30   689    56%    71%  -1.048,00     3.214     -346     7%  43,5%  40,1%  indefinido
+corte 0,9 / 10 barras      -2.936,30   267    43%     7%  -1.118,00     4.706     -351    10%  36,3%  39,7%  indefinido  s/trade 123/191
+corte 0,9 / 20 barras      -2.960,80   230    49%     9%  -1.147,60     4.679     -350    10%  39,6%  43,3%  indefinido  s/trade 123/191
+corte 0,8 / 5 barras       -2.524,90   347    52%    15%    -856,60     4.340     -319     4%  29,4%  32,4%  indefinido  s/trade 126/191
+corte 0,8 / 10 barras      -2.881,60   182    46%     5%  -1.875,30     3.248     -345     5%  30,8%  37,6%  indefinido  s/trade 150/191
+corte 0,8 / 20 barras      -2.744,30   197    46%     6%  -1.742,70     3.243     -336     7%  36,0%  41,2%  indefinido  s/trade 141/191
+corte 0,7 / 10 barras      -2.899,00   378    49%     8%    -951,30     3.293     -280     3%  29,6%  32,9%  indefinido  s/trade 126/191
+corte 0,6 / 10 barras       5.004,20  1089    54%    65%    -841,10     2.880     -258     2%  33,5%  31,3%  indefinido
+
+
+===== IS =====
+variante                     liquido   ops  preg+  bl20+   pior dia     MaxDD  R$/stop  stop%   win%    BE%    veredito
+-----------------------------------------------------------------------------------------------------------------------
+PRODUCAO                    7.351,00   310    59%    76%    -713,00     2.893     -337    15%  51,3%  45,0%    POSITIVO   <== PRODUCAO
+perda/dia R$150             4.423,50   252    55%    68%    -605,40     3.090     -340    18%  50,8%  46,3%  indefinido
+perda/dia R$300             7.507,70   280    59%    76%    -605,40     2.807     -340    16%  52,1%  45,2%    POSITIVO
+perda/dia R$600             7.176,00   308    59%    75%    -713,00     2.788     -337    15%  51,0%  44,8%    POSITIVO
+perda/dia R$900             7.351,00   310    59%    76%    -713,00     2.893     -337    15%  51,3%  45,0%    POSITIVO
+perda/dia R$1.500           7.351,00   310    59%    76%    -713,00     2.893     -337    15%  51,3%  45,0%    POSITIVO
+max 1 entrada/dia           2.424,70   121    52%    64%    -540,50     2.221     -322    25%  52,1%  47,3%  indefinido  s/trade 8/129
+max 2 entradas/dia          6.647,30   203    61%    76%    -713,00     2.449     -326    19%  54,2%  46,2%    POSITIVO  s/trade 2/129
+max 3 entradas/dia          8.616,70   262    60%    76%    -713,00     2.629     -342    16%  53,8%  45,5%    POSITIVO
+max 5 entradas/dia          7.061,80   301    58%    76%    -713,00     3.223     -337    16%  51,5%  45,3%    POSITIVO
+corte 0,9 / 5 barras        5.044,00   460    57%    71%  -1.048,00     3.214     -335     8%  40,4%  36,9%  indefinido
+corte 0,9 / 10 barras      -2.936,30   267    43%    11%  -1.118,00     4.706     -351    10%  36,3%  39,7%  indefinido  s/trade 61/129
+corte 0,9 / 20 barras      -2.960,80   230    49%    15%  -1.147,60     4.679     -350    10%  39,6%  43,3%  indefinido  s/trade 61/129
+corte 0,8 / 5 barras       -2.524,90   347    52%    24%    -856,60     4.340     -319     4%  29,4%  32,4%  indefinido  s/trade 64/129
+corte 0,8 / 10 barras      -2.881,60   182    46%     7%  -1.875,30     3.248     -345     5%  30,8%  37,6%  indefinido  s/trade 88/129
+corte 0,8 / 20 barras      -2.744,30   197    46%    10%  -1.742,70     3.243     -336     7%  36,0%  41,2%  indefinido  s/trade 79/129
+corte 0,7 / 10 barras      -2.899,00   378    49%    13%    -951,30     3.293     -280     3%  29,6%  32,9%  indefinido  s/trade 64/129
+corte 0,6 / 10 barras         772,90   752    52%    51%    -841,10     2.880     -257     2%  30,9%  30,4%  indefinido
+
+
+===== OOS =====
+variante                     liquido   ops  preg+  bl20+   pior dia     MaxDD  R$/stop  stop%   win%    BE%    veredito
+-----------------------------------------------------------------------------------------------------------------------
+PRODUCAO                    4.255,30   151    60%   100%    -722,00     1.855     -307    13%  58,9%  50,5%    POSITIVO   <== PRODUCAO
+perda/dia R$150             1.036,30   113    50%    74%    -552,00     2.178     -299    15%  53,1%  50,4%  indefinido
+perda/dia R$300             2.700,40   135    56%    88%    -552,00     2.178     -307    13%  57,0%  51,0%  indefinido
+perda/dia R$600             4.306,30   150    60%   100%    -671,00     1.804     -307    13%  59,3%  50,8%    POSITIVO
+perda/dia R$900             4.255,30   151    60%   100%    -722,00     1.855     -307    13%  58,9%  50,5%    POSITIVO
+perda/dia R$1.500           4.255,30   151    60%   100%    -722,00     1.855     -307    13%  58,9%  50,5%    POSITIVO
+max 1 entrada/dia             795,00    56    55%    63%    -384,50     1.467     -274    23%  55,4%  51,4%  indefinido  s/trade 6/62
+max 2 entradas/dia          3.086,50   102    61%    95%    -671,00     2.279     -314    16%  57,8%  49,7%  indefinido
+max 3 entradas/dia          3.561,80   128    60%    95%    -722,00     1.868     -306    13%  56,2%  48,4%  indefinido
+max 5 entradas/dia          4.100,00   147    60%   100%    -722,00     1.855     -307    13%  58,5%  50,2%    POSITIVO
+corte 0,9 / 5 barras        2.033,10   215    53%    79%    -683,50     1.782     -291     5%  46,5%  42,6%  indefinido
+corte 0,9 / 10 barras       2.401,80   205    53%    93%    -596,30     1.240     -285     5%  47,8%  43,2%  indefinido
+corte 0,9 / 20 barras       2.584,90   184    55%    84%    -596,30     1.665     -264     8%  50,0%  44,9%  indefinido
+corte 0,8 / 5 barras        1.710,20   272    48%    88%    -523,10     1.485     -245     1%  37,1%  34,2%  indefinido
+corte 0,8 / 10 barras         734,20   255    50%    70%    -559,00     1.497     -214     3%  36,9%  35,6%  indefinido
+corte 0,8 / 20 barras       2.141,20   227    48%    95%    -513,40     1.499     -259     3%  43,2%  39,2%  indefinido
+corte 0,7 / 10 barras         331,90   287    53%    51%    -447,50     1.631     -223     2%  34,8%  34,3%  indefinido
+corte 0,6 / 10 barras       3.854,10   332    58%    84%    -692,50     1.720     -265     1%  38,6%  32,7%    POSITIVO

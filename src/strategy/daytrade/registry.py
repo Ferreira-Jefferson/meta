@@ -390,10 +390,101 @@ _KWARGS_PADRAO: dict[str, dict] = {
         # (que segue com 19,0, historico): aquela calibracao otimizou LIQUIDO
         # sobre o motor de ate 2026-09-08, que entregava o alvo maker de graca
         # e sem fila. Os demais campos abaixo continuam sendo ela.
-        janela_rompimento=10, alvo_vol=9.5, stop_vol=12.0, trail_vol=None,
+        #
+        # 2026-09-11 (MESMA DATA, RODADA SEGUINTE), ORDEM DO DONO "aplique a
+        # recomendada em producao": `alvo_vol` 9,5 -> 7,6 e
+        # `entrada_ttl_barras` 15 -> 5. Os dois JUNTOS, nunca separados --
+        # ver o porque no fim deste bloco.
+        #
+        # O PEDIDO ERA OUTRO, e e' isso que define a escolha: "ganhadora mesmo
+        # que pouco, mas constante". A funcao objetivo deixou de ser `liquido
+        # R$` e passou a ser declarada ANTES de medir, em
+        # `copawin_consistencia_diagnostico_2026_09_11.py` -- fracao de
+        # pregoes positivos, de blocos ROLANTES de 20 pregoes positivos, de
+        # meses positivos, concentracao nos 5 melhores dias, maior sequencia
+        # negativa, e quanto do lucro depende do achatamento de fim de pregao.
+        # Sem declarar isso antes, a varredura reotimizaria liquido e
+        # devolveria o mesmo robo de tudo-ou-nada.
+        #
+        # O DIAGNOSTICO, que mudou o alvo da busca: a config de 9,5 JA ganhava
+        # (+R$13.533,30 em 191 pregoes, 59% dos pregoes com operacao
+        # positivos, 84% dos blocos de 20) e JA nao dependia do fechamento (o
+        # achatamento carrega 2% do liquido, contra 114,1% da config
+        # anterior). O que sobrou desequilibrado foi o TAMANHO do stop --
+        # -R$437,77 por stop contra +R$267,74 por alvo, 1,64x.
+        #
+        # O QUE FOI MEDIDO E REFUTADO antes de sobrar estes dois parametros
+        # (~1.400 simulacoes; scripts `copawin_grade_constancia_`,
+        # `_freios_e_corte_`, `_robustez_por_data_de_inicio_2026_09_11.py`):
+        #   * `trail_vol` ligado (2,0/4,0) -- win% desaba para 33-38% e cola
+        #     no breakeven empirico em 40 de 40 celulas. O stop arrastado
+        #     corta o vencedor antes de ele pagar o perdedor, e este robo vive
+        #     de poucos trades grandes (docstring do modulo `copa_win`).
+        #   * `stop_vol` mais curto (4/6/8/10) -- degrada monotonicamente, e
+        #     12 e' OMBRO: 14/16/20 tambem pioram. Por isso `stop_vol` NAO
+        #     muda aqui.
+        #   * `corte_persistencia_frac_adverso` 0,6-0,9 -- o robo QUEBRA: 123
+        #     a 150 dos 191 pregoes sem trade, caixa abaixo do portao.
+        #   * `risco_pct_por_trade` 1%/2%/5% -- INERTE. A R$3.000 a quantidade
+        #     fica presa em 1 contrato pelo piso de `quantidade_por_entrada`,
+        #     entao NAO EXISTE hoje um dial de "ganhar menos e oscilar menos".
+        #   * `max_entradas_dia`, `perda_max_dia_pontos`, mexer na
+        #     `defesa_ativa`, `janela_rompimento` 5/20/30, `aquecimento_barras`
+        #     30/60/90 -- todos piores, e os da defesa compram lucro com CAUDA
+        #     (pior pregao de -R$1.469 para -R$2.166).
+        #
+        # O QUE O PAR NOVO ENTREGA, historico de 191 pregoes a R$3.000:
+        #
+        #                        liquido    MaxDD  lucro/DD  bl20+  mes+  pior dia
+        #     9,5 / ttl15     13.533,30   -50,3%      2,68    84%   80%  -1.986,50
+        #     7,6 / ttl5      18.322,40   -28,9%      6,70    97%  100%    -947,40
+        #
+        # E o teste que DECIDE, porque e' a unica forma medivel de "eu ganho
+        # sempre?" que nao depende do sorteio das primeiras operacoes (mesma
+        # metodologia que fixou `capital_minimo_recomendado_brl` em R$3.000):
+        # 76 datas de inicio, horizonte FIXO de 40 pregoes cada --
+        #
+        #     9,5 / ttl15    89,5% das datas positivas, PIOR inicio -R$888,40
+        #     7,6 / ttl5    100,0% das datas positivas, PIOR inicio +R$725,30
+        #
+        # POR QUE OS DOIS JUNTOS, e nunca so' um. O prazo curto SOZINHO, com o
+        # alvo antigo (a9,5+ttl5), e' PIOR que a producao no criterio que
+        # importa: 96,1% das datas, UMA morte, pior inicio -R$2.992,50. O alvo
+        # sozinho (a7,6+ttl15) ja da 100%, mas com liquido de +R$14.271,90 e
+        # MaxDD de R$2.702. O par e' que entrega os dois.
+        #
+        # `entrada_ttl_barras=5` NAO e' numero de grade justificado depois: o
+        # mecanismo ja estava escrito no CLAUDE.md, medido no `wdo_orb` --
+        # ordem-limite de entrada com prazo longo preenche horas depois do
+        # sinal (269,7 minutos no caso medido) e "os fills atrasados foram
+        # justamente os piores resultados". O `copa_win` rodava com 15 desde
+        # sempre, herdado e NUNCA medido. A licao existia e nao tinha sido
+        # varrida nas outras instancias -- e' o item novo de
+        # LICOES_DE_PRODUCAO.md desta rodada.
+        #
+        # O CUSTO, dito junto (sem ele a tabela acima mente por omissao):
+        #   1. PERDE NO OOS -- +R$3.206,00 contra +R$4.255,30 da config
+        #      anterior, e o veredito la' cai de POSITIVO para INDEFINIDO
+        #      (IC95% [47,2;62,2] atravessa o breakeven empirico de 48,47%).
+        #      No IS e no historico inteiro segue POSITIVO.
+        #   2. O OOS do WIN@ (>=2026-06-13) JA FOI GASTO varias vezes,
+        #      inclusive nesta mesma data. NAO existe teste cego para este
+        #      robo. O que sustenta a troca e' o PLATO no eixo do alvo (7,6 e
+        #      8,55 dao os dois 100% das datas), os 100% das datas de inicio
+        #      (robustez, nao cegueira), o mecanismo ser legivel nos dois
+        #      parametros, e sobreviver a fila ate 4x o volume mediano da
+        #      barra M1 (`copawin_candidato_a76_validacao_2026_09_11.py`).
+        #   3. EXISTE VARIANTE QUE RENDE MAIS E FOI DESCARTADA: `a7,6 ttl8`
+        #      da +R$23.812,70 e passa POSITIVO tambem no OOS, mas com MaxDD
+        #      de 50,1% e pior pregao de -R$2.913,50. O eixo do prazo NAO tem
+        #      plato de liquido (ttl 3/5/8/15 = 7,3k/18,3k/23,8k/14,3k --
+        #      vizinhos discordando em 60%), entao escolher o 8 seria pegar o
+        #      maior numero de um eixo ruidoso. `ttl5` e' a escolha pelo
+        #      criterio DECLARADO; `ttl8` seria a escolha por liquido.
+        janela_rompimento=10, alvo_vol=7.6, stop_vol=12.0, trail_vol=None,
         fatiar_saida_alvo=True,
         vol_min_ticks=8.0, fracao_entrada=1.0, aquecimento_barras=45,
-        max_entradas_dia=10, entrada_maker=True, entrada_ttl_barras=15,
+        max_entradas_dia=10, entrada_maker=True, entrada_ttl_barras=5,
         # Teto OFICIAL da Copa 2025 (`run_copa_score.TETO_OFICIAL["WIN@"]`) —
         # regulamento, nunca medida; só entra como CEILING porque
         # `margin_per_contract_brl` abaixo já limita a entrada pelo caixa

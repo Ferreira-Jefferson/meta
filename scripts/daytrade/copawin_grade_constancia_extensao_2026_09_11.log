@@ -1,0 +1,107 @@
+grade de GEOMETRIA pontuada por CONSTANCIA -- rodada EXTENSAO, capital R$ 3.000
+4 alvos x 4 stops x 1 trails x 2 janelas = 32 celulas
+producao = a9,5 s12 toff
+
+[  1/32] IS  a6,7 s14 toff    liq   -2.867,00  bl20+    0%  NEGATIVO  (7s)
+[  2/32] IS  a7,6 s20 toff    liq   -2.855,30  bl20+    0%  NEGATIVO  (7s)
+[  3/32] IS  a7,6 s14 toff    liq    4.726,70  bl20+   72%  indefinido  (20s)
+[  4/32] IS  a9,5 s12 toff    liq    7.351,00  bl20+   76%  POSITIVO  (20s)
+[  5/32] IS  a6,7 s16 toff    liq   -2.966,30  bl20+    0%  NEGATIVO  (31s)
+[  6/32] IS  a7,6 s16 toff    liq    5.429,90  bl20+   74%  indefinido  (33s)
+[  7/32] IS  a7,6 s12 toff    liq    9.185,60  bl20+   89%  POSITIVO  (35s)
+[  8/32] IS  a6,7 s20 toff    liq   -2.959,50  bl20+    0%  NEGATIVO  (36s)
+[  9/32] IS  a8,6 s12 toff    liq    7.335,90  bl20+   77%  POSITIVO  (37s)
+[ 10/32] IS  a6,7 s12 toff    liq    3.483,90  bl20+   53%  indefinido  (37s)
+[ 11/32] IS  a8,6 s20 toff    liq    2.353,00  bl20+   62%  indefinido  (38s)
+[ 12/32] IS  a8,6 s14 toff    liq    2.775,80  bl20+   64%  indefinido  (39s)
+[ 13/32] IS  a9,5 s16 toff    liq   -2.739,20  bl20+   14%  indefinido  (21s)
+[ 14/32] OOS a7,6 s14 toff    liq   -1.214,60  bl20+   37%  indefinido  (6s)
+[ 15/32] IS  a8,6 s16 toff    liq    2.094,90  bl20+   55%  indefinido  (45s)
+[ 16/32] OOS a6,7 s14 toff    liq      601,40  bl20+   72%  indefinido  (11s)
+[ 17/32] OOS a6,7 s16 toff    liq    1.148,90  bl20+   91%  indefinido  (10s)
+[ 18/32] OOS a6,7 s12 toff    liq    3.130,00  bl20+   88%  indefinido  (15s)
+[ 19/32] OOS a6,7 s20 toff    liq     -361,60  bl20+   77%  indefinido  (13s)
+[ 20/32] IS  a9,5 s14 toff    liq    5.518,80  bl20+   66%  indefinido  (41s)
+[ 21/32] OOS a7,6 s16 toff    liq   -1.194,20  bl20+   40%  indefinido  (11s)
+[ 22/32] IS  a9,5 s20 toff    liq   -2.716,90  bl20+   17%  indefinido  (18s)
+[ 23/32] OOS a7,6 s12 toff    liq    2.752,10  bl20+  100%  indefinido  (16s)
+[ 24/32] OOS a7,6 s20 toff    liq   -1.532,90  bl20+   63%  indefinido  (16s)
+[ 25/32] OOS a9,5 s12 toff    liq    4.255,30  bl20+  100%  POSITIVO  (10s)
+[ 26/32] OOS a8,6 s14 toff    liq      689,80  bl20+   81%  indefinido  (14s)
+[ 27/32] OOS a8,6 s20 toff    liq     -185,60  bl20+   74%  indefinido  (12s)
+[ 28/32] OOS a8,6 s16 toff    liq     -274,80  bl20+   60%  indefinido  (14s)
+[ 29/32] OOS a8,6 s12 toff    liq    2.843,90  bl20+   95%  indefinido  (18s)
+[ 30/32] OOS a9,5 s20 toff    liq      853,80  bl20+   72%  indefinido  (13s)
+[ 31/32] OOS a9,5 s14 toff    liq    1.304,10  bl20+   74%  indefinido  (16s)
+[ 32/32] OOS a9,5 s16 toff    liq    2.249,60  bl20+   79%  indefinido  (14s)
+
+
+===== IS -- ordenado por bl20+ (blocos rolantes de 20 pregoes positivos), depois liquido =====
+alvo/stop/trail      liquido   ops   R$/dia  preg+  bl20+   mes+   top5 seq-    MaxDD  R$/stop  R$/alvo  alvo%   win%    BE%    veredito
+----------------------------------------------------------------------------------------------------------------------------------------
+a9,5 s12 toff       7.351,00   310    56,98    59%    76%    86%    22%    5    2.893     -337      302    17%  51,3%  45,0%    POSITIVO   <== PRODUCAO
+a7,6 s12 toff       9.185,60   362    71,21    58%    89%    86%    17%    6    2.297     -369      225    23%  57,2%  50,1%    POSITIVO
+a8,6 s12 toff       7.335,90   331    56,87    58%    77%    71%    22%    5    2.786     -353      256    21%  53,8%  47,8%    POSITIVO
+a7,6 s16 toff       5.429,90   311    42,09    59%    74%    71%    18%    5    2.795     -460      237    26%  55,9%  51,2%  indefinido
+a7,6 s14 toff       4.726,70   337    36,64    58%    72%    71%    19%    6    2.965     -425      230    25%  53,1%  49,2%  indefinido
+a9,5 s14 toff       5.518,80   301    42,78    57%    66%    86%    21%    5    3.854     -376      300    18%  48,2%  43,4%  indefinido
+a8,6 s14 toff       2.775,80   320    21,52    58%    64%    71%    20%    6    3.427     -405      253    22%  50,3%  48,0%  indefinido
+a8,6 s20 toff       2.353,00   286    18,24    57%    62%    71%    21%    5    3.486     -503      262    25%  52,4%  50,3%  indefinido
+a8,6 s16 toff       2.094,90   299    16,24    58%    55%    57%    20%    5    3.499     -435      257    22%  52,8%  51,0%  indefinido
+a6,7 s12 toff       3.483,90   377    27,01    54%    53%    57%    21%    9    3.215     -350      217    22%  53,8%  51,1%  indefinido
+a9,5 s20 toff      -2.716,90   117   -21,06    48%    17%    14%    44%    5    3.539     -453      282    21%  45,3%  51,3%  indefinido  s/trade 73/129  ZEROU
+a9,5 s16 toff      -2.739,20   154   -21,23    49%    14%    14%    34%    5    3.275     -421      304    18%  44,8%  49,3%  indefinido  s/trade 61/129  ZEROU
+a7,6 s20 toff      -2.855,30    53   -22,13    38%     0%     0%    83%    4    3.251     -539      209    21%  41,5%  57,7%    NEGATIVO  s/trade 105/129  ZEROU
+a6,7 s14 toff      -2.867,00    56   -22,22    42%     0%     0%    79%    4    3.255     -407      170    18%  50,0%  65,8%    NEGATIVO  s/trade 105/129  ZEROU
+a6,7 s20 toff      -2.959,50    47   -22,94    36%     0%     0%    77%    5    3.228     -419      195    21%  42,6%  61,1%    NEGATIVO  s/trade 104/129
+a6,7 s16 toff      -2.966,30    47   -22,99    36%     0%     0%    81%    5    3.235     -386      207    15%  42,6%  61,9%    NEGATIVO  s/trade 104/129
+
+
+===== OOS -- ordenado por bl20+ (blocos rolantes de 20 pregoes positivos), depois liquido =====
+alvo/stop/trail      liquido   ops   R$/dia  preg+  bl20+   mes+   top5 seq-    MaxDD  R$/stop  R$/alvo  alvo%   win%    BE%    veredito
+----------------------------------------------------------------------------------------------------------------------------------------
+a9,5 s12 toff       4.255,30   151    68,63    60%   100%    75%    36%    5    1.855     -307      224    20%  58,9%  50,5%    POSITIVO   <== PRODUCAO
+a7,6 s12 toff       2.752,10   169    44,39    56%   100%    50%    38%    3    1.596     -314      201    27%  54,4%  49,0%  indefinido
+a8,6 s12 toff       2.843,90   157    45,87    60%    95%    75%    38%    5    2.046     -297      225    21%  54,8%  49,0%  indefinido
+a6,7 s16 toff       1.148,90   167    18,53    48%    91%    50%    40%    3    1.690     -425      179    34%  58,1%  55,9%  indefinido
+a6,7 s12 toff       3.130,00   182    50,48    52%    88%    75%    38%    4    1.573     -329      192    30%  58,2%  52,5%  indefinido
+a8,6 s14 toff         689,80   154    11,13    55%    81%    75%    40%    6    2.193     -354      220    21%  51,9%  50,5%  indefinido
+a9,5 s16 toff       2.249,60   138    36,28    55%    79%    75%    39%    6    2.238     -381      230    21%  53,6%  48,8%  indefinido
+a6,7 s20 toff        -361,60   156    -5,83    47%    77%    50%    41%    5    2.446     -483      176    36%  58,3%  59,0%  indefinido
+a9,5 s14 toff       1.304,10   146    21,03    53%    74%    75%    38%    6    2.190     -350      225    20%  52,7%  50,0%  indefinido
+a8,6 s20 toff        -185,60   138    -2,99    50%    74%    50%    40%    6    2.822     -478      219    25%  53,6%  54,0%  indefinido
+a9,5 s20 toff         853,80   132    13,77    55%    72%    75%    41%    6    2.824     -450      221    23%  55,3%  53,5%  indefinido
+a6,7 s14 toff         601,40   170     9,70    48%    72%    50%    42%    5    1.791     -377      181    31%  56,5%  55,3%  indefinido
+a7,6 s20 toff      -1.532,90   143   -24,72    52%    63%    50%    44%    4    2.658     -478      192    30%  53,8%  57,1%  indefinido
+a8,6 s16 toff        -274,80   150    -4,43    52%    60%    75%    42%    5    2.236     -377      218    22%  50,7%  51,2%  indefinido
+a7,6 s16 toff      -1.194,20   154   -19,26    52%    40%    25%    45%    4    2.253     -377      210    26%  49,4%  51,8%  indefinido
+a7,6 s14 toff      -1.214,60   160   -19,59    48%    37%    50%    46%    4    2.015     -352      198    26%  50,6%  53,1%  indefinido
+
+
+===== CRUZAMENTO IS x OOS (quem e' bom nas duas janelas) =====
+alvo/stop/trail       IS liq  IS bl20+  IS win   IS BE      IS ver     OOS liq  OOS bl20+  OOS win  OOS BE     OOS ver   pior bl20+
+-----------------------------------------------------------------------------------------------------------------------------------
+a7,6 s12 toff       9.185,60       89%   57,2%   50,1%    POSITIVO    2.752,10       100%    54,4%   49,0%  indefinido          89%
+a8,6 s12 toff       7.335,90       77%   53,8%   47,8%    POSITIVO    2.843,90        95%    54,8%   49,0%  indefinido          77%
+a9,5 s12 toff       7.351,00       76%   51,3%   45,0%    POSITIVO    4.255,30       100%    58,9%   50,5%    POSITIVO          76%   <== PRODUCAO
+a9,5 s14 toff       5.518,80       66%   48,2%   43,4%  indefinido    1.304,10        74%    52,7%   50,0%  indefinido          66%
+a8,6 s14 toff       2.775,80       64%   50,3%   48,0%  indefinido      689,80        81%    51,9%   50,5%  indefinido          64%
+a8,6 s20 toff       2.353,00       62%   52,4%   50,3%  indefinido     -185,60        74%    53,6%   54,0%  indefinido          62%
+a8,6 s16 toff       2.094,90       55%   52,8%   51,0%  indefinido     -274,80        60%    50,7%   51,2%  indefinido          55%
+a6,7 s12 toff       3.483,90       53%   53,8%   51,1%  indefinido    3.130,00        88%    58,2%   52,5%  indefinido          53%
+a7,6 s16 toff       5.429,90       74%   55,9%   51,2%  indefinido   -1.194,20        40%    49,4%   51,8%  indefinido          40%
+a7,6 s14 toff       4.726,70       72%   53,1%   49,2%  indefinido   -1.214,60        37%    50,6%   53,1%  indefinido          37%
+a9,5 s20 toff      -2.716,90       17%   45,3%   51,3%  indefinido      853,80        72%    55,3%   53,5%  indefinido          17%
+a9,5 s16 toff      -2.739,20       14%   44,8%   49,3%  indefinido    2.249,60        79%    53,6%   48,8%  indefinido          14%
+a6,7 s14 toff      -2.867,00        0%   50,0%   65,8%    NEGATIVO      601,40        72%    56,5%   55,3%  indefinido           0%
+a7,6 s20 toff      -2.855,30        0%   41,5%   57,7%    NEGATIVO   -1.532,90        63%    53,8%   57,1%  indefinido           0%
+a6,7 s16 toff      -2.966,30        0%   42,6%   61,9%    NEGATIVO    1.148,90        91%    58,1%   55,9%  indefinido           0%
+a6,7 s20 toff      -2.959,50        0%   42,6%   61,1%    NEGATIVO     -361,60        77%    58,3%   59,0%  indefinido           0%
+
+
+===== MAPA DO PLATO -- bl20+ no IS, trail=off =====
+alvo \ stop         s12      s14      s16      s20
+a6,7                53%       0%       0%       0%
+a7,6                89%      72%      74%       0%
+a8,6                77%      64%      55%      62%
+a9,5                76%      66%      14%      17%

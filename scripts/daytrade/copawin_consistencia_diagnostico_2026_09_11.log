@@ -1,0 +1,55 @@
+copa_win de PRODUCAO -- alvo_vol 9,5 / stop_vol 12,0 / trail DESLIGADO
+capital R$ 3.000 (piso declarado do robo)
+191 pregoes completos, 2025-12-01 a 2026-09-10
+
+  IS  (< 2026-06-13) rodado (310 operacoes)
+  OOS (>= 2026-06-13) rodado (151 operacoes)
+  HISTORICO INTEIRO rodado (488 operacoes)
+
+
+===== AS SEIS METRICAS DE CONSTANCIA =====
+janela                     liquido   ops    preg+    bl20+     mes+    top5  seq-    flat$    win%     BE%    veredito
+----------------------------------------------------------------------------------------------------------------------
+IS  (< 2026-06-13)        7.351,00   310      59%      76%      86%     22%     5      -2%   51,3%   45,0%    POSITIVO
+OOS (>= 2026-06-13)       4.255,30   151      60%     100%      75%     36%     5     -14%   58,9%   50,5%    POSITIVO
+HISTORICO INTEIRO        13.533,30   488      59%      84%      80%     14%     5       2%   54,7%   48,4%    POSITIVO
+
+legenda: preg+ = pregoes com operacao que fecharam positivos | bl20+ = blocos ROLANTES de 20 pregoes positivos | mes+ = meses positivos | top5 = quanto do lucro bruto veio dos 5 melhores dias | seq- = maior sequencia de pregoes negativos | flat$ = quanto do liquido saiu por achatamento de fim de pregao
+
+
+===== DISTRIBUICAO DO RESULTADO DIARIO (historico inteiro) =====
+  pior dia       -1.986,50
+  p05              -551,05
+  p25              -142,00
+  MEDIANA            82,60
+  p75               309,10
+  p95               735,00
+  melhor dia      1.233,80
+  MEDIA              70,85
+
+os 8 piores pregoes:
+  2026-09-08     -1.986,50
+  2026-09-09     -1.469,50
+  2026-08-12       -733,50
+  2026-08-03       -725,90
+  2026-02-26       -713,00
+  2026-03-11       -656,60
+  2026-07-28       -637,40
+  2026-03-02       -612,80
+os 8 melhores pregoes:
+  2026-06-15      1.233,80
+  2025-12-05      1.017,40
+  2026-03-10        957,60
+  2026-03-31        937,90
+  2026-08-24        922,50
+  2026-07-24        877,40
+  2026-04-29        824,70
+  2026-03-17        799,90
+
+
+===== DE ONDE VEM O DINHEIRO, por motivo de saida (historico inteiro) =====
+motivo                  ops    % ops      liquido   % do liq    win%      R$/op
+stop                     69    14,1%   -30.206,00    -223,2%    0,0%    -437,77
+target                   99    20,3%    26.506,10     195,9%  100,0%     267,74
+signal                  135    27,7%    16.997,60     125,6%   53,3%     125,91
+forced_flatten          185    37,9%       235,60       1,7%   51,9%       1,27
