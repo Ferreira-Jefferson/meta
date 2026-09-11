@@ -1098,6 +1098,60 @@ class IntradayLiveRuntime:
         store.log_event(conn, account_id, level, "daytrade", message, payload)
         self.notifier.notify(level, "daytrade", message, payload)
 
+    def _declara_fidelidade_de_execucao(self, conn, account: AccountState) -> None:
+        """Declara, uma vez por pregao, QUAL premissa de preenchimento este
+        robo esta usando ao vivo -- e grita quando ela nao foi calibrada.
+
+        POR QUE ISTO EXISTE (2026-09-11). A tabela padrao do backtest carimba
+        a premissa de fila em toda linha (`fila 438/489`, `fila 0/0`, `fila
+        NAO CALIBRADA`) desde 2026-09-09, justamente porque uma linha sem
+        carimbo e' indistinguivel de uma linha que ninguem sabe se esta certa.
+        O caminho AO VIVO nao tinha nada disso: `src/live/` nao mencionava
+        fidelidade em lugar nenhum, e a sombra rodava com `queue_ahead_qty=0`
+        / `exit_queue_ahead_qty=0` -- "toda ordem-limite minha preenche quando
+        o preco toca o nivel" -- sem dizer a ninguem.
+
+        O simbolo que expoe isso hoje e' o WIN@: `backtest.intraday.
+        fidelidade.FIDELIDADE` so' tem WDO@ (calibrado contra extrato real,
+        Kaplan-Meier, 438/489), entao todo robo de WIN@ opera com fila ZERO e
+        o dono nao tinha como saber ao ler o diario. E o custo de nao saber ja
+        foi medido em outro simbolo: com fila zero o motor previa +R$3,82 por
+        operacao num pregao do WDO F1 que deu -R$3,00 -- errava o SINAL.
+
+        Nivel `warn` quando nao ha calibracao, `info` quando ha. Nao impede
+        de operar: e' declaracao, nao portao. A decisao de rodar sem
+        calibracao e' do dono, e ela continua sendo dele -- o que muda e' que
+        agora ela e' TOMADA, e nao herdada de um default silencioso.
+
+        Uma vez por pregao (roda dentro de `_start_session`), nunca por barra:
+        aviso que repete a cada 5 segundos vira ruido, e ruido nao e' aviso."""
+        cfg = self.config
+        calibrada = bool(getattr(cfg.costs, "fidelidade_calibrada", False))
+        fila_ent = float(getattr(cfg, "queue_ahead_qty", 0.0) or 0.0)
+        fila_sai = float(getattr(cfg, "exit_queue_ahead_qty", 0.0) or 0.0)
+        payload = {
+            "symbol": self.strategy.symbol,
+            "fidelidade_calibrada": calibrada,
+            "queue_ahead_qty": fila_ent,
+            "exit_queue_ahead_qty": fila_sai,
+        }
+        if calibrada:
+            self._log(
+                conn, account.id, "info",
+                f"fila de execucao calibrada: entrada {fila_ent:.0f} / "
+                f"saida {fila_sai:.0f} contratos",
+                payload,
+            )
+            return
+        self._log(
+            conn, account.id, "warn",
+            f"fila de execucao NAO CALIBRADA para {self.strategy.symbol} -- "
+            "o motor assume que toda ordem-limite minha preenche quando o "
+            "preco toca o nivel. Resultado desta sessao e' OBSERVACAO, nao "
+            "previsao validada",
+            payload,
+        )
+
     # ---------- conta ------------------------------------------------------
 
     def ensure_account(self) -> AccountState:
@@ -1477,6 +1531,8 @@ class IntradayLiveRuntime:
         cima do reset: o stop agregado de sessao do robo (`session_stop_pct_capital`,
         em `strategy.daytrade.lab.gremah.Gremah`) le esse numero, e zera-lo
         num restart daria ao robo uma folga de risco que ele nao tem."""
+        self._declara_fidelidade_de_execucao(conn, account)
+
         restaurada = self._snapshot.session == session and bool(self._snapshot.machine)
         pnl_antes, flat_antes = self.machine.session_pnl, self.machine.flattened
 

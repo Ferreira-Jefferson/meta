@@ -1,0 +1,128 @@
+carregando o tape do WIN@, um arquivo por pregao...
+  tape: WIN_A_2026-06-17  (1/60)
+  tape: WIN_A_2026-06-18  (2/60)
+  tape: WIN_A_2026-06-19  (3/60)
+  tape: WIN_A_2026-06-22  (4/60)
+  tape: WIN_A_2026-06-23  (5/60)
+  tape: WIN_A_2026-06-24  (6/60)
+  tape: WIN_A_2026-06-25  (7/60)
+  tape: WIN_A_2026-06-26  (8/60)
+  tape: WIN_A_2026-06-29  (9/60)
+  tape: WIN_A_2026-06-30  (10/60)
+  tape: WIN_A_2026-07-01  (11/60)
+  tape: WIN_A_2026-07-02  (12/60)
+  tape: WIN_A_2026-07-03  (13/60)
+  tape: WIN_A_2026-07-06  (14/60)
+  tape: WIN_A_2026-07-07  (15/60)
+  tape: WIN_A_2026-07-08  (16/60)
+  tape: WIN_A_2026-07-09  (17/60)
+  tape: WIN_A_2026-07-10  (18/60)
+  tape: WIN_A_2026-07-13  (19/60)
+  tape: WIN_A_2026-07-14  (20/60)
+  tape: WIN_A_2026-07-15  (21/60)
+  tape: WIN_A_2026-07-16  (22/60)
+  tape: WIN_A_2026-07-17  (23/60)
+  tape: WIN_A_2026-07-20  (24/60)
+  tape: WIN_A_2026-07-21  (25/60)
+  tape: WIN_A_2026-07-22  (26/60)
+  tape: WIN_A_2026-07-23  (27/60)
+  tape: WIN_A_2026-07-24  (28/60)
+  tape: WIN_A_2026-07-27  (29/60)
+  tape: WIN_A_2026-07-28  (30/60)
+  tape: WIN_A_2026-07-29  (31/60)
+  tape: WIN_A_2026-07-30  (32/60)
+  tape: WIN_A_2026-08-03  (33/60)
+  tape: WIN_A_2026-08-04  (34/60)
+  tape: WIN_A_2026-08-05  (35/60)
+  tape: WIN_A_2026-08-06  (36/60)
+  tape: WIN_A_2026-08-07  (37/60)
+  tape: WIN_A_2026-08-10  (38/60)
+  tape: WIN_A_2026-08-11  (39/60)
+  tape: WIN_A_2026-08-12  (40/60)
+  tape: WIN_A_2026-08-13  (41/60)
+  tape: WIN_A_2026-08-14  (42/60)
+  tape: WIN_A_2026-08-17  (43/60)
+  tape: WIN_A_2026-08-18  (44/60)
+  tape: WIN_A_2026-08-19  (45/60)
+  tape: WIN_A_2026-08-20  (46/60)
+  tape: WIN_A_2026-08-21  (47/60)
+  tape: WIN_A_2026-08-24  (48/60)
+  tape: WIN_A_2026-08-25  (49/60)
+  tape: WIN_A_2026-08-26  (50/60)
+  tape: WIN_A_2026-08-27  (51/60)
+  tape: WIN_A_2026-08-28  (52/60)
+  tape: WIN_A_2026-08-31  (53/60)
+  tape: WIN_A_2026-09-01  (54/60)
+  tape: WIN_A_2026-09-02  (55/60)
+  tape: WIN_A_2026-09-03  (56/60)
+  tape: WIN_A_2026-09-04  (57/60)
+  tape: WIN_A_2026-09-08  (58/60)
+  tape: WIN_A_2026-09-09  (59/60)
+  tape: WIN_A_2026-09-10  (60/60)
+
+razao de ajuste medida em 60 pregoes
+  dispersao DENTRO do pregao (desvio da razao): mediana 1.32e-05  (constante ate' a 5a casa)
+  janela cruzavel: 2026-06-17 a 2026-09-10  (60 pregoes)
+
+robo rodado: 194 ordens de entrada armadas, 160 operacoes fechadas
+
+===== A GRADE DO BACKTEST NAO E' A GRADE NEGOCIAVEL =====
+distancia do nivel simulado ate' o tick REAL mais proximo, em pontos:
+  mediana 0,54   p90 2,10   maximo 2,48   (tick real = 5,00 pontos)
+  em R$/contrato: mediana 0,11   maximo 0,50
+
+
+===== ENTRADA (limite no nivel rompido, prazo 5 barras) =====
+n = 194 ordens   |   o motor encheu 80,4% delas (fila ZERO)
+
+volume negociado NO NOSSO PRECO durante a janela (contratos):
+  minimo                 0
+  p10                    0
+  p25                  832
+  MEDIANA            2.994
+  p75                5.010
+  p90                7.540
+  maximo            13.963
+  ordens com volume ZERO no nosso preco: 16,5%
+
+curva de preenchimento -- com fila de Q contratos na frente,
+que fracao das nossas ordens teria preenchido (V >= Q):
+           Q   preencheria
+           0        100,0%
+          50         83,0%
+         100         83,0%
+         250         82,5%
+         500         80,4%
+       1.000         71,1%
+       2.500         56,7%
+       5.000         25,3%
+      10.000          2,1%
+      25.000          0,0%
+
+
+===== SAIDA POR ALVO (limite parada ate' pagar) =====
+n = 160 ordens   |   o motor encheu 25,6% delas (fila ZERO)
+
+volume negociado NO NOSSO PRECO durante a janela (contratos):
+  minimo                 0
+  p10                    0
+  p25                    0
+  MEDIANA                0
+  p75                1.663
+  p90                3.848
+  maximo             6.541
+  ordens com volume ZERO no nosso preco: 65,6%
+
+curva de preenchimento -- com fila de Q contratos na frente,
+que fracao das nossas ordens teria preenchido (V >= Q):
+           Q   preencheria
+           0        100,0%
+          50         34,4%
+         100         34,4%
+         250         33,8%
+         500         31,2%
+       1.000         30,6%
+       2.500         18,1%
+       5.000          5,0%
+      10.000          0,0%
+      25.000          0,0%

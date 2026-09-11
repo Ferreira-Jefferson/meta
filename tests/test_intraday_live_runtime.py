@@ -6724,3 +6724,69 @@ def test_impedimento_de_fatia_orfa_e_registrado_uma_vez_so(tmp_path, pregao_aber
         eventos = store.recent_events(conn, acc.id, limit=200)
     linhas = [e for e in eventos if "FATIA DE SAIDA" in (e.get("message") or "")]
     assert len(linhas) == 1, f"esperava 1 linha no diario, veio {len(linhas)}"
+
+
+def test_sombra_declara_que_a_fila_NAO_e_calibrada(tmp_path, pregao_aberto):
+    """A premissa de preenchimento tem de aparecer no diario, uma vez por
+    pregao, quando o simbolo nao tem calibracao.
+
+    POR QUE: a tabela padrao do backtest carimba `fila NAO CALIBRADA` em toda
+    linha desde 2026-09-09, mas o caminho AO VIVO nao dizia nada -- `src/live/`
+    nao mencionava fidelidade em lugar nenhum, e a sombra rodava assumindo que
+    toda ordem-limite dela preenche quando o preco toca o nivel. O simbolo que
+    expoe isso hoje e' o WIN@ (`fidelidade.FIDELIDADE` so' tem WDO@). Custo
+    medido de nao saber, em outro simbolo: o motor com fila zero previa
+    +R$3,82/op num pregao do WDO F1 que deu -R$3,00 -- errava o SINAL."""
+    rt, _feed = _runtime(tmp_path, [_bar("13:00", 10.00, 10.02, 9.98, 10.00)])
+    rt.run_once(now=_agora("13:05:00"))
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        eventos = store.recent_events(conn, acc.id, limit=200)
+    linhas = [e for e in eventos if "NAO CALIBRADA" in (e.get("message") or "")]
+    assert len(linhas) == 1, f"esperava 1 declaracao, veio {len(linhas)}"
+    assert linhas[0]["level"] == "warn"
+
+
+def test_declaracao_de_fila_sai_UMA_vez_por_pregao_nao_por_barra(tmp_path, pregao_aberto):
+    """O supervisor chama `run_once` a cada 5 segundos o pregao inteiro. Aviso
+    que repete a cada barra vira ruido, e ruido nao e' aviso -- a declaracao
+    mora em `_start_session`, que roda uma vez por processo por pregao."""
+    rt, _feed = _runtime(tmp_path, [_bar("13:00", 10.00, 10.02, 9.98, 10.00)])
+    rt.run_once(now=_agora("13:05:00"))
+    rt.run_once(now=_agora("13:05:05"))
+    rt.run_once(now=_agora("13:05:10"))
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        eventos = store.recent_events(conn, acc.id, limit=200)
+    linhas = [e for e in eventos if "NAO CALIBRADA" in (e.get("message") or "")]
+    assert len(linhas) == 1, f"esperava 1 declaracao, veio {len(linhas)}"
+
+
+def test_sombra_declara_a_fila_CALIBRADA_quando_ela_existe(tmp_path, pregao_aberto):
+    """O outro lado: com calibracao, a linha e' `info` e carrega os numeros.
+
+    Sem este teste o primeiro ramo passaria por um `if` que nunca foi exercido
+    -- e um aviso que so' sabe gritar nao prova que sabe ficar quieto."""
+    from dataclasses import replace as _replace
+
+    cfg = _config()
+    cfg = _replace(
+        cfg,
+        costs=_replace(cfg.costs, fidelidade_calibrada=True),
+        queue_ahead_qty=438.0,
+        exit_queue_ahead_qty=489.0,
+    )
+    rt, _feed = _runtime(tmp_path, [_bar("13:00", 10.00, 10.02, 9.98, 10.00)],
+                         config=cfg)
+    rt.run_once(now=_agora("13:05:00"))
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        eventos = store.recent_events(conn, acc.id, limit=200)
+    assert not [e for e in eventos if "NAO CALIBRADA" in (e.get("message") or "")]
+    linhas = [e for e in eventos if "fila de execucao calibrada" in (e.get("message") or "")]
+    assert len(linhas) == 1
+    assert linhas[0]["level"] == "info"
+    assert "438" in linhas[0]["message"] and "489" in linhas[0]["message"]
