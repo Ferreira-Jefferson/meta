@@ -28,6 +28,7 @@ from strategy.daytrade.base import IntradayStrategy
 from strategy.daytrade.lab.copa_win import CopaWin
 from strategy.daytrade.lab.gremah import Gremah
 from strategy.daytrade.lab.wdo_grid_reload_maker import WdoGridReloadMaker
+from strategy.daytrade.lab.wdo_orb import WdoOrb
 
 # A ORDEM DESTE DICIONÁRIO É O PÓDIO DE DAY TRADE — o primeiro é o TOP-1.
 #
@@ -168,7 +169,37 @@ from strategy.daytrade.lab.wdo_grid_reload_maker import WdoGridReloadMaker
 # contê-lo. O que essa ordem não afirma: a `gremah_tick` tem medição
 # própria em UM ativo (PMAM3) contra os dez da `gremah` — é por isso que
 # `GremahTick.calibrated_setups()` oferece um só.
+# 2026-09-10, ordem do dono ("coloque ela em produção"): `wdo_orb` entra no
+# pódio como TOP-1, empurrando `wdo_grid_reload_maker` para TOP-2.
+#
+# Por quê a ORB sobe: ela é a ÚNICA candidata viva do projeto. A família
+# maker — de que `wdo_grid_reload_maker` é o TOP-1 histórico — foi encerrada
+# por refutação em 2026-09-10, quando a fila real do livro foi calibrada
+# contra extrato (438/489, `backtest/intraday/fidelidade.py`): o bruto por
+# operação cai para R$0,45 contra R$0,50 de corretagem, ou seja, o edge dela
+# só existia com fila ZERO. Toda a confirmação OOS citada mais acima
+# (R$148,89/pregão, 89% de retenção, 30/30 blocos) foi medida sob essa
+# premissa, e portanto descreve um motor, não o mercado. Deixar um robô
+# refutado em cima da única candidata viva faria o painel recomendar o
+# errado, que é exatamente o que uma ordem DECLARADA existe para evitar.
+#
+# O QUE ESTA ORDEM NÃO AFIRMA, e tem de ser lido junto: a ORB **não** passou
+# o crivo estatístico. Win 56,94% em 72 operações do IS, IC95%
+# [45,4 ; 67,7], breakeven empírico 47,74% — o breakeven cai DENTRO do
+# intervalo, então o veredito é INDEFINIDO, não positivo. Levar o limite
+# inferior acima do breakeven pede ~150 operações; IS (72) + OOS (51) somam
+# 123, e o OOS segue INTOCADO (ninguém gastou o teste cego). Ela é TOP-1 por
+# ser a melhor medição viva sobre o dado disponível e por decisão explícita
+# do dono ("já considero que ela está apta para ser promovida"), com 1
+# contrato — não por validação em dinheiro real.
+#
+# O que a ORB tem e a família maker não tinha: o resultado dela NÃO depende
+# de ganhar fila. Ela entra por limite esperando um RECUO (2 ticks atrás do
+# rompimento) e aceita não ser preenchida — 19,4% dos pregões passam em
+# branco de propósito. Fila alta não inverte o sinal dela; só reduz quantos
+# pregões operam.
 _ROBOTS: dict[str, type[IntradayStrategy]] = {
+    WdoOrb.name: WdoOrb,
     WdoGridReloadMaker.name: WdoGridReloadMaker,
     CopaWin.name: CopaWin,
     Gremah.name: Gremah,
@@ -182,6 +213,15 @@ _ROBOTS: dict[str, type[IntradayStrategy]] = {
 #: (`wdo_grid_reload_maker`, ver abaixo). `cls()` sem isto explodiria (copa_win)
 #: ou rodaria estático em 1 contrato pra sempre (wdo_grid_reload_maker) em
 #: `list_daytrade_robots`/`get_daytrade_robot`/`symbols_for_robot`.
+#:
+#: `wdo_orb` NÃO aparece aqui de propósito: os defaults da CLASSE já são a
+#: configuração de produção, número por número. É a mesma decisão tomada em
+#: 2026-09-09 para o sem-prazo do `wdo_grid_reload_maker` ("não fica repetido
+#: aqui", ver o comentário lá embaixo) — repetir um valor nesta tabela cria
+#: duas fontes para o mesmo número, que é como um lado muda e o outro não. O
+#: efeito colateral é o que se quer: script de laboratório, teste e sweep que
+#: fazem `WdoOrb()` direto herdam a produção inteira, então backtest e robô
+#: ao vivo descrevem o MESMO robô.
 _KWARGS_PADRAO: dict[str, dict] = {
     # 2026-08-29, pedido do dono depois de descobrir que o CopaWin já escala
     # contratos com o caixa e a WDO F1 não ("wdo também tem que ser dinâmico,

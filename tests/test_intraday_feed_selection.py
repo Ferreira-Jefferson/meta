@@ -94,15 +94,26 @@ def test_podio_declarado_2026_09_04():
     Decisao do dono, 2026-09-04: `gremah_tick` ELIMINADA (venceu em 0 de 9
     simbolos contra `gremah` M1, tanto no historico completo quanto no
     protocolo IS/OOS em PMAM3/KLBN3) -- o podio cai de 4 para 3 robos. Ver o
-    comentario sobre `_ROBOTS` em `strategy/daytrade/registry.py`."""
+    comentario sobre `_ROBOTS` em `strategy/daytrade/registry.py`.
+
+    Decisao do dono, 2026-09-10: `wdo_orb` entra como TOP-1 e empurra
+    `wdo_grid_reload_maker` para TOP-2. A familia maker foi refutada quando a
+    fila real do livro foi calibrada contra extrato (438/489,
+    `backtest/intraday/fidelidade.py`): o bruto por operacao cai para R$0,45
+    contra R$0,50 de corretagem, entao o edge dela so' existia com fila ZERO.
+    A ORB e' a unica candidata viva -- e o que ela NAO tem e' veredito: win
+    56,94% em 72 operacoes do IS, IC95% [45,4 ; 67,7] contra breakeven
+    empirico 47,74%, ou seja, INDEFINIDA. Ela e' TOP-1 por ser a melhor
+    medicao viva sobre o dado disponivel, nao por validacao em dinheiro
+    real."""
     robos = list_daytrade_robots()
 
     assert [r.key for r in robos] == [
-        "wdo_grid_reload_maker", "copa_win", "gremah",
+        "wdo_orb", "wdo_grid_reload_maker", "copa_win", "gremah",
     ]
-    assert [r.rank for r in robos] == [1, 2, 3]
-    assert [r.feed_kind for r in robos] == ["tick", "m1", "m1"]
-    assert [r.is_futuro for r in robos] == [True, True, False]
+    assert [r.rank for r in robos] == [1, 2, 3, 4]
+    assert [r.feed_kind for r in robos] == ["tick", "tick", "m1", "m1"]
+    assert [r.is_futuro for r in robos] == [True, True, True, False]
 
 
 def test_gremah_cobre_os_nove_simbolos_confirmados():

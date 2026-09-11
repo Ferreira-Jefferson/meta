@@ -111,6 +111,15 @@ class _Position:
     # split_exit`/`_resolve_live_split_exit`.
     exit_resting_qty: int = 0
     resting_exit_bars_waited: int = 0
+    # PRECO com que a fatia acima foi posicionada na corretora (execucao
+    # REAL). So' existe porque `current_target` pode MUDAR depois do arme:
+    # `AdjustTarget` reescreve o alvo da posicao, o backtest simulado passa a
+    # avaliar o nivel novo na barra seguinte -- e a ordem REAL continuava
+    # parada no preco VELHO, sem ninguem reprecificar (ate' 2026-09-10). O
+    # robo ao vivo entao nao reproduzia o robo medido justamente na saida que
+    # ele mais usa. `None` = nenhuma fatia real posicionada. Ver
+    # `_resolve_live_split_exit`.
+    exit_resting_price: float | None = None
     # Q_frente DA SAIDA -- quanto ainda tem de negociar NO NIVEL DO ALVO,
     # contra quem chegou antes, para a fatia desta posicao virar a primeira
     # da fila. Espelha `_queue_ahead_remaining` do lado da entrada, mas mora
@@ -969,6 +978,7 @@ class IntradaySessionMachine:
                     "exit_ttl_bars": pos.exit_ttl_bars,
                     "exit_resting_qty": pos.exit_resting_qty,
                     "exit_resting_bars_waited": pos.resting_exit_bars_waited,
+                    "exit_resting_price": pos.exit_resting_price,
                     # Fila do nivel e "ja tocou?" fazem parte do estado da
                     # fatia parada: sem eles um restart devolveria a fatia ao
                     # book com a fila ZERADA (preenchimento instantaneo no
@@ -1044,6 +1054,7 @@ class IntradaySessionMachine:
                 exit_ttl_bars=bloco.get("exit_ttl_bars"),
                 exit_resting_qty=qtd_pendente,
                 resting_exit_bars_waited=int(bloco.get("exit_resting_bars_waited") or 0),
+                exit_resting_price=bloco.get("exit_resting_price"),
                 exit_queue_ahead_remaining=float(
                     bloco.get("exit_queue_ahead_remaining") or 0.0),
                 exit_touched_once=bool(bloco.get("exit_touched_once")),
@@ -1626,6 +1637,18 @@ class IntradaySessionMachine:
                         self.resting_limit_bars_waited = 0
                         self._queue_ahead_remaining = 0.0
                         events.append(LimitCancelled(order=order, ts=ts, reason="ttl"))
+                        # A ordem morreu por PRAZO -- e ate' 2026-09-10 a
+                        # estrategia nao ficava sabendo por caminho nenhum:
+                        # `on_order_rejected` so' dispara na recusa por
+                        # teto/capital (dois sites acima), e o evento
+                        # `LimitCancelled` vai para o DIARIO, nao para o robo.
+                        # Um robo que guarda "ja' armei hoje" fora de
+                        # `positions` passava o resto do pregao mudo achando
+                        # que tinha ordem no book (ORB: 14 dos 72 pregoes do
+                        # IS, +R$1.236,00 -> +R$1.649,00 so' com o aviso de
+                        # volta). Ver `IntradayStrategy.on_order_expired` e o
+                        # item 4.25 de LICOES_DE_PRODUCAO.md.
+                        self.strategy.on_order_expired(ts)
 
         # (5) decisao do robo para a PROXIMA barra — nao roda mais depois do flatten.
         if not self.flattened:
@@ -1909,6 +1932,19 @@ class IntradaySessionMachine:
             self._clear_stale_enter()
             return events, orcamento
 
+        # O ALVO MUDOU debaixo da fatia? Simetrico de `_resolve_live_split_
+        # exit` (2026-09-10) e pelo mesmo motivo: uma ordem-limite REAL parada
+        # num preco nao vira outro preco sozinha -- ela e' CANCELADA e uma
+        # NOVA e' mandada, que entra no FIM da fila daquele nivel. Sem isto o
+        # backtest reaproveitava a fila ja' consumida do alvo VELHO para
+        # preencher no alvo NOVO, e mediria um robo mais rapido do que o que
+        # a corretora executa. Desarma aqui; o arme novo (com fila cheia)
+        # acontece nos blocos abaixo, na mesma barra se o preco ja' tocar.
+        if (pos.exit_resting_qty > 0 and pos.exit_resting_price is not None
+                and pos.current_target is not None
+                and pos.exit_resting_price != pos.current_target):
+            self._desarmar_fatia_de_saida(pos)
+
         # Fatia parada no book desde o FILL da entrada, nao desde o toque
         # (`exit_arms_at_fill`) -- arma aqui, antes de qualquer avaliacao,
         # para que a PROPRIA barra que tocar o alvo ja possa preenche-la.
@@ -1987,6 +2023,10 @@ class IntradaySessionMachine:
         pos.resting_exit_bars_waited = 0
         pos.exit_queue_ahead_remaining = self.config.exit_queue_ahead_qty
         pos.exit_touched_once = False
+        # o NIVEL em que esta fatia esta parada -- se `current_target` mudar
+        # depois (`AdjustTarget`), e' por esta comparacao que os dois motores
+        # descobrem que a ordem ficou no preco velho.
+        pos.exit_resting_price = pos.current_target
 
     @staticmethod
     def _desarmar_fatia_de_saida(pos: _Position) -> None:
@@ -1998,6 +2038,10 @@ class IntradaySessionMachine:
         pos.resting_exit_bars_waited = 0
         pos.exit_queue_ahead_remaining = 0.0
         pos.exit_touched_once = False
+        # so' o caminho REAL preenche este campo (`_resolve_live_split_exit`),
+        # mas desarmar e' desarmar: deixar o preco para tras faria o proximo
+        # arme parecer "ja' posicionado num nivel" que nao existe mais.
+        pos.exit_resting_price = None
 
     # ---------- saida dividida em execucao REAL (Fase 2, 2026-08-22) --------
 
@@ -2037,6 +2081,7 @@ class IntradaySessionMachine:
                 self.execution.cancel_exit_limit(ts, reason="stop")
                 pos.exit_resting_qty = 0
                 pos.resting_exit_bars_waited = 0
+                pos.exit_resting_price = None
             ref_price = _exit_fill_price(pos, bar, "stop")
             events.append(self._close_position(pos, ts, ref_price, IntradayExitReason.STOP))
             self.pending = None
@@ -2055,6 +2100,8 @@ class IntradaySessionMachine:
                 ))
                 pos.exit_resting_qty -= fechado
                 pos.resting_exit_bars_waited = 0
+                if pos.exit_resting_qty == 0:
+                    pos.exit_resting_price = None
                 if pos not in self.positions:  # ultima fatia (desta ou de outra rodada) fechou agora
                     self.pending = None
                     orfa = self._cancelar_resting_orfa(ts)
@@ -2065,6 +2112,38 @@ class IntradaySessionMachine:
                 # fatia), a MESMA ordem-limite continua vigiada; se zerou, a
                 # proxima barra rearma outra fatia do zero (bloco `target_hit`
                 # abaixo, ja que `exit_resting_qty == 0` de novo).
+                return events
+
+            # ---- nao preencheu nesta barra ----
+            #
+            # O ALVO MUDOU debaixo da fatia? `AdjustTarget` reescreve
+            # `pos.current_target` na hora (bloco (5) de `on_closed_bar`), e o
+            # backtest simulado passa a medir o nivel NOVO na barra seguinte
+            # -- mas a ordem REAL continua parada no preco VELHO, porque quem
+            # a posicionou foi o bloco `target_hit` la' embaixo, uma vez so'.
+            # Ate' 2026-09-10 ninguem reprecificava: o robo ao vivo ficava
+            # esperando um alvo que o robo medido ja' tinha abandonado, e a
+            # posicao so' saia no achatamento de fim de pregao, a MERCADO.
+            # Cancela e deixa o bloco `target_hit` rearmar no nivel novo --
+            # nesta MESMA barra, se o preco ja' o toca.
+            #
+            # Mesma cautela do estouro de prazo abaixo: cancelamento nao
+            # confirmado significa ordem possivelmente VIVA no book, e rearmar
+            # por cima poe duas limites de saida pela mesma posicao (numa
+            # conta NETTING a segunda inverte o lado -- item 1.24). Enquanto
+            # nao confirmar, espera; a proxima barra tenta de novo.
+            if (pos.exit_resting_price is not None
+                    and pos.current_target is not None
+                    and pos.exit_resting_price != pos.current_target):
+                cancelada = self.execution.cancel_exit_limit(ts, reason="alvo_alterado")
+                if cancelada is not None and not bool(
+                        getattr(cancelada, "is_terminal", True)):
+                    return events
+                pos.exit_resting_qty = 0
+                pos.resting_exit_bars_waited = 0
+                pos.exit_resting_price = None
+                # NAO retorna: cai no `target_hit` com o alvo novo ja' valendo
+                # (`_stop_target_touch` foi avaliado no topo, com ele).
             else:
                 pos.resting_exit_bars_waited += 1
                 if pos.resting_exit_bars_waited >= pos.exit_ttl_bars:
@@ -2087,6 +2166,7 @@ class IntradaySessionMachine:
                         return events
                     pos.exit_resting_qty = 0
                     pos.resting_exit_bars_waited = 0
+                    pos.exit_resting_price = None
                     # fecha o RESTANTE a mercado -- ainda e' um exit de ALVO
                     # (a decisao continua sendo "sair no alvo"), so' que a
                     # ultima fatia nao esperou a vez dela na fila e saiu pelo
@@ -2097,9 +2177,9 @@ class IntradaySessionMachine:
                     orfa = self._cancelar_resting_orfa(ts)
                     if orfa is not None:
                         events.append(orfa)
-            return events
+                return events
 
-        if target_hit:
+        if target_hit and pos.quantity > 0 and pos.exit_resting_qty == 0:
             fatia = min(pos.exit_split_unit, pos.quantity)
             self.execution.place_exit_limit(
                 position_side=pos.side, quantity=fatia, limit_price=pos.current_target,
@@ -2107,6 +2187,7 @@ class IntradaySessionMachine:
             )
             pos.exit_resting_qty = fatia
             pos.resting_exit_bars_waited = 0
+            pos.exit_resting_price = pos.current_target
 
         return events
 

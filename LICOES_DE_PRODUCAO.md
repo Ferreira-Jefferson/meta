@@ -2844,6 +2844,182 @@ do que pedi", e ordem-limite recusa pior (item 6.19).
 > **Pergunte à plataforma nova:** pergunta 85 (nova).
 > (4.8, 4.23, 6.18, 6.19)
 
+### 4.25 O motor avisa quando RECUSA uma ordem e não avisa quando ela EXPIRA — 14 de 72 pregões em silêncio, e a defesa certa já existia no repo — CORRIGIDO 2026-09-10
+
+Medido em 2026-09-10 numa estratégia ORB de laboratório: **14 dos 72 pregões
+do IS (19,4%) passaram inteiros sem nenhuma operação**. Não por falta de sinal
+— o sinal estava lá. A ordem-limite de ENTRADA dela expirava por prazo
+(`ttl_bars`), o motor a retirava do livro, e **a estratégia nunca era
+avisada**. Ela guardava `_armou_hoje = True`, seguia acreditando ter ordem
+parada no livro, e não agia mais até o fim da sessão.
+
+A causa é uma assimetria no contrato motor↔estratégia
+(`src/backtest/intraday/machine.py`):
+
+| evento | onde | avisa a estratégia? |
+|---|---|---|
+| ordem morre por **recusa** (teto de contratos / capital) | linhas 1210 e 1620 | **SIM** — `strategy.on_order_rejected(ts)` |
+| ordem-limite morre por **prazo** (`ttl_bars`) | linhas 1623-1628 | **NÃO** — `resting_limit = None` e `events.append(LimitCancelled(..., reason="ttl"))` |
+
+O ramo do prazo registra o evento no log do motor e segue adiante. São os dois
+únicos pontos em que `on_order_rejected` é chamado no repositório inteiro, e os
+dois são recusa. **O motor avisa quando recusa e não avisa quando expira.**
+
+**O que o conserto valeu.** Fazendo a estratégia detectar sozinha — contando as
+barras desde que armou e concluindo por conta própria que a ordem morreu quando
+passa do prazo:
+
+| | antes | depois |
+|---|---|---|
+| operações em 72 pregões | 58 | **72** (todo pregão opera) |
+| líquido | +R$1.236,00 | **+R$1.649,00** (+R$413,00, **+33%**) |
+| win% dos trades recuperados | — | **57,1%** (contra 56,9% dos 58 que já existiam) |
+
+O win% dos 14 recuperados praticamente igual ao dos 58 antigos é o número que
+fecha o argumento: **não havia seleção adversa.** Os dias em que a primeira
+ordem morria não eram dias ruins — o robô simplesmente não estava lá.
+
+**Por que é pior ao vivo do que no backtest.** Um robô que cala não gera erro,
+não gera alerta e não muda nada no painel: a tela mostra ele rodando
+normalmente. Falha que se parece com inatividade é a mais difícil de notar. No
+backtest custa um trade; ao vivo custa um pregão inteiro ocioso com o dono
+achando que tem ordem no livro.
+
+**É a TERCEIRA aparição desta família.** O item **1.14** (incidente WDO F1,
+2026-08-28) é o primeiro: 20 de 20 recusas por capital amostradas deixavam o
+robô mudo pelo resto do pregão — foi exatamente para isso que o hook
+`on_order_rejected` nasceu. O hook fechou o caminho da recusa e deixou aberto o
+caminho do prazo, que ninguém tinha percebido ser um caminho separado.
+
+**A varredura do repo — e ela é metade da lição.** Dos 9 robôs que armam ordem
+de entrada:
+
+| robô | prazo na entrada | o que trava o rearme | exposto |
+|---|---|---|---|
+| `CopaWin` (produção) | SIM (`entrada_ttl_barras=5`) | `self._espera` | **NÃO — imune** |
+| `WdoGridReloadMaker` (produção) | não | `pending_side` | não hoje, **latente** |
+| `Gremah` (produção) | não | — | não |
+| 6 outros de laboratório | não | — | não |
+
+O ponto que importa: **a `CopaWin` já se defendia sozinha**, e ninguém tinha
+copiado a defesa. Em `copa_win.py` (linhas ~712-718) ela incrementa
+`self._espera` a cada barra e, ao chegar em `entrada_ttl_barras`, zera o
+contador e libera o rearme — **sem depender de aviso nenhum do motor**. A
+solução certa já estava escrita no repositório, num robô de produção, e a ORB
+foi construída sem ela. E a `WdoGridReloadMaker` está a um parâmetro de
+distância do mesmo bug: o `pending_side` dela só é limpo por recusa confirmada
+ou por preenchimento, então basta alguém ligar `ttl_bars` na entrada dela para
+o robô ficar mudo pelo mesmo mecanismo.
+
+**Correção aplicada (2026-09-10):** a assimetria foi fechada na raiz, não só
+no robô. Nasceu um hook novo, `IntradayStrategy.on_order_expired(ts)`
+(`src/strategy/daytrade/base.py`, default no-op), chamado pelo motor na MESMA
+barra em que ele emite `LimitCancelled(reason="ttl")`. É irmão de
+`on_order_rejected`, e **são dois hooks de propósito**: recusa e prazo são duas
+causas diferentes, e um robô pode querer reagir diferente a cada uma —
+juntá-los num aviso só obrigaria toda estratégia a adivinhar por que a ordem
+morreu. Nenhum robô do pódio mudou de comportamento (hoje nenhum outro usa
+`ttl_bars` na entrada; a `WdoGridReloadMaker` continua sendo o caso latente da
+tabela acima, agora com a defesa pronta para quando alguém ligar o prazo).
+Coberto por `tests/test_intraday_alvo_alterado.py`. A regra abaixo continua
+valendo inteira — ter o aviso não dispensa a estratégia de contar o próprio
+prazo, porque a plataforma NOVA pode não ter aviso nenhum.
+
+> **Regra.** **Quem coloca uma ordem parada COM PRAZO conta o prazo sozinho e
+> conclui por conta própria que a ordem morreu. Nunca confie em ser avisado.**
+> Num motor de execução, "ordem recusada" e "ordem expirada" são eventos
+> DIFERENTES, e uma plataforma pode notificar um e não o outro — registrar no
+> log não é notificar. Estado do tipo "já mandei minha ordem" que só é limpo
+> por preenchimento ou por recusa é uma armadilha: ele fica permanentemente
+> ligado no caminho que ninguém notifica, e o sintoma é silêncio, não erro.
+>
+> Corolário de auditoria, que é o que economiza a próxima descoberta: ao achar
+> um caminho de notificação faltando, **enumere TODAS as formas pelas quais
+> uma ordem pode morrer** (recusa, prazo, cancelamento pedido, cancelamento
+> pela corretora, achatamento de fim de pregão) e confirme, uma a uma, que
+> cada uma tem caminho de volta. O item 1.14 fechou uma delas e a ausência das
+> outras passou despercebida por 13 dias. Corolário de reuso: antes de escrever
+> a defesa, procure quem no repositório já resolveu isso — aqui ela existia,
+> pronta e em produção, num robô que ninguém consultou.
+>
+> **Pergunte à plataforma nova:** pergunta 89 (nova).
+> (1.14, 3.8, 4.23)
+
+### 4.26 Mudar o alvo mudava o nível do BACKTEST e não mexia na ordem que já estava no livro da corretora — o mecanismo que responde por 81% do líquido da ORB não existia ao vivo — CORRIGIDO 2026-09-10
+
+Achado em 2026-09-10, ao portar a ORB do WDO@ para produção. `AdjustTarget` é
+aplicado no motor (`src/backtest/intraday/machine.py`) escrevendo
+`pos.current_target` na hora: a partir da barra seguinte o backtest já mede o
+nível novo. Só que, com a saída fatiada (`exit_split_unit` — o desenho de
+execução obrigatório deste projeto desde 2026-09-09), a ordem-limite REAL foi
+mandada para a corretora **uma vez só**, pelo bloco que arma a fatia no
+primeiro toque do alvo, e **ninguém a reprecificava**. Ela ficava parada no
+preço VELHO para sempre.
+
+O robô ao vivo ficava esperando um alvo que o robô medido já tinha abandonado.
+A posição não sairia no nível novo: sairia no achatamento de fim de pregão, **a
+mercado** — exatamente o custo que este desenho de execução existe para não
+pagar (4.24, 4.8).
+
+**O número, e por que ele não é um detalhe.** O mecanismo de saída é o que
+responde por **+81% do líquido** da ORB. Trocar o corte de tempo a mercado por
+`AdjustTarget(preço corrente)` aos 60 minutos, nos mesmos 72 pregões:
+
+| | corte de tempo a mercado | `AdjustTarget` aos 60 min |
+|---|---|---|
+| deslize pago em 72 pregões | R$265,00 | **R$70,00** |
+| R$/operação | +15,71 | **+21,31** |
+
+Dos **+R$5,60 por operação** de ganho, **R$3,36 são mecanicamente o deslize que
+deixou de ser pago**. E nada disso existiria ao vivo: ao vivo a ordem continuava
+no preço velho, então o robô real pagaria o achatamento a mercado enquanto a
+planilha mostrava o ganho.
+
+**A segunda metade do defeito ia para o outro lado — no simulado.** Quando o
+alvo mudava, a fatia simulada **herdava a fila já consumida do nível velho**.
+Uma ordem-limite parada num preço não vira outro preço sozinha: ela é
+cancelada, outra é mandada, e a nova entra no **FIM** da fila daquele nível. O
+backtest media um robô mais rápido do que a corretora executa — a MESMA família
+de erro que `backtest/intraday/fidelidade.py` (fila 438/489, Kaplan-Meier)
+existe para fechar (4.21, 4.22). Um defeito otimista no preço ao vivo e outro
+otimista na velocidade no simulado, na mesma linha de código.
+
+**Correção aplicada (2026-09-10):** `_Position` ganhou `exit_resting_price` — o
+preço com que a fatia foi **de fato** posicionada. Quando ele diverge de
+`current_target`, os dois motores reagem, cada um pagando o seu custo:
+
+| motor | o que faz quando o alvo muda |
+|---|---|
+| REAL | cancela (`reason="alvo_alterado"`) e remanda no nível novo, com a MESMA cautela de cancelamento-não-confirmado do estouro de prazo |
+| SIMULADO | desarma e rearma a fatia com a fila do nível **CHEIA** |
+
+A cautela do cancelamento não é zelo: **cancelamento não confirmado significa
+ordem possivelmente viva** (1.24), e duas ordens-limite pela mesma posição numa
+conta NETTING não zeram — invertem o lado (1.23). Coberto por
+`tests/test_intraday_alvo_alterado.py`.
+
+> **Regra.** **Mudar um nível no estado interno do motor não move a ordem que
+> já está no livro.** Toda vez que o robô puder ALTERAR um nível que já virou
+> ordem parada na corretora, a alteração precisa de um caminho EXPLÍCITO de
+> cancelar-e-remandar — e o **custo** desse caminho (perder a fila do nível,
+> ficar exposto entre o cancelamento e o novo envio) tem de aparecer no
+> backtest. Sem isso o simulador mede uma reprecificação de graça que a
+> corretora não dá, e o robô ao vivo fica esperando um preço que o robô medido
+> já abandonou.
+>
+> **Corolário que amarra este item ao 4.25, e é o que vale levar para um motor
+> novo: o contrato motor↔estratégia é assimétrico por omissão, e a omissão é
+> sempre do mesmo lado — o motor age e não conta.** Duas vezes no mesmo dia, no
+> mesmo arquivo: a ordem de entrada morreu e ninguém avisou o robô (4.25); o
+> robô mudou o alvo e ninguém avisou a corretora (este item). Ao auditar um
+> motor de execução, enumere os **dois sentidos**: (a) toda forma de uma ordem
+> MORRER tem hook de volta para a estratégia? (b) toda decisão da estratégia
+> que altera uma ordem JÁ ENVIADA tem caminho até a corretora? Auditar só um
+> sentido fecha metade dos buracos e dá a sensação de ter fechado todos.
+>
+> **Pergunte à plataforma nova:** pergunta 90 (nova).
+> (4.25, 4.21, 4.22, 4.24, 1.23, 1.24)
+
 ---
 
 ## Parte 5 — Dados, relógio e instrumento
@@ -6118,6 +6294,32 @@ dinheiro ou meses.
     maior que o volume disponível não se resolvem testando mais variações de
     TIMING sobre o mesmo mecanismo reativo. (6.28, 6.21, 4.22)
 
+89. Quando uma ordem parada minha **expira por prazo**, a plataforma AVISA o
+    robô ou só registra no log? E quando ela é **recusada**? Se os dois
+    eventos não notificam igual, o robô tem de contar o prazo sozinho — e a
+    lista completa a percorrer não são dois eventos, são cinco: recusa, prazo,
+    cancelamento que eu pedi, cancelamento que a corretora fez, e achatamento
+    de fim de pregão. Cada um que não tiver caminho de volta deixa ligado para
+    sempre o estado "já mandei minha ordem", e o sintoma é SILÊNCIO, não erro:
+    aqui foram 14 de 72 pregões (19,4%) sem nenhuma operação, +R$413,00 (+33%)
+    de líquido esperando do outro lado, e nenhum alerta em lugar nenhum.
+    (4.25, 1.14, 3.8)
+
+90. Esta plataforma deixa **ALTERAR o preço de uma ordem-limite que já está no
+    livro**, ou só cancelar e mandar outra? E quando ela deixa alterar, a ordem
+    **mantém a posição na fila** daquele nível ou vai para o FIM? As duas
+    respostas mudam código e mudam backtest: se só existe cancelar-e-remandar,
+    o robô fica exposto no intervalo entre as duas ordens e precisa tratar
+    cancelamento não confirmado (1.24, 1.23); e se a ordem nova entra no fim da
+    fila, o simulador tem de cobrar a fila CHEIA do nível a cada
+    reprecificação, senão mede um robô mais rápido do que a corretora executa.
+    Aqui o motor mudava o alvo no estado interno e a ordem real continuava
+    parada no preço velho para sempre, enquanto a fatia simulada herdava a fila
+    já consumida — otimista ao vivo e otimista no papel, no mesmo ponto do
+    código. A pergunta 54 cobre perder a fila ao cancelar-e-reenviar; esta
+    cobre o caso em que é o próprio robô que decide mudar o nível de uma
+    ordem JÁ ENVIADA. (4.26, 4.21, 4.22, 1.24)
+
 ---
 
 ## O resumo, se sobrar só um parágrafo
@@ -6262,7 +6464,13 @@ para zero) conforme o stop alarga. A sensibilidade fecha o argumento: a MESMA
 janela com fila 0/0 dá **21 de 21 pregões positivos**, o ponto de virada fica
 em ~170 contratos e o livro real tem 438. Todo lucro que esta família já
 mostrou — os +R$239.936,50 e +R$77.833,50 do item 6.19 incluídos — era
-artefato de uma única premissa do simulador (6.21). Mais o
+artefato de uma única premissa do simulador (6.21). Mais 1 item em
+2026-09-10, a terceira aparição da família do item 1.14: o motor avisa a
+estratégia quando RECUSA uma ordem e não avisa quando ela EXPIRA por prazo
+— uma ORB de laboratório passou 14 de 72 pregões (19,4%) em silêncio
+acreditando ter ordem no livro, +R$413,00 (+33%) de líquido do outro lado,
+e a defesa correta já existia pronta na `CopaWin` sem nunca ter sido
+copiada (4.25). Mais o
 registro acumulado do projeto. Quando um item aqui contradisser o código, o
 código ganha — e este
 arquivo está desatualizado.*

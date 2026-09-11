@@ -518,6 +518,34 @@ class IntradayStrategy(ABC):
         de pendencia proprio (decide so' a partir de `positions` a cada
         chamada) nao precisa sobrescrever isto."""
 
+    def on_order_expired(self, ts: pd.Timestamp) -> None:
+        """Avisa o robo que a ordem-limite de ENTRADA parada no book morreu
+        por PRAZO (`EnterLimit.ttl_bars` estourado) -- o motor ja' a
+        cancelou e ela nao existe mais em lugar nenhum.
+
+        E' o IRMAO de `on_order_rejected`, e existe porque so' ele existia
+        (2026-09-10, item 4.25 de LICOES_DE_PRODUCAO.md). Uma ordem-limite
+        de entrada pode morrer por CINCO caminhos -- preencheu, foi recusada
+        por teto/capital, foi substituida por outra (`superseded`), a
+        posicao fechou (`position_closed`), ou estourou o prazo -- e ate'
+        aqui a estrategia so' era notificada do segundo. Um robo que guarda
+        estado proprio de "ja' tenho ordem no book" (o mesmo
+        `pending_side`/`_armou_hoje` de que fala `on_order_rejected`)
+        ficava, no caso do prazo, achando para SEMPRE que tinha ordem viva:
+        medido na ORB, 14 dos 72 pregoes do IS passavam em silencio depois
+        do primeiro rompimento -- +R$1.236,00 viravam +R$1.649,00 so' com o
+        aviso de volta. Robo cego, e cego justamente no caminho que o motor
+        percorre sozinho.
+
+        PODE chegar com posicao aberta: uma `EnterLimit` fatiada
+        (`split_quantities`) em que ALGUNS filhos preencheram e o resto
+        estourou o prazo notifica aqui do mesmo jeito -- o que morreu foi a
+        ordem, nao a posicao. Quem so' quer saber de "arme perdido" checa
+        `positions` (ou estado proprio) antes de reagir.
+
+        Default no-op, mesmo criterio de `on_order_rejected`: um robo que
+        decide so' a partir de `positions` a cada chamada nao precisa disto."""
+
     def seed_volume_window(self, previous_session_tail: list[Bar]) -> None:
         """Alimenta o robo com o FINAL do pregao ANTERIOR, antes da
         primeira barra/tick de hoje — para um teto de posicao baseado em
