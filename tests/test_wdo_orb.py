@@ -129,23 +129,24 @@ def test_a_ordem_fica_offset_ticks_ATRAS_do_rompimento_nos_dois_lados():
 
 
 def test_stop_e_alvo_saem_do_TAMANHO_da_faixa_ancorados_no_limite():
-    """Faixa de 17,5 pontos = 35 ticks (a mediana medida do IS) -> stop 35
-    ticks, alvo 70. Os niveis contam a partir do LIMITE pedido, nao do preco
-    que rompeu: e' esse nivel que a ordem vai ocupar."""
+    """Faixa de 17,5 pontos = 35 ticks (a mediana medida do IS) -> o TETO
+    (30, desde 2026-09-11) morde: stop 30 ticks, alvo 60. Os niveis contam a
+    partir do LIMITE pedido, nao do preco que rompeu: e' esse nivel que a
+    ordem vai ocupar."""
     robo = WdoOrb()
     _faixa(robo, hi=5_117.5, lo=5_100.0)
 
     (acao,) = _rompe(robo, 5_118.5)
 
     limite = 5_118.5 - 1.0
-    assert acao.initial_stop == pytest.approx(limite - 35 * 0.5)
-    assert acao.initial_target == pytest.approx(limite + 70 * 0.5)
+    assert acao.initial_stop == pytest.approx(limite - 30 * 0.5)
+    assert acao.initial_target == pytest.approx(limite + 60 * 0.5)
 
 
 @pytest.mark.parametrize("faixa_pontos, stop_esperado", [
     (5.0, 20),    # 10 ticks de faixa: o PISO morde (13,9% dos pregoes do IS)
-    (17.5, 35),   # 35 ticks: passa livre (54,2%)
-    (46.5, 40),   # 93 ticks, o maximo medido: o TETO morde (31,9%)
+    (11.5, 23),   # 23 ticks: passa livre (25,0%, com o teto em 30)
+    (46.5, 30),   # 93 ticks, o maximo medido: o TETO morde (61,1% com teto 30)
 ])
 def test_o_clamp_do_stop_morde_nas_duas_pontas(faixa_pontos, stop_esperado):
     robo = WdoOrb()
@@ -166,8 +167,8 @@ def test_short_espelha_a_geometria_do_long():
     (acao,) = _rompe(robo, 5_099.0)
 
     limite = 5_099.0 + 1.0
-    assert acao.initial_stop == pytest.approx(limite + 35 * 0.5)
-    assert acao.initial_target == pytest.approx(limite - 70 * 0.5)
+    assert acao.initial_stop == pytest.approx(limite + 30 * 0.5)
+    assert acao.initial_target == pytest.approx(limite - 60 * 0.5)
 
 
 def test_dentro_da_faixa_nao_arma_nada():
@@ -287,12 +288,31 @@ def test_fade_espelha_quando_o_primeiro_rompimento_foi_vendido():
     assert acao.limit_price == pytest.approx(5_118.5 + 2 * 0.5)
 
 
-def test_fade_dispara_ate_3_vezes_por_pregao_e_para_na_4a():
-    """O teto subiu de 1 para 3 em 2026-09-11 (ver `max_fades_por_dia`): teto
-    3 ficou em 1o lugar nas DUAS janelas (IS +3.055,50 / OOS +839,00, contra
-    +2.843,50 / +385,50 do teto 1). A 4a chamada e' o que o teto existe para
-    cortar -- ela deu -496,00 no IS."""
+def test_fade_dispara_1_vez_por_pregao_e_para_na_2a_no_default():
+    """O teto default e' 1 (de novo, desde 2026-09-11 -- passou por 3 no
+    mesmo dia, ver `max_fades_por_dia`): combinado com `stop_max_ticks=30`,
+    teto1+stop30 tem o melhor R$/operacao (+18,18) e a menor trava (52,4%)
+    das 5 combinacoes medidas -- ver a nota do campo. A 2a chamada e' o que
+    o teto default agora corta."""
     robo = WdoOrb()
+    _faixa(robo, hi=5_117.5, lo=5_100.0)
+    _rompe(robo, 5_118.5)
+    _rompe(robo, 5_118.0, minuto=17.0, positions=[_posicao()])
+    _rompe(robo, 5_110.0, minuto=30.0)
+
+    assert len(_rompe(robo, 5_099.0, minuto=45.0)) == 1, "fade #1"
+    robo.on_order_expired(ABERTURA + pd.Timedelta(minutes=46))
+    assert _rompe(robo, 5_098.0, minuto=47.0) == [], (
+        "1 fade ja' disparou -- a 2a e' exatamente a que o teto default corta"
+    )
+
+
+def test_o_teto_do_fade_e_parametro_nao_numero_cravado():
+    """`max_fades_por_dia` existe para que mexer no teto seja uma DECISAO
+    explicita, com a medicao ao lado (ver a nota do campo), e nao uma edicao
+    de logica. Com teto 3 o robo reproduz o comportamento de producao entre
+    2026-09-11 e a promocao pra teto1+stop30 no mesmo dia."""
+    robo = WdoOrb(max_fades_por_dia=3)
     _faixa(robo, hi=5_117.5, lo=5_100.0)
     _rompe(robo, 5_118.5)
     _rompe(robo, 5_118.0, minuto=17.0, positions=[_posicao()])
@@ -307,22 +327,6 @@ def test_fade_dispara_ate_3_vezes_por_pregao_e_para_na_4a():
     assert _rompe(robo, 5_098.0, minuto=minuto) == [], (
         "3 fades ja' dispararam -- a 4a e' exatamente a que o teto corta"
     )
-
-
-def test_o_teto_do_fade_e_parametro_nao_numero_cravado():
-    """`max_fades_por_dia` existe para que mexer no teto seja uma DECISAO
-    explicita, com a medicao ao lado (ver a nota do campo), e nao uma edicao
-    de logica. Com teto 1 o robo reproduz o comportamento anterior a
-    2026-09-11."""
-    robo = WdoOrb(max_fades_por_dia=1)
-    _faixa(robo, hi=5_117.5, lo=5_100.0)
-    _rompe(robo, 5_118.5)
-    _rompe(robo, 5_118.0, minuto=17.0, positions=[_posicao()])
-    _rompe(robo, 5_110.0, minuto=30.0)
-
-    assert len(_rompe(robo, 5_099.0, minuto=45.0)) == 1
-    robo.on_order_expired(ABERTURA + pd.Timedelta(minutes=46))
-    assert _rompe(robo, 5_098.0, minuto=47.0) == []
 
 
 def test_fade_nao_dispara_antes_da_1a_operacao_fechar():
@@ -442,10 +446,15 @@ def test_o_robo_esta_no_podio_com_os_defaults_da_classe():
     assert robo.fade_rompimento_oposto is True, (
         "o fade e' o que levou o IS a POSITIVO -- tem de vir ligado por default"
     )
-    assert robo.max_fades_por_dia == 3, (
-        "teto 3 ficou em 1o lugar nas DUAS janelas (IS +3.055,50 / OOS "
-        "+839,00); teto 1 da' +2.843,50 / +385,50 e soltar de vez da' "
-        "+2.399,50 no IS -- ver a nota do campo"
+    assert robo.max_fades_por_dia == 1, (
+        "teto1+stop30 tem o melhor R$/operacao (+18,18) e a menor trava "
+        "(52,4%) das 5 combinacoes medidas em 2026-09-11 -- ver a nota do "
+        "campo. Teto 3 (que rodou em producao antes desta promocao) da' "
+        "mais liquido total (+3.055,50 IS) mas mais risco de ruina"
+    )
+    assert robo.stop_max_ticks == 30, (
+        "baixou de 40 pra 30 na mesma promocao -- capa o pior stop isolado "
+        "em R$150 em vez de R$200, sem mexer no stop_min_ticks (20)"
     )
     assert robo.quantity == 1, (
         "1 contrato ate' o risco de capital achado no OOS (R$375 trava, "

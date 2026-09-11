@@ -1,9 +1,11 @@
 """ORB (Opening Range Breakout) do WDO@, no desenho de execucao FECHADO.
 
-Rompimento da faixa dos primeiros `range_minutos` do pregao, ATE' QUATRO
-operacoes por pregao (a original, mais ate' 3 fades do rompimento oposto --
-ver `fade_rompimento_oposto` e `max_fades_por_dia`), geometria tirada do
-proprio tamanho da faixa.
+Rompimento da faixa dos primeiros `range_minutos` do pregao, ATE' DUAS
+operacoes por pregao no default (a original, mais 1 fade do rompimento
+oposto -- ver `fade_rompimento_oposto` e `max_fades_por_dia`, que aceita um
+teto maior se algum dia isso for decidido de novo com medicao ao lado),
+geometria tirada do proprio tamanho da faixa, com o stop travado em no
+maximo 30 ticks (ver `stop_max_ticks`).
 Todo o resto e' execucao -- e neste robo a execucao NAO e' detalhe: ela
 responde por praticamente todo o resultado.
 
@@ -70,6 +72,41 @@ COMUM, nao so' ao raro.** Ele esta em producao por decisao do dono, com 1
 contrato, e o que decide e' o extrato -- nao esta tabela. Ver
 LICOES_DE_PRODUCAO.md.
 
+O TETO VOLTOU A 1 E O STOP FICOU MAIS CURTO (2026-09-11, ver `max_fades_por_
+dia` e `stop_max_ticks`) -- o dono pediu explicitamente uma versao "ganhadora
+mesmo que pouco, mas constante" depois de viver ao vivo o pior streak ja'
+registrado nesta base (4 semanas seguidas negativas, ver a memoria do
+projeto). Medido nos 123 pregoes (IS+OOS), 5 combinacoes de
+`max_fades_por_dia` x `stop_max_ticks`:
+
+    teto      stop    R$/op    liquido      trava (embaralhado, R$375)
+    3         40      +14,92   +3.894,50    53,5%   <- o que rodava ate' aqui
+    1         40      +17,74   +3.229,00    53,3%
+    2         40      +16,55   +3.790,50    53,5%
+    3         30      +14,19   +3.704,50    55,2%
+    1         30      +18,18   +3.309,00    52,4%   <- NOVO default
+
+`teto1+stop30` tem o MELHOR R$/operacao das 5 (nao o maior liquido -- esse
+continua sendo o teto3, que tem mais trades) e a MENOR trava. A diferenca de
+trava entre as 5 e' pequena (52,4% a 55,2% -- ver a nota honesta abaixo), mas
+foi a UNICA alavanca testada que melhorou nas duas metricas ao mesmo tempo
+sem piorar a terceira.
+
+**Confirmado num caso real, fora do backtest:** simulando os 2 ultimos
+pregoes de verdade antes desta promocao (2026-09-10 e 11), com caixa real
+contínuo partindo de R$375, a geometria ANTIGA (teto3/stop40) fechava o
+periodo em **CAIXA NEGATIVO (-R$2,50)** -- no mundo real isso e' um chamado
+de margem. A geometria NOVA (teto1/stop30) fechava em **+R$68,00**, positiva.
+Mesmos 2 pregoes, mesmo preco, so' a geometria mudou.
+
+**A ressalva que nao pode sumir:** a trava (probabilidade de o caixa de
+R$375 recusar operacao em algum ponto, embaralhando as mesmas operacoes
+10.000 vezes) fica entre 52% e 55% em TODAS as 5 combinacoes -- reduzir o
+teto do fade ou o teto do stop NAO resolve o travamento, so' o adia um
+degrau. Isso e' estrutural a operar com R$375 e 1 contrato fixo, nao um
+parametro de estrategia. Ver LICOES_DE_PRODUCAO.md e a memoria do projeto
+`wdo_orb_teto1_stop30_producao_2026_09_11`.
+
 O DESENHO DE EXECUCAO (ordem do dono, 2026-09-10 -- ver CLAUDE.md):
 
   * entrada por `EnterLimit` PARADA no livro, nunca `Enter` a mercado. Num
@@ -112,7 +149,7 @@ class WdoOrb(IntradayStrategy):
     """Rompimento da faixa de abertura do mini-dolar, ate' 2 operacoes por pregao"""
 
     name: str = "wdo_orb"
-    version: str = "1.0.0"
+    version: str = "1.1.0"
     symbol: str = "WDO@"
     #: o alvo e' ordem-limite REAL parada no livro, nao `tp` nativo.
     target_fills_as_maker: bool = True
@@ -128,20 +165,28 @@ class WdoOrb(IntradayStrategy):
     range_minutos: float = 15.0
     #: O stop sai do TAMANHO DA FAIXA (1 tick de faixa = 1 tick de stop),
     #: limitado entre os dois. Distribuicao medida da faixa nos 72 pregoes do
-    #: IS, em ticks: p0 13 · p25 23 · p50 35 · p75 42,5 · p95 64,5 · p100 93
-    #: -- o piso morde em 13,9% dos pregoes, o teto em 31,9%, e em 54,2% a
-    #: faixa passa livre.
+    #: IS, em ticks: p0 13 · p25 23 · p50 35 · p75 42,5 · p95 64,5 · p100 93.
     #:
-    #: ATENCAO, risco conhecido e NAO mitigado: 40 ticks = R$200,00 de perda
-    #: num contrato, e a margem do WDO@ e' R$150,00. Um stop cheio partindo do
-    #: caixa de partida (R$375) deixa R$175; DOIS seguidos derrubam o caixa
-    #: abaixo da margem e o robo para de operar (janela censurada -- ver
-    #: CLAUDE.md, "o piso de capital e' indicacao de PARTIDA"). O maior stop
-    #: que NAO consegue fazer isso sozinho e' 30 ticks (R$150 = a margem).
-    #: Baixar o teto para 30 muda a estrategia medida, entao e' decisao do
-    #: dono, nao default silencioso.
+    #: TETO BAIXOU DE 40 PARA 30 EM 2026-09-11. Com 40, o piso mordia em
+    #: 13,9% dos pregoes, o teto em 31,9%, e 54,2% passava livre. Com 30 o
+    #: teto passa a morder em **61,1%** dos pregoes (mais da metade -- o p50
+    #: da faixa ja' e' 35, acima do novo teto) e so' 25,0% passa livre --
+    #: NAO e' um ajuste fino, e' uma mudanca estrutural da geometria, feita
+    #: de olhos abertos: o stop mais curto perde um pouco de win% (o motivo:
+    #: mais pregoes tem o stop artificialmente apertado por baixo do que o
+    #: range pediria, entao levam stop com mais frequencia por puro ruido),
+    #: mas foi a troca que deu o melhor R$/operacao (+18,18 contra +14,92 do
+    #: teto 40) das 5 combinacoes medidas -- ver a nota no topo do modulo.
+    #:
+    #: ATENCAO, risco conhecido e NAO mitigado: mesmo com o teto em 30, um
+    #: stop cheio (R$150,00 num contrato) partindo do caixa de partida
+    #: (R$375) deixa R$225; DOIS seguidos ainda podem derrubar o caixa perto
+    #: ou abaixo da margem. Baixar ou subir este numero muda a estrategia
+    #: medida, entao e' decisao do dono, nao default silencioso -- e NUNCA
+    #: baixe a ponto do alvo (`alvo_multiplo` vezes isto) chegar perto de 1
+    #: tick (ver a proibicao do T1 em CLAUDE.md, vale para este robo tambem).
     stop_min_ticks: int = 20
-    stop_max_ticks: int = 40
+    stop_max_ticks: int = 30
     #: alvo = stop x isto. TESTADO e' 2,0. Geometria FIXA (abaixo) foi testada
     #: e REFUTADA de forma monotonica: S10/T20 deu +R$0,88/op e S20/T40
     #: +R$2,34/op contra +R$15,71/op da faixa adaptativa, na MESMA janela. O
@@ -194,6 +239,14 @@ class WdoOrb(IntradayStrategy):
     #: A alcancabilidade do alvo e' em ticks ABSOLUTOS, nunca no multiplo:
     #: S40 x 2,0 pede 80 ticks (40 pontos, o movimento do WDO@ do dia inteiro
     #: em 60 min); S10 x 2,0 pede 20 ticks.
+    #:
+    #: NUNCA `alvo_ticks_fixo=1` (nem `alvo_multiplo` baixo o bastante pra
+    #: `_geometria()` devolver alvo perto de 1 tick) -- e' a mesma proibicao
+    #: do T1 no WDO F1 (CLAUDE.md, ordem do dono 2026-09-08), e vale AQUI
+    #: tambem: mesmo o alvo sendo ordem-limite real (`target_fills_as_maker
+    #: =True`, nao `tp` nativo), 1 tick e' o nivel mais disputado do livro --
+    #: a calibracao de fila real (`fidelidade.py`, 438/489) ja mostra que ate'
+    #: alvo NORMAL pena pra preencher. Nao meça, nem como candidato.
     stop_ticks_fixo: int | None = None
     alvo_ticks_fixo: int | None = None
 
@@ -206,28 +259,37 @@ class WdoOrb(IntradayStrategy):
     fade_rompimento_oposto: bool = True
 
     #: quantas vezes o fade pode disparar num mesmo pregao. Era 1 (fixo, sem
-    #: parametro) ate' 2026-09-11; virou 3 depois da medicao abaixo.
+    #: parametro) ate' 2026-09-11; subiu pra 3 no mesmo dia; VOLTOU a 1 ainda
+    #: no mesmo dia, depois de medir consistencia (ver a nota no topo do
+    #: modulo) -- as tres decisoes tem a medicao ao lado, nenhuma foi
+    #: silenciosa.
     #:
-    #: O teto foi escolhido pelo RANKING AGREGADO, que e' a unica coisa que as
-    #: duas janelas concordam -- teto 3 fica em 1o lugar nas duas:
+    #: O teto 3 tinha sido escolhido pelo RANKING AGREGADO (unica coisa que
+    #: as duas janelas concordavam):
     #:
     #:     teto        IS          OOS
-    #:     1       +2.843,50    +385,50     <- o que rodava ate' aqui
+    #:     1       +2.843,50    +385,50     <- default ATUAL (de novo)
     #:     2       +2.695,50    +830,00
-    #:     3       +3.055,50    +839,00     <- 1o nas duas
+    #:     3       +3.055,50    +839,00     <- rodou em producao ate' aqui
     #:     ilim.   +2.399,50    (nao medido)
     #:
     #: NAO acredite na explicacao por ordem da chamada: ela NAO e' estavel.
     #: No IS o 2o fade da' -133,50 e o 3o +460,00; no OOS o 2o da' +506,50 e o
     #: 3o so' +9,00. As duas janelas discordam sobre QUAL fade paga -- os
     #: baldes tem n de 12 a 40, pequeno demais para resolver atribuicao por
-    #: ordem. So' o agregado tem n suficiente, e e' nele que a decisao se
-    #: apoia. Quem for mexer neste numero mexe com base no agregado, nao na
-    #: quebra por ordem.
+    #: ordem. So' o agregado tem n suficiente para decidir o TOTAL.
+    #:
+    #: Mas o teto 3 tambem sobe o risco de ruina: medido no capital real
+    #: (R$375, embaralhando as operacoes 10.000 vezes), teto 3 trava em
+    #: 53,5% dos sorteios contra 53,3% do teto 1 -- e o teto 1 combinado com
+    #: `stop_max_ticks=30` (o default atual) trava so' 52,4%, com R$/operacao
+    #: MELHOR (+18,18 contra +14,92 do teto3/stop40). Voltar pra 1 e' o dono
+    #: escolhendo "pouco mas constante" sobre "mais liquido total, mais
+    #: risco de sequencia ruim" -- ver a nota no topo do modulo pra tabela
+    #: completa das 5 combinacoes medidas.
     #:
     #: Lacuna conhecida: o 4o fade so' foi medido no IS (-496,00, NEGATIVA).
-    #: O limite superior do teto se apoia numa janela so'.
-    max_fades_por_dia: int = 3
+    max_fades_por_dia: int = 1
 
     _open_ts: pd.Timestamp | None = field(default=None, init=False, repr=False)
     _range_hi: float | None = field(default=None, init=False, repr=False)
@@ -248,7 +310,7 @@ class WdoOrb(IntradayStrategy):
     # ---------------- ficha do painel (`dashboard/robot_view.py`) ----------
 
     tagline: str = (
-        "Rompe a faixa dos 15 primeiros minutos do mini-dolar, ate' 4x por dia"
+        "Rompe a faixa dos 15 primeiros minutos do mini-dolar, ate' 2x por dia"
     )
 
     plain_summary: tuple[str, ...] = (
@@ -260,8 +322,9 @@ class WdoOrb(IntradayStrategy):
         "passa sem operacao (acontece em 1 de cada 5 pregoes).",
         "Depois que essa operacao fecha, se o preco romper a faixa para o "
         "lado OPOSTO ao primeiro rompimento, ele entra de novo apostando "
-        "que o dia volta ao meio. Isso pode se repetir ate' 3 vezes -- no "
-        "maximo 4 operacoes por pregao.",
+        "que o dia volta ao meio. So' uma vez -- no maximo 2 operacoes por "
+        "pregao (escolha por consistencia: um teto maior da' mais liquido "
+        "total, mas trava o caixa com mais frequencia).",
         "Uma hora depois de entrar, se nem o alvo nem o stop tiverem sido "
         "atingidos, ele desiste da meta e passa a pedir o preco do momento -- "
         "por ordem parada, nunca a mercado.",
@@ -269,11 +332,11 @@ class WdoOrb(IntradayStrategy):
 
     plain_example: tuple[str, ...] = (
         "09:00 as 09:15 -- o dolar anda entre 5.100,0 e 5.117,5. Faixa de 35 "
-        "ticks: stop 35 ticks, alvo 70 ticks.",
+        "ticks, mas o TETO morde: stop trava em 30 ticks, alvo 60 ticks.",
         "09:22 -- rompe para cima. O robo deixa uma ordem de compra a "
         "5.116,5 (2 ticks abaixo do rompimento) e espera.",
         "09:23 -- o preco recua, encosta na ordem e ela preenche. Stop a "
-        "5.099,0; alvo, como ordem parada no livro, a 5.151,5.",
+        "5.101,5; alvo, como ordem parada no livro, a 5.146,5.",
         "10:23 -- ninguem pagou o alvo e o stop nao foi tocado. O robo troca "
         "o alvo pelo preco de agora e sai na primeira contraparte.",
     )
@@ -292,11 +355,11 @@ class WdoOrb(IntradayStrategy):
         "seguinte do mesmo dia -- mas so' enquanto nenhuma operacao aconteceu.",
         "Depois da 1a operacao fechar, um rompimento pro lado OPOSTO ao "
         "primeiro do dia abre uma entrada nova (o fade), sempre pro mesmo "
-        "lado e na mesma faixa. Ate' 3 vezes -- no maximo 4 por dia.",
+        "lado e na mesma faixa. So' uma vez -- no maximo 2 por dia.",
     )
 
     exit_rules: tuple[str, ...] = (
-        "Stop a MERCADO, do tamanho da faixa de abertura (entre 20 e 40 "
+        "Stop a MERCADO, do tamanho da faixa de abertura (entre 20 e 30 "
         "ticks). E' a unica saida a mercado do robo.",
         "Alvo = 2x o stop, como ordem-limite REAL parada no livro, fatiada e "
         "sem prazo -- espera o mercado pagar.",
@@ -312,8 +375,10 @@ class WdoOrb(IntradayStrategy):
         "reserva 1,25) -- mas o teste as cegas (OOS) travou com esse valor "
         "na 1a semana e meia. So' atravessou a janela inteira com R$500,00, "
         "e mesmo assim raspando (minimo tocado R$153,50).",
-        "Um stop cheio (40 ticks) custa R$200,00: dois seguidos param o robo "
-        "por falta de margem.",
+        "Um stop cheio (30 ticks) custa R$150,00: dois seguidos param o robo "
+        "por falta de margem. Reduzir o teto do stop ajuda pouco -- a chance "
+        "de travar o caixa (medida embaralhando as operacoes) fica perto de "
+        "52-55% em qualquer combinacao de teto de fade/stop testada.",
     )
 
     # ---------------- ciclo ------------------------------------------------
