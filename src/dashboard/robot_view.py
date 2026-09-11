@@ -231,7 +231,8 @@ def _preco_agora(symbol: str) -> tuple[float | None, str]:
     return preco_de_referencia(symbol)
 
 
-def capital_minimo_para(is_futuro: bool, symbol: str, preco: float | None) -> float | None:
+def capital_minimo_para(is_futuro: bool, symbol: str, preco: float | None,
+                        robot_key: str | None = None) -> float | None:
     """Caixa mínimo para abrir 1 posição neste ativo, com ESTE robô.
 
     Ação: `capital_minimo_brl(preco)` -- depende do preço de hoje. Futuro
@@ -265,7 +266,28 @@ def capital_minimo_para(is_futuro: bool, symbol: str, preco: float | None) -> fl
     camada seguinte exige --, ele apenas deixou de ser apertado demais do
     outro lado. Não baixe este número para R$150 achando que "agora bate":
     ele responde a pergunta *quanto preciso para começar com folga*, que é
-    outra pergunta."""
+    outra pergunta.
+
+    **`robot_key` (2026-09-11): o piso do ROBÔ, quando ele declara um.** Tudo
+    acima é piso do INSTRUMENTO e responde *a corretora deixa eu abrir?*. Um
+    robô pode precisar de mais que isso para sobreviver ao que ele mesmo
+    perde antes de recuperar -- e isso é propriedade do ROBÔ, não do
+    contrato: dois robôs no MESMO símbolo, com geometrias diferentes, têm
+    quedas máximas diferentes. Quem declara é a classe, no atributo
+    `capital_minimo_recomendado_brl` (lido por `getattr`, mesma convenção de
+    `calibrated_setups` -- esta função não precisa saber qual robô é).
+
+    O resultado é o **MAIOR dos dois**, nunca a substituição de um pelo
+    outro. `max` e não override porque as duas restrições são reais ao mesmo
+    tempo e nenhuma isenta a outra: um piso de robô menor que a margem da
+    corretora não libera nada (a corretora recusa de qualquer forma), e um
+    piso de instrumento menor que a queda do robô só adianta a liquidação.
+    Declarar um número MENOR que o do instrumento, portanto, não tem efeito
+    -- de propósito, para não existir caminho em que uma declaração de robô
+    afrouxe uma exigência da corretora.
+
+    Sem `robot_key`, ou com um robô que não declara nada, o resultado é
+    idêntico ao de antes desta mudança."""
     from strategy.daytrade.base import (
         MARGIN_BUFFER_FUTUROS, RESERVA_CAIXA_SEGURANCA, capital_minimo_brl,
     )
@@ -275,9 +297,36 @@ def capital_minimo_para(is_futuro: bool, symbol: str, preco: float | None) -> fl
 
         margem = profile_for(symbol).margin_per_contract_brl
         if margem is None:
-            return None
-        return margem * MARGIN_BUFFER_FUTUROS * RESERVA_CAIXA_SEGURANCA
-    return capital_minimo_brl(preco) if preco is not None else None
+            piso = None
+        else:
+            piso = margem * MARGIN_BUFFER_FUTUROS * RESERVA_CAIXA_SEGURANCA
+    else:
+        piso = capital_minimo_brl(preco) if preco is not None else None
+
+    piso_robo = _piso_declarado_pelo_robo(robot_key)
+    if piso_robo is None:
+        return piso
+    return piso_robo if piso is None else max(piso, piso_robo)
+
+
+def _piso_declarado_pelo_robo(robot_key: str | None) -> float | None:
+    """`capital_minimo_recomendado_brl` da CLASSE do robô, ou `None`.
+
+    Lê da classe (não da instância) para não depender de o robô ser
+    construtível com os kwargs de produção neste contexto -- o painel chama
+    isto em telas que só listam robôs. Robô desconhecido devolve `None` em
+    vez de levantar: quem pergunta o piso de um robô que não existe já vai
+    tropeçar num erro melhor logo adiante."""
+    if not robot_key:
+        return None
+    from strategy.daytrade.registry import daytrade_robot_class
+
+    try:
+        cls = daytrade_robot_class(robot_key)
+    except KeyError:
+        return None
+    valor = getattr(cls, "capital_minimo_recomendado_brl", None)
+    return None if valor is None else float(valor)
 
 
 def _daytrade_assets(cls, robo) -> tuple[RobotAsset, ...]:
@@ -300,11 +349,13 @@ def _daytrade_assets(cls, robo) -> tuple[RobotAsset, ...]:
                        getattr(robo, "stop_vol_mult", None),
                        preco, data, is_futuro,
                        getattr(robo, "profit_ticks", None),
-                       getattr(robo, "stop_ticks", None)),)
+                       getattr(robo, "stop_ticks", None),
+                       getattr(cls, "name", None)),)
     ativos = tuple(
         _asset(s.symbol, s.profit_pct, s.stop_multiplier,
                s.alvo_por_volatilidade, s.alvo_vol_mult, s.stop_vol_mult,
-               *_preco_agora(s.symbol), is_futuro, None, None)
+               *_preco_agora(s.symbol), is_futuro, None, None,
+               getattr(cls, "name", None))
         for s in setups()
     )
     # Ordenado pelo CAIXA MÍNIMO, do mais barato ao mais caro. A ordem antiga
@@ -320,7 +371,7 @@ def _daytrade_assets(cls, robo) -> tuple[RobotAsset, ...]:
 
 def _asset(symbol, profit_pct, stop_multiplier, alvo_por_volatilidade,
            alvo_vol_mult, stop_vol_mult, preco, data, is_futuro=False,
-           profit_ticks=None, stop_ticks=None) -> RobotAsset:
+           profit_ticks=None, stop_ticks=None, robot_key=None) -> RobotAsset:
     # Futuro não tem "lote" (é 1 CONTRATO, margem por contrato) -- `lote =
     # preco x 100` e `capital_minimo_brl` (que embute o MESMO x100) são
     # fórmula de ação. Ver `capital_minimo_para` para o porquê de ramificar
@@ -336,7 +387,7 @@ def _asset(symbol, profit_pct, stop_multiplier, alvo_por_volatilidade,
         price=preco,
         price_date=data,
         lot_cost=lote,
-        min_capital=capital_minimo_para(is_futuro, symbol, preco),
+        min_capital=capital_minimo_para(is_futuro, symbol, preco, robot_key),
         is_futuro=is_futuro,
         profit_ticks=profit_ticks,
         stop_ticks=stop_ticks,

@@ -138,6 +138,53 @@ que mede se/quanto isto ajuda.
 `defesa_ativa=False` (default) preserva o comportamento BYTE A BYTE de antes
 desta secao -- os dois `*_pct` so' importam com `defesa_ativa=True`.
 
+## Alvo por ORDEM-LIMITE REAL fatiada (2026-09-11, ADITIVO e OPT-IN)
+
+Ate' aqui o alvo deste robo era `tp` NATIVO (`target_fills_as_maker=True` sem
+fatia): o motor o trata como preenchido sempre que o preco TOCA o nivel,
+cobrando so' `DESLIZE_ALVO_NATIVO_TICKS`. E' a mesma premissa que o CLAUDE.md
+proibe desde 2026-09-10 ("o desenho de execucao e' FECHADO: nunca a mercado,
+nem na entrada nem no alvo") -- na corretora, `tp` nativo e' gatilho varrido a
+MERCADO, e no WDO F1 ele comeu 57,9% do bruto teorico (n=11, 10 saidas contra
+0 a favor). Aqui o deslize em si e' pequeno em proporcao (1 tick = R$1,00
+contra um alvo de centenas de reais), e foi por isso que a violacao
+sobreviveu tanto tempo sem doer.
+
+O QUE FORCOU A MUDANCA nao foi o preco, foi a PROBABILIDADE DE PREENCHIMENTO.
+A varredura de alvo de 2026-09-11 (`copawin_alvo_menor_sweep_2026_09_11.py`)
+achou que baixar o alvo para 50% do pedido tira a dependencia do fechamento
+do pregao -- a contribuicao do achatamento para o lucro cai de 114,1% para
+5,0% no IS -- e transfere o resultado inteiro para a saida por ALVO (de 79,9%
+para 211,4%). So' que a saida por alvo e' justamente a perna que o motor NAO
+sabia questionar: sem fatia, `exit_queue_ahead_qty` nem e' consultado (o
+caminho da fila mora em `machine._resolve_target_partial_fill`, que so' roda
+com `exit_split_unit`), entao "tocou" virava "preencheu", sempre. O alvo menor
+exerce essa suposicao 3x mais que o alvo cheio.
+
+Ou seja: o ganho medido morava exatamente no ponto onde o simulador era mais
+otimista -- a assinatura de modelo incompleto que este projeto ja pagou caro
+duas vezes (deslize do TP nativo, fila da familia maker, onde o motor chegou
+a errar o SINAL: +R$3,82/op previsto contra -R$3,00 realizado).
+
+`fatiar_saida_alvo=True` declara `EnterLimit.exit_split_unit=1` e
+`exit_ttl_bars` (default `EXIT_TTL_BARS_SEM_PRAZO`), o mesmo mecanismo que
+`wdo_orb` e `wdo_grid_reload_maker` ja usam em producao. Com ele o alvo vira
+ordem-limite parada no livro e passa a atravessar o modelo de fila -- o que
+permite, pela primeira vez neste robo, perguntar QUANTA fila mata o ganho.
+
+O que isso NAO resolve, e precisa ser dito junto: o WIN@ continua SEM
+fidelidade de execucao calibrada (`backtest.intraday.fidelidade.FIDELIDADE`
+so' tem WDO@, medido contra extrato real). Fatiar torna a fila MENSURAVEL,
+nao CONHECIDA. Ate' existir pregao real do WIN@ para calibrar, o unico uso
+honesto e' SENSIBILIDADE ("a que nivel de fila o edge morre?"), nunca uma
+previsao pontual -- e um numero de fila digitado a mao num script continua
+proibido pelo CLAUDE.md.
+
+`fatiar_saida_alvo=False` (default) preserva o comportamento BYTE A BYTE de
+antes desta secao. Ligar exige `entrada_maker=True`: `exit_split_unit` so'
+viaja em `EnterLimit`, e a classe RECUSA a combinacao em vez de virar no-op
+silencioso (item 4.23).
+
 ## Corte por PERSISTENCIA no lado ADVERSO (2026-09-03, ADITIVO e OPT-IN)
 
 Achado RETROSPECTIVO de `scripts/daytrade/copawin_duracao_operacoes_2026_09_
@@ -199,6 +246,15 @@ nunca dispara sozinho" em vez de um valor arbitrario.
 """
 from __future__ import annotations
 
+#: Prazo da fatia de saida por ALVO: SEM prazo. NUNCA `None` -- `None` no
+#: motor significa "comportamento antigo, sem fatia", e em execucao REAL
+#: `machine._resolve_live_split_exit` levanta `NotImplementedError`. Mesma
+#: constante/mesmo motivo de `wdo_grid_reload_maker.EXIT_TTL_BARS_SEM_PRAZO` e
+#: `wdo_orb.EXIT_TTL_BARS_SEM_PRAZO` (ordem do dono, 2026-09-09): a limite do
+#: alvo fica parada ate' o mercado PAGAR, e nunca sai a mercado por
+#: impaciencia.
+EXIT_TTL_BARS_SEM_PRAZO = 10 ** 9
+
 from collections import deque
 
 import pandas as pd
@@ -229,6 +285,40 @@ class CopaWin(IntradayStrategy):
 
     name = "copa_win"
     version = "0.1"
+    #: Caixa mínimo RECOMENDADO para operar este robô, em reais (decisão do
+    #: dono, 2026-09-11). NÃO substitui o piso do INSTRUMENTO -- quem lê usa
+    #: o MAIOR dos dois (`dashboard.robot_view.capital_minimo_para`), porque
+    #: os dois respondem perguntas diferentes e nenhuma isenta a outra:
+    #:
+    #:   * o piso do INSTRUMENTO (margem x buffer x reserva = R$250 no WIN@)
+    #:     responde "a corretora deixa eu abrir?";
+    #:   * ESTE piso responde "eu sobrevivo ao que este robô perde antes de
+    #:     recuperar?" -- e essa é propriedade do ROBÔ, não do contrato.
+    #:
+    #: De onde saem os R$600. A configuração de produção (alvo_vol=9,5 + alvo
+    #: por ordem-limite real) é INVARIANTE ao capital de R$250 a R$750: 310
+    #: trades no IS e 130 no OOS em todos os níveis, mesmo líquido, 0 pregões
+    #: sem trade -- o robô abre 1 contrato e sempre cabe. Capital aqui não
+    #: compra desempenho, compra distância da parede. A queda máxima é a MESMA
+    #: em reais em qualquer nível (o tamanho da posição não muda): R$226,90 no
+    #: IS e R$84,80 no OOS. Logo:
+    #:
+    #:   margem crua (R$100) + pior queda medida (R$226,90) = R$326,90 é o
+    #:   ponto em que a equity ENCOSTA na margem na pior janela já vista;
+    #:   R$600 deixa ~2,2x a pior queda de folga.
+    #:
+    #: Por que não R$326,90: dimensionar para o pior caso JÁ VISTO é ajustar
+    #: à amostra -- 184 pregões não esgotam o que o mercado faz. E há um
+    #: motivo específico deste motor para ser conservador aqui: o portão de
+    #: capital do backtest olha o caixa REALIZADO, então ele deixou o robô
+    #: seguir operando com equity de R$23,10 (R$250 de partida). Uma corretora
+    #: cobra margem contra a EQUITY, não contra o caixa realizado -- teria
+    #: liquidado. O backtest é mais permissivo que a realidade exatamente
+    #: nesse ponto, e o piso precisa compensar isso.
+    #:
+    #: `None` na maioria dos robôs: sem esta declaração vale só o piso do
+    #: instrumento, comportamento de sempre.
+    capital_minimo_recomendado_brl: float | None = 600.0
     symbol = "WIN@"
     is_futuro = True
     # A saida por alvo e' ordem PARADA no nivel (maker, sem slippage); a
@@ -276,6 +366,11 @@ class CopaWin(IntradayStrategy):
         margin_per_contract_brl: float | None = None,
         margin_buffer: float = MARGIN_BUFFER_FUTUROS,
         risco_pct_por_trade: float | None = None,
+        fatiar_saida_alvo: bool = False,
+        exit_ttl_bars: int | None = EXIT_TTL_BARS_SEM_PRAZO,
+        teto_perda_abs_brl: float | None = None,
+        teto_perda_frac_max: float = 0.50,
+        teto_perda_frac_min: float = 0.05,
         defesa_ativa: bool = False,
         defesa_gatilho_stop_pct: float = 0.0,
         defesa_alvo_proximidade_pct: float = 0.0,
@@ -470,6 +565,40 @@ class CopaWin(IntradayStrategy):
         self.risco_pct_por_trade = (
             None if risco_pct_por_trade is None else float(risco_pct_por_trade)
         )
+        if fatiar_saida_alvo and not entrada_maker:
+            # `exit_split_unit` so' existe em `EnterLimit` -- `Enter` (a
+            # mercado) nao tem o campo, entao com `entrada_maker=False` esta
+            # flag seria lida por ninguem e o alvo continuaria sendo `tp`
+            # nativo, em SILENCIO. E' exatamente a armadilha do item 4.23 de
+            # LICOES_DE_PRODUCAO.md (`anchor_exits_at_fill` inerte fora do
+            # caminho de `EnterLimit`): uma flag ligada que nao faz nada e'
+            # pior que uma flag ausente, porque encerra a pergunta.
+            raise ValueError(
+                "copa_win: `fatiar_saida_alvo=True` exige `entrada_maker=True` "
+                "-- `exit_split_unit` so' viaja em `EnterLimit`, entao com "
+                "entrada a mercado a flag seria um no-op silencioso e o alvo "
+                "continuaria saindo por `tp` nativo."
+            )
+        self.fatiar_saida_alvo = bool(fatiar_saida_alvo)
+        self.exit_ttl_bars = None if exit_ttl_bars is None else int(exit_ttl_bars)
+        if teto_perda_abs_brl is not None and teto_perda_abs_brl <= 0:
+            raise ValueError(
+                f"copa_win: `teto_perda_abs_brl` tem que ser positivo ou `None`, "
+                f"veio {teto_perda_abs_brl!r}."
+            )
+        if not 0 < teto_perda_frac_min <= teto_perda_frac_max:
+            raise ValueError(
+                f"copa_win: a escada precisa de 0 < `teto_perda_frac_min` "
+                f"({teto_perda_frac_min!r}) <= `teto_perda_frac_max` "
+                f"({teto_perda_frac_max!r}) -- a fracao do degrau de cima "
+                f"nunca pode ser maior que a do degrau de baixo, senao a "
+                f"escada SOBE com o caixa em vez de descer."
+            )
+        self.teto_perda_abs_brl = (
+            None if teto_perda_abs_brl is None else float(teto_perda_abs_brl)
+        )
+        self.teto_perda_frac_max = float(teto_perda_frac_max)
+        self.teto_perda_frac_min = float(teto_perda_frac_min)
         self.defesa_ativa = bool(defesa_ativa)
         self.defesa_gatilho_stop_pct = float(defesa_gatilho_stop_pct)
         self.defesa_alvo_proximidade_pct = float(defesa_alvo_proximidade_pct)
@@ -518,6 +647,59 @@ class CopaWin(IntradayStrategy):
     # ---------- tamanho: sempre fracao do teto ----------------------------
 
     @property
+    def teto_perda_brl(self) -> float | None:
+        """Quanto UM trade pode custar, em reais, dado o caixa de agora --
+        `None` quando a escada esta' desligada (`teto_perda_abs_brl is None`).
+
+        Formula (pedido do dono, 2026-09-11 -- "ate' 50% da carteira e ir
+        diminuindo conforme a carteira aumenta para representar no maximo
+        5%")::
+
+            teto = min(frac_max x caixa, max(abs, frac_min x caixa))
+
+        Com `abs=125`, `frac_max=0,50` e `frac_min=0,05` isso desenha tres
+        regimes, e e' DE PROPOSITO que o do meio seja plano:
+
+            caixa      teto      % do caixa   quem manda
+            R$   250   R$  125      50,0%     frac_max  (carteira minuscula)
+            R$ 1.000   R$  125      12,5%     abs       (o degrau plano)
+            R$ 2.500   R$  125       5,0%     os dois se encontram
+            R$10.000   R$  500       5,0%     frac_min  (escala de novo)
+
+        O degrau plano existe porque `frac_max` e `frac_min` sozinhos nao se
+        encontram: uma reta de 50% a 5% precisaria de um ponto de ancoragem,
+        e esse ponto E' o `abs`. Um so' parametro para varrer, em vez de dois
+        (onde comeca a descer e onde para).
+
+        POR QUE ISTO NAO E' O MESMO QUE `risco_pct_por_trade`: aquele so'
+        encolhe a QUANTIDADE, e quantidade tem piso de 1 contrato
+        (`quantidade_por_entrada`). No caixa real do WIN@ (R$250 = 2 margens
+        + reserva) a entrada JA' e' 1 contrato, entao o teto por risco e'
+        aritmeticamente incapaz de reduzir coisa alguma -- 5% de R$250 sao
+        R$12,50 contra um stop MEDIANO de R$293,00 medido, e o piso de 1
+        contrato passa por cima. A escada morde no outro lugar: na DISTANCIA
+        do stop (ver `_entrada`). Por isso ela muda a estrategia medida, e
+        por isso nasceu opt-in."""
+        if self.teto_perda_abs_brl is None:
+            return None
+        caixa = max(0.0, self._cash_atual_brl)
+        return min(
+            self.teto_perda_frac_max * caixa,
+            max(self.teto_perda_abs_brl, self.teto_perda_frac_min * caixa),
+        )
+
+    @property
+    def teto_perda_pontos(self) -> float | None:
+        """`teto_perda_brl` convertido para PONTOS do contrato, que e' a
+        unidade em que `_entrada` desenha o stop. `None` com a escada
+        desligada, ou enquanto o caixa ainda nao chegou (`on_capital_update`
+        nunca chamado -- mesmo caso de `margin_per_contract_brl`)."""
+        teto = self.teto_perda_brl
+        if teto is None or teto <= 0 or self.point_value_brl <= 0:
+            return None
+        return teto / self.point_value_brl
+
+    @property
     def quantidade_por_entrada(self) -> int:
         """`max(1, round(teto_efetivo x fracao))` -- piso de 1 contrato
         porque uma entrada de zero contratos nao e' "menor", e' nenhuma.
@@ -550,11 +732,27 @@ class CopaWin(IntradayStrategy):
                 self._cash_atual_brl, self.margin_per_contract_brl, self.margin_buffer,
             )
             teto_efetivo = min(teto_efetivo, teto_por_caixa)
-        if self.risco_pct_por_trade is not None and self._ultimo_stop_dist_pontos is not None:
+        # ORCAMENTO de perda desta entrada, em R$: a ESCADA quando ligada
+        # (`teto_perda_brl`, que ja' embute os tres regimes), senao o
+        # `risco_pct_por_trade` plano de sempre. A escada SUBSTITUI o percentual
+        # plano em vez de se somar a ele porque os dois respondem a MESMA
+        # pergunta ("quanto um trade pode custar") -- deixar os dois ativos
+        # significaria dois donos para o mesmo numero, e o menor venceria em
+        # silencio. Quem liga a escada esta' declarando qual e' a resposta.
+        orcamento_brl: float | None = None
+        if self.teto_perda_abs_brl is not None:
+            orcamento_brl = self.teto_perda_brl
+        elif self.risco_pct_por_trade is not None:
+            orcamento_brl = self.risco_pct_por_trade * self._cash_atual_brl
+        if (orcamento_brl is not None and orcamento_brl > 0
+                and self._cash_atual_brl > 0
+                and self._ultimo_stop_dist_pontos is not None):
             stop_reais_por_contrato = self._ultimo_stop_dist_pontos * self.point_value_brl
             if stop_reais_por_contrato > 0:
                 teto_por_risco = contracts_from_risk(
-                    self._cash_atual_brl, self.risco_pct_por_trade, stop_reais_por_contrato,
+                    self._cash_atual_brl,
+                    orcamento_brl / self._cash_atual_brl,
+                    stop_reais_por_contrato,
                 )
                 teto_efetivo = min(teto_efetivo, teto_por_risco)
         return max(1, round(teto_efetivo * self.fracao_entrada))
@@ -748,9 +946,31 @@ class CopaWin(IntradayStrategy):
         base = nivel_rompido if self.entrada_maker else preco
         alvo_dist = self.alvo_vol * vol
         stop_dist = self.stop_vol * vol
+        # ESCADA DE PERDA MAXIMA (2026-09-11, ver `teto_perda_brl`): o stop
+        # nunca fica mais longe do que o caixa de agora aguenta perder num
+        # trade. Corta a DISTANCIA, nao a quantidade -- no caixa real cabe 1
+        # contrato e so', entao cortar quantidade nao corta nada.
+        #
+        # O ALVO NAO E' CORTADO JUNTO, de proposito: a escada e' um limite de
+        # RISCO, e encolher o alvo junto seria mudar a tese do robo em vez de
+        # limitar o que ela pode custar. O efeito colateral e' conhecido e
+        # medido separado -- com o stop mais perto e o alvo no mesmo lugar, a
+        # razao risco:retorno MELHORA no papel e o win% CAI, porque trades que
+        # antes respiravam e voltavam agora batem o stop. E' exatamente o
+        # mecanismo que `wdo_orb.alvo_multiplo` documenta em sentido contrario
+        # ("com stop largo o perdedor sai pelo relogio com perda PEQUENA; com
+        # stop apertado o mesmo trade sai no stop CHEIO") -- la' a geometria
+        # fixa foi REFUTADA de forma monotonica. Nao ha' motivo para supor que
+        # aqui seja diferente sem medir; a escada existe para ser varrida.
+        teto_pontos = self.teto_perda_pontos
+        if teto_pontos is not None:
+            stop_dist = min(stop_dist, teto_pontos)
         # Guardado ANTES de `quantidade_por_entrada` ser lida abaixo (dentro
         # de `Enter(...)`/`EnterLimit(...)`) -- e' o teto por RISCO desta
-        # entrada especifica, ver `IntradayStrategy`/modulo.
+        # entrada especifica, ver `IntradayStrategy`/modulo. Guarda o stop JA
+        # CORTADO pela escada: o teto por risco tem de dimensionar sobre a
+        # perda que o robo de fato arrisca, nao sobre a que ele arriscaria se
+        # a escada nao existisse.
         self._ultimo_stop_dist_pontos = stop_dist
         if lado == "long":
             stop = no_tick(base - stop_dist, self.tick_size)
@@ -773,6 +993,13 @@ class CopaWin(IntradayStrategy):
             initial_stop=stop,
             initial_target=alvo,
             ttl_bars=self.entrada_ttl_barras,
+            # ALVO POR ORDEM-LIMITE REAL (2026-09-11, ordem do dono). Fatia de
+            # 1 contrato, mesma unidade do `wdo_orb` -- o motor arma uma
+            # ordem-limite PARADA no nivel do alvo e so' preenche o que a fila
+            # daquele preco deixar passar, em vez de tratar o toque como fill
+            # garantido. Ver a secao do modulo "Alvo por ordem-limite REAL".
+            exit_split_unit=(1 if self.fatiar_saida_alvo else None),
+            exit_ttl_bars=(self.exit_ttl_bars if self.fatiar_saida_alvo else None),
             metadata=metadata,
             reason=f"reteste_{lado}",
         )

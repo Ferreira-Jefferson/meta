@@ -1035,14 +1035,17 @@ def _intraday_capital_minimo(robot_key: str, symbol: Optional[str] = None) -> Op
         # Futuro não consulta preço nenhum: o piso é margem por contrato, que
         # a corretora fixa (ver `capital_minimo_para`). Sair antes evita uma
         # ida ao terminal que não mudaria a resposta.
-        return capital_minimo_para(True, symbol, None)
+        return capital_minimo_para(True, symbol, None, robot_key)
     perfil = PROFILES.get(symbol)
     if perfil is None:
         return None
     preco, _origem = preco_de_referencia(symbol)
     if preco is None:
         return None
-    return capital_minimo_brl(preco, perfil.default_quantity)
+    piso = capital_minimo_brl(preco, perfil.default_quantity)
+    # acao tambem pode ter piso proprio do robo -- mesma regra do futuro
+    # acima, o MAIOR dos dois (ver `capital_minimo_para`).
+    return capital_minimo_para(False, symbol, preco, robot_key) or piso
 
 
 def min_cash_for(slot, robot_key: Optional[str] = None) -> float:

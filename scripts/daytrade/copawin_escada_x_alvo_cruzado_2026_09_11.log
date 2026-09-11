@@ -1,0 +1,249 @@
+96 celulas: 4 alvos x 4 escadas x 3 capitais x 2 janelas
+alvo por ordem-limite REAL fatiada em TODAS as celulas (premissa, nao variavel)
+
+[ 1/96]  IS cap      250 alvo 70% - escada DESLIGADA        liq       -69,40 n=26   s/trade 116/129 caixa min     -0,20 pior   -446,50 win  42,3% BE  43,0% indefinido
+[ 2/96]  IS cap      250 alvo 70% - escada ABS 125          liq      -177,80 n=28   s/trade 121/129 caixa min     72,20 pior   -126,50 win  35,7% BE  37,7% indefinido
+[ 3/96]  IS cap      250 alvo 100% - escada ABS 125         liq      -182,30 n=135  s/trade  85/129 caixa min     67,70 pior   -158,50 win  31,1% BE  31,5% indefinido
+[ 4/96]  IS cap      250 alvo 100% - escada ABS 200         liq      -162,50 n=3    s/trade 127/129 caixa min     87,50 pior   -180,50 win  33,3% BE  55,7% indefinido
+[ 5/96]  IS cap      250 alvo 50% - escada ABS 125          liq      -199,40 n=6    s/trade 127/129 caixa min     50,60 pior   -126,50 win  33,3% BE  49,0% indefinido <<< PAR DA REGRA
+[ 6/96]  IS cap      250 alvo 100% - escada ABS 75          liq     9.091,90 n=380  s/trade   0/129 caixa min    153,20 pior   -367,50 win  33,9% BE  27,6% POSITIVO
+[ 7/96]  IS cap      250 alvo 50% - escada ABS 200          liq      -167,40 n=4    s/trade 127/129 caixa min     82,60 pior   -172,50 win  25,0% BE  40,1% indefinido
+[ 8/96]  IS cap      250 alvo 70% - escada ABS 200          liq      -166,40 n=28   s/trade 118/129 caixa min     83,60 pior   -201,50 win  46,4% BE  48,1% indefinido
+[ 9/96]  IS cap      250 alvo 50% - escada ABS 75           liq      -194,50 n=291  s/trade  78/129 caixa min     55,50 pior   -190,90 win  29,9% BE  30,2% indefinido
+[10/96]  IS cap      250 alvo 70% - escada ABS 75           liq      -150,40 n=566  s/trade   1/129 caixa min     99,60 pior   -190,90 win  26,9% BE  26,9% indefinido
+[11/96]  IS cap      250 alvo 100% - escada DESLIGADA       liq      -157,50 n=9    s/trade 124/129 caixa min     40,00 pior   -822,50 win  55,6% BE  58,3% indefinido
+[12/96]  IS cap      750 alvo 100% - escada DESLIGADA       liq      -463,70 n=15   s/trade 121/129 caixa min     -8,70 pior   -822,50 win  53,3% BE  59,6% indefinido
+[13/96]  IS cap      250 alvo 50% - escada DESLIGADA        liq     7.191,10 n=310  s/trade   0/129 caixa min     23,10 pior   -728,50 win  51,3% BE  45,1% POSITIVO
+[14/96]  IS cap      250 alvo 30% - escada DESLIGADA        liq      -153,00 n=6    s/trade 127/129 caixa min     24,10 pior   -230,50 win  33,3% BE  44,2% indefinido
+[15/96]  IS cap      750 alvo 70% - escada DESLIGADA        liq      -542,90 n=141  s/trade  61/129 caixa min     -5,70 pior   -728,50 win  46,1% BE  47,0% indefinido
+[16/96]  IS cap      250 alvo 30% - escada ABS 200          liq      -177,50 n=56   s/trade 117/129 caixa min     72,50 pior   -201,50 win  50,0% BE  51,3% indefinido
+[17/96]  IS cap      250 alvo 30% - escada ABS 125          liq      -193,90 n=5    s/trade 127/129 caixa min     56,10 pior   -126,50 win  20,0% BE  38,9% indefinido
+[18/96]  IS cap      750 alvo 100% - escada ABS 200         liq      -682,40 n=36   s/trade 115/129 caixa min     67,60 pior   -201,50 win  36,1% BE  40,9% indefinido
+[19/96]  IS cap      750 alvo 100% - escada ABS 75          liq     6.948,80 n=370  s/trade   0/129 caixa min    477,60 pior   -324,50 win  33,8% BE  28,8% POSITIVO
+[20/96]  IS cap      250 alvo 30% - escada ABS 75           liq      -156,80 n=6    s/trade 127/129 caixa min     93,20 pior    -76,50 win  16,7% BE  31,1% indefinido
+[21/96]  IS cap      750 alvo 70% - escada ABS 125          liq      -694,10 n=39   s/trade 118/129 caixa min     55,90 pior   -126,50 win  33,3% BE  39,6% indefinido
+[22/96]  IS cap      750 alvo 70% - escada ABS 75           liq      -650,10 n=569  s/trade   1/129 caixa min     99,90 pior   -191,50 win  26,7% BE  27,1% indefinido
+[23/96]  IS cap      750 alvo 100% - escada ABS 125         liq     8.116,10 n=349  s/trade   0/129 caixa min    420,80 pior   -342,50 win  36,7% BE  30,8% POSITIVO
+[24/96]  IS cap      750 alvo 70% - escada ABS 200          liq      -669,50 n=31   s/trade 117/129 caixa min     80,50 pior   -201,50 win  41,9% BE  48,0% indefinido
+[25/96]  IS cap      750 alvo 50% - escada ABS 200          liq      -697,30 n=159  s/trade  78/129 caixa min     52,70 pior   -201,50 win  42,8% BE  44,1% indefinido
+[26/96]  IS cap      750 alvo 50% - escada DESLIGADA        liq     7.191,10 n=310  s/trade   0/129 caixa min    523,10 pior   -728,50 win  51,3% BE  45,1% POSITIVO
+[27/96]  IS cap      750 alvo 50% - escada ABS 125          liq      -696,20 n=58   s/trade 117/129 caixa min     53,80 pior   -126,50 win  32,8% BE  37,0% indefinido <<< PAR DA REGRA
+[28/96]  IS cap      750 alvo 50% - escada ABS 75           liq      -695,90 n=279  s/trade  78/129 caixa min     54,10 pior   -190,90 win  29,0% BE  30,0% indefinido
+[29/96]  IS cap      750 alvo 30% - escada DESLIGADA        liq      -701,60 n=20   s/trade 124/129 caixa min     48,40 pior   -610,50 win  55,0% BE  68,9% indefinido
+[30/96]  IS cap      750 alvo 30% - escada ABS 125          liq      -694,90 n=217  s/trade  89/129 caixa min     55,10 pior   -126,50 win  46,1% BE  47,6% indefinido
+[31/96]  IS cap      750 alvo 30% - escada ABS 200          liq      -665,10 n=58   s/trade 116/129 caixa min     84,90 pior   -201,50 win  46,6% BE  51,0% indefinido
+[32/96]  IS cap      750 alvo 30% - escada ABS 75           liq      -695,30 n=301  s/trade  86/129 caixa min     54,70 pior    -76,50 win  36,2% BE  37,5% indefinido
+[33/96]  IS cap    3.000 alvo 100% - escada ABS 125         liq     5.880,70 n=349  s/trade   0/129 caixa min    462,60 pior   -343,50 win  36,1% BE  31,8% indefinido
+[34/96]  IS cap    3.000 alvo 100% - escada ABS 75          liq     6.341,70 n=386  s/trade   0/129 caixa min    153,00 pior   -367,50 win  32,9% BE  28,5% indefinido
+[35/96]  IS cap    3.000 alvo 100% - escada ABS 200         liq     7.120,20 n=273  s/trade   0/129 caixa min  1.732,20 pior   -387,50 win  43,2% BE  37,2% POSITIVO
+[36/96]  IS cap    3.000 alvo 70% - escada ABS 200          liq     2.674,90 n=349  s/trade   0/129 caixa min  1.290,30 pior   -282,50 win  41,0% BE  39,0% indefinido
+[37/96]  IS cap    3.000 alvo 100% - escada DESLIGADA       liq     8.311,00 n=226  s/trade   0/129 caixa min    939,80 pior   -822,50 win  50,9% BE  42,5% POSITIVO
+[38/96]  IS cap    3.000 alvo 70% - escada DESLIGADA        liq     5.311,00 n=258  s/trade   0/129 caixa min  2.244,30 pior   -728,50 win  49,6% BE  44,5% indefinido
+[39/96]  IS cap    3.000 alvo 70% - escada ABS 125          liq    -2.919,50 n=139  s/trade  85/129 caixa min     80,50 pior   -204,50 win  33,8% BE  41,1% indefinido
+[40/96] OOS cap      250 alvo 100% - escada DESLIGADA       liq      -247,50 n=1    s/trade   54/55 caixa min      2,50 pior   -247,50 win   0,0% BE 100,0% NEGATIVO
+[41/96]  IS cap    3.000 alvo 70% - escada ABS 75           liq    -2.592,00 n=558  s/trade   0/129 caixa min    107,30 pior   -190,90 win  26,7% BE  28,2% indefinido
+[42/96]  IS cap    3.000 alvo 50% - escada DESLIGADA        liq     7.351,00 n=310  s/trade   0/129 caixa min  2.773,10 pior   -728,50 win  51,3% BE  45,0% POSITIVO
+[43/96] OOS cap      250 alvo 100% - escada ABS 125         liq      -190,00 n=2    s/trade   54/55 caixa min     60,00 pior   -126,50 win   0,0% BE 100,0% NEGATIVO
+[44/96]  IS cap    3.000 alvo 50% - escada ABS 200          liq     1.386,60 n=424  s/trade   0/129 caixa min  1.106,70 pior   -257,50 win  42,5% BE  41,5% indefinido
+[45/96] OOS cap      250 alvo 100% - escada ABS 200         liq      -190,00 n=2    s/trade   54/55 caixa min     60,00 pior   -126,50 win   0,0% BE 100,0% NEGATIVO
+[46/96]  IS cap    3.000 alvo 50% - escada ABS 125          liq    -2.936,80 n=248  s/trade  71/129 caixa min     63,20 pior   -198,50 win  34,3% BE  38,3% indefinido <<< PAR DA REGRA
+[47/96]  IS cap    3.000 alvo 30% - escada ABS 200          liq    -2.951,40 n=153  s/trade  91/129 caixa min     48,60 pior   -201,50 win  45,1% BE  52,9% indefinido
+[48/96]  IS cap    3.000 alvo 50% - escada ABS 75           liq    -2.944,00 n=282  s/trade  71/129 caixa min     56,00 pior   -198,50 win  30,1% BE  33,8% indefinido
+[49/96] OOS cap      250 alvo 100% - escada ABS 75          liq      -153,00 n=2    s/trade   54/55 caixa min     97,00 pior    -76,50 win   0,0% BE 100,0% NEGATIVO
+[50/96] OOS cap      250 alvo 30% - escada DESLIGADA        liq       120,90 n=1    s/trade   54/55 caixa min     -0,70 pior    120,90 win 100,0% BE   0,0% POSITIVO
+[51/96]  IS cap    3.000 alvo 30% - escada DESLIGADA        liq     2.804,40 n=427  s/trade   0/129 caixa min     16,00 pior   -728,50 win  55,3% BE  53,2% indefinido
+[52/96]  IS cap    3.000 alvo 30% - escada ABS 125          liq    -2.913,00 n=218  s/trade  86/129 caixa min     87,00 pior   -189,50 win  42,2% BE  48,0% indefinido
+[53/96]  IS cap    3.000 alvo 30% - escada ABS 75           liq    -2.946,70 n=359  s/trade  70/129 caixa min     53,30 pior   -188,50 win  38,4% BE  42,1% indefinido
+[54/96] OOS cap      250 alvo 70% - escada DESLIGADA        liq      -247,50 n=1    s/trade   54/55 caixa min      2,50 pior   -247,50 win   0,0% BE 100,0% NEGATIVO
+[55/96] OOS cap      250 alvo 70% - escada ABS 200          liq      -190,00 n=2    s/trade   54/55 caixa min     60,00 pior   -126,50 win   0,0% BE 100,0% NEGATIVO
+[56/96] OOS cap      250 alvo 70% - escada ABS 75           liq      -153,00 n=2    s/trade   54/55 caixa min     97,00 pior    -76,50 win   0,0% BE 100,0% NEGATIVO
+[57/96] OOS cap      250 alvo 70% - escada ABS 125          liq      -190,00 n=2    s/trade   54/55 caixa min     60,00 pior   -126,50 win   0,0% BE 100,0% NEGATIVO
+[58/96] OOS cap      250 alvo 50% - escada DESLIGADA        liq     5.111,00 n=130  s/trade    0/55 caixa min    165,20 pior   -489,50 win  59,2% BE  46,2% POSITIVO
+[59/96] OOS cap      250 alvo 50% - escada ABS 75           liq      -153,00 n=2    s/trade   54/55 caixa min     97,00 pior    -76,50 win   0,0% BE 100,0% NEGATIVO
+[60/96] OOS cap      250 alvo 30% - escada ABS 200          liq      -182,30 n=9    s/trade   53/55 caixa min     67,70 pior   -187,50 win  44,4% BE  53,6% indefinido
+[61/96] OOS cap      250 alvo 50% - escada ABS 200          liq      -198,90 n=15   s/trade   50/55 caixa min     51,10 pior   -201,50 win  33,3% BE  37,4% indefinido
+[62/96] OOS cap      250 alvo 50% - escada ABS 125          liq      -154,20 n=16   s/trade   52/55 caixa min     95,80 pior   -126,50 win  31,2% BE  34,4% indefinido <<< PAR DA REGRA
+[63/96] OOS cap      750 alvo 100% - escada DESLIGADA       liq      -738,40 n=6    s/trade   52/55 caixa min     11,60 pior   -301,50 win  16,7% BE  77,4% NEGATIVO
+[64/96] OOS cap      750 alvo 100% - escada ABS 125         liq      -668,10 n=31   s/trade   46/55 caixa min     81,90 pior   -126,50 win  22,6% BE  28,5% indefinido
+[65/96] OOS cap      250 alvo 30% - escada ABS 125          liq      -194,80 n=28   s/trade   50/55 caixa min     55,20 pior   -126,50 win  39,3% BE  42,6% indefinido
+[66/96] OOS cap      250 alvo 30% - escada ABS 75           liq      -153,00 n=2    s/trade   54/55 caixa min     97,00 pior    -76,50 win   0,0% BE 100,0% NEGATIVO
+[67/96] OOS cap      750 alvo 100% - escada ABS 200         liq      -657,30 n=25   s/trade   44/55 caixa min     77,80 pior   -201,50 win  28,0% BE  34,7% indefinido
+[68/96] OOS cap      750 alvo 100% - escada ABS 75          liq      -680,70 n=41   s/trade   47/55 caixa min     69,30 pior    -76,50 win  17,1% BE  22,3% indefinido
+[69/96] OOS cap      750 alvo 70% - escada ABS 75           liq       790,60 n=232  s/trade    0/55 caixa min    519,30 pior   -141,50 win  32,8% BE  31,5% indefinido
+[70/96] OOS cap      750 alvo 70% - escada ABS 200          liq     1.757,20 n=139  s/trade    0/55 caixa min    486,30 pior   -201,50 win  45,3% BE  41,5% indefinido
+[71/96] OOS cap      750 alvo 70% - escada DESLIGADA        liq     4.206,30 n=109  s/trade    0/55 caixa min    159,60 pior   -489,50 win  56,9% BE  45,3% POSITIVO
+[72/96] OOS cap      750 alvo 50% - escada ABS 200          liq      -698,30 n=27   s/trade   47/55 caixa min     51,70 pior   -201,50 win  29,6% BE  36,9% indefinido
+[73/96] OOS cap      750 alvo 30% - escada DESLIGADA        liq     3.584,50 n=183  s/trade    0/55 caixa min    100,50 pior   -499,50 win  59,6% BE  51,7% POSITIVO
+[74/96] OOS cap      750 alvo 50% - escada DESLIGADA        liq     5.111,00 n=130  s/trade    0/55 caixa min    665,20 pior   -489,50 win  59,2% BE  46,2% POSITIVO
+[75/96] OOS cap      750 alvo 50% - escada ABS 125          liq      -656,20 n=44   s/trade   46/55 caixa min     88,50 pior   -126,50 win  29,5% BE  34,7% indefinido <<< PAR DA REGRA
+[76/96] OOS cap      750 alvo 70% - escada ABS 125          liq       600,30 n=189  s/trade    0/55 caixa min    561,30 pior   -126,50 win  37,6% BE  36,5% indefinido
+[77/96] OOS cap      750 alvo 30% - escada ABS 200          liq      -666,50 n=47   s/trade   44/55 caixa min     83,50 pior   -201,50 win  46,8% BE  52,1% indefinido
+[78/96] OOS cap      750 alvo 50% - escada ABS 75           liq      -694,20 n=26   s/trade   51/55 caixa min     55,80 pior    -76,50 win  19,2% BE  30,6% indefinido
+[79/96] OOS cap    3.000 alvo 100% - escada ABS 200         liq     2.825,80 n=116  s/trade    0/55 caixa min  2.116,40 pior   -300,50 win  47,4% BE  40,6% indefinido
+[80/96] OOS cap      750 alvo 30% - escada ABS 75           liq     5.050,60 n=291  s/trade    0/55 caixa min    519,30 pior   -284,50 win  53,6% BE  45,3% POSITIVO
+[81/96] OOS cap    3.000 alvo 100% - escada DESLIGADA       liq     4.206,20 n=96   s/trade    0/55 caixa min  2.110,20 pior   -346,50 win  56,2% BE  43,6% POSITIVO
+[82/96] OOS cap      750 alvo 30% - escada ABS 125          liq      -688,50 n=55   s/trade   46/55 caixa min     61,50 pior   -126,50 win  38,2% BE  44,2% indefinido
+[83/96] OOS cap    3.000 alvo 100% - escada ABS 125         liq     3.042,10 n=116  s/trade    0/55 caixa min  2.785,00 pior   -312,50 win  48,3% BE  40,9% indefinido
+[84/96] OOS cap    3.000 alvo 100% - escada ABS 75          liq     3.042,10 n=116  s/trade    0/55 caixa min  2.785,00 pior   -312,50 win  48,3% BE  40,9% indefinido
+[85/96] OOS cap    3.000 alvo 70% - escada ABS 125          liq     1.442,10 n=147  s/trade    0/55 caixa min  2.844,30 pior   -238,50 win  43,5% BE  40,6% indefinido
+[86/96] OOS cap    3.000 alvo 70% - escada ABS 200          liq     1.846,70 n=138  s/trade    0/55 caixa min  2.736,30 pior   -239,50 win  45,7% BE  41,7% indefinido
+[87/96] OOS cap    3.000 alvo 70% - escada ABS 75           liq     1.442,10 n=147  s/trade    0/55 caixa min  2.844,30 pior   -238,50 win  43,5% BE  40,6% indefinido
+[88/96] OOS cap    3.000 alvo 70% - escada DESLIGADA        liq     4.019,80 n=109  s/trade    0/55 caixa min  2.409,60 pior   -489,50 win  56,9% BE  46,0% POSITIVO
+[89/96] OOS cap    3.000 alvo 50% - escada ABS 125          liq     2.080,30 n=203  s/trade    0/55 caixa min  1.635,70 pior   -273,50 win  43,8% BE  40,0% indefinido <<< PAR DA REGRA
+[90/96] OOS cap    3.000 alvo 30% - escada DESLIGADA        liq     3.644,40 n=183  s/trade    0/55 caixa min  2.350,50 pior   -499,50 win  59,6% BE  51,6% POSITIVO
+[91/96] OOS cap    3.000 alvo 50% - escada ABS 200          liq     2.178,40 n=173  s/trade    0/55 caixa min  1.712,60 pior   -279,50 win  49,1% BE  44,8% indefinido
+[92/96] OOS cap    3.000 alvo 50% - escada DESLIGADA        liq     5.254,30 n=133  s/trade    0/55 caixa min  2.915,20 pior   -489,50 win  60,9% BE  48,1% POSITIVO
+[93/96] OOS cap    3.000 alvo 50% - escada ABS 75           liq       563,20 n=222  s/trade    0/55 caixa min  1.214,70 pior   -200,50 win  39,2% BE  38,2% indefinido
+[94/96] OOS cap    3.000 alvo 30% - escada ABS 75           liq     2.819,30 n=264  s/trade    0/55 caixa min  2.138,80 pior   -285,50 win  56,4% BE  51,9% indefinido
+[95/96] OOS cap    3.000 alvo 30% - escada ABS 125          liq     2.812,70 n=260  s/trade    0/55 caixa min  1.975,40 pior   -285,50 win  55,8% BE  51,0% indefinido
+[96/96] OOS cap    3.000 alvo 30% - escada ABS 200          liq     1.902,10 n=253  s/trade    0/55 caixa min  1.677,00 pior   -256,50 win  54,5% BE  51,4% indefinido
+
+
+===== IS - capital R$ 250 =====
+variante                        retorno   liquido R$  MaxDD %    MaxDD R$ lucro/DD   win% trades     R$/dia trd/dia  capital final pregoes       alvo%      escada acerto alvo       flat%      BE emp    IC95 win     s/trade   caixa min     pior op
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+IS 250 alvo 100% - escada DESL   -63,0%      -157,50   -92,1%      912,50    -0,17  55,6%      9      -1,22     0,1          92,50     129        100%   DESLIGADA       11,1%       44,4%      58,28% [26,7;81,1]     124/129       40,00     -822,50  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 250 alvo 100% - escada ABS    -65,0%      -162,50   -82,8%      421,30    -0,39  33,3%      3      -1,26     0,0          87,50     129        100%     ABS 200        0,0%       33,3%      55,67%  [6,1;79,2]     127/129       87,50     -180,50  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 250 alvo 100% - escada ABS    -72,9%      -182,30   -97,9%    3.130,90    -0,06  31,1%    135      -1,41     1,0          67,70     129        100%     ABS 125        3,7%       30,4%      31,51% [23,9;39,4]      85/129       67,70     -158,50  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 250 alvo 100% - escada ABS  3.636,8%     9.091,90   -96,2%    3.870,60     2,35  33,9%    380      70,48     2,9       9.341,90     129        100%      ABS 75        2,9%       32,4%      27,58% [29,4;38,8]       0/129      153,20     -367,50  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 250 alvo 70% - escada DESLI   -27,8%       -69,40  -100,0%    2.207,90    -0,03  42,3%     26      -4,96     1,9         180,60      14         70%   DESLIGADA        7,7%       42,3%      42,97% [25,5;61,1]     116/129       -0,20     -446,50  ZERADO desliz.alvo 1,0t fila NAO CALIBRADA
+IS 250 alvo 70% - escada ABS 2   -66,6%      -166,40   -93,9%    1.285,50    -0,13  46,4%     28      -1,29     0,2          83,60     129         70%     ABS 200       10,7%       35,7%      48,09% [29,5;64,2]     118/129       83,60     -201,50  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 250 alvo 70% - escada ABS 1   -71,1%      -177,80   -94,4%    1.212,40    -0,15  35,7%     28      -1,38     0,2          72,20     129         70%     ABS 125        7,1%       17,9%      37,72% [20,7;54,2]     121/129       72,20     -126,50  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 250 alvo 70% - escada ABS 7   -60,2%      -150,40   -97,4%    3.697,50    -0,04  26,9%    566      -1,17     4,4          99,60     129         70%      ABS 75        2,7%       19,4%      26,94% [23,4;30,7]       1/129       99,60     -190,90  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 250 alvo 50% - escada DESLI 2.876,4%     7.191,10   -96,3%    2.892,70     2,49  51,3%    310      55,74     2,4       7.441,10     129         50%   DESLIGADA       17,1%       40,0%      45,12% [45,7;56,8]       0/129       23,10     -728,50  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 250 alvo 50% - escada ABS 2   -67,0%      -167,40   -83,2%      409,30    -0,41  25,0%      4      -1,30     0,0          82,60     129         50%     ABS 200       25,0%       25,0%      40,09%  [4,6;69,9]     127/129       82,60     -172,50  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 250 alvo 50% - escada ABS 1   -79,8%      -199,40   -89,7%      441,30    -0,45  33,3%      6      -1,55     0,0          50,60     129         50%     ABS 125       16,7%       16,7%      49,04%  [9,7;70,0]     127/129       50,60     -126,50  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 250 alvo 50% - escada ABS 7   -77,8%      -194,50   -97,6%    2.233,80    -0,09  29,9%    291      -1,51     2,3          55,50     129         50%      ABS 75        5,5%       12,4%      30,17% [24,9;35,4]      78/129       55,50     -190,90  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 250 alvo 30% - escada DESLI   -61,2%      -153,00   -95,1%      468,80    -0,33  33,3%      6      -1,19     0,0          97,00     129         30%   DESLIGADA       16,7%       16,7%      44,17%  [9,7;70,0]     127/129       24,10     -230,50  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 250 alvo 30% - escada ABS 2   -71,0%      -177,50   -95,0%    1.378,10    -0,13  50,0%     56      -1,38     0,4          72,50     129         30%     ABS 200       25,0%       12,5%      51,25% [37,3;62,7]     117/129       72,50     -201,50  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 250 alvo 30% - escada ABS 1   -77,6%      -193,90   -88,6%      436,80    -0,44  20,0%      5      -1,50     0,0          56,10     129         30%     ABS 125       20,0%       20,0%      38,93%  [3,6;62,4]     127/129       56,10     -126,50  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 250 alvo 30% - escada ABS 7   -62,7%      -156,80   -81,1%      399,70    -0,39  16,7%      6      -1,22     0,0          93,20     129         30%      ABS 75       16,7%       16,7%      31,07%  [3,0;56,4]     127/129       93,20      -76,50  desliz.alvo 1,0t fila NAO CALIBRADA
+
+
+===== IS - capital R$ 750 =====
+variante                        retorno   liquido R$  MaxDD %    MaxDD R$ lucro/DD   win% trades     R$/dia trd/dia  capital final pregoes       alvo%      escada acerto alvo       flat%      BE emp    IC95 win     s/trade   caixa min     pior op
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+IS 750 alvo 100% - escada DESL   -61,8%      -463,70  -100,6%    1.513,70    -0,31  53,3%     15     -57,96     1,9         286,30       8        100%   DESLIGADA        6,7%       40,0%      59,58% [30,1;75,2]     121/129       -8,70     -822,50  ZERADO desliz.alvo 1,0t fila NAO CALIBRADA
+IS 750 alvo 100% - escada ABS    -91,0%      -682,40   -97,0%    2.197,70    -0,31  36,1%     36      -5,29     0,3          67,60     129        100%     ABS 200        5,6%       36,1%      40,88% [22,5;52,4]     115/129       67,60     -201,50  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 750 alvo 100% - escada ABS  1.082,1%     8.116,10   -88,6%    3.277,80     2,48  36,7%    349      62,92     2,7       8.866,10     129        100%     ABS 125        2,9%       36,4%      30,76% [31,8;41,9]       0/129      420,80     -342,50  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 750 alvo 100% - escada ABS    926,5%     6.948,80   -87,6%    3.369,80     2,06  33,8%    370      53,87     2,9       7.698,80     129        100%      ABS 75        2,7%       33,2%      28,78% [29,2;38,7]       0/129      477,60     -324,50  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 750 alvo 70% - escada DESLI   -72,4%      -542,90  -100,2%    3.108,10    -0,17  46,1%    141      -7,98     2,1         207,10      68         70%   DESLIGADA        7,8%       46,1%      47,01% [38,1;54,3]      61/129       -5,70     -728,50  ZERADO desliz.alvo 1,0t fila NAO CALIBRADA
+IS 750 alvo 70% - escada ABS 2   -89,3%      -669,50   -95,7%    1.788,60    -0,37  41,9%     31      -5,19     0,2          80,50     129         70%     ABS 200        9,7%       35,5%      47,98% [26,4;59,2]     117/129       80,50     -201,50  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 750 alvo 70% - escada ABS 1   -92,5%      -694,10   -96,9%    1.728,70    -0,40  33,3%     39      -5,38     0,3          55,90     129         70%     ABS 125        5,1%       20,5%      39,57% [20,6;49,0]     118/129       55,90     -126,50  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 750 alvo 70% - escada ABS 7   -86,7%      -650,10   -97,4%    3.737,50    -0,17  26,7%    569      -5,04     4,4          99,90     129         70%      ABS 75        2,8%       19,3%      27,07% [23,2;30,5]       1/129       99,90     -191,50  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 750 alvo 50% - escada DESLI   958,8%     7.191,10   -82,5%    2.892,70     2,49  51,3%    310      55,74     2,4       7.941,10     129         50%   DESLIGADA       17,1%       40,0%      45,12% [45,7;56,8]       0/129      523,10     -728,50  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 750 alvo 50% - escada ABS 2   -93,0%      -697,30   -98,2%    2.862,10    -0,24  42,8%    159      -5,41     1,2          52,70     129         50%     ABS 200       14,5%       28,9%      44,08% [35,3;50,5]      78/129       52,70     -201,50  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 750 alvo 50% - escada ABS 1   -92,8%      -696,20   -95,4%    1.110,80    -0,63  32,8%     58      -5,40     0,4          53,80     129         50%     ABS 125        8,6%       13,8%      37,00% [22,1;45,6]     117/129       53,80     -126,50  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 750 alvo 50% - escada ABS 7   -92,8%      -695,90   -97,9%    2.532,20    -0,27  29,0%    279      -5,39     2,2          54,10     129         50%      ABS 75        6,1%       12,9%      30,00% [24,0;34,6]      78/129       54,10     -190,90  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 750 alvo 30% - escada DESLI   -93,5%      -701,60   -95,1%      944,50    -0,74  55,0%     20      -5,44     0,2          48,40     129         30%   DESLIGADA       25,0%       15,0%      68,86% [34,2;74,2]     124/129       48,40     -610,50  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 750 alvo 30% - escada ABS 2   -88,7%      -665,10   -94,7%    1.511,50    -0,44  46,6%     58      -5,16     0,4          84,90     129         30%     ABS 200       22,4%       12,1%      51,02% [34,3;59,2]     116/129       84,90     -201,50  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 750 alvo 30% - escada ABS 1   -92,7%      -694,90   -97,3%    2.020,50    -0,34  46,1%    217      -5,39     1,7          55,10     129         30%     ABS 125       20,3%       11,5%      47,57% [39,6;52,7]      89/129       55,10     -126,50  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 750 alvo 30% - escada ABS 7   -92,7%      -695,30   -96,4%    1.464,90    -0,47  36,2%    301      -5,39     2,3          54,70     129         30%      ABS 75       15,3%        6,3%      37,45% [31,0;41,8]      86/129       54,70      -76,50  desliz.alvo 1,0t fila NAO CALIBRADA
+
+
+===== IS - capital R$ 3.000 =====
+variante                        retorno   liquido R$  MaxDD %    MaxDD R$ lucro/DD   win% trades     R$/dia trd/dia  capital final pregoes       alvo%      escada acerto alvo       flat%      BE emp    IC95 win     s/trade   caixa min     pior op
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+IS 3.000 alvo 100% - escada DE   277,0%     8.311,00   -75,0%    2.815,20     2,95  50,9%    226      64,43     1,8      11.311,00     129        100%   DESLIGADA        4,9%       55,8%      42,52% [44,4;57,3]       0/129      939,80     -822,50  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 3.000 alvo 100% - escada AB   237,3%     7.120,20   -61,5%    2.770,10     2,57  43,2%    273      55,20     2,1      10.120,20     129        100%     ABS 200        4,0%       46,5%      37,15% [37,5;49,2]       0/129    1.732,20     -387,50  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 3.000 alvo 100% - escada AB   196,0%     5.880,70   -87,7%    3.383,80     1,74  36,1%    349      45,59     2,7       8.880,70     129        100%     ABS 125        2,9%       36,4%      31,77% [31,2;41,3]       0/129      462,60     -343,50  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 3.000 alvo 100% - escada AB   211,4%     6.341,70   -96,2%    3.868,60     1,64  32,9%    386      49,16     3,0       9.341,70     129        100%      ABS 75        2,6%       31,6%      28,46% [28,4;37,7]       0/129      153,00     -367,50  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 3.000 alvo 70% - escada DES   177,0%     5.311,00   -58,1%    3.108,10     1,71  49,6%    258      41,17     2,0       8.311,00     129         70%   DESLIGADA        8,5%       48,8%      44,53% [43,6;55,7]       0/129    2.244,30     -728,50  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 3.000 alvo 70% - escada ABS    89,2%     2.674,90   -68,7%    2.828,80     0,95  41,0%    349      20,74     2,7       5.674,90     129         70%     ABS 200        5,4%       36,4%      38,96% [35,9;46,2]       0/129    1.290,30     -282,50  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 3.000 alvo 70% - escada ABS   -97,3%    -2.919,50   -98,0%    4.024,20    -0,73  33,8%    139     -22,63     1,1          80,50     129         70%     ABS 125        3,6%       28,8%      41,13% [26,5;42,0]      85/129       80,50     -204,50  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 3.000 alvo 70% - escada ABS   -86,4%    -2.592,00   -97,2%    3.709,30    -0,70  26,7%    558     -20,09     4,3         408,00     129         70%      ABS 75        2,7%       20,4%      28,18% [23,2;30,5]       0/129      107,30     -190,90  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 3.000 alvo 50% - escada DES   245,0%     7.351,00   -50,3%    2.892,70     2,54  51,3%    310      56,98     2,4      10.351,00     129         50%   DESLIGADA       17,1%       40,0%      45,01% [45,7;56,8]       0/129    2.773,10     -728,50  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 3.000 alvo 50% - escada ABS    46,2%     1.386,60   -78,0%    3.930,60     0,35  42,5%    424      10,75     3,3       4.386,60     129         50%     ABS 200       10,4%       28,8%      41,51% [37,8;47,2]       0/129    1.106,70     -257,50  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 3.000 alvo 50% - escada ABS   -97,9%    -2.936,80   -98,4%    3.965,40    -0,74  34,3%    248     -22,77     1,9          63,20     129         50%     ABS 125        7,7%       19,8%      38,32% [28,6;40,4]      71/129       63,20     -198,50  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 3.000 alvo 50% - escada ABS   -98,1%    -2.944,00   -98,6%    3.972,60    -0,74  30,1%    282     -22,82     2,2          56,00     129         50%      ABS 75        8,5%       14,9%      33,80% [25,1;35,7]      71/129       56,00     -198,50  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 3.000 alvo 30% - escada DES    93,5%     2.804,40   -99,6%    4.527,30     0,62  55,3%    427      21,74     3,3       5.804,40     129         30%   DESLIGADA       26,9%       27,9%      53,16% [50,5;59,9]       0/129       16,00     -728,50  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 3.000 alvo 30% - escada ABS   -98,4%    -2.951,40   -98,7%    3.797,80    -0,78  45,1%    153     -22,88     1,2          48,60     129         30%     ABS 200       23,5%       18,3%      52,90% [37,4;53,0]      91/129       48,60     -201,50  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 3.000 alvo 30% - escada ABS   -97,1%    -2.913,00   -97,7%    3.762,80    -0,77  42,2%    218     -22,58     1,7          87,00     129         30%     ABS 125       19,3%       13,8%      48,04% [35,8;48,8]      86/129       87,00     -189,50  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 3.000 alvo 30% - escada ABS   -98,2%    -2.946,70   -98,6%    3.779,80    -0,78  38,4%    359     -22,84     2,8          53,30     129         30%      ABS 75       17,5%        8,1%      42,14% [33,6;43,6]      70/129       53,30     -188,50  desliz.alvo 1,0t fila NAO CALIBRADA
+
+
+===== OOS - capital R$ 250 =====
+variante                        retorno   liquido R$  MaxDD %    MaxDD R$ lucro/DD   win% trades     R$/dia trd/dia  capital final pregoes       alvo%      escada acerto alvo       flat%      BE emp    IC95 win     s/trade   caixa min     pior op
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+OOS 250 alvo 100% - escada DES   -99,0%      -247,50   -99,4%      426,10    -0,58   0,0%      1      -4,50     0,0           2,50      55        100%   DESLIGADA        0,0%        0,0%     100,00%  [0,0;79,3]       54/55        2,50     -247,50  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 250 alvo 100% - escada ABS   -76,0%      -190,00   -86,0%      368,60    -0,52   0,0%      2      -3,45     0,0          60,00      55        100%     ABS 200        0,0%        0,0%     100,00%  [0,0;65,8]       54/55       60,00     -126,50  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 250 alvo 100% - escada ABS   -76,0%      -190,00   -86,0%      368,60    -0,52   0,0%      2      -3,45     0,0          60,00      55        100%     ABS 125        0,0%        0,0%     100,00%  [0,0;65,8]       54/55       60,00     -126,50  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 250 alvo 100% - escada ABS   -61,2%      -153,00   -66,7%      194,20    -0,79   0,0%      2      -2,78     0,0          97,00      55        100%      ABS 75        0,0%        0,0%     100,00%  [0,0;65,8]       54/55       97,00      -76,50  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 250 alvo 70% - escada DESL   -99,0%      -247,50   -99,4%      426,10    -0,58   0,0%      1      -4,50     0,0           2,50      55         70%   DESLIGADA        0,0%        0,0%     100,00%  [0,0;79,3]       54/55        2,50     -247,50  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 250 alvo 70% - escada ABS    -76,0%      -190,00   -86,0%      368,60    -0,52   0,0%      2      -3,45     0,0          60,00      55         70%     ABS 200        0,0%        0,0%     100,00%  [0,0;65,8]       54/55       60,00     -126,50  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 250 alvo 70% - escada ABS    -76,0%      -190,00   -86,0%      368,60    -0,52   0,0%      2      -3,45     0,0          60,00      55         70%     ABS 125        0,0%        0,0%     100,00%  [0,0;65,8]       54/55       60,00     -126,50  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 250 alvo 70% - escada ABS    -61,2%      -153,00   -66,7%      194,20    -0,79   0,0%      2      -2,78     0,0          97,00      55         70%      ABS 75        0,0%        0,0%     100,00%  [0,0;65,8]       54/55       97,00      -76,50  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 250 alvo 50% - escada DESL 2.044,4%     5.111,00   -43,3%      874,10     5,85  59,2%    130      92,93     2,4       5.361,00      55         50%   DESLIGADA       17,7%       40,0%      46,19% [50,6;67,3]        0/55      165,20     -489,50  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 250 alvo 50% - escada ABS    -79,6%      -198,90   -94,2%      829,00    -0,24  33,3%     15      -3,62     0,3          51,10      55         50%     ABS 200        6,7%       20,0%      37,44% [15,2;58,3]       50/55       51,10     -201,50  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 250 alvo 50% - escada ABS    -61,7%      -154,20   -89,4%      811,10    -0,19  31,2%     16      -2,80     0,3          95,80      55         50%     ABS 125       12,5%       12,5%      34,35% [14,2;55,6]       52/55       95,80     -126,50  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 250 alvo 50% - escada ABS    -61,2%      -153,00   -66,7%      194,20    -0,79   0,0%      2      -2,78     0,0          97,00      55         50%      ABS 75        0,0%        0,0%     100,00%  [0,0;65,8]       54/55       97,00      -76,50  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 250 alvo 30% - escada DESL    48,4%       120,90  -100,2%      376,60     0,32 100,0%      1     120,90     1,0         370,90       1         30%   DESLIGADA      100,0%        0,0%       0,00%[20,7;100,0]       54/55       -0,70      120,90  ZERADO desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 250 alvo 30% - escada ABS    -72,9%      -182,30   -84,5%      369,30    -0,49  44,4%      9      -3,31     0,2          67,70      55         30%     ABS 200       22,2%       11,1%      53,63% [18,9;73,3]       53/55       67,70     -187,50  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 250 alvo 30% - escada ABS    -77,9%      -194,80   -91,9%      629,20    -0,31  39,3%     28      -3,54     0,5          55,20      55         30%     ABS 125       21,4%       14,3%      42,60% [23,6;57,6]       50/55       55,20     -126,50  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 250 alvo 30% - escada ABS    -61,2%      -153,00   -66,7%      194,20    -0,79   0,0%      2      -2,78     0,0          97,00      55         30%      ABS 75        0,0%        0,0%     100,00%  [0,0;65,8]       54/55       97,00      -76,50  desliz.alvo 1,0t fila NAO CALIBRADA
+
+
+===== OOS - capital R$ 750 =====
+variante                        retorno   liquido R$  MaxDD %    MaxDD R$ lucro/DD   win% trades     R$/dia trd/dia  capital final pregoes       alvo%      escada acerto alvo       flat%      BE emp    IC95 win     s/trade   caixa min     pior op
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+OOS 750 alvo 100% - escada DES   -98,5%      -738,40   -98,8%      917,00    -0,81  16,7%      6     -13,43     0,1          11,60      55        100%   DESLIGADA        0,0%       33,3%      77,43%  [3,0;56,4]       52/55       11,60     -301,50  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 750 alvo 100% - escada ABS   -87,6%      -657,30   -94,0%    1.219,70    -0,54  28,0%     25     -11,95     0,5          92,70      55        100%     ABS 200        0,0%       36,0%      34,74% [14,3;47,6]       44/55       77,80     -201,50  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 750 alvo 100% - escada ABS   -89,1%      -668,10   -93,3%    1.138,70    -0,59  22,6%     31     -12,15     0,6          81,90      55        100%     ABS 125        0,0%       22,6%      28,50% [11,4;39,8]       46/55       81,90     -126,50  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 750 alvo 100% - escada ABS   -90,8%      -680,70   -93,9%    1.058,00    -0,64  17,1%     41     -12,38     0,7          69,30      55        100%      ABS 75        2,4%       14,6%      22,29%  [8,5;31,3]       47/55       69,30      -76,50  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 750 alvo 70% - escada DESL   560,8%     4.206,30   -82,8%    1.152,40     3,65  56,9%    109      76,48     2,0       4.956,30      55         70%   DESLIGADA       13,8%       50,5%      45,32% [47,5;65,8]        0/55      159,60     -489,50  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 750 alvo 70% - escada ABS    234,3%     1.757,20   -73,1%    1.988,50     0,88  45,3%    139      31,95     2,5       2.507,20      55         70%     ABS 200        8,6%       39,6%      41,54% [37,3;53,6]        0/55      486,30     -201,50  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 750 alvo 70% - escada ABS     80,0%       600,30   -70,9%    1.679,60     0,36  37,6%    189      10,91     3,4       1.350,30      55         70%     ABS 125        7,4%       28,0%      36,48% [31,0;44,7]        0/55      561,30     -126,50  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 750 alvo 70% - escada ABS    105,4%       790,60   -64,0%    1.659,40     0,48  32,8%    232      14,37     4,2       1.540,60      55         70%      ABS 75        6,5%       21,1%      31,51% [27,0;39,0]        0/55      519,30     -141,50  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 750 alvo 50% - escada DESL   681,5%     5.111,00   -30,5%      874,10     5,85  59,2%    130      92,93     2,4       5.861,00      55         50%   DESLIGADA       17,7%       40,0%      46,19% [50,6;67,3]        0/55      665,20     -489,50  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 750 alvo 50% - escada ABS    -93,1%      -698,30   -96,3%    1.328,40    -0,53  29,6%     27     -12,70     0,5          51,70      55         50%     ABS 200       11,1%       25,9%      36,91% [15,9;48,5]       47/55       51,70     -201,50  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 750 alvo 50% - escada ABS    -87,5%      -656,20   -93,7%    1.318,40    -0,50  29,5%     44     -11,93     0,8          93,80      55         50%     ABS 125       13,6%       18,2%      34,69% [18,2;44,2]       46/55       88,50     -126,50  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 750 alvo 50% - escada ABS    -92,6%      -694,20   -94,9%    1.042,80    -0,67  19,2%     26     -12,62     0,5          55,80      55         50%      ABS 75       11,5%        3,8%      30,55%  [8,5;37,9]       51/55       55,80      -76,50  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 750 alvo 30% - escada DESL   477,9%     3.584,50   -89,7%    1.393,00     2,57  59,6%    183      65,17     3,3       4.334,50      55         30%   DESLIGADA       31,7%       27,3%      51,67% [52,3;66,4]        0/55      100,50     -499,50  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 750 alvo 30% - escada ABS    -88,9%      -666,50   -95,1%    1.604,40    -0,42  46,8%     47     -12,12     0,9          83,50      55         30%     ABS 200       25,5%       17,0%      52,10% [33,3;60,8]       44/55       83,50     -201,50  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 750 alvo 30% - escada ABS    -91,8%      -688,50   -94,6%    1.087,30    -0,63  38,2%     55     -12,52     1,0          61,50      55         30%     ABS 125       23,6%       12,7%      44,25% [26,5;51,4]       46/55       61,50     -126,50  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 750 alvo 30% - escada ABS    673,4%     5.050,60   -41,0%    1.179,10     4,28  53,6%    291      91,83     5,3       5.800,60      55         30%      ABS 75       26,1%       13,7%      45,34% [47,9;59,3]        0/55      519,30     -284,50  desliz.alvo 1,0t fila NAO CALIBRADA
+
+
+===== OOS - capital R$ 3.000 =====
+variante                        retorno   liquido R$  MaxDD %    MaxDD R$ lucro/DD   win% trades     R$/dia trd/dia  capital final pregoes       alvo%      escada acerto alvo       flat%      BE emp    IC95 win     s/trade   caixa min     pior op
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+OOS 3.000 alvo 100% - escada D   140,2%     4.206,20   -33,6%    1.152,40     3,65  56,2%     96      76,48     1,7       7.206,20      55        100%   DESLIGADA        6,2%       57,3%      43,64% [46,3;65,7]        0/55    2.110,20     -346,50  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 3.000 alvo 100% - escada A    94,2%     2.825,80   -40,3%    1.431,10     1,97  47,4%    116      51,38     2,1       5.825,80      55        100%     ABS 200        2,6%       46,6%      40,60% [38,6;56,4]        0/55    2.116,40     -300,50  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 3.000 alvo 100% - escada A   101,4%     3.042,10   -23,5%    1.284,50     2,37  48,3%    116      55,31     2,1       6.042,10      55        100%     ABS 125        4,3%       47,4%      40,85% [39,4;57,3]        0/55    2.785,00     -312,50  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 3.000 alvo 100% - escada A   101,4%     3.042,10   -23,5%    1.284,50     2,37  48,3%    116      55,31     2,1       6.042,10      55        100%      ABS 75        4,3%       47,4%      40,85% [39,4;57,3]        0/55    2.785,00     -312,50  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 3.000 alvo 70% - escada DE   134,0%     4.019,80   -24,2%    1.269,10     3,17  56,9%    109      73,09     2,0       7.019,80      55         70%   DESLIGADA       13,8%       50,5%      46,04% [47,5;65,8]        0/55    2.409,60     -489,50  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 3.000 alvo 70% - escada AB    61,6%     1.846,70   -36,9%    1.797,00     1,03  45,7%    138      33,58     2,5       4.846,70      55         70%     ABS 200        8,7%       39,9%      41,65% [37,6;54,0]        0/55    2.736,30     -239,50  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 3.000 alvo 70% - escada AB    48,1%     1.442,10   -39,1%    1.901,50     0,76  43,5%    147      26,22     2,7       4.442,10      55         70%     ABS 125        8,8%       37,4%      40,58% [35,8;51,6]        0/55    2.844,30     -238,50  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 3.000 alvo 70% - escada AB    48,1%     1.442,10   -39,1%    1.901,50     0,76  43,5%    147      26,22     2,7       4.442,10      55         70%      ABS 75        8,8%       37,4%      40,58% [35,8;51,6]        0/55    2.844,30     -238,50  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 3.000 alvo 50% - escada DE   175,1%     5.254,30   -17,1%      931,50     5,64  60,9%    133      95,53     2,4       8.254,30      55         50%   DESLIGADA       20,3%       39,1%      48,08% [52,4;68,8]        0/55    2.915,20     -489,50  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 3.000 alvo 50% - escada AB    72,6%     2.178,40   -52,8%    1.917,50     1,14  49,1%    173      39,61     3,1       5.178,40      55         50%     ABS 200       12,7%       29,5%      44,82% [41,8;56,5]        0/55    1.712,60     -279,50  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 3.000 alvo 50% - escada AB    69,3%     2.080,30   -53,7%    1.899,70     1,10  43,8%    203      37,82     3,7       5.080,30      55         50%     ABS 125       10,8%       24,1%      39,99% [37,2;50,7]        0/55    1.635,70     -273,50  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 3.000 alvo 50% - escada AB    18,8%       563,20   -65,6%    2.320,70     0,24  39,2%    222      10,24     4,0       3.563,20      55         50%      ABS 75       11,7%       21,2%      38,24% [33,0;45,7]        0/55    1.214,70     -200,50  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 3.000 alvo 30% - escada DE   121,5%     3.644,40   -27,0%    1.373,90     2,65  59,6%    183      66,26     3,3       6.644,40      55         30%   DESLIGADA       31,7%       27,3%      51,62% [52,3;66,4]        0/55    2.350,50     -499,50  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 3.000 alvo 30% - escada AB    63,4%     1.902,10   -57,4%    2.260,90     0,84  54,5%    253      34,58     4,6       4.902,10      55         30%     ABS 200       28,5%       18,2%      51,43% [48,4;60,6]        0/55    1.677,00     -256,50  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 3.000 alvo 30% - escada AB    93,8%     2.812,70   -39,8%    1.303,60     2,16  55,8%    260      51,14     4,7       5.812,70      55         30%     ABS 125       28,5%       18,5%      51,02% [49,7;61,7]        0/55    1.975,40     -285,50  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 3.000 alvo 30% - escada AB    94,0%     2.819,30   -34,8%    1.187,10     2,37  56,4%    264      51,26     4,8       5.819,30      55         30%      ABS 75       28,4%       17,8%      51,85% [50,4;62,3]        0/55    2.138,80     -285,50  desliz.alvo 1,0t fila NAO CALIBRADA
+
+
+===== CRITERIO DE ACEITE NO CAPITAL REAL (R$ 250) =====
+declarado antes de medir: POSITIVO nas duas janelas, 0 pregoes sem trade
+nas duas, caixa minimo acima da margem crua de R$ 100 nas duas.
+
+  alvo      escada                  IS                                 OOS                  aceite
+                      liq / s-trade / caixa / vered       liq / s-trade / caixa / vered   
+  100%     DESLIG.     -158 / 124/129 / 40 / indef           -248 / 54/55 / 2 / NEGAT       falha
+  100%     ABS 200     -162 / 127/129 / 88 / indef          -190 / 54/55 / 60 / NEGAT       falha
+  100%     ABS 125      -182 / 85/129 / 68 / indef          -190 / 54/55 / 60 / NEGAT       falha
+  100%      ABS 75     9.092 / 0/129 / 153 / POSIT          -153 / 54/55 / 97 / NEGAT       falha
+   70%     DESLIG.      -69 / 116/129 / -0 / indef           -248 / 54/55 / 2 / NEGAT       falha
+   70%     ABS 200     -166 / 118/129 / 84 / indef          -190 / 54/55 / 60 / NEGAT       falha
+   70%     ABS 125     -178 / 121/129 / 72 / indef          -190 / 54/55 / 60 / NEGAT       falha
+   70%      ABS 75      -150 / 1/129 / 100 / indef          -153 / 54/55 / 97 / NEGAT       falha
+   50%     DESLIG.      7.191 / 0/129 / 23 / POSIT          5.111 / 0/55 / 165 / POSIT      falha
+   50%     ABS 200     -167 / 127/129 / 83 / indef          -199 / 50/55 / 51 / indef       falha
+   50%     ABS 125     -199 / 127/129 / 51 / indef          -154 / 52/55 / 96 / indef       falha <<< REGRA
+   50%      ABS 75      -194 / 78/129 / 56 / indef          -153 / 54/55 / 97 / NEGAT       falha
+   30%     DESLIG.     -153 / 127/129 / 24 / indef           121 / 54/55 / -1 / POSIT       falha
+   30%     ABS 200     -177 / 117/129 / 73 / indef          -182 / 53/55 / 68 / indef       falha
+   30%     ABS 125     -194 / 127/129 / 56 / indef          -195 / 50/55 / 55 / indef       falha
+   30%      ABS 75     -157 / 127/129 / 93 / indef          -153 / 54/55 / 97 / NEGAT       falha

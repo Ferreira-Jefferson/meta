@@ -1,0 +1,127 @@
+40 celulas: 10 fracoes de alvo x 2 capitais x 2 janelas
+cada uma imprime assim que termina
+
+[ 1/40]  IS cap      250 alvo 10% (vol 1,9)     liq      -258,50  n=7    alvo  71,4% flat  14,3% win  71,4% BE  86,1%  s/trade 127/129  indefinido  (0s)
+[ 2/40]  IS cap      250 alvo 40% (vol 7,6)     liq      -322,10  n=15   alvo  33,3% flat  26,7% win  66,7% BE  72,5%  s/trade 124/129  indefinido  (1s)
+[ 3/40]  IS cap      250 alvo 100% (vol 19,0)   liq       -76,30  n=25   alvo   4,0% flat  44,0% win  40,0% BE  40,7%  s/trade 116/129  indefinido  (3s)
+[ 4/40]  IS cap      250 alvo 70% (vol 13,3)    liq        14,50  n=25   alvo  12,0% flat  40,0% win  40,0% BE  39,9%  s/trade 117/129  indefinido  (3s)
+[ 5/40]  IS cap      250 alvo 60% (vol 11,4)    liq      -111,70  n=25   alvo   8,0% flat  36,0% win  40,0% BE  41,2%  s/trade 117/129  indefinido  (3s)
+[ 6/40]  IS cap      250 alvo 20% (vol 3,8)     liq       123,40  n=306  alvo  52,3% flat  14,1% win  62,7% BE  62,6%  s/trade 67/129  indefinido  (12s)
+[ 7/40]  IS cap      250 alvo 30% (vol 5,7)     liq      -216,70  n=11   alvo  36,4% flat  18,2% win  45,5% BE  54,7%  s/trade 125/129  indefinido  (19s)
+[ 8/40]  IS cap      250 alvo 90% (vol 17,1)    liq      -203,00  n=24   alvo   4,2% flat  41,7% win  37,5% BE  39,4%  s/trade 116/129  indefinido  (21s)
+[ 9/40]  IS cap    3.000 alvo 100% (vol 19,0)   liq    11.221,50  n=224  alvo   6,7% flat  55,8% win  50,9% BE  40,5%  s/trade 0/129  POSITIVO  (20s)
+[10/40]  IS cap      250 alvo 50% (vol 9,5)     liq     9.345,90  n=303  alvo  23,1% flat  40,6% win  54,5% BE  46,4%  s/trade 0/129  POSITIVO  (22s)
+[11/40]  IS cap      250 alvo 80% (vol 15,2)    liq     8.856,90  n=241  alvo  10,8% flat  51,9% win  51,5% BE  42,7%  s/trade 0/129  POSITIVO  (24s)
+[12/40]  IS cap    3.000 alvo 50% (vol 9,5)     liq     9.900,50  n=303  alvo  23,1% flat  40,6% win  54,5% BE  46,2%  s/trade 0/129  POSITIVO  (22s)
+[13/40]  IS cap    3.000 alvo 80% (vol 15,2)    liq     8.248,70  n=241  alvo  10,8% flat  51,9% win  51,5% BE  43,4%  s/trade 0/129  POSITIVO  (24s)
+[14/40]  IS cap    3.000 alvo 70% (vol 13,3)    liq     4.272,70  n=263  alvo  10,6% flat  47,9% win  48,3% BE  44,2%  s/trade 0/129  indefinido  (24s)
+[15/40]  IS cap    3.000 alvo 60% (vol 11,4)    liq     5.268,80  n=279  alvo  14,7% flat  43,7% win  50,9% BE  46,2%  s/trade 0/129  indefinido  (24s)
+[16/40]  IS cap    3.000 alvo 90% (vol 17,1)    liq     6.801,10  n=232  alvo   7,8% flat  53,9% win  48,3% BE  41,4%  s/trade 0/129  POSITIVO  (27s)
+[17/40] OOS cap      250 alvo 40% (vol 7,6)     liq       153,50  n=1    alvo 100,0% flat   0,0% win 100,0% BE   0,0%  s/trade 54/55  POSITIVO  (0s)
+[18/40] OOS cap      250 alvo 30% (vol 5,7)     liq       114,50  n=1    alvo 100,0% flat   0,0% win 100,0% BE   0,0%  s/trade 54/55  POSITIVO  (0s)
+[19/40]  IS cap    3.000 alvo 40% (vol 7,6)     liq     4.053,50  n=354  alvo  24,9% flat  34,7% win  54,8% BE  51,5%  s/trade 0/129  indefinido  (26s)
+[20/40] OOS cap      250 alvo 90% (vol 17,1)    liq      -247,50  n=1    alvo   0,0% flat   0,0% win   0,0% BE 100,0%  s/trade 54/55  NEGATIVO  (7s)
+[21/40] OOS cap      250 alvo 100% (vol 19,0)   liq      -247,50  n=1    alvo   0,0% flat   0,0% win   0,0% BE 100,0%  s/trade 54/55  NEGATIVO  (10s)
+[22/40] OOS cap      250 alvo 80% (vol 15,2)    liq      -247,50  n=1    alvo   0,0% flat   0,0% win   0,0% BE 100,0%  s/trade 54/55  NEGATIVO  (12s)
+[23/40] OOS cap      250 alvo 70% (vol 13,3)    liq      -247,50  n=1    alvo   0,0% flat   0,0% win   0,0% BE 100,0%  s/trade 54/55  NEGATIVO  (11s)
+[24/40]  IS cap    3.000 alvo 30% (vol 5,7)     liq     6.902,30  n=451  alvo  33,9% flat  26,4% win  55,9% BE  50,9%  s/trade 0/129  POSITIVO  (24s)
+[25/40] OOS cap      250 alvo 60% (vol 11,4)    liq      -247,50  n=1    alvo   0,0% flat   0,0% win   0,0% BE 100,0%  s/trade 54/55  NEGATIVO  (12s)
+[26/40] OOS cap      250 alvo 50% (vol 9,5)     liq     5.068,80  n=136  alvo  22,8% flat  39,7% win  56,6% BE  43,8%  s/trade 0/55  POSITIVO  (13s)
+[27/40] OOS cap      250 alvo 10% (vol 1,9)     liq     4.766,40  n=356  alvo  73,9% flat   7,6% win  78,7% BE  70,2%  s/trade 0/55  POSITIVO  (13s)
+[28/40] OOS cap      250 alvo 20% (vol 3,8)     liq     3.312,30  n=239  alvo  54,0% flat  20,5% win  66,1% BE  59,7%  s/trade 0/55  POSITIVO  (13s)
+[29/40] OOS cap    3.000 alvo 100% (vol 19,0)   liq     4.007,50  n=97   alvo   7,2% flat  56,7% win  56,7% BE  44,8%  s/trade 0/55  POSITIVO  (13s)
+[30/40] OOS cap    3.000 alvo 90% (vol 17,1)    liq     4.251,60  n=100  alvo   9,0% flat  55,0% win  54,0% BE  41,8%  s/trade 0/55  POSITIVO  (13s)
+[31/40] OOS cap    3.000 alvo 80% (vol 15,2)    liq     3.278,40  n=105  alvo  11,4% flat  52,4% win  55,2% BE  46,0%  s/trade 0/55  indefinido  (13s)
+[32/40]  IS cap    3.000 alvo 10% (vol 1,9)     liq    -2.908,20  n=226  alvo  66,8% flat   9,3% win  70,8% BE  77,5%  s/trade 93/129  NEGATIVO  (24s)
+[33/40]  IS cap    3.000 alvo 20% (vol 3,8)     liq     4.367,10  n=596  alvo  52,0% flat  17,3% win  62,9% BE  60,2%  s/trade 0/129  indefinido  (27s)
+[34/40] OOS cap    3.000 alvo 70% (vol 13,3)    liq     4.696,70  n=114  alvo  16,7% flat  48,2% win  56,1% BE  44,1%  s/trade 0/55  POSITIVO  (11s)
+[35/40] OOS cap    3.000 alvo 60% (vol 11,4)    liq     2.307,40  n=129  alvo  20,2% flat  41,1% win  48,8% BE  43,2%  s/trade 0/55  indefinido  (11s)
+[36/40] OOS cap    3.000 alvo 50% (vol 9,5)     liq     4.920,90  n=136  alvo  22,8% flat  39,7% win  56,6% BE  44,4%  s/trade 0/55  POSITIVO  (11s)
+[37/40] OOS cap    3.000 alvo 40% (vol 7,6)     liq     1.959,10  n=149  alvo  30,2% flat  35,6% win  57,0% BE  52,5%  s/trade 0/55  indefinido  (11s)
+[38/40] OOS cap    3.000 alvo 30% (vol 5,7)     liq     4.262,50  n=204  alvo  40,7% flat  26,0% win  60,8% BE  53,0%  s/trade 0/55  POSITIVO  (10s)
+[39/40] OOS cap    3.000 alvo 10% (vol 1,9)     liq     4.796,90  n=356  alvo  73,9% flat   7,6% win  78,7% BE  70,5%  s/trade 0/55  POSITIVO  (9s)
+[40/40] OOS cap    3.000 alvo 20% (vol 3,8)     liq     3.344,20  n=239  alvo  54,0% flat  20,5% win  66,1% BE  59,7%  s/trade 0/55  POSITIVO  (9s)
+
+
+===== IS - capital R$ 250 =====
+variante                        retorno   liquido R$  MaxDD %    MaxDD R$ lucro/DD   win% trades     R$/dia trd/dia  capital final pregoes       alvo% acerto alvo       flat%      BE emp    IC95 win     s/trade   caixa min
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+IS 250 alvo 100% (vol 19,0)      -30,5%       -76,30  -100,3%    2.207,90    -0,03  40,0%     25      -5,45     1,8         173,70      14        100%        4,0%       44,0%      40,71% [23,4;59,3]     116/129       -7,10  ZERADO desliz.alvo 1,0t fila NAO CALIBRADA
+IS 250 alvo 90% (vol 17,1)       -81,2%      -203,00   -97,8%    2.076,80    -0,10  37,5%     24      -1,57     0,2          47,00     129         90%        4,2%       41,7%      39,41% [21,2;57,3]     116/129       40,00  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 250 alvo 80% (vol 15,2)     3.542,8%     8.856,90   -96,6%    2.522,50     3,51  51,5%    241      68,66     1,9       9.106,90     129         80%       10,8%       51,9%      42,68% [45,2;57,7]       0/129       83,80  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 250 alvo 70% (vol 13,3)         5,8%        14,50  -100,1%    2.050,30     0,01  40,0%     25       1,12     1,9         264,50      13         70%       12,0%       40,0%      39,86% [23,4;59,3]     117/129       -1,50  ZERADO desliz.alvo 1,0t fila NAO CALIBRADA
+IS 250 alvo 60% (vol 11,4)       -44,7%      -111,70  -102,8%    1.976,50    -0,06  40,0%     25      -8,59     1,9         138,30      13         60%        8,0%       36,0%      41,15% [23,4;59,3]     117/129      -53,90  ZERADO desliz.alvo 1,0t fila NAO CALIBRADA
+IS 250 alvo 50% (vol 9,5)      3.738,4%     9.345,90   -69,0%    2.985,60     3,13  54,5%    303      72,45     2,3       9.595,90     129         50%       23,1%       40,6%      46,35% [48,8;60,0]       0/129      192,00  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 250 alvo 40% (vol 7,6)       -128,8%      -322,10  -112,0%      673,40    -0,48  66,7%     15     -64,42     3,0         -72,10       5         40%       33,3%       26,7%      72,51% [41,7;84,8]     124/129      -72,10  ZERADO desliz.alvo 1,0t fila NAO CALIBRADA
+IS 250 alvo 30% (vol 5,7)        -86,7%      -216,70   -94,0%      520,70    -0,42  45,5%     11      -1,68     0,1          33,30     129         30%       36,4%       18,2%      54,71% [21,3;72,0]     125/129       33,30  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 250 alvo 20% (vol 3,8)         49,4%       123,40  -100,4%    3.396,80     0,04  62,7%    306       1,99     4,9         373,40      62         20%       52,3%       14,1%      62,59% [57,2;68,0]      67/129      -12,20  ZERADO desliz.alvo 1,0t fila NAO CALIBRADA
+IS 250 alvo 10% (vol 1,9)       -103,4%      -258,50  -102,1%      409,90    -0,63  71,4%      7    -129,25     3,5          -8,50       2         10%       71,4%       14,3%      86,08% [35,9;91,8]     127/129       -8,50  ZERADO desliz.alvo 1,0t fila NAO CALIBRADA
+
+
+===== IS - capital R$ 3.000 =====
+variante                        retorno   liquido R$  MaxDD %    MaxDD R$ lucro/DD   win% trades     R$/dia trd/dia  capital final pregoes       alvo% acerto alvo       flat%      BE emp    IC95 win     s/trade   caixa min
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+IS 3.000 alvo 100% (vol 19,0)    374,1%    11.221,50   -51,0%    2.526,50     4,44  50,9%    224      86,99     1,7      14.221,50     129        100%        6,7%       55,8%      40,51% [44,4;57,4]       0/129    2.424,30  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 3.000 alvo 90% (vol 17,1)     226,7%     6.801,10   -51,8%    2.526,50     2,69  48,3%    232      52,72     1,8       9.801,10     129         90%        7,8%       53,9%      41,37% [41,9;54,7]       0/129    2.347,30  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 3.000 alvo 80% (vol 15,2)     275,0%     8.248,70   -45,5%    2.522,50     3,27  51,5%    241      63,94     1,9      11.248,70     129         80%       10,8%       51,9%      43,40% [45,2;57,7]       0/129    2.833,80  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 3.000 alvo 70% (vol 13,3)     142,4%     4.272,70   -64,4%    3.960,90     1,08  48,3%    263      33,12     2,0       7.272,70     129         70%       10,6%       47,9%      44,23% [42,3;54,3]       0/129    2.191,00  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 3.000 alvo 60% (vol 11,4)     175,6%     5.268,80   -62,2%    2.906,80     1,81  50,9%    279      40,84     2,2       8.268,80     129         60%       14,7%       43,7%      46,15% [45,1;56,7]       0/129    1.765,80  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 3.000 alvo 50% (vol 9,5)      330,0%     9.900,50   -40,7%    2.985,60     3,32  54,5%    303      76,75     2,3      12.900,50     129         50%       23,1%       40,6%      46,17% [48,8;60,0]       0/129    2.942,00  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 3.000 alvo 40% (vol 7,6)      135,1%     4.053,50   -95,0%    3.536,80     1,15  54,8%    354      31,42     2,7       7.053,50     129         40%       24,9%       34,7%      51,55% [49,6;59,9]       0/129      186,20  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 3.000 alvo 30% (vol 5,7)      230,1%     6.902,30   -48,5%    3.044,30     2,27  55,9%    451      53,51     3,5       9.902,30     129         30%       33,9%       26,4%      50,86% [51,3;60,4]       0/129    2.002,20  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 3.000 alvo 20% (vol 3,8)      145,6%     4.367,10   -83,0%    5.147,60     0,85  62,9%    596      33,85     4,6       7.367,10     129         20%       52,0%       17,3%      60,18% [59,0;66,7]       0/129    1.056,30  desliz.alvo 1,0t fila NAO CALIBRADA
+IS 3.000 alvo 10% (vol 1,9)      -96,9%    -2.908,20   -98,4%    3.101,80    -0,94  70,8%    226     -22,54     1,8          91,80     129         10%       66,8%        9,3%      77,53% [64,6;76,3]      93/129       49,60  desliz.alvo 1,0t fila NAO CALIBRADA
+
+
+===== OOS - capital R$ 250 =====
+variante                        retorno   liquido R$  MaxDD %    MaxDD R$ lucro/DD   win% trades     R$/dia trd/dia  capital final pregoes       alvo% acerto alvo       flat%      BE emp    IC95 win     s/trade   caixa min
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+OOS 250 alvo 100% (vol 19,0)     -99,0%      -247,50   -99,4%      426,10    -0,58   0,0%      1      -4,50     0,0           2,50      55        100%        0,0%        0,0%     100,00%  [0,0;79,3]       54/55        2,50  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 250 alvo 90% (vol 17,1)      -99,0%      -247,50   -99,4%      426,10    -0,58   0,0%      1      -4,50     0,0           2,50      55         90%        0,0%        0,0%     100,00%  [0,0;79,3]       54/55        2,50  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 250 alvo 80% (vol 15,2)      -99,0%      -247,50   -99,4%      426,10    -0,58   0,0%      1      -4,50     0,0           2,50      55         80%        0,0%        0,0%     100,00%  [0,0;79,3]       54/55        2,50  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 250 alvo 70% (vol 13,3)      -99,0%      -247,50   -99,4%      426,10    -0,58   0,0%      1      -4,50     0,0           2,50      55         70%        0,0%        0,0%     100,00%  [0,0;79,3]       54/55        2,50  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 250 alvo 60% (vol 11,4)      -99,0%      -247,50   -99,4%      426,10    -0,58   0,0%      1      -4,50     0,0           2,50      55         60%        0,0%        0,0%     100,00%  [0,0;79,3]       54/55        2,50  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 250 alvo 50% (vol 9,5)     2.027,5%     5.068,80   -62,8%      860,10     5,89  56,6%    136      92,16     2,5       5.318,80      55         50%       22,8%       39,7%      43,78% [48,2;64,7]        0/55      165,20  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 250 alvo 40% (vol 7,6)        61,4%       153,50  -100,4%      410,00     0,37 100,0%      1     153,50     1,0         403,50       1         40%      100,0%        0,0%       0,00%[20,7;100,0]       54/55       -1,50  ZERADO desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 250 alvo 30% (vol 5,7)        45,8%       114,50  -100,0%      439,20     0,26 100,0%      1     114,50     1,0         364,50       1         30%      100,0%        0,0%       0,00%[20,7;100,0]       54/55       -0,10  ZERADO desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 250 alvo 20% (vol 3,8)     1.324,9%     3.312,30   -84,2%    1.232,30     2,69  66,1%    239      60,22     4,3       3.562,30      55         20%       54,0%       20,5%      59,67% [59,9;71,8]        0/55      165,20  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 250 alvo 10% (vol 1,9)     1.906,6%     4.766,40   -66,8%      746,00     6,39  78,7%    356      86,66     6,5       5.016,40      55         10%       73,9%        7,6%      70,18% [74,1;82,6]        0/55      176,70  desliz.alvo 1,0t fila NAO CALIBRADA
+
+
+===== OOS - capital R$ 3.000 =====
+variante                        retorno   liquido R$  MaxDD %    MaxDD R$ lucro/DD   win% trades     R$/dia trd/dia  capital final pregoes       alvo% acerto alvo       flat%      BE emp    IC95 win     s/trade   caixa min
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+OOS 3.000 alvo 100% (vol 19,0)   133,6%     4.007,50   -33,6%    1.152,40     3,48  56,7%     97      72,86     1,8       7.007,50      55        100%        7,2%       56,7%      44,80% [46,8;66,1]        0/55    2.110,20  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 3.000 alvo 90% (vol 17,1)    141,7%     4.251,60   -32,3%    1.084,90     3,92  54,0%    100      77,30     1,8       7.251,60      55         90%        9,0%       55,0%      41,78% [44,3;63,4]        0/55    2.151,10  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 3.000 alvo 80% (vol 15,2)    109,3%     3.278,40   -33,4%    1.084,90     3,02  55,2%    105      59,61     1,9       6.278,40      55         80%       11,4%       52,4%      45,96% [45,7;64,4]        0/55    2.117,80  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 3.000 alvo 70% (vol 13,3)    156,6%     4.696,70   -27,1%    1.282,10     3,66  56,1%    114      85,39     2,1       7.696,70      55         70%       16,7%       48,2%      44,11% [47,0;64,9]        0/55    2.316,60  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 3.000 alvo 60% (vol 11,4)     76,9%     2.307,40   -29,9%    1.290,90     1,79  48,8%    129      41,95     2,3       5.307,40      55         60%       20,2%       41,1%      43,18% [40,4;57,4]        0/55    2.227,00  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 3.000 alvo 50% (vol 9,5)     164,0%     4.920,90   -20,9%      860,10     5,72  56,6%    136      89,47     2,5       7.920,90      55         50%       22,8%       39,7%      44,38% [48,2;64,7]        0/55    2.915,20  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 3.000 alvo 40% (vol 7,6)      65,3%     1.959,10   -24,4%    1.223,40     1,60  57,0%    149      35,62     2,7       4.959,10      55         40%       30,2%       35,6%      52,49% [49,0;64,7]        0/55    2.453,90  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 3.000 alvo 30% (vol 5,7)     142,1%     4.262,50   -26,1%    1.338,50     3,18  60,8%    204      77,50     3,7       7.262,50      55         30%       40,7%       26,0%      53,04% [53,9;67,2]        0/55    2.356,60  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 3.000 alvo 20% (vol 3,8)     111,5%     3.344,20   -29,2%    1.232,30     2,71  66,1%    239      60,80     4,3       6.344,20      55         20%       54,0%       20,5%      59,74% [59,9;71,8]        0/55    2.915,20  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS 3.000 alvo 10% (vol 1,9)     159,9%     4.796,90   -15,3%      735,10     6,53  78,7%    356      87,22     6,5       7.796,90      55         10%       73,9%        7,6%      70,49% [74,1;82,6]        0/55    2.926,70  desliz.alvo 1,0t fila NAO CALIBRADA
+
+
+===== RESUMO: as tres perguntas, lado a lado (capital R$ 3.000) =====
+  alvo  janela     n  acerto alvo   flat%      liquido    win%     BE%     veredito
+  100%      IS   224         6,7%   55,8%    11.221,50   50,89   40,51     POSITIVO
+  100%     OOS    97         7,2%   56,7%     4.007,50   56,70   44,80     POSITIVO
+   90%      IS   232         7,8%   53,9%     6.801,10   48,28   41,37     POSITIVO
+   90%     OOS   100         9,0%   55,0%     4.251,60   54,00   41,78     POSITIVO
+   80%      IS   241        10,8%   51,9%     8.248,70   51,45   43,40     POSITIVO
+   80%     OOS   105        11,4%   52,4%     3.278,40   55,24   45,96   indefinido
+   70%      IS   263        10,6%   47,9%     4.272,70   48,29   44,23   indefinido
+   70%     OOS   114        16,7%   48,2%     4.696,70   56,14   44,11     POSITIVO
+   60%      IS   279        14,7%   43,7%     5.268,80   50,90   46,15   indefinido
+   60%     OOS   129        20,2%   41,1%     2.307,40   48,84   43,18   indefinido
+   50%      IS   303        23,1%   40,6%     9.900,50   54,46   46,17     POSITIVO
+   50%     OOS   136        22,8%   39,7%     4.920,90   56,62   44,38     POSITIVO
+   40%      IS   354        24,9%   34,7%     4.053,50   54,80   51,55   indefinido
+   40%     OOS   149        30,2%   35,6%     1.959,10   57,05   52,49   indefinido
+   30%      IS   451        33,9%   26,4%     6.902,30   55,88   50,86     POSITIVO
+   30%     OOS   204        40,7%   26,0%     4.262,50   60,78   53,04     POSITIVO
+   20%      IS   596        52,0%   17,3%     4.367,10   62,92   60,18   indefinido
+   20%     OOS   239        54,0%   20,5%     3.344,20   66,11   59,74     POSITIVO
+   10%      IS   226        66,8%    9,3%    -2.908,20   70,80   77,53     NEGATIVO
+   10%     OOS   356        73,9%    7,6%     4.796,90   78,65   70,49     POSITIVO

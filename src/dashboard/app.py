@@ -839,7 +839,9 @@ def _novo_robo_ctx(conn) -> dict:
             # parquet velho fazia esse número nascer errado -- ver
             # `live_control.preco_de_referencia`.
             preco, data = _preco_agora(symbol)
-            minimo = capital_minimo_para(info.is_futuro, symbol, preco)
+            # `info.key`: o piso e' do ROBO tambem, nao so' do instrumento --
+            # ver `capital_minimo_para`.
+            minimo = capital_minimo_para(info.is_futuro, symbol, preco, info.key)
             modos = slots_por_robo_ativo.get((info.key, symbol), {})
             modos_usados = sorted(modos)
             algum_slot = next(iter(modos.values()), None)

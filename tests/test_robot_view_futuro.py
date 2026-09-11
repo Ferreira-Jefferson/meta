@@ -115,3 +115,40 @@ def test_asset_futuro_nao_mostra_profit_pct_fabricado():
     assert a.is_futuro is True
     assert a.profit_pct == 0.0  # presente, mas o template não lê isto p/ futuro
     assert a.profit_ticks == 1
+
+
+# ---------- piso declarado pelo ROBO (2026-09-11) --------------------------
+
+def test_piso_do_robo_levanta_o_piso_do_instrumento():
+    """`copa_win` declara `capital_minimo_recomendado_brl=600` -- o piso do
+    WIN@ por margem e' R$250, e o painel tem de mostrar o MAIOR dos dois.
+
+    Os dois numeros respondem perguntas diferentes: R$250 e' "a corretora
+    deixa abrir?", R$600 e' "eu sobrevivo ao que este robo perde antes de
+    recuperar?". Nenhum isenta o outro."""
+    assert capital_minimo_para(True, "WIN@", None) == 250.0
+    assert capital_minimo_para(True, "WIN@", None, "copa_win") == 600.0
+
+
+def test_robo_sem_piso_declarado_nao_muda_nada():
+    """Comportamento IDENTICO ao de antes desta mudanca para todo robo que
+    nao declara piso proprio -- a WDO F1 e a ORB seguem no piso do
+    instrumento (R$375)."""
+    assert capital_minimo_para(True, "WDO@", None, "wdo_orb") == 375.0
+    assert capital_minimo_para(True, "WDO@", None, "wdo_grid_reload_maker") == 375.0
+
+
+def test_piso_de_robo_menor_que_o_do_instrumento_nao_afrouxa_nada(monkeypatch):
+    """Declarar um numero MENOR que a exigencia da corretora nao pode liberar
+    nada -- a corretora recusaria de qualquer forma. O `max` garante que nao
+    exista caminho em que uma declaracao de robo afrouxe margem."""
+    from strategy.daytrade.lab.copa_win import CopaWin
+
+    monkeypatch.setattr(CopaWin, "capital_minimo_recomendado_brl", 10.0)
+    assert capital_minimo_para(True, "WIN@", None, "copa_win") == 250.0
+
+
+def test_robot_key_desconhecida_cai_no_piso_do_instrumento():
+    """Chave que nao existe no catalogo nao derruba a tela do painel -- quem
+    pergunta o piso de um robo inexistente tropeca num erro melhor adiante."""
+    assert capital_minimo_para(True, "WIN@", None, "nao_existe") == 250.0

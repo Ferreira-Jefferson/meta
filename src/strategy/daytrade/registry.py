@@ -329,7 +329,69 @@ _KWARGS_PADRAO: dict[str, dict] = {
         # `run_copa_score.CALIBRACAO_IS["WIN@"]` (recalibrado e confirmado em
         # OOS em 2026-08-28) — trocar aqui sem trocar lá (ou vice-versa) é o
         # catálogo divergindo da calibração que a memória documenta.
-        janela_rompimento=10, alvo_vol=19.0, stop_vol=12.0, trail_vol=None,
+        # 2026-09-11, ORDEM DO DONO -- `alvo_vol` cai de 19,0 para 9,5 (50% do
+        # que a calibracao de 2026-08-28 pedia) e o alvo passa a sair por
+        # ORDEM-LIMITE REAL fatiada (`fatiar_saida_alvo=True`). Os dois andam
+        # JUNTOS de proposito: o alvo menor so' vale medido no mecanismo de
+        # execucao correto, e o mecanismo correto so' vale a pena com o alvo
+        # que de fato e' alcancado. Ver a secao "Alvo por ORDEM-LIMITE REAL
+        # fatiada" em `copa_win.py`.
+        #
+        # O QUE MOTIVOU -- diagnostico de excursao (`copawin_excursao_alvo_
+        # stop_2026_09_11.py`, 321 trades): o alvo de 19,0 era alcancado por
+        # 6,9% dos trades e a excursao favoravel MEDIANA parava em 31,6% dele.
+        # Na pratica o robo nao tinha alvo, tinha RELOGIO: 56,1% das saidas
+        # eram por achatamento de fim de pregao, e elas carregavam 114,1% do
+        # lucro liquido -- o resultado era decidido por onde o dia fechou.
+        #
+        # O QUE MUDOU, medido (`copawin_alvo_menor_sweep_`, `copawin_alvo_
+        # fatiado_fila_sensibilidade_` e `copawin_escada_x_alvo_cruzado_`,
+        # todos 2026-09-11, IS 129 pregoes + OOS 55, veredito por IC95% do
+        # win% contra o breakeven EMPIRICO):
+        #
+        #   capital R$3.000    alvo 19,0 (tp nativo)   alvo 9,5 (limite real)
+        #   IS  liquido             +R$ 11.221,50            +R$  7.351,00
+        #   OOS liquido             +R$  4.007,50            +R$  5.254,30
+        #   OOS MaxDD                      -33,6%                   -17,1%
+        #   OOS lucro/DD                      3,48                     5,64
+        #   saida por alvo                     7,2%                    20,3%
+        #   saida pelo sino                   56,7%                    39,1%
+        #   lucro vindo do sino              109,9%                     ~3%
+        #
+        #   capital R$250 (o REAL)  alvo 19,0 (tp nativo)  alvo 9,5 (limite)
+        #   IS                      ZEROU (caixa -R$7,10)    +R$ 7.191,10
+        #   IS pregoes sem trade           116 de 129            0 de 129
+        #   OOS                      -R$247,50 (1 trade)     +R$ 5.111,00
+        #   OOS pregoes sem trade            54 de 55             0 de 55
+        #
+        # O IS PIORA e o OOS MELHORA, e isso e' o sinal que se quer ver: parte
+        # do IS antigo vinha de otimismo de execucao que o mecanismo novo
+        # removeu (o `tp` nativo preenchia no toque; a limite exige orcamento
+        # de volume). A sensibilidade a FILA foi varrida ate' 2x o volume da
+        # barra M1 mediana do WIN@ (49.924 contratos na nossa frente) e NAO
+        # move o resultado -- o WIN@ gira 24.962 contratos/minuto contra 2.935
+        # do WDO@, e a posicao deste robo vive HORAS, nao segundos. Confirmado
+        # por teste de sanidade (a 25 milhoes de contratos o acerto do alvo
+        # vai a zero, entao o modelo esta ligado -- ele so' nao morde aqui).
+        #
+        # A ESCADA DE PERDA POR TRADE (`teto_perda_abs_brl`, pedida pelo dono
+        # na mesma data) NAO entra, e a razao e' medicao, nao esquecimento.
+        # Cruzada com este alvo (`copawin_escada_x_alvo_cruzado_2026_09_11`,
+        # 4 alvos x 4 tetos x 3 capitais x 2 janelas), a escada DESLIGADA
+        # venceu em 8 de 8 combinacoes de alvo x janela no capital sem
+        # censura. Com alvo 9,5 no IS a R$3.000: desligada +R$7.351,00,
+        # teto R$200 +R$1.386,60, teto R$125 -R$2.936,80. O mecanismo e' o
+        # que `wdo_orb.alvo_multiplo` ja documentava em sentido contrario --
+        # com stop largo o perdedor sai pelo relogio com perda PEQUENA; com
+        # stop apertado o MESMO trade sai no stop CHEIO. A escada continua
+        # implementada e testada, opt-in, desligada.
+        #
+        # `alvo_vol` deixa de espelhar `run_copa_score.CALIBRACAO_IS["WIN@"]`
+        # (que segue com 19,0, historico): aquela calibracao otimizou LIQUIDO
+        # sobre o motor de ate 2026-09-08, que entregava o alvo maker de graca
+        # e sem fila. Os demais campos abaixo continuam sendo ela.
+        janela_rompimento=10, alvo_vol=9.5, stop_vol=12.0, trail_vol=None,
+        fatiar_saida_alvo=True,
         vol_min_ticks=8.0, fracao_entrada=1.0, aquecimento_barras=45,
         max_entradas_dia=10, entrada_maker=True, entrada_ttl_barras=15,
         # Teto OFICIAL da Copa 2025 (`run_copa_score.TETO_OFICIAL["WIN@"]`) —
@@ -450,6 +512,31 @@ def list_daytrade_robots() -> list[DaytradeRobotInfo]:
             is_futuro=getattr(cls, "is_futuro", False),
         ))
     return infos
+
+
+def daytrade_robot_class(key: str) -> type[IntradayStrategy]:
+    """A CLASSE do robô, sem instanciar nada.
+
+    Existe para quem precisa só de um atributo DECLARADO na classe (hoje:
+    `capital_minimo_recomendado_brl`, lido pelo painel em
+    `dashboard.robot_view.capital_minimo_para`) sem pagar o preço de
+    construir o robô -- e sem o risco de a construção falhar por um motivo
+    que nada tem a ver com a pergunta feita (`Gremah.__init__` recusa símbolo
+    sem calibração; `CopaWin.__init__` recusa combinações de execução
+    inválidas). Perguntar "qual o piso de caixa deste robô?" não deve
+    depender de o robô ser construtível com os kwargs daquele contexto.
+
+    `KeyError` para chave desconhecida, mesma disciplina de
+    `get_daytrade_robot` -- nunca um default silencioso.
+
+    Não devolve `_ROBOTS` nem uma cópia dele de propósito: o catálogo
+    continua fechado, e o acesso é sempre por chave declarada."""
+    if key not in _ROBOTS:
+        raise KeyError(
+            f"robô de day trade desconhecido: {key!r} — disponíveis: "
+            f"{', '.join(sorted(_ROBOTS))}"
+        )
+    return _ROBOTS[key]
 
 
 def get_daytrade_robot(key: str, symbol: str | None = None) -> IntradayStrategy:

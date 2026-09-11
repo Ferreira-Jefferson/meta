@@ -17,7 +17,7 @@ from strategy.daytrade.base import (
     Exit,
     IntradayOpenPosition,
 )
-from strategy.daytrade.lab.copa_win import CopaWin
+from strategy.daytrade.lab.copa_win import EXIT_TTL_BARS_SEM_PRAZO, CopaWin
 
 TICK = 5.0
 
@@ -438,3 +438,148 @@ def test_corte_persistencia_tem_prioridade_sobre_defesa_ativa_no_mesmo_bar():
     acoes = robo.on_bar(bar1.ts, bar1, [pos1], 0.0)
     assert len(acoes) == 1
     assert acoes[0].reason == "corte_persistencia"
+
+
+# ---------------------------------------------------------------------------
+# Escada de perda maxima por trade (2026-09-11, pedido do dono)
+# ---------------------------------------------------------------------------
+
+
+def test_escada_desligada_por_default_nao_toca_em_nada():
+    """A escada e' ADITIVA e OPT-IN: sem `teto_perda_abs_brl` os dois
+    acessores sao `None` e o stop sai de `stop_vol x vol` puro, como sempre."""
+    robo = _robo()
+    robo.on_capital_update(250.0)
+    assert robo.teto_perda_brl is None
+    assert robo.teto_perda_pontos is None
+
+
+def test_escada_desenha_os_tres_regimes_pedidos_pelo_dono():
+    """`min(50% x caixa, max(ABS, 5% x caixa))` -- 50% na carteira minuscula,
+    um degrau PLANO no meio (quem manda e' o ABS) e 5% quando a carteira
+    cresce. E' a forma literal do pedido: "ate 50% da carteira e ir diminuindo
+    conforme a carteira aumenta para representar no maximo 5%"."""
+    robo = _robo(teto_perda_abs_brl=125.0, point_value_brl=0.20)
+    esperado = {
+        250.0: 125.0,      # 50,0% -- manda `teto_perda_frac_max`
+        1_000.0: 125.0,    # 12,5% -- manda o ABS (degrau plano)
+        2_500.0: 125.0,    # 5,0% -- os dois se encontram
+        10_000.0: 500.0,   # 5,0% -- manda `teto_perda_frac_min`, e volta a escalar
+    }
+    for caixa, teto in esperado.items():
+        robo.on_capital_update(caixa)
+        assert robo.teto_perda_brl == pytest.approx(teto), caixa
+        # a conversao para PONTOS e' o que `_entrada` consome
+        assert robo.teto_perda_pontos == pytest.approx(teto / 0.20), caixa
+
+
+def test_escada_nunca_pode_subir_com_o_caixa():
+    """`frac_min > frac_max` desenharia uma escada que SOBE -- risco maior
+    quanto maior a carteira, o oposto do pedido. Recusa na construcao."""
+    with pytest.raises(ValueError, match="escada"):
+        _robo(teto_perda_abs_brl=125.0, teto_perda_frac_min=0.9,
+              teto_perda_frac_max=0.5)
+
+
+def test_escada_corta_a_DISTANCIA_do_stop_e_deixa_o_alvo_onde_estava():
+    """O ponto inteiro da escada: ela morde na GEOMETRIA, nao na quantidade.
+
+    No caixa real do WIN@ a entrada ja' e' 1 contrato e
+    `quantidade_por_entrada` tem piso de 1, entao um teto por QUANTIDADE e'
+    aritmeticamente incapaz de reduzir a perda. O alvo NAO e' cortado junto --
+    a escada limita o que o trade pode custar, nao a tese do robo."""
+    kw = dict(alvo_vol=19.0, stop_vol=12.0, entrada_maker=False,
+              point_value_brl=0.20, tick_size=5.0)
+    barras = _faixa_plana(5) + [_bar(5, 140_100.0, 140_400.0, 140_100.0, 140_350.0)]
+
+    sem = _robo(**kw)
+    sem.on_capital_update(250.0)
+    (acao_sem,) = _alimentar(sem, barras)
+
+    com = _robo(teto_perda_abs_brl=125.0, **kw)
+    com.on_capital_update(250.0)
+    (acao_com,) = _alimentar(com, barras)
+
+    dist_stop_sem = abs(acao_sem.initial_stop - barras[-1].close)
+    dist_stop_com = abs(acao_com.initial_stop - barras[-1].close)
+    # R$125 de teto / R$0,20 por ponto = 625 pontos, arredondado na grade de 5
+    assert dist_stop_sem > dist_stop_com
+    assert dist_stop_com <= 625.0 + 5.0
+    # o ALVO fica intacto -- a escada e' limite de risco, nao de tese
+    assert acao_com.initial_target == acao_sem.initial_target
+
+
+def test_escada_dimensiona_a_quantidade_pelo_proprio_orcamento():
+    """Com a escada ligada, o teto por RISCO passa a usar o orcamento dela, e
+    nao `risco_pct_por_trade` -- os dois respondem a mesma pergunta e deixar
+    os dois ativos daria dois donos ao mesmo numero."""
+    robo = _robo(teto_perda_abs_brl=125.0, risco_pct_por_trade=0.05,
+                 point_value_brl=0.20, margin_per_contract_brl=100.0,
+                 fracao_entrada=1.0)
+    robo.on_capital_update(10_000.0)      # escada da' R$500 (5%); o plano daria os mesmos R$500
+    robo._ultimo_stop_dist_pontos = 500.0  # R$100 por contrato
+    assert robo.quantidade_por_entrada == 5  # floor(500 / 100)
+
+
+# ---------------------------------------------------------------------------
+# Alvo por ordem-limite REAL fatiada (2026-09-11, ordem do dono)
+# ---------------------------------------------------------------------------
+
+
+def test_alvo_fatiado_desligado_por_default_mantem_o_tp_nativo():
+    """ADITIVO e OPT-IN: sem `fatiar_saida_alvo` o `EnterLimit` nao declara
+    fatia nenhuma, e o motor segue tratando o alvo como `tp` nativo."""
+    robo = _robo(entrada_maker=True)
+    barras = _faixa_plana(5) + [_bar(5, 140_100.0, 140_400.0, 140_100.0, 140_350.0)]
+    (acao,) = _alimentar(robo, barras)
+    assert acao.exit_split_unit is None
+    assert acao.exit_ttl_bars is None
+
+
+def test_alvo_fatiado_declara_ordem_limite_de_1_contrato_sem_prazo():
+    """Ligado, o alvo vira ordem-limite REAL parada no livro (`exit_split_
+    unit=1`) e sem prazo -- e' o que faz o modelo de fila do motor passar a
+    alcancar a saida por alvo, que antes preenchia no toque de graca."""
+    robo = _robo(entrada_maker=True, fatiar_saida_alvo=True)
+    barras = _faixa_plana(5) + [_bar(5, 140_100.0, 140_400.0, 140_100.0, 140_350.0)]
+    (acao,) = _alimentar(robo, barras)
+    assert acao.exit_split_unit == 1
+    assert acao.exit_ttl_bars == EXIT_TTL_BARS_SEM_PRAZO
+
+
+def test_alvo_fatiado_recusa_entrada_a_mercado_em_vez_de_virar_no_op():
+    """`exit_split_unit` so' existe em `EnterLimit`. Com `entrada_maker=False`
+    a flag seria lida por ninguem e o alvo continuaria em `tp` nativo EM
+    SILENCIO -- a armadilha do item 4.23 (`anchor_exits_at_fill` inerte fora
+    do caminho de `EnterLimit`). A classe recusa na construcao."""
+    with pytest.raises(ValueError, match="entrada_maker"):
+        _robo(entrada_maker=False, fatiar_saida_alvo=True)
+
+
+def test_producao_do_copa_win_segue_o_desenho_de_execucao_fechado():
+    """Trava o catalogo contra deriva silenciosa. O `_KWARGS_PADRAO` do
+    registry e' o robo que opera dinheiro, e tres coisas nele nao sao
+    preferencia -- sao a regra de execucao do projeto (CLAUDE.md, "O desenho
+    de execucao e' FECHADO"):
+
+      * entrada por ordem-limite (`entrada_maker`), nunca a mercado;
+      * a ordem de entrada TEM prazo -- sem prazo ela preenche horas depois
+        do sinal;
+      * o alvo sai por ordem-limite REAL fatiada, nunca por `tp` nativo (que
+        a corretora varre a mercado).
+
+    E fixa os dois numeros decididos em 2026-09-11, para uma mudanca neles
+    ser deliberada e nao um efeito colateral de outra edicao."""
+    from strategy.daytrade.registry import get_daytrade_robot
+
+    robo = get_daytrade_robot("copa_win", symbol="WIN@")
+    assert robo.entrada_maker is True
+    assert robo.entrada_ttl_barras is not None and robo.entrada_ttl_barras > 0
+    assert robo.fatiar_saida_alvo is True
+    assert robo.exit_ttl_bars == EXIT_TTL_BARS_SEM_PRAZO
+    # alvo a 50% do que a calibracao de 2026-08-28 pedia (19,0), stop intacto
+    assert robo.alvo_vol == 9.5
+    assert robo.stop_vol == 12.0
+    # a escada de perda foi MEDIDA e REFUTADA (perde em 8 de 8 combinacoes no
+    # capital sem censura) -- fica implementada, opt-in, desligada
+    assert robo.teto_perda_abs_brl is None

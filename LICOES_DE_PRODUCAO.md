@@ -1332,6 +1332,14 @@ confirmação OOS ainda. Reverificado com o mesmo teste de caixa real
 (R$3.000, 182 pregões de WIN@): **274 trades, R$3.000,00 → R$12.498,00**,
 equity mínima R$2.545,90 — nunca chegou perto de zerar.
 
+> **Correção de escopo, 2026-09-11 (itens 3.17/6.21):** "nenhum perto de
+> zerar" vale só no capital testado aqui (R$3.000). No capital REAL do slot
+> de produção do `copa_win` (R$250,00), os mesmos 5% de `risco_pct_por_
+> trade` são aritmeticamente INERTES — `quantidade_por_entrada` floor em
+> `max(1, ...)` sempre devolve 1 contrato, e a conta chegou a equity
+> NEGATIVA. O teto por risco deste item protege a partir de algum capital
+> intermediário; não protege no capital em que o robô roda hoje.
+
 Antes de chegar nessa correção, uma ideia intermediária (do dono) foi
 testada e REFUTADA: "separar" uma fatia do caixa a cada marco de
 crescimento (ex.: +60%) e parar de contá-la como caixa operacional. No
@@ -1652,6 +1660,50 @@ segundos`, via `_pode_armar_apos_recusa`) passou a valer também para o
 rearme pós-recusa por capital — calibrado e verificado junto com a
 reancoragem, nos mesmos 126 pregões (ver 4.14 para os números completos de
 calibração e o risco residual sobre `max_trades_per_side`).
+
+### 3.17 O portão de capital só sabe checar MARGEM de abertura — o `copa_win` foi à conta NEGATIVA rodando exatamente a config e o capital de produção
+
+Confirma e AGRAVA o item 3.11 ("piso exato do CopaWin"). Medido em
+2026-09-11 (`scripts/daytrade/copawin_escada_perda_sweep_2026_09_11.py` e
+`scripts/daytrade/copawin_teto_perda_diagnostico_2026_09_11.py`), rodando o
+`copa_win` (WIN@, TOP-2 do pódio) com os kwargs REAIS de produção
+(`_KWARGS_PADRAO`, alvo_vol=19/stop_vol=12) no capital REAL do slot sombra
+que roda hoje (`dt-copa_win-win@-shadow`, R$250,00) sobre o histórico IS
+congelado (129 pregões, 2025-12-01 → 2026-06-12): a conta foi a **equity
+NEGATIVA** — `wiped_out_at = 2025-12-18 15:07`, mínimo **−R$7,10**. Pior
+operação: **−R$446,50 em 1 contrato** (178% do capital inicial), saída por
+STOP; as 5 piores foram −446,50 / −397,50 / −324,50 / −292,50 / −252,50,
+todas 1 contrato. 25 trades em 129 pregões, 116 sem trade — janela também
+censurada (item 6.1/6.15).
+
+O item 3.11 já tinha medido "trava" neste mesmo robô a R$250 (21 trades,
+−R$386,90, final R$113,10) — mas parava aí: caixa baixo, sem trade, sem
+nunca cruzar zero. Esta medição, na config de produção ATUAL e na janela
+IS, mostra que "trava" não é o pior desfecho possível: o mesmo mecanismo
+pode entregar conta **negativa** antes de travar, porque o portão de
+entrada só verifica se cabe abrir 1 contrato (margem R$100 × buffer ×
+reserva) — nunca quanto esse contrato pode PERDER. O stop do `copa_win` é
+por volatilidade (`stop_vol=12 × vol do dia`), e a distribuição medida em
+182 pregões salvos é: média R$309,97/contrato, mediana R$293,00, p95
+R$455,60, máximo R$728,50 (`copawin_teto_perda_diagnostico_2026_09_11.py`).
+A perda MEDIANA de um único stop já é 117% do capital de R$250.
+
+> **Regra (portável):** margem para ABRIR e perda máxima do STOP são dois
+> números independentes, calculados de formas diferentes, e checar só o
+> primeiro não é uma aproximação do segundo — é medir outra pergunta. Antes
+> de pôr em produção (ou em capital real) qualquer robô cujo stop varie com
+> a volatilidade do dia (em vez de ser fixo em ticks/pontos), compare a
+> distribuição do stop EM DINHEIRO — p95 e máximo, nunca só a média — contra
+> o caixa disponível. Se o p95 já passa do caixa, a conta fica negativa com
+> o azar COMUM da própria estratégia, não com um evento raro. Um piso de
+> capital derivado só de MARGEM (3.10) responde "cabe abrir?"; nunca
+> responde "sobrevive ao stop?" — são a mesma lacuna do item 3.5/3.9, agora
+> com a distribuição medida e o desfecho batendo negativo, não só travando.
+> **Pergunte à plataforma nova (pergunta 91):** a plataforma recusa a ordem
+> quando o STOP declarado excede o caixa disponível, ou só valida a margem
+> de abertura? Se só a segunda, o robô precisa construir o teto por perda
+> máxima do stop por fora — checar margem nunca é suficiente para stop
+> variável por volatilidade.
 
 ---
 
@@ -3019,6 +3071,47 @@ conta NETTING não zeram — invertem o lado (1.23). Coberto por
 >
 > **Pergunte à plataforma nova:** pergunta 90 (nova).
 > (4.25, 4.21, 4.22, 4.24, 1.23, 1.24)
+
+### 4.27 Trailing/breakeven-stop com trava de 1 tick é economicamente idêntico a NÃO travar — o deslize fixo do stop consome a trava inteira antes de virar lucro
+
+Testado em 2026-09-11 (`scripts/daytrade/wdof1_saida_assimetrica_2026_09_11.py`),
+WDO F1, T2/S16: uma variante de saída assimétrica ("breakeven+1 tick" — arma
+quando o preço anda 2 ticks a favor e move o STOP para `entry_price + 1 tick`
+a favor, via `AdjustStop`) deu **0% de acerto nos dois únicos pregões reais
+disponíveis** — 2026-09-10 (n=11, líquido **−R$263,50**) e 2026-09-11 (n=17,
+líquido **−R$265,50**) — pior que o baseline T2/S16 sem trava nos mesmos dois
+pregões (−R$256,50 e −R$240,00).
+
+Rastreado trade a trade (prints de debug temporários, não incorporados ao
+código): toda saída pelo trailing, **incluindo as que armaram exatamente como
+pedido**, fechou em pnl = **−R$0,50** — só a corretagem, lucro líquido zero.
+Exemplo: entrada long a 5.144,0; preço subiu a 5.145,0 (2 ticks a favor); o
+código moveu o stop pra 5.144,5 = entry+1 tick, corretamente. A saída por esse
+stop ainda assim rendeu zero.
+
+A causa é o mesmo mecanismo do item 4.8, só que do lado do STOP: o motor
+(`IntradayCostModel.slippage_ticks`, `backtest/intraday/machine.py`) cobra um
+deslize FIXO de **1 tick ADVERSO em toda saída por stop**, sempre — é o mesmo
+pedágio já embutido no baseline ("perda por stop = 16 ticks + 1 tick de
+deslize + R$0,50 de corretagem"). Uma trava de exatamente 1 tick de lucro
+coincide, em magnitude, com esse deslize: o tick que a trava reservava é
+exatamente o tick que o deslize consome, e o resultado colapsa para "só a
+corretagem" — nunca o lucro nominal que a trava pretendia proteger. Uma trava
+de 2+ ticks sobrevive (sobra 1+ tick líquido depois do deslize); uma trava de
+1 tick ou menos é teatro: mesmo formalmente correta no código, produz o mesmo
+dinheiro de não ter trava nenhuma, só que via mais eventos de stop.
+
+> **Regra (portável — vale para qualquer trailing/breakeven-stop, nesta
+> linguagem ou na de destino da portabilidade):** uma trava de lucro só é
+> real se for **estritamente MAIOR** que o deslize fixo cobrado na execução
+> do stop nesta plataforma/simulador. Antes de aceitar qualquer geometria de
+> trailing ou breakeven-stop, confira a distância entre o nível travado e o
+> preço de entrada contra esse deslize — não contra zero. Trava ≤ deslize
+> não é "trava pequena": é ausência de trava disfarçada de proteção, e ela
+> ainda gasta um evento de stop (e a corretagem dele) para entregar o mesmo
+> resultado de não ter travado nada.
+> **Pergunte à plataforma nova:** pergunta 93 (nova).
+> (4.8)
 
 ---
 
@@ -5188,6 +5281,35 @@ ele devolveria se estivesse funcionando.
 > **Pergunte à plataforma nova:** perguntas 81 e 82 (novas).
 > (3.8, 3.9, 3.12, 4.20, 4.21, 4.22, 6.15, 6.16, 6.17, 6.18, 6.19, 7.1)
 
+**Confirmado num SEGUNDO robô, 2026-09-11 (mesma tarefa que gerou o item
+3.17):** o pedido do dono era limitar a perda por trade a "até 50% da
+carteira, diminuindo até no máximo 5% conforme a carteira cresce" no
+`copa_win`. O caminho óbvio — apertar `risco_pct_por_trade` (o mesmo teto
+por risco do item 3.9, já LIGADO em produção a 5%) — é aritmeticamente
+inerte no capital real do slot (R$250,00): `quantidade_por_entrada` termina
+em `max(1, round(...))`, e 5% de R$250 = R$12,50 de orçamento contra um
+stop mediano de R$293,00 (item 3.17) pede 0 contratos, que o piso devolve
+como 1. O teto por risco estava LIGADO, nomeado, documentado — e nunca
+reduziu um centavo de risco no único capital em que o robô roda de verdade;
+a tabela de produção mostra "risco 5%" e o risco real do trade mediano é
+117% da conta. Diferente da regra 4 acima (medida a R$375,00/1% no WDO F1):
+aqui o mesmo mecanismo aparece a R$250,00/5% num robô com stop por
+VOLATILIDADE em vez de fixo em ticks — confirma que o piso implícito não é
+peculiaridade de um robô, um capital ou um percentual: é propriedade de
+`max(1, round(...))` sempre que o orçamento de risco cai abaixo de 1
+unidade indivisível, e quanto MAIOR o percentual pedido (5% aqui contra 1%
+no WDO F1), mais enganosa a tabela de produção fica — o número parece mais
+seguro e é igualmente inerte.
+
+> **Corolário sobre onde o risco pode de fato ser cortado:** num regime em
+> que a quantidade já está no piso indivisível (1 contrato, 1 lote), o único
+> lugar onde reduzir risco por trade é possível é a GEOMETRIA — a distância
+> do stop —, nunca a quantidade. Apertar `risco_pct_por_trade` nesse regime
+> muda a tabela sem mudar o robô; encurtar o stop muda o robô, mas mede uma
+> estratégia DIFERENTE e pede validação própria, não é "o mesmo robô mais
+> seguro".
+> (3.9, 3.17)
+
 ### 6.22 O nulo geométrico: win% alto em alvo pequeno não é evidência de nada
 
 Num teste de pullback na VWAP no WDO@, a primeira rodada reportou "o gatilho
@@ -5483,6 +5605,223 @@ assim às vezes enche; não cria caminho de ENTRADA nova executável.
 > "entrada nova".
 
 Pergunta 88 da Parte 8 carrega a parte que depende de plataforma.
+
+### 6.29 Uma escada de teto absoluto de perda no piso de capital também vira penhasco NÃO-monotônico — célula boa entre duas catástrofes, confirmado num TERCEIRO robô e num TERCEIRO eixo de parâmetro
+
+Generaliza os itens 6.15 (janela IS/OOS) e 6.16 (geometria de alvo/stop em
+ticks): a mesma catraca de ruína perto do piso de capital também derruba a
+leitura de uma varredura de TETO ABSOLUTO em reais, e desta vez o padrão não
+é sequer degradação em degrau — é penhasco em ZIGUEZAGUE.
+
+Medido em `scripts/daytrade/copawin_escada_perda_sweep_2026_09_11.py`
+(2026-09-11): 10 tetos de perda por trade × 3 capitais × 2 janelas (IS 129
+pregões, OOS), passada cronológica contínua, `copa_win` em capital REAL.
+Mesmo capital (R$3.000,00), mesma janela (IS), só variando o teto absoluto
+da escada:
+
+| teto | líquido R$ | trades | pregões sem trade |
+|---|---|---|---|
+| R$200 | **+7.590,30** | 278 | 0/129 |
+| R$150 | **−2.949,80** | 146 | **78/129** |
+| R$125 | **+7.589,70** | 310 | 0/129 |
+
+Uma célula RUIM (R$150) sanduichada entre duas boas (R$200 e R$125) que dão
+o MESMO líquido dentro de R$0,60 de diferença uma da outra. No OOS a
+R$750,00: R$125 → −R$668,10 (46/55 sem trade), R$100 → **+R$2.766,60** (166
+trades, 0/55 sem trade), R$75 → −R$683,10 (48/55 sem trade) — a mesma
+assinatura, célula boa isolada entre duas ruins, agora num eixo (teto
+absoluto de perda) e num robô (`copa_win`, stop por volatilidade) diferentes
+dos dois itens anteriores (WDO F1, alvo em ticks fixos).
+
+**O mecanismo é o mesmo dos itens 6.15/6.16, só que mais visível aqui
+porque o eixo é contínuo em vez de discreto:** com o caixa perto do piso,
+o resultado da janela inteira é decidido por se as PRIMEIRAS operações
+ganham ou perdem — uma perda cedo derruba o caixa abaixo do portão de
+capital e o robô cala pelo resto da janela (coluna `pregões sem trade`
+salta de 0 para 60-90%); uma vitória cedo destrava e o robô compõe até o
+fim. O parâmetro entra pouco nessa conta: mudar o teto de R$200 para R$150
+não piora a estratégia, muda QUAL sequência de trades early cabe no orçamento
+antes da primeira perda, e essa mudança pode cair para qualquer lado.
+
+> **Regra (portável, especializa 6.15/6.16):** em varredura de QUALQUER
+> parâmetro (janela, geometria em ticks, ou teto absoluto em reais) com
+> caixa perto do piso, célula vizinha discordando por ordem de grandeza —
+> e, principal sinal deste item, uma célula boa isolada entre duas más ou
+> vice-versa, sem gradiente — é assinatura de dependência de CAMINHO, não
+> de sensibilidade a parâmetro. O teste continua sendo a coluna `pregões sem
+> trade`: se as células boas têm 0 e as ruins têm dezenas de por cento,
+> a grade mediu quem sobreviveu ao começo da janela, não qual parâmetro é
+> melhor. Escolher a célula "campeã" nesse regime é ajustar ao sorteio da
+> largada, não à estratégia — e a defesa é a mesma dos dois itens
+> anteriores: nunca ler `líquido` de uma varredura no piso de capital sem
+> `trades` e `pregões sem trade` ao lado, e preferir repor o caixa por
+> sessão (pergunta 81) a escalar o capital só para "resolver" o zigue-zague.
+> (6.15, 6.16, 3.11, 3.17)
+
+Pergunta a plataforma nova: nenhuma nova — perguntas 47/52 (6.16) e 81
+(6.21) já cobrem expor `pregões sem trade`/`caixa_min` por célula e rodar
+com caixa reposto por sessão; este item é confirmação em terceiro
+robô/eixo, não pergunta nova.
+
+### 6.30 "Fila mata robô maker" não generaliza entre instrumentos — no WIN@, a mesma fila que matou o WDO@ não morde em nenhum nível plausível
+
+O item 6.21 encerrou a família maker do WDO@ em 2026-09-10: com a fila real
+calibrada contra extrato (438 contratos na entrada / 489 na saída,
+Kaplan-Meier — itens 4.20/4.21/4.22), o lucro só existia com fila zero. Ficava
+a tentação de generalizar "fila mata robô maker" para qualquer estratégia
+maker do projeto. Em 2026-09-11, ao converter o alvo do `copa_win` (WIN@) de
+`tp` nativo para ordem-limite REAL fatiada (`fatiar_saida_alvo=True`) e
+varrer a sensibilidade a fila na saída, a generalização foi REFUTADA.
+
+Medido em `scripts/daytrade/copawin_alvo_fatiado_fila_sensibilidade_2026_09_11.py`
+(56 células, IS 129 pregões + OOS 55, capitais R$250 e R$3.000, alvo a 100% e
+a 50% do pedido). Fila varrida na SAÍDA, em frações do volume da barra M1
+mediana, capital R$3.000, alvo 50%:
+
+| fila na frente da nossa ordem de alvo | líquido IS |
+|---|---|
+| 0 contratos | +R$ 7.351 |
+| 2.496 (0,10x barra) | +R$ 7.351 |
+| 6.240 (0,25x) | +R$ 7.350 |
+| 12.481 (0,50x) | +R$ 7.349 |
+| 24.962 (1,00x) | +R$ 7.581 |
+| 49.924 (2,00x) | +R$ 7.429 |
+
+Nada. A fila só começa a morder a **250.000 contratos** (acerto do alvo cai
+de 17,1% para 13,7%) e só zera o acerto do alvo a **25.000.000** — teste de
+sanidade que PROVA que o modelo de fila está de fato ligado (sem ele, o
+achado seria indistinguível de wiring quebrado).
+
+**A explicação mecânica, medida:** volume mediano por barra M1, mesma regra
+que o motor usa (`engine._bar_volume`) — **WIN@ 24.962 contratos/minuto
+contra WDO@ 2.935, ou seja 8,5x mais giro**. Some o tempo de exposição: a
+WDO F1 tinha alvo de 1-2 ticks e posição de minutos; o `copa_win` tem alvo de
+centenas de pontos e posição de HORAS (medido ao vivo em 2026-09-11: 184
+barras M1 numa posição só). Uma ordem de 1 contrato parada num nível que o
+preço visita por horas, num instrumento que gira 25 mil contratos por
+minuto, não tem problema de fila.
+
+> **A regra (portável, é o que precisa sobreviver à troca de plataforma):**
+> fila não é propriedade do robô nem do instrumento isoladamente — é a razão
+> entre o TAMANHO da sua ordem e o GIRO no nível, multiplicada pelo TEMPO que
+> a ordem espera. Um mesmo número de fila é fatal para alvo curto num
+> instrumento de pouco giro (WDO@, item 6.21) e irrelevante para alvo longo
+> num instrumento de muito giro (WIN@, este item). Antes de transferir um
+> veredito de fila de um robô para outro, compare os três: tamanho da ordem,
+> giro por unidade de tempo no instrumento, e tempo esperado de espera.
+> Transferir "fila mata maker" do WDO@ para o WIN@ sem medir teria matado por
+> engano a melhor configuração já medida do WIN@.
+
+**Corolário, generaliza os itens 4.20/4.21/4.22:** um parâmetro de realismo
+pode estar corretamente implementado, corretamente ligado, e ainda assim NÃO
+MOVER NADA — e isso não é o mesmo que estar desligado (o erro do item 4.22
+era `queue_ahead_qty` no default `0.0`, nunca setado). A diferença entre
+"não morde" e "não está ligado" só é observável com um teste de sanidade em
+valor absurdo (aqui, 25.000.000 contratos). Toda varredura de parâmetro de
+realismo que devolver resultado chapado precisa desse teste antes de virar
+achado — sem ele, "não morde" e "está quebrado" são a mesma linha na tabela.
+
+**Achado secundário, custo do MECANISMO (separado da fila, fila mantida em
+zero nos dois lados):** trocar o `tp` nativo pela ordem-limite real fatiada
+custou ~25% do líquido no IS e ganhou ~7% no OOS — IS R$3.000/alvo 50%:
+R$9.900 (nativo) → R$7.351 (limite); OOS R$3.000/alvo 50%: R$4.921 →
+R$5.254. O acerto do alvo caiu de 23,1% para 17,1% no IS (a limite exige
+orçamento de volume; o nativo preenchia no toque, de graça — mesmo
+mecanismo do item 6.19). Perder no IS e ganhar no OOS é a assinatura
+esperada de um mecanismo que REMOVE um otimismo que a amostra de dentro
+estava explorando, e não motivo para reverter a troca.
+
+Pergunta 92 da Parte 8 carrega a parte que depende de plataforma.
+
+### 6.31 Um teto de perda por trade que corta a DISTÂNCIA DO STOP não é trava de segurança gratuita — é mudar de estratégia, e a estratégia nova perde
+
+Continua o corolário do item 6.21 ("no regime de piso indivisível, o único
+lugar para reduzir risco é a geometria, nunca a quantidade") e o item 3.17
+(pedido do dono para limitar a perda por trade do `copa_win`). A escada foi
+implementada como `teto_perda_brl = min(50%×caixa, max(ABS, 5%×caixa))`, e
+como a quantidade já mora no piso de 1 contrato, ela corta a DISTÂNCIA do
+stop. Medida sozinha ela cumpre a promessa — no capital real acaba com o
+zeramento do `copa_win` (pior operação −R$446,50 → −R$159,50, caixa nunca
+fica negativo). Cruzada com a mudança de alvo da mesma rodada (alvo a 50%
+do pedido, saindo por ordem-limite real em vez do `tp` nativo), ela é
+DOMINADA.
+
+Medido em `scripts/daytrade/copawin_escada_x_alvo_cruzado_2026_09_11.py`: 4
+frações de alvo × 4 tetos × 3 capitais × 2 janelas (IS 129 pregões, OOS 55).
+**No capital SEM censura (R$3.000,00, todas as células operando), a escada
+DESLIGADA venceu em 8 de 8 combinações de alvo × janela** — monotônico e
+consistente nas duas janelas, ao contrário do zigue-zague de caminho do
+item 6.29 (que é sobre o eixo do teto perto do PISO de capital; este item é
+sobre o mesmo eixo longe do piso, onde a censura já não explica nada).
+
+IS a R$3.000,00, alvo em 9,5 (50% do pedido):
+
+| teto | líquido R$ |
+|---|---|
+| escada DESLIGADA | +7.351,00 |
+| ABS R$200 | +1.386,60 |
+| ABS R$125 | −2.936,80 |
+| ABS R$75 | −2.944,00 |
+
+Mesmo IS a R$3.000,00, alvo em 19,0 (100% do pedido):
+
+| teto | líquido R$ |
+|---|---|
+| escada DESLIGADA | +8.311,00 |
+| ABS R$200 | +7.120,20 |
+| ABS R$125 | +5.880,70 |
+| ABS R$75 | +6.341,70 |
+
+**O mecanismo, e é ele que precisa sobreviver à troca de plataforma: o stop
+largo não é só risco — é o TEMPO que o trade tem para resolver.** Neste
+robô 56,1% das saídas eram por achatamento de fim de pregão, e carregavam
+114,1% do lucro líquido: trades que sofreram excursão adversa, respiraram e
+voltaram. Encurtar o stop converte esses perdedores-pequenos-que-viravam-
+ganhadores em stops CHEIOS. É o mesmo mecanismo que `strategy/daytrade/lab/wdo_orb.py`
+já documenta no campo `alvo_multiplo`, em sentido inverso, sobre o instrumento
+oposto: "com stop largo o perdedor sai pelo relógio com perda PEQUENA; com
+stop apertado o mesmo trade sai no stop CHEIO" — geometria fixa perdeu de
++R$2,34/op para +R$15,71/op da faixa adaptativa na mesma janela. Dois robôs
+diferentes, dois instrumentos diferentes, mesmo mecanismo.
+
+E há um segundo efeito que o nome "teto de perda" esconde: ele limita a
+perda de UM trade, nunca de uma SEQUÊNCIA. Apertar o stop também PIOROU o
+MaxDD (de −51,0% para −85,8% no IS a R$3.000,00), porque com stop curto o
+robô opera mais vezes e a soma dos golpes pequenos passou o golpe grande
+que o teto evitou.
+
+O que foi para produção no lugar (desfecho registrado aqui): `copa_win`
+passou a rodar `alvo_vol=9.5` (metade da calibração de 2026-08-28) e
+`fatiar_saida_alvo=True` (alvo por ordem-limite real, não pelo `tp` nativo
+que o CLAUDE.md proíbe). No capital REAL de R$250,00, o IS sai de "ZEROU,
+caixa −R$7,10, 116 de 129 pregões sem trade" (item 3.17) para "+R$7.191,10,
+0 de 129 sem trade", e o OOS de "−R$247,50 com 1 trade" para "+R$5.111,00
+com 130 trades". A escada fica implementada, testada e DESLIGADA.
+
+Risco que fica aberto, e precisa constar: (1) no capital real de R$250,00 o
+caixa marcado a mercado desce a R$23,10 no IS (MaxDD −96,3%) — abaixo da
+margem crua de R$100,00; o robô sobreviveu, mas sem folga; (2) com saída
+fatiada não existe TP registrado na corretora (`live.intraday_runtime._alvo_atomico`
+recusa amarrar TP em posição fatiada, de propósito) — só o STOP fica
+protegido no broker, o alvo depende do processo do robô mandando a
+ordem-limite a cada barra; (3) o WIN@ segue SEM fidelidade de execução
+calibrada (ver item 6.30 — ainda não medida a fila de ENTRADA do WIN@,
+que preenche de graça em todas as linhas acima).
+
+> **Regra (portável):** um teto de perda por trade que morde na distância
+> do stop não é uma trava de segurança gratuita — é uma mudança de
+> estratégia, e ela cobra na taxa de acerto. Antes de aceitar qualquer
+> limitador de perda que aperte o stop, meça-o no capital SEM censura e
+> contra a alternativa de não ter limitador nenhum — a mesma defesa do
+> item 6.29, aplicada fora do regime de piso. E meça o MaxDD junto com o
+> líquido: um teto por trade pode reduzir a pior operação e ainda assim
+> piorar a pior SEQUÊNCIA, porque o número de trades muda junto com a
+> geometria.
+> **Pergunte à plataforma nova:** nenhuma pergunta nova — é a mesma
+> pergunta 81/82 (6.21) e a defesa do item 6.29; este item é confirmação em
+> quarto robô/eixo (WDO F1 alvo-ticks, `copa_win` teto-absoluto-no-piso,
+> agora `copa_win` teto-absoluto-longe-do-piso), não pergunta nova.
+> (3.17, 6.15, 6.16, 6.17, 6.21, 6.29)
 
 ---
 
@@ -6319,6 +6658,40 @@ dinheiro ou meses.
     código. A pergunta 54 cobre perder a fila ao cancelar-e-reenviar; esta
     cobre o caso em que é o próprio robô que decide mudar o nível de uma
     ordem JÁ ENVIADA. (4.26, 4.21, 4.22, 1.24)
+
+91. Esta plataforma recusa o REGISTRO de uma ordem quando o STOP declarado
+    excede o caixa disponível, ou só valida a margem exigida para ABRIR a
+    posição? Margem e perda máxima do stop são números independentes — um
+    robô com stop que varia por volatilidade (não fixo em ticks/pontos) pode
+    passar em todo portão de margem e ainda assim ir a equity negativa no
+    primeiro stop caro. Se a resposta for só a segunda, o teto por perda
+    máxima do stop tem de ser construído por fora, comparando a distribuição
+    do stop em dinheiro (p95 e máximo, nunca só a média) contra o caixa antes
+    de operar capital real. (3.17)
+
+92. Ao ler um veredito de fila (robô maker enche ou não enche) medido num
+    instrumento, esta plataforma me deixa medir, para o instrumento NOVO, os
+    três números que decidem se o veredito transfere: o giro médio (volume
+    por unidade de tempo) NO NÍVEL da minha ordem, o tamanho da minha ordem
+    relativo a esse giro, e o tempo esperado de espera até o preço voltar ao
+    nível? Sem os três, "fila mata este robô" vira "fila mata todo robô
+    maker" por generalização indevida — e a generalização pode ir para os
+    dois lados: matar por engano uma configuração saudável (aqui, o WIN@) ou
+    salvar por engano uma que a fila real mataria. Testar a sensibilidade com
+    um valor absurdo de fila (ordens de grandeza acima do plausível) antes de
+    aceitar "não morde" como resultado — sem esse teste de sanidade, "não
+    morde" e "o modelo de fila está desligado" são indistinguíveis. (6.30,
+    4.20, 4.21, 4.22, 6.21)
+
+93. Esta plataforma (ou o simulador que a representa) cobra algum deslize
+    fixo na execução de um STOP que foi MOVIDO por trailing/breakeven, e
+    qual é o tamanho dele em ticks? Antes de aceitar qualquer geometria de
+    trailing ou breakeven-stop, compare a distância entre o nível travado e
+    o preço de entrada contra esse deslize — não contra zero. Uma trava
+    menor ou igual ao deslize é economicamente idêntica a não ter trava
+    nenhuma: o deslize consome o tick reservado antes de virar lucro, e o
+    resultado colapsa para "só a corretagem", mesmo quando o código moveu o
+    stop exatamente como pedido. (4.27, 4.8)
 
 ---
 
