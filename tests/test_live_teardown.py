@@ -672,6 +672,58 @@ def test_sombra_comprada_em_futuro_nao_infla_o_caixa(diario, monkeypatch):
     assert resultado.posicao_encerrada["pl"] == 514.50
 
 
+SLOT_REAL_WDO = daytrade_slot("wdo_grid_reload_maker", "WDO@", "live")
+
+
+def test_fechamento_real_de_futuro_aplica_ponto_e_sinal(diario, monkeypatch):
+    """A mesma família de defeito (5.7/5.8/5.19), no caminho que fala com a
+    CORRETORA (`_limpar_na_corretora`), não só no de sombra.
+
+    `d367b39` corrigiu os dois caminhos NO MESMO commit (`bruto = _pl_brl(...)`
+    entrou nos dois), mas só o de sombra tinha um teste com um futuro de
+    verdade -- este módulo inteiro só testava o caminho real com PMAM3 (ação),
+    onde os três defeitos são invisíveis por construção (1 ponto = R$1,00,
+    nocional = capital comprometido, e o teste usava só compra). Sem este
+    teste, uma regressão futura no cálculo do fechamento REAL de um futuro
+    passaria a suíte inteira.
+
+    Short de 1 WDO@ @ 5133,0 que a corretora fecha (`avg_price`) a 5185,0: 52
+    pontos CONTRA, R$10,00 o ponto -- R$520,00 de perda bruta, menos R$0,50 de
+    corretagem fixa de futuro. SEM tick de derrapagem aqui: `avg_price` é o
+    preço que a corretora JÁ executou (ver `_preco_de_execucao_a_mercado`)."""
+    _conta(SLOT_REAL_WDO, cash=375.0)
+    broker = _BrokerFalso(
+        ordens=[], posicao={"side": "short", "price": 5133.0, "quantity": 1},
+        preco=5185.0)
+    _monta(monkeypatch, broker=broker)
+
+    resultado = live_teardown.remover(SLOT_REAL_WDO, apagar_historico=True)
+
+    assert resultado.posicao_encerrada["pl"] == -520.50
+    assert resultado.posicao_encerrada["price"] == 5185.0
+    assert resultado.posicao_encerrada["taxas"] == 0.50
+    assert resultado.posicao_encerrada["deslize"] is None
+    assert "prejuízo" in resultado.resumo
+
+
+def test_fechamento_real_de_futuro_comprado_nao_infla(diario, monkeypatch):
+    """Espelho comprado do teste acima -- o mesmo eixo em que o bug antigo
+    teria INFLADO o resultado em vez de afundá-lo, e que menos chama atenção.
+
+    Comprada de 1 WDO@ @ 5133,0 fechada pela corretora a 5185,0: 52 pontos A
+    FAVOR = +R$520,00, menos R$0,50 de corretagem = +R$519,50."""
+    _conta(SLOT_REAL_WDO, cash=375.0)
+    broker = _BrokerFalso(
+        ordens=[], posicao={"side": "long", "price": 5133.0, "quantity": 1},
+        preco=5185.0)
+    _monta(monkeypatch, broker=broker)
+
+    resultado = live_teardown.remover(SLOT_REAL_WDO, apagar_historico=True)
+
+    assert resultado.posicao_encerrada["pl"] == 519.50
+    assert "lucro" in resultado.resumo
+
+
 def test_sombra_em_acao_continua_pagando_preco_cheio(diario, monkeypatch):
     """A correção não pode trocar o erro do futuro por um erro na ação.
 
