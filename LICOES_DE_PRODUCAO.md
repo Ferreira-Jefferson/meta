@@ -4332,6 +4332,95 @@ caminho, então não há o que recusar.
 > IDADE do dado que devolve, distinguindo "última cotação conhecida" de
 > "cotação de agora"? (5.19, 5.20)
 
+### 5.25 O feed reautenticava a CADA leitura em vez de uma vez por processo — 16 alarmes de "cegueira" em 4 episódios, e nenhum era cegueira de verdade — CORRIGIDO 2026-09-14
+
+Pregão de 2026-09-14: os 5 slots de day trade ao vivo (contas 545, 547, 548,
+549, 550 — WIN@, WDO@ ×3, PMAM3) gravaram no diário, em **4 episódios**, **16**
+eventos `error`: `feed nao conseguiu LER o terminal (<símbolo>): connect:
+falha ao conectar ao terminal MT5 (last_error=(-6, 'Terminal: Authorization
+failed'))`, cada um seguido de "feed voltou a ler o terminal apos 1 a 3
+passo(s) de falha" — 5 a 15 s de cegueira DECLARADA por episódio. Episódios às
+12:13, 12:44, 13:30 e 13:31 UTC (09:13, 09:44, 10:30 e 10:31 BRT).
+
+**A evidência que achou a causa** mora em duas observações do mesmo diário,
+nenhuma delas isolada bastaria:
+
+1. Os CINCO processos falharam na MESMA janela de 1 a 4 s e voltaram juntos.
+   Cinco processos independentes não erram em união por acaso — a falha é do
+   terminal, não do robô.
+2. No MESMO processo e no MESMO segundo, `MT5Feed` (relógio) e `MT5Broker`
+   (ordens) não reclamaram de nada — as ordens continuaram sendo enviadas
+   normalmente durante a janela.
+
+A diferença entre quem falhou e quem não falhou não era o terminal: era que
+`MT5Broker.connect()` e `MT5Feed._connect()` guardam `_connected` e chamam
+`mt5.initialize()` **uma vez por processo**, enquanto
+`market_data_intraday/mt5_source.py::_connect` e `mt5_ticks_source.py::_connect`
+chamavam **a cada leitura** — de 5 em 5 s, vezes 5 processos, ≈1 pedido de
+autorização por segundo contra o terminal, o pregão inteiro. E
+`mt5.initialize(login=..., password=..., server=...)` com credenciais não é
+consulta barata: repete AUTORIZAÇÃO ao servidor da corretora (Rico-PRD).
+Enquanto o terminal está reconectando ou ocupado, essa autorização volta `-6
+RES_E_AUTH_FAILED` — com a sessão IPC já existente perfeitamente viva e capaz
+de entregar tick. **O robô declarava cegueira por causa de uma pergunta que
+não precisava ter feito.** Nenhum dos 16 eventos era cegueira de verdade.
+
+**O agravante de método, que tem de sobreviver à troca de plataforma.** As
+DUAS funções `_connect` já diziam na própria docstring: *"Idempotente — mesmo
+padrão de `MT5Feed._connect`/`MT5Broker.connect`"*. Não eram. A promessa
+estava no comentário e o cache não estava no código. É a mesma família do
+item 3.8 (`queue_ahead_qty` nasceu em 2026-08-26 com default `0.0` e viciou um
+mês de medição justamente por PARECER implementado): **um invariante afirmado
+em docstring e não implementado é pior que um invariante ausente, porque
+encerra a pergunta de quem for conferir.** Ninguém procura o que já achou.
+Quem abrisse o arquivo leria "idempotente" e iria embora.
+
+**O agravante 2 — o alarme que grita sem motivo treina o dono a ignorar o
+alarme.** Esta linha de diário existe por causa do item 5.17 (2026-09-08: o
+terminal parou de entregar tick de WDO@ por 44,8 minutos, `closed_bars_since`
+devolveu lista vazia em 538 passos seguidos sem UMA linha em lugar nenhum, e o
+robô mandou 45 ordens-limite reais contra preços de até 45 min atrás,
+−R$116). O alarme foi construído justamente para aquela cegueira. Um alarme
+que dispara 16 vezes num pregão por falso positivo corrói exatamente a única
+defesa que existe contra a cegueira real.
+
+> **Regra**, portável — vale em qualquer corretora e qualquer linguagem:
+>
+> 1. **Handshake de sessão é uma vez por processo, nunca por leitura.**
+>    Reautenticar a cada ciclo transforma um blip do lado do servidor em
+>    cegueira declarada do lado do robô. O que decide se o robô está cego é o
+>    RESULTADO da leitura, nunca o sucesso do handshake — testar o handshake
+>    para decidir sobre o dado é trocar o termômetro pelo termostato.
+> 2. **Invariante afirmado em docstring e não implementado é pior que
+>    invariante ausente** (mesma família do 3.8). Quando um comentário promete
+>    uma propriedade, ou existe teste que a prende, ou a promessa sai do
+>    comentário.
+> 3. **Todo falso positivo de alarme é dívida contra o alarme verdadeiro.**
+>    Antes de aceitar um alarme ruidoso como "chato mas inofensivo", conte
+>    quantas vezes ele dispara por pregão e contra o que ele foi construído
+>    para proteger.
+
+**A correção**, novo módulo `src/market_data_intraday/mt5_connection.py`: uma
+sessão IPC por PROCESSO, com cache invalidado por `terminal_info() is not
+None` — liveness do IPC, deliberadamente **não** `terminal_info().connected`,
+que é o handshake com o servidor de negociação: quando ele cai, reinicializar
+não conserta nada — e 3 tentativas espaçadas de 0,35 s só no caminho em que a
+sessão precisa nascer. `mt5.shutdown()` nunca é chamado, de propósito: o IPC
+do pacote `MetaTrader5` é GLOBAL do processo e o mesmo processo tem um
+`MT5Broker` com `_connected=True` em memória — derrubar a sessão para "limpar"
+trocaria um alarme falso por uma ordem que não sai. Os dois `_connect`
+passaram a delegar para o módulo novo. Coberto por `tests/test_mt5_connection.py`
+(10 testes; o central prende que 50 leituras seguidas produzem 1
+`initialize`, e outro prende que a sessão cacheada sobrevive a um
+`initialize` que passou a falhar).
+
+**Risco residual, registrado e não tocado nesta correção:**
+`MT5Broker._connected` e `MT5Feed._connected` cacheiam para sempre, sem
+NENHUMA revalidação. Se o terminal reiniciar de verdade, esses dois seguem
+achando que estão conectados — falha OPOSTA à corrigida aqui.
+
+> **Pergunte à plataforma nova:** perguntas 100 a 102 da Parte 8. (5.25)
+
 ---
 
 ## Parte 6 — Método: os erros que custam meses, não reais
@@ -7244,6 +7333,26 @@ dinheiro ou meses.
     varredura de 0 a 2.000 contratos no WIN@, usando a escala calibrada do
     WDO@ (438/489), devolveu a MESMA linha nas 36 células porque o volume
     mediano da barra M1 do WIN@ é 24.955 contratos. (6.38)
+
+100. Conectar/autenticar na plataforma nova é operação barata e idempotente,
+     ou ela repede autorização ao servidor da corretora a cada chamada? No
+     MT5, `initialize(login=..., password=..., server=...)` repete
+     autorização todo santo dia — a diferença entre um robô saudável e um
+     que declarava cegueira falsa 16 vezes por pregão era só chamá-la uma
+     vez por processo em vez de uma vez por leitura. (5.25)
+101. Existe uma consulta barata e LOCAL que responda "minha sessão ainda
+     está de pé?" sem reautenticar — o equivalente de `terminal_info()`? No
+     MT5 essa consulta existe e tem DOIS sinais diferentes empilhados no
+     mesmo objeto: liveness do IPC local (não cai com blip do servidor) e o
+     handshake com o servidor de negociação (`.connected`) — confundir os
+     dois faz reinicializar a sessão exatamente quando reinicializar não
+     resolve nada. (5.25)
+102. A falha de autenticação é distinguível da falha de leitura de dado, ou
+     as duas voltam pelo mesmo código de erro? No MT5 as duas podem chegar
+     como o mesmo `last_error()` (-6, "Authorization failed") mesmo quando o
+     dado em si estava perfeitamente disponível pela sessão já aberta — sem
+     separar as duas, todo blip de autenticação vira alarme de cegueira de
+     dado. (5.25)
 
 ---
 
