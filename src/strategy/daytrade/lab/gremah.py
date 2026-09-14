@@ -511,6 +511,28 @@ _VOLATILITY_OVERRIDE_BY_SYMBOL: dict[str, tuple[float, float]] = {
     "KLBN4": (0.05, 10.0),
 }
 
+#: Piso de segurança para QUALQUER dimensão de geometria (alvo, espaçamento
+#: OU stop), em ticks inteiros -- 2026-09-13, depois de confirmar contra o
+#: extrato REAL da PMAM3 que 1 tick não é uma geometria pequena, é uma
+#: geometria que a corretora não executa. No terminal MT5 real (magic
+#: 862226953, 25/08 a 03/09): 49 ordens enviadas, 41 CANCELADAS sem nunca
+#: serem tocadas (84%), e das 8 restantes só 1 tinha o magic do robô de
+#: verdade -- 1 round-trip completo em 9 pregões, perda de R$1,00. Checagem
+#: de tick (uma das ordens canceladas, R$0,13, PMAM3): o preço real NUNCA
+#: saiu de R$0,14-0,15 na meia hora inteira em que a ordem ficou parada --
+#: o nível não foi "perdido na fila" (como no WDO@, item 6.21), foi
+#: simplesmente nunca visitado. Mesmo espírito do T1 proibido no WDO F1
+#: (LICOES_DE_PRODUCAO.md, alvo menor que o deslize não é alvo pequeno, é
+#: alvo inexequível) -- aqui generalizado para QUALQUER papel da Gremah,
+#: porque a auditoria (2026-09-13) achou os 9/9 símbolos calibrados
+#: resolvendo para alvo=1/espaçamento=1 no preço de referência mais
+#: recente, não só a PMAM3. Nenhum símbolo é especial o bastante pra abrir
+#: exceção -- ver `_geometria_e_segura`, aplicado no ponto de ARMAR a
+#: entrada (nunca clampado em silêncio: uma geometria abaixo do piso faz o
+#: robô RECUSAR a sessão, nunca substitui por outro número nunca validado
+#: em backtest).
+PROFIT_TICKS_MINIMO = 2
+
 # GEOMETRIA EM TICKS confirmada no OOS (2026-08-26): (alvo, espacamento, stop),
 # em ticks INTEIROS. Substitui os tres numeros de uma vez, sem passar por
 # `profit_pct` -- e' o unico jeito de escolher alvo e stop de forma
@@ -668,8 +690,11 @@ class _SessionState:
     # `last_closed_side` ja' esta' setado NESTA sessao.
     open_pnl_brl: float = 0.0
     last_trade_won: bool | None = None
-    spacing_ticks_today: int = 1
-    profit_ticks_today: int = 1
+    # `None` = geometria da sessao ficou ABAIXO do piso `PROFIT_TICKS_MINIMO`
+    # (ver `_geometria_e_segura`) -- sessao recusa armar QUALQUER entrada
+    # (nunca substitui por outro numero nao validado em backtest).
+    spacing_ticks_today: int | None = 1
+    profit_ticks_today: int | None = 1
     stop_ticks_today: int | None = None
     session_stop_armed: bool = False
     session_stop_brl_hoje: float = 0.0
@@ -1453,9 +1478,29 @@ class Gremah(IntradayStrategy):
             stop_ticks = self.stop_ticks
         return profit_ticks, spacing_ticks, stop_ticks
 
+    def _geometria_e_segura(self, profit_ticks: int, spacing_ticks: int, stop_ticks: int | None) -> bool:
+        """`False` = alvo, espacamento OU stop resolveram abaixo de
+        `PROFIT_TICKS_MINIMO` -- geometria que a corretora nao executa de
+        verdade (ver a constante). Quem chama tem de RECUSAR a sessao (nenhuma
+        entrada armada), nunca clampar/substituir pelo piso: um numero que
+        nunca passou pelo protocolo de calibracao (regime -> varredura IS ->
+        confirmacao OOS) nao entra em producao so' porque e' "mais seguro" na
+        aparencia -- essa e' exatamente a logica que o T1 do WDO F1 ja
+        provou errada."""
+        if profit_ticks < PROFIT_TICKS_MINIMO or spacing_ticks < PROFIT_TICKS_MINIMO:
+            return False
+        if stop_ticks is not None and stop_ticks < PROFIT_TICKS_MINIMO:
+            return False
+        return True
+
     def _arm_fixed_session_params(self) -> None:
         price = self._state.open_price
         profit_ticks, spacing_ticks, stop_ticks = self._session_ticks(price)
+        if not self._geometria_e_segura(profit_ticks, spacing_ticks, stop_ticks):
+            self._state.profit_ticks_today = None
+            self._state.spacing_ticks_today = None
+            self._state.stop_ticks_today = None
+            return
         self._state.profit_ticks_today = profit_ticks
         self._state.spacing_ticks_today = spacing_ticks
         self._state.stop_ticks_today = stop_ticks
@@ -1830,17 +1875,25 @@ class Gremah(IntradayStrategy):
         if not self._passa_filtro_qualidade_entrada(ts, bar):
             return actions
 
-        state.pending_side = next_side
-        state.pending_bars_waited = 0
-        state.pending_mode = "fixed" if is_fixed_phase else "rolling"
         if is_fixed_phase:
-            entry = self._build_entry(
-                next_side, state.open_price,
+            # `profit_ticks_today is None` = `_arm_fixed_session_params` ja'
+            # recusou a geometria da sessao inteira (ver `_geometria_e_segura`)
+            # -- nunca arma entrada, pregao inteiro fica de fora, do mesmo
+            # jeito que um portao de capital recusado.
+            if state.profit_ticks_today is None:
+                return actions
+            spacing_ticks, profit_ticks, stop_ticks = (
                 state.spacing_ticks_today, state.profit_ticks_today, state.stop_ticks_today,
-                ts,
             )
+            anchor = state.open_price
         else:
             anchor = bar.close
             profit_ticks, spacing_ticks, stop_ticks = self._session_ticks(anchor)
-            entry = self._build_entry(next_side, anchor, spacing_ticks, profit_ticks, stop_ticks, ts)
+            if not self._geometria_e_segura(profit_ticks, spacing_ticks, stop_ticks):
+                return actions
+
+        state.pending_side = next_side
+        state.pending_bars_waited = 0
+        state.pending_mode = "fixed" if is_fixed_phase else "rolling"
+        entry = self._build_entry(next_side, anchor, spacing_ticks, profit_ticks, stop_ticks, ts)
         return [entry]

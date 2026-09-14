@@ -600,6 +600,62 @@ def test_simbolo_fora_da_tabela_de_ticks_segue_no_percentual():
     )
 
 
+def test_geometria_abaixo_do_piso_nunca_arma_entrada_fase_fixa():
+    """2026-09-13: alvo/espacamento de 1 tick nao e' geometria pequena, e'
+    geometria que a corretora nao executa (49 ordens reais da PMAM3, 41
+    canceladas sem nunca serem tocadas -- ver `PROFIT_TICKS_MINIMO`). A
+    PMAM3 de producao (`_GEOMETRIA_TICKS_BY_SYMBOL["PMAM3"] == (1, 1, 16)`)
+    tem que ficar de fora do dia inteiro, nunca so' recusar a entrada e
+    seguir tentando com o mesmo numero invalido."""
+    strat = Gremah(symbol="PMAM3", filtro_minutos_desde_abertura_min=None,
+                   filtro_volume_toque_max=None)
+    strat.on_session_start(None)
+    ts = pd.Timestamp("2026-01-05 13:00", tz="UTC")
+    bar = Bar(ts=ts, open=0.14, high=0.14, low=0.14, close=0.14, volume=0)
+
+    actions = strat.on_bar(ts, bar, positions=[], session_pnl_brl=0.0)
+
+    assert actions == []
+    assert strat._state.pending_side is None
+    assert strat._state.profit_ticks_today is None
+
+
+def test_geometria_abaixo_do_piso_nunca_arma_entrada_fase_rolante():
+    strat = Gremah(symbol="PMAM3", filtro_minutos_desde_abertura_min=None,
+                   filtro_volume_toque_max=None)
+    strat.on_session_start(None)
+    ts = pd.Timestamp("2026-01-05 15:00", tz="UTC")  # ja' na fase rolante
+    bar = Bar(ts=ts, open=0.14, high=0.14, low=0.14, close=0.14, volume=0)
+
+    actions = strat.on_bar(ts, bar, positions=[], session_pnl_brl=0.0)
+
+    assert actions == []
+    assert strat._state.pending_side is None
+
+
+def test_geometria_no_piso_ou_acima_continua_armando_normalmente():
+    """O piso e' >= 2, nao > 2 -- profit_ticks/spacing_ticks=2 tem que
+    continuar sendo aceito, so' 1 e' recusado."""
+    strat = _strat(profit_ticks=2, spacing_ticks=2, stop_ticks=8)
+    strat.on_session_start(None)
+    ts = pd.Timestamp("2026-01-05 13:00", tz="UTC")
+    bar = Bar(ts=ts, open=5.00, high=5.00, low=5.00, close=5.00, volume=0)
+
+    actions = strat.on_bar(ts, bar, positions=[], session_pnl_brl=0.0)
+
+    assert len(actions) == 1
+    assert strat._state.pending_side == "long"
+
+
+def test_geometria_e_segura_rejeita_qualquer_uma_das_tres_dimensoes():
+    strat = _strat()
+    assert strat._geometria_e_segura(2, 2, 8) is True
+    assert strat._geometria_e_segura(2, 2, None) is True  # stop opcional
+    assert strat._geometria_e_segura(1, 2, 8) is False  # alvo abaixo do piso
+    assert strat._geometria_e_segura(2, 1, 8) is False  # espacamento abaixo do piso
+    assert strat._geometria_e_segura(2, 2, 1) is False  # stop abaixo do piso
+
+
 # NOTA (2026-09-04): existia aqui `test_pmam3_nao_entra_na_geometria_em_
 # ticks_do_motor_tick`, guardando a decisão de que a PMAM3 (reprovada no OOS
 # do motor tick, 2026-08-26) não entrava em `GremahTick.
