@@ -198,10 +198,64 @@ from strategy.daytrade.lab.wdo_orb import WdoOrb
 # rompimento) e aceita não ser preenchida — 19,4% dos pregões passam em
 # branco de propósito. Fila alta não inverte o sinal dela; só reduz quantos
 # pregões operam.
+# 2026-09-13, ORDEM DO DONO: `copa_win` sobe a TOP-1, empurrando `wdo_orb`
+# para TOP-2 e `wdo_grid_reload_maker` para TOP-3.
+#
+# POR QUE ELA SOBE -- e' o unico robo deste catalogo com VEREDITO, e nao com
+# "melhor medicao disponivel". O criterio do projeto (itens 6.22/6.23) e' o
+# IC95% do win% contra o BREAKEVEN EMPIRICO `perda_media/(ganho_media+perda_
+# media)`. Com a config de 2026-09-11 (`alvo_vol=7,6` + `entrada_ttl_
+# barras=5`), 191 pregoes a R$3.000:
+#
+#     win 61,1%   IC95% [57,0 ; 65,0]   breakeven empirico 53,01%
+#
+# O intervalo INTEIRO fica acima do breakeven, em 568 operacoes. Nenhum outro
+# robo do catalogo tem isso:
+#   * `wdo_orb` -- win 56,94% em 72 operacoes do IS, IC95% [45,4 ; 67,7]
+#     contra breakeven 47,74%: o breakeven cai DENTRO do intervalo, veredito
+#     INDEFINIDO. Ela era TOP-1 por ser a unica candidata viva, declarado
+#     assim desde 2026-09-10;
+#   * `wdo_grid_reload_maker` -- familia maker REFUTADA em 2026-09-10, quando
+#     a fila real do livro foi calibrada contra extrato (438/489): o bruto
+#     por operacao cai para R$0,45 contra R$0,50 de corretagem. O edge dela
+#     so' existia com fila ZERO.
+#
+# E o que sustenta a ordem nao e' so' o veredito: e' CONSTANCIA medida, que
+# foi o pedido original do dono ("ganhadora mesmo que pouco, mas constante").
+# 76 datas de inicio, horizonte FIXO de 40 pregoes cada -- **100,0% delas
+# terminam positivas, e a PIOR delas fecha em +R$725,30**. Nao existe data de
+# inicio em que este robo termine no vermelho no historico salvo. Junto:
+# MaxDD de 28,9% (contra 50,3% da config anterior), lucro/DD 6,70, 97% dos
+# blocos rolantes de 20 pregoes positivos e 10 dos 10 meses positivos.
+#
+# O QUE ESTA ORDEM NAO AFIRMA, e tem de ser lido junto -- mesma disciplina da
+# promocao da `wdo_orb`, que declarou as proprias lacunas:
+#
+#   1. NO OOS O VEREDITO E' INDEFINIDO, nao positivo: IC95% [47,2 ; 62,2]
+#      contra breakeven 48,47%. O liquido la' continua positivo (+R$3.206,00)
+#      e cai um pouco abaixo da config anterior (+R$4.255,30). E o OOS do
+#      WIN@ (>=2026-06-13) JA FOI GASTO varias vezes -- nao existe teste cego
+#      para este robo, e nenhuma rodada futura devolve um.
+#   2. CUSTA 8x MAIS CAPITAL que o TOP-2. Piso medido R$2.500 (primeiro nivel
+#      com 100% das datas de inicio sobrevivendo, 2026-09-13), declarado
+#      R$3.000 por folga, contra R$375 do WDO@. Ser TOP-1 nao a torna a
+#      escolha certa para quem nao tem esse caixa -- e a R$1.000 quase um
+#      quarto das datas de inicio nao sobrevive 40 pregoes.
+#   3. NUNCA OPEROU COM DINHEIRO REAL, so' sombra. E o WIN@ nao tem
+#      fidelidade de execucao calibrada (`backtest.intraday.fidelidade` so'
+#      tem WDO@): o motor assume fila ZERO nos dois lados. A curva de
+#      preenchimento medida no tape em 2026-09-11
+#      (`win_fila_real_por_tape_2026_09_11.py`) mostra que na SAIDA o motor
+#      ja fica abaixo do teto do tape (25,6% contra 34,4%), mas na ENTRADA
+#      ele empata com o teto em fila ~500 contratos e fica otimista acima
+#      disso. Isso e' limite conhecido, nao validacao.
+#   4. Roda em BARRA M1, nao tick -- entao stop e alvo na mesma barra sao
+#      resolvidos por regra pessimista, nao por dado, ao contrario dos robos
+#      de WDO@.
 _ROBOTS: dict[str, type[IntradayStrategy]] = {
+    CopaWin.name: CopaWin,
     WdoOrb.name: WdoOrb,
     WdoGridReloadMaker.name: WdoGridReloadMaker,
-    CopaWin.name: CopaWin,
     Gremah.name: Gremah,
 }
 

@@ -47,7 +47,7 @@ SYMBOL = "WIN@"
 MIN_BARRAS_POR_PREGAO = 400
 HORIZONTE = 40          # pregoes a frente, igual para toda data de inicio
 PASSO = 2               # testa 1 a cada N pregoes como data de inicio
-NIVEIS = [600.0, 1_000.0, 1_500.0, 2_000.0, 3_000.0, 5_000.0]
+NIVEIS = [250.0, 500.0, 750.0, 1_000.0, 1_500.0, 2_000.0, 2_500.0, 3_000.0, 4_000.0, 5_000.0]
 
 _CACHE: dict = {}
 

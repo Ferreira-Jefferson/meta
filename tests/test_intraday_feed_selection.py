@@ -105,14 +105,29 @@ def test_podio_declarado_2026_09_04():
     56,94% em 72 operacoes do IS, IC95% [45,4 ; 67,7] contra breakeven
     empirico 47,74%, ou seja, INDEFINIDA. Ela e' TOP-1 por ser a melhor
     medicao viva sobre o dado disponivel, nao por validacao em dinheiro
-    real."""
+    real.
+
+    Decisao do dono, 2026-09-13: `copa_win` sobe a TOP-1, `wdo_orb` cai para
+    TOP-2 e `wdo_grid_reload_maker` para TOP-3. E' o UNICO robo do catalogo
+    com VEREDITO em vez de "melhor medicao disponivel": win 61,1% em 568
+    operacoes, IC95% [57,0 ; 65,0] contra breakeven empirico 53,01% -- o
+    intervalo INTEIRO acima do breakeven. Some-se a constancia medida, que
+    era o pedido: 100,0% de 76 datas de inicio terminam positivas (horizonte
+    fixo de 40 pregoes), com a PIOR delas em +R$725,30.
+
+    O que a ordem NAO afirma: no OOS o veredito e' INDEFINIDO (IC95%
+    [47,2 ; 62,2] contra breakeven 48,47%) e o OOS do WIN@ ja foi GASTO --
+    nao ha teste cego para este robo; ela custa 8x mais capital que o TOP-2
+    (piso R$3.000 contra R$375); nunca operou com dinheiro real; e o WIN@ nao
+    tem fidelidade de execucao calibrada. Ver o comentario datado sobre
+    `_ROBOTS` em `strategy/daytrade/registry.py`."""
     robos = list_daytrade_robots()
 
     assert [r.key for r in robos] == [
-        "wdo_orb", "wdo_grid_reload_maker", "copa_win", "gremah",
+        "copa_win", "wdo_orb", "wdo_grid_reload_maker", "gremah",
     ]
     assert [r.rank for r in robos] == [1, 2, 3, 4]
-    assert [r.feed_kind for r in robos] == ["tick", "tick", "m1", "m1"]
+    assert [r.feed_kind for r in robos] == ["m1", "tick", "tick", "m1"]
     assert [r.is_futuro for r in robos] == [True, True, True, False]
 
 
