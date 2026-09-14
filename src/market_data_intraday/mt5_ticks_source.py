@@ -72,6 +72,7 @@ from typing import Callable, Optional
 import pandas as pd
 
 from core.b3_session import MT5_SERVER_TIMEZONE, server_utc_offset_hours
+from market_data_intraday.mt5_connection import conectar
 
 MAX_TICKS_PER_REQUEST = 200_000
 
@@ -104,22 +105,20 @@ def _cursor_paginacao(time_msc: int) -> datetime:
 
 
 def _connect(mt5, login=None, password=None, server=None, path=None) -> bool:
-    """Identico a `mt5_source._connect` -- duplicado de proposito (feature
-    nao importa feature, regra 1 do AGENTS.md; `mt5_source.py` e
-    `mt5_ticks_source.py` sao dois arquivos da MESMA feature
-    `market_data_intraday`, mas a conexao MT5 e' um detalhe pequeno o
-    bastante para nao valer criar acoplamento entre os dois so' por isto)."""
-    kwargs = {}
-    if path:
-        kwargs["path"] = path
-    if login is not None:
-        kwargs["login"] = login
-        kwargs["password"] = password
-        kwargs["server"] = server
-    try:
-        return bool(mt5.initialize(**kwargs))
-    except Exception:
-        return False
+    """Delega para `mt5_connection.conectar` -- uma sessao IPC por PROCESSO,
+    nao uma por leitura.
+
+    Ate 2026-09-14 isto (e o gemeo em `mt5_source.py`) chamava
+    `mt5.initialize()` a cada busca, dizendo na docstring ser "idempotente".
+    Nao era: com credenciais, `initialize()` repede autorizacao ao servidor da
+    corretora, e 5 slots x 1 chamada a cada 5s derrubavam os CINCO feeds
+    juntos com `-6 Terminal: Authorization failed` enquanto a sessao IPC que
+    ja existia seguia lendo tick sem problema. A justificativa historica de
+    duplicar o trecho ("pequeno demais para valer acoplamento") caiu junto: o
+    pedaco deixou de ser pequeno quando passou a ter cache, invalidacao e
+    retentativa -- e duas copias disso e' que seria caro. `mt5_connection` e
+    da MESMA feature, entao nenhuma fronteira do AGENTS.md e' cruzada."""
+    return conectar(mt5, login=login, password=password, server=server, path=path)
 
 
 def _report_error(on_error: Optional[Callable[[str, Exception], None]], key: str, exc: Exception) -> None:

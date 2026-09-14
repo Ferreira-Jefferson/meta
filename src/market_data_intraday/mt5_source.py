@@ -38,6 +38,7 @@ from typing import Callable, Optional
 import pandas as pd
 
 from core.b3_session import MT5_SERVER_TIMEZONE, server_utc_offset_hours
+from market_data_intraday.mt5_connection import conectar
 
 
 MAX_BARS_PER_REQUEST = 99999
@@ -62,18 +63,10 @@ class SymbolEconomics:
 
 
 def _connect(mt5, login=None, password=None, server=None, path=None) -> bool:
-    """Idempotente — mesmo padrao de `MT5Feed._connect`/`MT5Broker.connect`."""
-    kwargs = {}
-    if path:
-        kwargs["path"] = path
-    if login is not None:
-        kwargs["login"] = login
-        kwargs["password"] = password
-        kwargs["server"] = server
-    try:
-        return bool(mt5.initialize(**kwargs))
-    except Exception:
-        return False
+    """Delega para `mt5_connection.conectar` -- gemeo do de
+    `mt5_ticks_source.py`, que carrega a historia completa do porque isto
+    deixou de ser um `mt5.initialize()` por leitura (2026-09-14)."""
+    return conectar(mt5, login=login, password=password, server=server, path=path)
 
 
 def _report_error(on_error: Optional[Callable[[str, Exception], None]], key: str, exc: Exception) -> None:
@@ -85,9 +78,10 @@ def _falha_de_leitura(mt5, resultado, chamada: str) -> Optional[RuntimeError]:
     """Distingue "NAO HA barra nova" de "NAO CONSEGUI ler" -- devolve o erro
     da segunda, `None` na primeira.
 
-    Gemeo de `mt5_ticks_source._falha_de_leitura`, duplicado pelo mesmo motivo
-    de `_connect` (ver a docstring de la'): sao dois arquivos da mesma feature,
-    e o pedaco e' pequeno demais para valer acoplamento. A docstring COMPLETA,
+    Gemeo de `mt5_ticks_source._falha_de_leitura`, e duplicado: sao dois
+    arquivos da mesma feature e o pedaco e' pequeno o bastante para nao valer
+    um terceiro modulo (ao contrario de `_connect`, que virou
+    `mt5_connection` em 2026-09-14 quando deixou de ser pequeno). A docstring COMPLETA,
     com a medicao no terminal real que sustenta o corte em `< 0`, esta em
     `mt5_ticks_source.py` -- este caminho M1 nunca foi visto cegar, mas o
     `resultado is None or len(...) == 0 -> DataFrame()` era identico, e
