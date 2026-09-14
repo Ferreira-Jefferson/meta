@@ -5981,6 +5981,280 @@ nunca foi ligada), só que num degrau acima: aqui o que não foi propagado não
 > antes de copiar o prazo de um robô para outro, converta os dois para tempo
 > de relógio MEDIDO no feed de destino).
 
+### 6.34 Um parâmetro de execução herdado pode não ser ponto cego nenhum — quando a economia por trade já está decidida por outro motivo, cadência só redistribui QUAIS perdas acontecem
+
+O item 6.33 (acima) mostrou que um parâmetro de execução herdado e nunca
+medido — o prazo da ordem de entrada do `copa_win` — valia sozinho mais que
+uma grade inteira de 152 células, e fechou com uma regra geral: "varra as
+outras estratégias em busca do mesmo parâmetro". Isso levantou a pergunta
+natural sobre o `wdo_grid_reload_maker` (WDO@, família maker ENCERRADA pelo
+item 6.21 em 2026-09-10, quando a fila real calibrada por Kaplan-Meier — 438
+contratos na entrada / 489 na saída — mostrou que o lucro só existia com fila
+zero): ele tem um parâmetro análogo, `reancora_min_segundos` (freio de
+cadência que throttla reprecificação de ordem pendente e rearme após recusa
+por capital, default 10 s), também nunca varrido sistematicamente contra P&L
+— só escolhido pra não estourar o teto de envios de ordem da corretora.
+
+**O número.** Varredura de 6 valores (2s, 5s, 10s — controle de produção,
+20s, 30s, 60s) × 88 pregões reais do IS (2026-02-27 a 2026-07-06), motor de
+produção completo: T2/S16, fila calibrada Kaplan-Meier (329 entrada / 494
+saída), sem prazo na saída, capital real R$375. TODOS os 6 valores deram
+**negativo**, com o win% preso numa faixa de apenas **0,53 ponto percentual**
+(85,76%–86,29%) contra um breakeven empírico travado perto de 88% — o
+parâmetro moveu QUANTOS trades aconteceram (trd/dia variou de 55,3 a 64,5)
+mas não moveu a economia por trade em nenhuma direção mensurável.
+
+**A regra (portável, vale em qualquer corretora e qualquer linguagem).** Nem
+todo parâmetro de execução "herdado, nunca medido contra resultado" é um
+ponto cego que muda o veredito de uma estratégia — antes de gastar uma
+varredura nele, pergunte se a economia por trade JÁ está estruturalmente
+negativa por outro motivo independente. Aqui: a fila real do livro, medida
+por Kaplan-Meier (item 6.21, itens 4.20/4.21/4.22), já deixa o bruto por
+operação abaixo do custo fixo de corretagem. Se a resposta é sim, um
+parâmetro de CADÊNCIA de reenvio de ordem só redistribui QUAIS trades
+perdedores acontecem — não pode resgatar uma economia negativa que vem de
+outro lugar.
+
+A diferença para o item 6.33 é o que importa reter: lá o parâmetro
+(`entrada_ttl_barras`) mudava QUAIS SINAIS a estratégia chegava a executar —
+filtrava sinais velhos/atrasados de um robô de rompimento com edge
+direcional e espaço para operar. Aqui o parâmetro só governa a velocidade de
+reenvio de uma ordem de grid que já reancora a cada barra — nenhum dos dois
+lados possíveis desse parâmetro toca a fila real que já matou o edge da
+família (item 6.21).
+
+> Vale medir mesmo assim quando a dúvida aparecer — foi medido aqui, com o
+> mesmo rigor de IC95%/breakeven das hipóteses anteriores desta família (item
+> 6.21) — mas o item 6.33 NÃO deve virar heurística geral de "todo parâmetro
+> de execução esquecido é candidato a virar veredito". Primeiro descarte que
+> a economia por trade já esteja decidida por outro motivo independente; só
+> então a varredura vale o tempo de máquina.
+
+Referência cruzada: item 6.33 (mesmo TIPO de busca, resultado oposto —
+robô com edge direcional vivo, parâmetro que filtra sinais), item 6.21 (a
+fila real, calibrada por Kaplan-Meier, que encerrou a família maker do WDO@
+em 2026-09-10) e itens 4.20/4.21/4.22 (a calibração de fila que produz o
+número usado aqui).
+
+### 6.35 Nenhuma calibração de geometria tira o robô do penhasco de ruína quando o capital já está no piso — em TODAS as 5 combinações testadas, mais da metade dos reordenamentos das mesmas operações trava o caixa
+
+O `wdo_orb` (ORB do WDO@, `src/strategy/daytrade/lab/wdo_orb.py`) tinha sido
+promovido em 2026-09-11 para produção com `max_fades_por_dia=3` e
+`stop_max_ticks=40`. No mesmo dia, depois de viver ao vivo o pior streak já
+registrado na base (4 semanas seguidas de resultado negativo no extrato
+real), o dono pediu uma versão "ganhadora mesmo que pouco, mas constante".
+
+**O número.** Varredura de `max_fades_por_dia` (1, 2, 3) × `stop_max_ticks`
+(30, 40) — 5 combinações válidas — nos 123 pregões (IS+OOS), capital real
+R$375. Para cada combinação, o risco de ruína foi medido embaralhando as
+operações REALIZADAS 10.000 vezes e contando em quantos sorteios o caixa de
+R$375 chega a recusar uma entrada por falta de margem. **O risco de ruína
+ficou entre 52,4% e 55,2% nas 5 combinações** — uma faixa de só 3 pontos
+percentuais entre a melhor (teto1+stop30, 52,4%) e a pior (teto3+stop30,
+55,2%). A combinação escolhida tem o melhor R$/operação (+18,18 contra
++14,92 da que rodava antes) e a menor trava, mas isso é uma melhora
+marginal, não uma solução: **mais da metade dos reordenamentos possíveis das
+mesmas operações levam o caixa mínimo a travar em algum ponto, não importa
+qual combinação de teto de fade ou teto de stop se escolha.**
+
+Confirmação fora do backtest, com os 2 últimos pregões reais antes desta
+decisão (2026-09-10 e 11), caixa contínuo partindo de R$375: a geometria
+antiga (teto3/stop40) fechava o período com **caixa NEGATIVO (−R$2,50)** —
+no mundo real isso é a corretora fazendo um chamado de margem. A geometria
+nova (teto1/stop30) fechava em **+R$68,00**, positivo — mas nenhuma das duas
+ficou confortavelmente acima da margem crua de R$150.
+
+**A regra (portável para qualquer corretora e qualquer linguagem).**
+Parâmetros de geometria de entrada/saída (teto de operações por dia, tamanho
+do stop) mudam o tamanho médio e a frequência de cada perda, mas **não
+mudam a probabilidade estrutural de uma sequência de perdas ocorrer** — essa
+probabilidade é dominada pelo TAMANHO DO CAPITAL relativo ao tamanho típico
+de uma perda, não pela calibração fina da estratégia. Testar "qual ajuste de
+parâmetro reduz o risco de travar o caixa" quando o capital já está no piso
+mínimo tende a devolver melhorias de poucos pontos percentuais, não a
+resolver o problema — e isso deveria ser o resultado ESPERADO, não motivo
+para continuar testando parâmetros novos à procura de uma solução que não
+existe nesse espaço de busca.
+
+> Mesma família de erro do item 6.15 (piso de capital censura o backtest) e
+> do item 6.29 (escada de teto vira penhasco não-monotônico), num terceiro
+> eixo: aqui o próprio risco de ruína embaralhado — não só o líquido — foi
+> medido, e ficou preso a um patamar que a geometria não move. Quando a
+> parede aparece em toda combinação já mapeada de DOIS parâmetros
+> independentes, o próximo passo não é uma terceira varredura de parâmetro —
+> é levar a decisão para o dono como pergunta de CAPITAL, não de estratégia.
+
+Referência cruzada: item 6.15 (piso de capital censura backtest e IS/OOS),
+item 6.29 (escada de teto de perda também é penhasco não-monotônico),
+`capital_minimo_brl` / `contracts_from_capital_operacional`
+(`strategy/daytrade/base.py`) e a seção "Capital inicial: sempre o mínimo
+real do instrumento" do `CLAUDE.md`.
+
+### 6.36 Saída fatiada + posição que escala viram um viés de contagem: cada fatia de um trade VENCEDOR conta como um "trade" novo, cada STOP conta como um só — o win%/IC medido por registro fica contaminado exatamente quando a estratégia mais precisa ser julgada
+
+Ao testar realocação dinâmica de contratos no `wdo_orb` (subclasse
+experimental `WdoOrbDinamico`, nunca tocou o arquivo de produção
+`strategy/daytrade/lab/wdo_orb.py` nem o registry), usando o mesmo padrão
+opt-in `on_capital_update` + `contracts_from_capital_com_reserva` que
+`CopaWin`/`WdoGridReloadMaker` já usam, apareceu um artefato de CONTAGEM na
+forma como o motor registra trades quando a posição escala além de 1
+contrato: `exit_split_unit=1` faz uma entrada VENCEDORA de N contratos virar
+N REGISTROS de "trade ganho" na tabela de resultado (cada fatia do alvo
+fatiado conta como um trade separado), enquanto um STOP fecha a posição
+inteira ATOMICAMENTE em 1 registro só (confirmado em
+`machine.py::_close_position`), mesmo quando a posição tinha N contratos. Ao
+escalar de 1 para 5 contratos (teto oficial do WDO@), todo trade vencedor se
+multiplica em registros e todo trade perdedor continua contando como 1 só —
+o win% e o intervalo de confiança calculados POR REGISTRO DE TRADE ficam
+artificialmente inflados/estreitados conforme a posição cresce, sem isso
+refletir nenhuma melhora real de segurança ou edge.
+
+**O número.** Teste pequeno (16 pregões reais, 2026-02-27 a 2026-03-20,
+motor de produção completo, fila calibrada, capital real R$375, desenho de
+execução fechado) comparando ESTÁTICO (1 contrato fixo) contra DINÂMICO
+(escala 1→5 contratos pelo mesmo caixa):
+
+| métrica | ESTÁTICO | DINÂMICO |
+|---|---|---|
+| trades (registros) | 22 | 75 |
+| stops (eventos, não fragmentados) | 4 | 4 |
+| win% por registro | 72,7% | 86,7% (contaminado pelo artefato) |
+| breakeven empírico | 35,5% | 61,7% (também contaminado — a fórmula usa ganho/perda médios por registro) |
+| líquido R$ | 2.459,00 | 9.190,00 |
+| MaxDD | R$473,00 (126,1% do capital de partida) | R$2.350,00 (626,7% do capital de partida) |
+
+O que é ROBUSTO ao artefato (soma de R$ e curva de caixa não dependem de como
+o motor fragmenta o registro) mostra o OPOSTO do que o win%/IC contaminados
+sugeririam: sob rejeição i.i.d. (mesmo método de
+`capital_dinamico_rerun_2026_08_27.py`, 30 sementes embaralhando a mesma
+sequência de trades), o ESTÁTICO NUNCA zerou (0/30) enquanto o DINÂMICO
+zerou em 2 de 30 sementes — mesmos 4 stops nas duas variantes, mas ao
+escalar, o mesmo stop custa proporcionalmente muito mais.
+
+**A regra (invariante portável).** Ao calcular win%/IC de confiança de
+qualquer estratégia que fatia a saída (`exit_split_unit`) E escala
+quantidade de posição (realocação dinâmica de contratos/lotes), NUNCA meça
+win%/breakeven por REGISTRO DE TRADE bruto da tabela de resultado — meça por
+EVENTO DE FECHAMENTO DE POSIÇÃO (agrupando as fatias de uma mesma entrada
+como 1 resultado só, ponderado pelo tamanho real da posição), ou use
+métricas robustas à fragmentação (líquido em R$, MaxDD em R$/%, taxa de
+ruína sob rejeição i.i.d.) como critério decisivo sempre que a granularidade
+de registro puder variar entre as variantes comparadas. Combinar (a) saída
+fatiada e (b) tamanho de posição variável no tempo é o gatilho específico
+deste viés — qualquer estratégia do repo com essa combinação deve ter seu
+win%/IC históricos tratados com suspeita até serem recalculados por evento
+em vez de por registro.
+
+> A família maker do WDO F1/`wdo_grid_reload_maker`, quando ainda usava
+> realocação dinâmica antes de ser encerrada por fila real (item 6.21), tinha
+> exatamente essa combinação — saída fatiada + escala de contratos. Os
+> números de win%/IC publicados ANTES do encerramento por fila podem ter
+> somado os dois vieses (fila zero E fragmentação de registro), na mesma
+> direção: os dois inflam o resultado aparente.
+
+Referência cruzada: item 6.21 (família maker ENCERRADA pela fila real —
+mesma combinação saída-fatiada + realocação dinâmica), item 6.22 (o nulo
+geométrico), item 6.23 (breakeven empírico quando o payoff foge do nominal)
+e `machine.py::_close_position` (onde o STOP fecha atômico e o alvo fatiado
+não).
+
+---
+
+### 6.37 Um veredito POSITIVO foi RETIRADO horas depois de publicado: 9 de 9 símbolos calibrados da `Gremah` resolviam alvo/espaçamento em 1 tick, e em 9 dias de operação real a PMAM3 teve 1 round-trip completo, resultado −R$1,00
+
+O dono, olhando o veredito recém-publicado de uma cesta `Gremah`
+(PMAM3+DASA3+KLBN3, win% 89-92%, IC95% de Wilson acima do breakeven nas duas
+janelas IS/OOS — POSITIVA), levantou dois pontos de cabeça em vez de aceitar
+o número: "alvo de 1 tick não funciona" e "PMAM3... desde que a gremah foi
+feita, até agora ela não comprou ou vendeu nada no real". Os dois pontos
+verificaram, e o segundo derrubou o primeiro veredito no mesmo dia em que
+saiu.
+
+**O número, contra o terminal MT5 real** (magic `862226953`, único símbolo
+com histórico real no período, 25/08 a 03/09/2026 — 9 dias de operação): **49
+ordens enviadas pelo robô em PMAM3, 41 CANCELADAS sem nunca serem tocadas
+(84%)**, 8 preenchidas — dessas, só **1** carregava o magic do robô de
+verdade (as outras 7 eram 1 teste manual do dono e ordens sem magic,
+prováveis SL/TP da corretora). **1 round-trip completo do robô em 9 dias de
+operação real, resultado −R$1,00.**
+
+Checagem mecânica direta, não estatística: peguei uma das ordens canceladas
+(compra parada em R$0,13, ativa das 08:00 às 08:30 de 25/08) e busquei TODO
+negócio real da PMAM3 naquela janela de 30 minutos via `copy_ticks_range` — o
+preço **nunca saiu de R$0,14-0,15** durante a meia hora inteira em que a
+ordem ficou parada. Este não é o modo de falha do WDO@ (perder a disputa de
+fila no nível, item 6.21/4.21) — aqui o nível simplesmente **nunca foi
+visitado** pelo mercado.
+
+**O achado generaliza muito além da PMAM3, e isso é o ponto mais
+importante.** Rodando `Gremah._session_ticks()` (o método real de produção,
+não um proxy) para os 9 símbolos de `_CALIBRATION_BY_SYMBOL`
+(`strategy/daytrade/lab/gremah.py`) no preço mais recente disponível de cada
+um: **9 de 9 resolvem para alvo=1 tick, espaçamento=1 tick.** Quatro deles
+(PMAM3, CSAN3, KLBN3, BMGB4) têm isso HARDCODED em
+`_GEOMETRIA_TICKS_BY_SYMBOL` — "confirmado" via grid search de backtest sem
+nunca checar execução real, e não muda com o preço; os outros cinco (KLBN4,
+DASA3, PCAR3, GRND3, LPSB3) saturam no piso `max(1, round(...))` do cálculo
+percentual/por-volatilidade nos preços atuais. Nenhum símbolo da tabela
+inteira escapa.
+
+**A regra (invariante portátil — generaliza o T1 proibido do WDO F1, item
+4.6/4.8, com evidência ainda mais direta).** Um alvo — OU espaçamento, OU
+stop — de 1 tick não é "geometria pequena calibrada com sucesso": é geometria
+que a corretora não executa de forma confiável. Aqui a evidência é mais
+direta que a do WDO@ porque não é disputa de fila — é o nível **não sendo
+tocado** pelo mercado real na janela em que a ordem fica parada. Um backtest
+que conta "toque" a partir do high/low agregado de uma barra (M1, no caso da
+Gremah) pode registrar dezenas de "toques" que nunca correspondem a um
+negócio real print ado naquele preço exato — o mesmo otimismo "toque=preenche"
+já corrigido para o WDO@ (itens 4.20-4.22) nunca tinha sido auditado para
+ações, e o motor de ações (`Gremah`) não tem fila calibrada nenhuma
+(`backtest/intraday/fidelidade.py` só cobre WDO@) — o gap ficou invisível até
+ter dado real pra comparar.
+
+**A correção aplicada (2026-09-13, código, não parâmetro de backtest):** em
+`strategy/daytrade/lab/gremah.py`, constante nova `PROFIT_TICKS_MINIMO = 2` +
+método `_geometria_e_segura(profit_ticks, spacing_ticks, stop_ticks) -> bool`,
+chamado nos dois pontos onde uma entrada é armada (fase fixa via
+`_arm_fixed_session_params`, fase rolante dentro de `on_bar`). Se QUALQUER
+uma das três dimensões resolver abaixo de 2 ticks, a estratégia RECUSA a
+sessão inteira (nenhuma entrada armada) — nunca clampa/substitui pelo piso em
+silêncio, porque um número que nunca passou pelo protocolo de calibração
+(regime → varredura IS → confirmação OOS) não pode entrar em produção só por
+parecer "mais seguro" na superfície; é a mesma lição que o T1 do WDO F1 já
+tinha ensinado, agora reaplicada a um motor diferente. 4 testes novos em
+`tests/test_gremah.py` cobrem o gate (fase fixa recusa, fase rolante recusa,
+geometria válida em 2 ticks continua armando, a função de checagem isolada
+rejeitando cada uma das três dimensões). Suíte inteira: 2014 passed, 1
+skipped — sem regressão.
+
+**Consequência prática que fica registrada: o veredito POSITIVO foi
+RETIRADO.** Com a correção, a `Gremah` não arma NENHUMA entrada em NENHUM dos
+9 símbolos calibrados hoje, porque todos saturam no piso de 1 tick — isso
+inclui a cesta PMAM3+DASA3+KLBN3 reportada como POSITIVA momentos antes desta
+descoberta. É o resultado correto e intencional (parar de operar geometria
+inexequível é melhor que continuar operando um robô que não é tocado), mas
+nenhuma perna da cesta está operável até recalibração acima do novo piso.
+
+> **Achado relacionado, EM ABERTO — não corrigido aqui.**
+> `rolling_reanchor_after_bars` (default 30 barras M1 = 30 minutos) é a
+> explicação mecânica mais provável de a ordem nunca ter sido tocada de
+> verdade: ela fica parada 30 minutos inteiros antes de ser reancorada para o
+> preço atual — o mesmo anti-padrão que `wdo_grid_reload_maker` já teve e
+> corrigiu no item 4.9 ("reancorar em TODA barra, não só no instante de
+> armar"; antes disso o robô ficava ativo só 0-14% do pregão). A `Gremah`
+> nunca recebeu essa mesma correção. Consertar só o piso de tamanho (este
+> item) não resolve isso — mesmo depois de recalibrar um símbolo com alvo≥2,
+> uma ordem que só reancora a cada 30 minutos pode continuar não sendo tocada
+> pelo MESMO motivo mecânico observado aqui. Candidato a PRÓXIMO item, não
+> resolvido agora.
+
+Referência cruzada: item 4.6 (piso de 1 tick decidindo o alvo — mesma
+saturação, achada primeiro no WDO@), item 4.8 (T1 proibido no WDO F1 — mesma
+proibição, agora com evidência de "nível nunca visitado" em vez de "perde a
+fila"), item 4.9 (reancoragem só ao armar — o achado em aberto acima) e item
+6.21 (família maker WDO encerrada pela fila real — modo de falha irmão, não
+idêntico).
 
 ### 6.38 Um eixo de fila varrido de 0 a 2.000 contratos devolveu a MESMA linha em 36 células — não era robustez, era escala emprestada de outro instrumento
 
@@ -6025,10 +6299,6 @@ aplicada aqui a um parâmetro de fila), item 6.21/4.21 (a calibração 438/489 d
 WDO@ que foi emprestada na escala errada), item 6.30 (fila não generaliza
 entre instrumentos — aqui o erro é a UNIDADE de medida da fila, não só o
 efeito dela).
-
----
-
-## Parte 7 — Disciplina de trabalho
 
 ---
 
@@ -6913,6 +7183,60 @@ dinheiro ou meses.
     `copa_win` era o default (`entrada_ttl_barras=15`, nunca comparado com
     nada); baixá-lo para 5 valeu mais que uma grade de 152 células de
     geometria. (6.33, 6.20, 4.24)
+
+95. Depois que a fila real do livro (medida por Kaplan-Meier ou equivalente,
+    pergunta 80) já mostrar que o bruto por operação fica ABAIXO do custo
+    fixo por ordem desta plataforma, ainda vale a pena varrer um parâmetro de
+    CADÊNCIA de reenvio/reancoragem de ordem — ou a resposta já está decidida
+    pela economia? Varrer 6 valores de cadência (2s a 60s) sobre uma família
+    cuja fila real já mostrava expectativa negativa por trade produziu 6
+    resultados negativos, com o win% preso numa faixa de 0,53 ponto
+    percentual contra um breakeven bem acima — a cadência redistribuiu
+    QUANTOS trades aconteciam (trd/dia variou), nunca a economia por trade em
+    nenhuma direção mensurável. Compare com a pergunta 94 (prazo de entrada do
+    `copa_win`): lá o parâmetro análogo mudava QUAIS SINAIS a estratégia
+    chegava a executar, e por isso resgatou uma economia positiva que já
+    existia; aqui o parâmetro só reordena o reenvio de uma ordem que já
+    reancora a cada barra, sem tocar a fila que matou o edge da família.
+    Antes de varrer, confirme se a economia por trade já está
+    estruturalmente decidida por um motivo independente do parâmetro em
+    questão — só a resposta "não" justifica a varredura. (6.34, 6.33, 6.21)
+
+96. Ao portar uma estratégia com portão de capital mínimo, qual é a
+    probabilidade de o capital mínimo oficial travar o robô numa sequência
+    de perdas COMUM (não rara) — medida embaralhando o histórico real de
+    operações 10.000 vezes e contando em quantos sorteios o caixa recusa uma
+    entrada por falta de margem, não só olhando o líquido agregado? Se essa
+    probabilidade for alta (aqui, 52,4%-55,2% em 5 combinações de geometria
+    diferentes) e não se mover com a calibração de parâmetro de
+    entrada/saída, o problema é de DIMENSIONAMENTO DE CAPITAL, não de
+    parâmetro de estratégia — trate como decisão do dono, não como algo a
+    "otimizar" testando mais combinações. (6.35, 6.15)
+
+97. Quando a saída é fatiada E a quantidade de posição escala dinamicamente,
+    como a plataforma nova conta "um trade" para fins de win%/IC — por
+    REGISTRO de preenchimento ou por EVENTO de fechamento de posição? Se for
+    por registro, o win% de qualquer variante que escale contratos está
+    contaminado do mesmo jeito: cada fatia de um trade vencedor infla a
+    contagem, cada stop (fechamento atômico) não. Cruze com a família maker
+    do WDO F1 (item 6.21) — ela combinava saída fatiada com realocação
+    dinâmica de contratos antes de ser encerrada pela fila real, e pode ter
+    reportado win%/IC otimistas demais por este mesmo motivo, ANTES de ter
+    sido encerrada pelo motivo da fila. (6.36, 6.21)
+
+98. Quando uma estratégia maker resolve geometria (alvo, espaçamento OU
+    stop) abaixo de um piso mínimo de ticks, a plataforma nova RECUSA a
+    sessão automaticamente, ou esse gate precisa ser implementado à mão em
+    cada estratégia? E existe uma forma de auditar TODAS as estratégias de
+    uma vez contra esse piso — rodando o método real de calibração de cada
+    uma nos preços correntes, não lendo o parâmetro configurado — em vez de
+    descobrir símbolo por símbolo depois que dinheiro real já foi arriscado?
+    Aqui **9 de 9** símbolos calibrados de um único robô (`Gremah`)
+    resolviam para alvo=1 tick sem que ninguém tivesse rodado essa auditoria
+    antes de publicar um veredito POSITIVO; a checagem contra o extrato real
+    (84% das ordens canceladas sem nunca serem tocadas, 1 round-trip
+    completo em 9 dias) é que forçou a retirada do veredito no mesmo dia.
+    (4.6, 4.8, 6.37)
 99. Qual é a grandeza que a plataforma nova me dá para estimar fila — volume
     da barra (todos os preços) ou volume ao preço do meu nível? E qual é a
     escala típica dela NESTE instrumento? Varrer fila numa escala emprestada
