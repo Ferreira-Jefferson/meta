@@ -107,6 +107,13 @@ def test_podio_declarado_2026_09_04():
     medicao viva sobre o dado disponivel, nao por validacao em dinheiro
     real.
 
+    Decisao do dono, 2026-09-11: `wdo_grid_fade_off_t3` entra no CATALOGO em
+    ULTIMO lugar -- observacao em sombra da variante `combo_T3` (filtro de
+    regime `fade_off`/20min + alvo T3/S16), estatisticamente INDEFINIDA em
+    19 pregoes (IC95% do win% atravessa o breakeven empirico). Nao e'
+    promocao: nao entra acima de `wdo_orb` nem de `wdo_grid_reload_maker`.
+    Ver o comentario datado em `strategy/daytrade/registry.py`.
+
     Decisao do dono, 2026-09-13: `copa_win` sobe a TOP-1, `wdo_orb` cai para
     TOP-2 e `wdo_grid_reload_maker` para TOP-3. E' o UNICO robo do catalogo
     com VEREDITO em vez de "melhor medicao disponivel": win 61,1% em 568
@@ -125,10 +132,11 @@ def test_podio_declarado_2026_09_04():
 
     assert [r.key for r in robos] == [
         "copa_win", "wdo_orb", "wdo_grid_reload_maker", "gremah",
+        "wdo_grid_fade_off_t3",
     ]
-    assert [r.rank for r in robos] == [1, 2, 3, 4]
-    assert [r.feed_kind for r in robos] == ["m1", "tick", "tick", "m1"]
-    assert [r.is_futuro for r in robos] == [True, True, True, False]
+    assert [r.rank for r in robos] == [1, 2, 3, 4, 5]
+    assert [r.feed_kind for r in robos] == ["m1", "tick", "tick", "m1", "tick"]
+    assert [r.is_futuro for r in robos] == [True, True, True, False, True]
 
 
 def test_gremah_cobre_os_nove_simbolos_confirmados():

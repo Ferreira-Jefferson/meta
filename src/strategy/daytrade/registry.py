@@ -27,6 +27,7 @@ from core.instruments import economics_for
 from strategy.daytrade.base import IntradayStrategy
 from strategy.daytrade.lab.copa_win import CopaWin
 from strategy.daytrade.lab.gremah import Gremah
+from strategy.daytrade.lab.wdo_grid_fade_off_t3 import WdoGridFadeOffT3
 from strategy.daytrade.lab.wdo_grid_reload_maker import WdoGridReloadMaker
 from strategy.daytrade.lab.wdo_orb import WdoOrb
 
@@ -198,6 +199,34 @@ from strategy.daytrade.lab.wdo_orb import WdoOrb
 # rompimento) e aceita não ser preenchida — 19,4% dos pregões passam em
 # branco de propósito. Fila alta não inverte o sinal dela; só reduz quantos
 # pregões operam.
+# 2026-09-11, decisao do dono: `wdo_grid_fade_off_t3` entra no catalogo em
+# ULTIMO lugar (observacao, NAO promocao) -- candidata `combo_T3` (filtro de
+# regime `fade_off`/20min + alvo T3, mantendo S16). Um teste inicial pooled de
+# 19 pregoes (`scripts/daytrade/wdof1_regime_alvo_combinado_2026_09_11.py`)
+# parecia promissor (+R$169,50 liquido) mas NAO SOBREVIVEU a ampliacao pro
+# historico real completo -- ver `scripts/daytrade/wdof1_combo_t3_is_oos_
+# real_2026_09_11.py`, 132 pregoes reais (2026-02-27 a 2026-09-09), corte
+# IS/OOS limpo (88/44 pregoes), limiar do regime recalibrado SO no IS (11,00
+# ticks, sem vazamento):
+#
+#   IS  (88 preg.): combo_T3 NEGATIVO com confianca -- IC95% win% [79,17;
+#                   81,80] inteiro ABAIXO do breakeven empirico 83,90%;
+#                   liquido -R$11.677,50 (baseline: -R$11.798,00).
+#   OOS (44 preg.): combo_T3 INDEFINIDO -- IC95% win% [81,10;84,56]
+#                   atravessa o breakeven 83,83%; liquido continua NEGATIVO,
+#                   -R$1.629,50 (baseline: -R$3.990,50 -- reduz o prejuizo em
+#                   ~59% mas nao inverte o sinal).
+#
+# Os 19 pregoes do teste pooled -- e sobretudo os 2 ultimos, usados pra
+# ESCOLHER a variante -- eram um recorte favoravel, nao representativo; e'
+# exatamente o vies de selecao que o proprio script de origem ja declarava.
+# NENHUM periodo (IS ou OOS) tem IC inteiro acima do breakeven em nenhuma
+# variante testada hoje (`wdo_grid_fade_off_t3` incluida) -- nao ha edge
+# comprovado. Fica em SOMBRA (nunca execucao real) so' como observacao
+# adicional daqui pra frente, sem prometer mais do que os dados sustentam;
+# nao substitui `wdo_orb` (TOP-1) nem `wdo_grid_reload_maker` (TOP-2), so'
+# existe para o painel/slot de sombra poderem instancia-la pelo catalogo em
+# vez de importar a classe direto.
 # 2026-09-13, ORDEM DO DONO: `copa_win` sobe a TOP-1, empurrando `wdo_orb`
 # para TOP-2 e `wdo_grid_reload_maker` para TOP-3.
 #
@@ -257,6 +286,7 @@ _ROBOTS: dict[str, type[IntradayStrategy]] = {
     WdoOrb.name: WdoOrb,
     WdoGridReloadMaker.name: WdoGridReloadMaker,
     Gremah.name: Gremah,
+    WdoGridFadeOffT3.name: WdoGridFadeOffT3,
 }
 
 #: kwargs extras pra robôs cujo construtor exige parâmetro sem default
