@@ -1,0 +1,126 @@
+existe versao do copa_win com CAPITAL R$ 300 e ACERTO >= 90%?
+26 geometrias x 2 janelas = 52 celulas   (producao a7,6 s12 incluida como referencia)
+lembrete aritmetico: acerto >= 90% exige stop ~9x alvo, e nessa geometria
+o breakeven tambem fica em ~90% -- as duas colunas tem de ser lidas juntas.
+
+[  1/52] IS  a1,6 s16    win  80,0%  liq       32,10  indefinido   s/trade 127/129  ZEROU  (0s)
+[  2/52] IS  a1,2 s20    win  79,0%  liq     -131,30  indefinido   s/trade 117/129  ZEROU  (1s)
+[  3/52] IS  a1,6 s20    win  80,0%  liq       32,10  indefinido   s/trade 127/129  ZEROU  (0s)
+[  4/52] IS  a1,2 s24    win  79,7%  liq     -121,50  indefinido   s/trade 117/129  ZEROU  (1s)
+[  5/52] IS  a1,2 s30    win  80,0%  liq     -137,60  indefinido   s/trade 117/129  ZEROU  (1s)
+[  6/52] IS  a1,6 s24    win  80,0%  liq       32,10  indefinido   s/trade 127/129  ZEROU  (0s)
+[  7/52] IS  a1,6 s30    win  80,0%  liq       32,10  indefinido   s/trade 127/129  ZEROU  (0s)
+[  8/52] IS  a2,4 s20    win  80,0%  liq      131,90  indefinido   s/trade 127/129  ZEROU  (0s)
+[  9/52] IS  a2,4 s24    win  80,0%  liq      131,90  indefinido   s/trade 127/129  ZEROU  (0s)
+[ 10/52] IS  a1,2 s16    win  79,5%  liq     -125,60  indefinido   s/trade 109/129  ZEROU  (2s)
+[ 11/52] IS  a1,2 s12    win  77,5%  liq     -138,80  indefinido   s/trade 108/129  ZEROU  (2s)
+[ 12/52] IS  a2,4 s30    win  80,0%  liq      131,90  indefinido   s/trade 127/129  ZEROU  (0s)
+[ 13/52] IS  a3,2 s20    win  75,0%  liq      297,80  indefinido   s/trade 124/129  ZEROU  (1s)
+[ 14/52] IS  a3,2 s24    win  72,2%  liq      261,00  indefinido   s/trade 124/129  ZEROU  (0s)
+[ 15/52] IS  a3,2 s30    win  72,2%  liq      274,00  indefinido   s/trade 124/129  ZEROU  (1s)
+[ 16/52] IS  a7,6 s12    win  66,7%  liq      160,00  indefinido   s/trade 124/129  ZEROU  (1s)
+[ 17/52] IS  a0,8 s12    win  80,8%  liq    3.368,00  indefinido   (12s)
+[ 18/52] IS  a0,8 s20    win  80,9%  liq    3.537,30  indefinido   (12s)
+[ 19/52] OOS a0,8 s20    win 100,0%  liq      152,10  POSITIVO     s/trade 61/62  ZEROU  (0s)
+[ 20/52] IS  a0,8 s24    win  81,4%  liq    3.484,80  indefinido   (12s)
+[ 21/52] OOS a0,8 s16    win  87,5%  liq     -278,40  indefinido   s/trade 61/62  (5s)
+[ 22/52] OOS a0,8 s24    win 100,0%  liq      152,10  POSITIVO     s/trade 61/62  ZEROU  (0s)
+[ 23/52] OOS a0,8 s30    win 100,0%  liq      152,10  POSITIVO     s/trade 61/62  ZEROU  (0s)
+[ 24/52] OOS a1,2 s12    win 100,0%  liq       93,10  POSITIVO     s/trade 61/62  ZEROU  (0s)
+[ 25/52] IS  a0,8 s16    win  81,1%  liq    3.700,60  POSITIVO     (13s)
+[ 26/52] IS  a0,8 s30    win  81,4%  liq    3.288,40  indefinido   (12s)
+[ 27/52] OOS a1,2 s16    win 100,0%  liq       93,10  POSITIVO     s/trade 61/62  ZEROU  (0s)
+[ 28/52] OOS a1,2 s20    win 100,0%  liq       93,10  POSITIVO     s/trade 61/62  ZEROU  (0s)
+[ 29/52] OOS a0,8 s12    win  71,1%  liq     -220,60  indefinido   s/trade 52/62  (6s)
+[ 30/52] OOS a1,2 s24    win 100,0%  liq       93,10  POSITIVO     s/trade 61/62  ZEROU  (0s)
+[ 31/52] OOS a1,2 s30    win 100,0%  liq       93,10  POSITIVO     s/trade 61/62  ZEROU  (0s)
+[ 32/52] OOS a1,6 s30    win  83,3%  liq      136,20  indefinido   s/trade 61/62  ZEROU  (0s)
+[ 33/52] OOS a2,4 s12    win 100,0%  liq       48,50  POSITIVO     s/trade 61/62  ZEROU  (0s)
+[ 34/52] OOS a2,4 s20    win 100,0%  liq       48,50  POSITIVO     s/trade 61/62  ZEROU  (0s)
+[ 35/52] OOS a2,4 s24    win 100,0%  liq       48,50  POSITIVO     s/trade 61/62  ZEROU  (0s)
+[ 36/52] OOS a2,4 s16    win 100,0%  liq       48,50  POSITIVO     s/trade 61/62  ZEROU  (0s)
+[ 37/52] IS  a2,4 s16    win  66,7%  liq     -271,60  indefinido   s/trade 127/129  (11s)
+[ 38/52] IS  a1,6 s12    win  66,7%  liq     -271,40  indefinido   s/trade 127/129  (13s)
+[ 39/52] OOS a2,4 s30    win 100,0%  liq       48,50  POSITIVO     s/trade 61/62  ZEROU  (0s)
+[ 40/52] OOS a3,2 s12    win 100,0%  liq       70,90  POSITIVO     s/trade 61/62  ZEROU  (0s)
+[ 41/52] OOS a3,2 s16    win 100,0%  liq       70,90  POSITIVO     s/trade 61/62  ZEROU  (0s)
+[ 42/52] IS  a2,4 s12    win  60,0%  liq     -216,60  indefinido   s/trade 127/129  (11s)
+[ 43/52] OOS a3,2 s20    win 100,0%  liq       70,90  POSITIVO     s/trade 61/62  ZEROU  (0s)
+[ 44/52] OOS a3,2 s24    win 100,0%  liq       70,90  POSITIVO     s/trade 61/62  ZEROU  (0s)
+[ 45/52] OOS a3,2 s30    win 100,0%  liq       70,90  POSITIVO     s/trade 61/62  ZEROU  (0s)
+[ 46/52] OOS a1,6 s16    win  72,2%  liq      -61,70  indefinido   s/trade 41/62  ZEROU  (2s)
+[ 47/52] IS  a3,2 s16    win  73,1%  liq     -280,40  indefinido   s/trade 124/129  (11s)
+[ 48/52] IS  a3,2 s12    win  60,0%  liq     -209,20  indefinido   s/trade 125/129  (11s)
+[ 49/52] OOS a1,6 s24    win  71,4%  liq     -248,30  indefinido   s/trade 61/62  (3s)
+[ 50/52] OOS a1,6 s20    win  62,5%  liq     -203,00  indefinido   s/trade 61/62  (4s)
+[ 51/52] OOS a1,6 s12    win  76,7%  liq    2.707,30  indefinido   (4s)
+[ 52/52] OOS a7,6 s12    win  50,0%  liq     -289,00  indefinido   s/trade 61/62  (3s)
+
+
+===== IS -- ordenado por taxa de ACERTO (o que o dono pediu) =====
+alvo/stop      win%       IC95%  BE emp  BEnom     liquido   opscaixa min alvo tk  alvo R$  stop R$    veredito
+---------------------------------------------------------------------------------------------------------------
+a0,8 s30      81,4%     [79;84]   79,0%    97%    3.288,40   918      287    25,5     25,5    956,7  indefinido
+a0,8 s24      81,4%     [79;84]   78,8%    97%    3.484,80   912      287    25,7     25,7    769,9  indefinido
+a0,8 s16      81,1%     [78;83]   78,4%    95%    3.700,60   946      287    25,4     25,4    508,3    POSITIVO
+a0,8 s20      80,9%     [78;83]   78,3%    96%    3.537,30   921      287    25,5     25,5    637,6  indefinido
+a0,8 s12      80,8%     [78;83]   78,4%    94%    3.368,00   962      287    25,5     25,5    382,4  indefinido
+a1,6 s16      80,0%     [38;96]   75,5%    91%       32,10     5       -2    35,6     35,6    356,2  indefinido  s/trade 127/129  ZEROU
+a1,6 s20      80,0%     [38;96]   75,5%    93%       32,10     5       -2    35,6     35,6    445,2  indefinido  s/trade 127/129  ZEROU
+a1,2 s30      80,0%     [70;87]   80,9%    96%     -137,60    80      -30    31,0     31,0    775,2  indefinido  s/trade 117/129  ZEROU
+a1,6 s24      80,0%     [38;96]   75,5%    94%       32,10     5       -2    35,6     35,6    534,2  indefinido  s/trade 127/129  ZEROU
+a1,6 s30      80,0%     [38;96]   75,5%    95%       32,10     5       -2    35,6     35,6    667,8  indefinido  s/trade 127/129  ZEROU
+a2,4 s20      80,0%     [38;96]   63,1%    89%      131,90     5       -4    61,2     61,2    510,0  indefinido  s/trade 127/129  ZEROU
+a2,4 s24      80,0%     [38;96]   63,1%    91%      131,90     5       -4    61,2     61,2    612,0  indefinido  s/trade 127/129  ZEROU
+a2,4 s30      80,0%     [38;96]   63,1%    93%      131,90     5       -4    61,2     61,2    765,0  indefinido  s/trade 127/129  ZEROU
+a1,2 s24      79,7%     [70;87]   80,6%    95%     -121,50    79      -14    31,0     31,0    620,2  indefinido  s/trade 117/129  ZEROU
+a1,2 s16      79,5%     [72;86]   80,1%    93%     -125,60   132       -4    29,5     29,5    393,1  indefinido  s/trade 109/129  ZEROU
+a1,2 s20      79,0%     [69;86]   79,9%    94%     -131,30    81      -24    31,0     31,0    516,8  indefinido  s/trade 117/129  ZEROU
+a1,2 s12      77,5%     [70;84]   78,1%    91%     -138,80   142       -5    29,9     29,9    298,7  indefinido  s/trade 108/129  ZEROU
+a3,2 s20      75,0%     [53;89]   67,6%    86%      297,80    20      -16    63,2     63,2    395,2  indefinido  s/trade 124/129  ZEROU
+a3,2 s16      73,1%     [54;86]   77,1%    83%     -280,40    26       20   108,7    108,7    543,7  indefinido  s/trade 124/129
+a3,2 s24      72,2%     [49;88]   65,2%    88%      261,00    18      -53    66,2     66,2    496,3  indefinido  s/trade 124/129  ZEROU
+a3,2 s30      72,2%     [49;88]   64,9%    90%      274,00    18      -40    66,2     66,2    620,4  indefinido  s/trade 124/129  ZEROU
+a7,6 s12      66,7%     [39;86]   61,9%    61%      160,00    12      -22   132,4    132,4    209,0  indefinido  s/trade 124/129  ZEROU   <== PRODUCAO
+a2,4 s16      66,7%     [30;90]   81,3%    87%     -271,60     6       28    81,1     81,1    541,0  indefinido  s/trade 127/129
+a1,6 s12      66,7%     [30;90]   85,5%    88%     -271,40     6       29    54,1     54,1    405,7  indefinido  s/trade 127/129
+a2,4 s12      60,0%     [31;83]   71,1%    83%     -216,60    10       13    81,2     81,2    405,8  indefinido  s/trade 127/129
+a3,2 s12      60,0%     [39;78]   65,7%    79%     -209,20    20       59   108,6    108,6    407,3  indefinido  s/trade 125/129
+
+
+===== OOS -- ordenado por taxa de ACERTO (o que o dono pediu) =====
+alvo/stop      win%       IC95%  BE emp  BEnom     liquido   opscaixa min alvo tk  alvo R$  stop R$    veredito
+---------------------------------------------------------------------------------------------------------------
+a0,8 s20     100,0%    [65;100]    0,0%    96%      152,10     7       -9    20,5     20,5    512,0    POSITIVO  s/trade 61/62  ZEROU
+a0,8 s24     100,0%    [65;100]    0,0%    97%      152,10     7       -9    20,5     20,5    614,4    POSITIVO  s/trade 61/62  ZEROU
+a0,8 s30     100,0%    [65;100]    0,0%    97%      152,10     7       -9    20,5     20,5    768,0    POSITIVO  s/trade 61/62  ZEROU
+a1,2 s12     100,0%    [44;100]    0,0%    91%       93,10     3       -8    44,1     44,1    440,6    POSITIVO  s/trade 61/62  ZEROU
+a1,2 s16     100,0%    [44;100]    0,0%    93%       93,10     3       -8    44,1     44,1    587,5    POSITIVO  s/trade 61/62  ZEROU
+a1,2 s20     100,0%    [44;100]    0,0%    94%       93,10     3       -8    44,1     44,1    734,4    POSITIVO  s/trade 61/62  ZEROU
+a1,2 s24     100,0%    [44;100]    0,0%    95%       93,10     3       -8    44,1     44,1    881,3    POSITIVO  s/trade 61/62  ZEROU
+a1,2 s30     100,0%    [44;100]    0,0%    96%       93,10     3       -8    44,1     44,1  1.101,6    POSITIVO  s/trade 61/62  ZEROU
+a2,4 s12     100,0%    [21;100]    0,0%    83%       48,50     1      -16    88,1     88,1    440,6    POSITIVO  s/trade 61/62  ZEROU
+a2,4 s20     100,0%    [21;100]    0,0%    89%       48,50     1      -16    88,1     88,1    734,4    POSITIVO  s/trade 61/62  ZEROU
+a2,4 s24     100,0%    [21;100]    0,0%    91%       48,50     1      -16    88,1     88,1    881,3    POSITIVO  s/trade 61/62  ZEROU
+a2,4 s16     100,0%    [21;100]    0,0%    87%       48,50     1      -16    88,1     88,1    587,5    POSITIVO  s/trade 61/62  ZEROU
+a2,4 s30     100,0%    [21;100]    0,0%    93%       48,50     1      -16    88,1     88,1  1.101,6    POSITIVO  s/trade 61/62  ZEROU
+a3,2 s12     100,0%    [21;100]    0,0%    79%       70,90     1      -11    91,4     91,4    342,6    POSITIVO  s/trade 61/62  ZEROU
+a3,2 s16     100,0%    [21;100]    0,0%    83%       70,90     1      -11    91,4     91,4    456,8    POSITIVO  s/trade 61/62  ZEROU
+a3,2 s20     100,0%    [21;100]    0,0%    86%       70,90     1      -11    91,4     91,4    571,0    POSITIVO  s/trade 61/62  ZEROU
+a3,2 s24     100,0%    [21;100]    0,0%    88%       70,90     1      -11    91,4     91,4    685,2    POSITIVO  s/trade 61/62  ZEROU
+a3,2 s30     100,0%    [21;100]    0,0%    90%       70,90     1      -11    91,4     91,4    856,5    POSITIVO  s/trade 61/62  ZEROU
+a0,8 s16      87,5%     [53;98]   95,2%    95%     -278,40     8       22    26,4     26,4    528,0  indefinido  s/trade 61/62
+a1,6 s30      83,3%     [44;97]   59,6%    95%      136,20     6       -0    34,8     34,8    652,8  indefinido  s/trade 61/62  ZEROU
+a1,6 s12      76,7%     [72;81]   73,0%    88%    2.707,30   399      132    43,4     43,4    325,2  indefinido
+a1,6 s16      72,2%     [63;80]   72,4%    91%      -61,70   115       -3    45,3     45,3    452,8  indefinido  s/trade 41/62  ZEROU
+a1,6 s24      71,4%     [36;92]   85,1%    94%     -248,30     7       52    52,8     52,8    792,0  indefinido  s/trade 61/62
+a0,8 s12      71,1%     [60;80]   73,6%    94%     -220,60    76       52    25,8     25,8    387,2  indefinido  s/trade 52/62
+a1,6 s20      62,5%     [31;86]   77,4%    93%     -203,00     8       86    52,8     52,8    660,0  indefinido  s/trade 61/62
+a7,6 s12      50,0%      [9;91]   74,2%    61%     -289,00     2       11   251,0    251,0    396,2  indefinido  s/trade 61/62   <== PRODUCAO
+
+
+===== RESPOSTA: celulas que cumprem AS DUAS condicoes =====
+criterio: win% >= 90%, liquido > 0, alvo >= 2 ticks reais, janela NAO censurada (0 pregoes sem trade)
+  NENHUMA. Ver as tabelas acima -- a coluna que explica por que
+  esta no `s/trade` (censura pelo caixa) ou no `BE emp` (acerto alto que
+  nao paga, porque o breakeven subiu junto).

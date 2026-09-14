@@ -5982,6 +5982,54 @@ nunca foi ligada), só que num degrau acima: aqui o que não foi propagado não
 > de relógio MEDIDO no feed de destino).
 
 
+### 6.38 Um eixo de fila varrido de 0 a 2.000 contratos devolveu a MESMA linha em 36 células — não era robustez, era escala emprestada de outro instrumento
+
+2026-09-13, `scripts/daytrade/copawin_300_alvo_fino_sensibilidade_fila_2026_09_13.py`.
+Para checar se uma geometria de alvo muito curto do `copa_win` (WIN@, barra M1)
+sobrevivia à fila do livro, a varredura de `queue_ahead_qty`/
+`exit_queue_ahead_qty` foi montada de 0 a 2.000 contratos — a escala escolhida
+por analogia com a calibração REAL do WDO@ (438 na entrada / 489 na saída,
+Kaplan-Meier, item 6.21/4.21). As 36 células devolveram **números idênticos**:
+mesmo líquido, mesmo win%, mesmo número de operações, mesmo caixa mínimo, do
+zero até 2.000. Lido de forma ingênua isso pareceria robustez espetacular ("o
+resultado não depende da fila"); era **eixo morto** (mesma família do item
+6.25, agora no próprio parâmetro de fila, não num filtro de entrada). O motor
+consome a fila com o `bar.volume` da barra (`engine._volume_da_barra`, que usa
+`real_volume`), e a barra M1 do WIN@ tem volume MEDIANO de **24.955 contratos**
+(p10 8.063, p90 63.511) — uma fila de 2.000 é engolida pelo primeiro toque de
+qualquer barra, então o parâmetro estava ligado, com valor, e era inerte.
+Refeita a varredura em MÚLTIPLOS do volume mediano da barra (0x / 0,25x / 0,5x
+/ 1x / 2x / 4x), o eixo acordou: a 1x o líquido retém 92-95% e o win% cai de
+88,6% para 88,3%; a 2x e 4x as células colapsam em janela censurada.
+
+**A regra (invariante portável).** Fila é medida na moeda do INSTRUMENTO,
+nunca na de outro. Antes de varrer um parâmetro de atrito, confirme que a
+escala varrida é comparável à grandeza que o motor usa para consumi-lo — e o
+teste de que ela é comparável é o eixo MEXER. Um eixo que devolve a mesma
+linha em todas as células não é robustez: até prova em contrário é um
+parâmetro que não está sendo exercido, e a prova é mostrar a célula onde ele
+finalmente muda o resultado. Transferir um número calibrado de um instrumento
+para outro (438/489 do WDO@ para o WIN@) é o mesmo erro de escala que a
+tabela de margem do CLAUDE.md já pagou uma vez ao trocar WIN e WDO.
+
+**Limitação que fica registrada, não corrigida aqui.** Mesmo a varredura
+corrigida (múltiplos do volume da barra) continua otimista, porque
+`bar.volume` é o volume do minuto inteiro em TODOS os preços, não o volume NO
+NÍVEL da própria ordem — a grandeza certa é volume-ao-preço, medida no tape
+(`scripts/daytrade/win_fila_real_por_tape_2026_09_11.py`), e o motor M1 não
+enxerga essa coluna. O WIN@ continua SEM fidelidade de execução calibrada em
+`backtest/intraday/fidelidade.py`.
+
+Referência cruzada: item 6.25 (eixo morto num filtro — mesma checagem
+aplicada aqui a um parâmetro de fila), item 6.21/4.21 (a calibração 438/489 do
+WDO@ que foi emprestada na escala errada), item 6.30 (fila não generaliza
+entre instrumentos — aqui o erro é a UNIDADE de medida da fila, não só o
+efeito dela).
+
+---
+
+## Parte 7 — Disciplina de trabalho
+
 ---
 
 ## Parte 7 — Disciplina de trabalho
@@ -6865,6 +6913,13 @@ dinheiro ou meses.
     `copa_win` era o default (`entrada_ttl_barras=15`, nunca comparado com
     nada); baixá-lo para 5 valeu mais que uma grade de 152 células de
     geometria. (6.33, 6.20, 4.24)
+99. Qual é a grandeza que a plataforma nova me dá para estimar fila — volume
+    da barra (todos os preços) ou volume ao preço do meu nível? E qual é a
+    escala típica dela NESTE instrumento? Varrer fila numa escala emprestada
+    de outro contrato produz eixo morto que se parece com robustez: uma
+    varredura de 0 a 2.000 contratos no WIN@, usando a escala calibrada do
+    WDO@ (438/489), devolveu a MESMA linha nas 36 células porque o volume
+    mediano da barra M1 do WIN@ é 24.955 contratos. (6.38)
 
 ---
 

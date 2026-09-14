@@ -1,0 +1,121 @@
+o acerto do alvo fino sobrevive a fila? -- capital R$ 300
+3 geometrias x 6 filas x 2 janelas = 36 celulas
+fila = contratos na FRENTE da minha limite, no nivel dela. O motor do WIN@ hoje assume 0.
+referencia externa: tape do WIN@ empata com o teto em ~500; WDO@ calibrado da' 438/489.
+
+[  1/36] IS  a0,15 fila 0,00x     win 100,0%  liq       69,90  POSITIVO  (0s)
+[  2/36] IS  a0,15 fila 0,50x     win 100,0%  liq       69,90  POSITIVO  (0s)
+[  3/36] IS  a0,15 fila 1,00x     win 100,0%  liq       73,30  POSITIVO  (0s)
+[  4/36] IS  a0,15 fila 0,25x     win 100,0%  liq       69,90  POSITIVO  (0s)
+[  5/36] IS  a0,08 fila 2,00x     win 100,0%  liq       54,90  POSITIVO  (0s)
+[  6/36] IS  a0,15 fila 2,00x     win 100,0%  liq       59,50  POSITIVO  (0s)
+[  7/36] IS  a7,60 fila 0,00x     win  66,7%  liq      160,00  indefinido  (0s)
+[  8/36] IS  a7,60 fila 0,25x     win  66,7%  liq      160,00  indefinido  (0s)
+[  9/36] IS  a7,60 fila 0,50x     win  66,7%  liq      160,00  indefinido  (0s)
+[ 10/36] IS  a7,60 fila 1,00x     win  66,7%  liq      150,20  indefinido  (1s)
+[ 11/36] IS  a7,60 fila 2,00x     win  55,6%  liq      106,90  indefinido  (1s)
+[ 12/36] IS  a7,60 fila 4,00x     win  55,6%  liq      147,90  indefinido  (1s)
+[ 13/36] OOS a0,08 fila 2,00x     win 100,0%  liq       83,20  POSITIVO  (0s)
+[ 14/36] OOS a0,08 fila 4,00x     win  81,1%  liq      193,50  indefinido  (1s)
+[ 15/36] OOS a0,08 fila 0,00x     win  88,6%  liq    2.235,60  POSITIVO  (5s)
+[ 16/36] OOS a0,08 fila 0,25x     win  88,6%  liq    2.235,80  POSITIVO  (5s)
+[ 17/36] OOS a0,08 fila 0,50x     win  89,0%  liq    2.241,00  POSITIVO  (6s)
+[ 18/36] OOS a0,15 fila 2,00x     win 100,0%  liq       85,20  POSITIVO  (0s)
+[ 19/36] OOS a0,08 fila 1,00x     win  88,3%  liq    2.122,50  POSITIVO  (7s)
+[ 20/36] OOS a0,15 fila 0,00x     win  88,4%  liq    2.833,20  POSITIVO  (7s)
+[ 21/36] OOS a0,15 fila 0,25x     win  88,4%  liq    2.849,80  POSITIVO  (7s)
+[ 22/36] IS  a0,08 fila 0,50x     win  81,2%  liq     -205,60  indefinido  (11s)
+[ 23/36] IS  a0,08 fila 0,00x     win  81,2%  liq     -205,60  indefinido  (11s)
+[ 24/36] IS  a0,08 fila 4,00x     win  79,1%  liq     -211,70  indefinido  (11s)
+[ 25/36] IS  a0,08 fila 0,25x     win  81,2%  liq     -205,60  indefinido  (12s)
+[ 26/36] IS  a0,08 fila 1,00x     win  81,2%  liq     -202,20  indefinido  (11s)
+[ 27/36] OOS a7,60 fila 4,00x     win  38,9%  liq     -193,00  indefinido  (1s)
+[ 28/36] OOS a0,15 fila 0,50x     win  88,6%  liq    2.864,10  POSITIVO  (5s)
+[ 29/36] OOS a0,15 fila 1,00x     win  87,9%  liq    2.617,80  POSITIVO  (5s)
+[ 30/36] IS  a0,15 fila 4,00x     win  79,2%  liq     -246,80  indefinido  (13s)
+[ 31/36] OOS a0,15 fila 4,00x     win  80,0%  liq     -270,40  indefinido  (5s)
+[ 32/36] OOS a7,60 fila 0,00x     win  50,0%  liq     -289,00  indefinido  (4s)
+[ 33/36] OOS a7,60 fila 0,25x     win  50,0%  liq     -289,00  indefinido  (4s)
+[ 34/36] OOS a7,60 fila 0,50x     win  50,0%  liq     -289,00  indefinido  (4s)
+[ 35/36] OOS a7,60 fila 1,00x     win  50,0%  liq     -289,00  indefinido  (3s)
+[ 36/36] OOS a7,60 fila 2,00x     win  54,3%  liq    4.108,40  POSITIVO  (4s)
+
+
+===== alvo 0,08 / stop 20   (alvo mediano = 1,7 ticks reais) =====
+
+  IS (129 pregoes)
+      fila     win%   BE emp     liquido    opssaiu alvo caixa min    veredito
+  ----------------------------------------------------------------------------
+     0,00x    81,2%    84,9%     -205,60     64    81,2%        94  indefinido  s/trade 121/129
+     0,25x    81,2%    84,9%     -205,60     64    81,2%        94  indefinido  s/trade 121/129
+     0,50x    81,2%    84,9%     -205,60     64    81,2%        94  indefinido  s/trade 121/129
+     1,00x    81,2%    84,9%     -202,20     64    81,2%        98  indefinido  s/trade 121/129
+     2,00x   100,0%     0,0%       54,90      9   100,0%       -13    POSITIVO  s/trade 127/129  ZEROU
+     4,00x    79,1%    85,2%     -211,70     43    79,1%        88  indefinido  s/trade 123/129
+
+  OOS (62 pregoes)
+      fila     win%   BE emp     liquido    opssaiu alvo caixa min    veredito
+  ----------------------------------------------------------------------------
+     0,00x    88,6%    84,0%    2.235,60    484    88,6%       246    POSITIVO
+     0,25x    88,6%    84,0%    2.235,80    484    88,6%       246    POSITIVO
+     0,50x    89,0%    84,4%    2.241,00    480    88,8%       246    POSITIVO
+     1,00x    88,3%    83,9%    2.122,50    479    88,3%       202    POSITIVO
+     2,00x   100,0%     0,0%       83,20      4   100,0%       -12    POSITIVO  s/trade 61/62  ZEROU
+     4,00x    81,1%    75,6%      193,50     37    81,1%        -0  indefinido  s/trade 55/62  ZEROU
+
+
+===== alvo 0,15 / stop 20   (alvo mediano = 3,2 ticks reais) =====
+
+  IS (129 pregoes)
+      fila     win%   BE emp     liquido    opssaiu alvo caixa min    veredito
+  ----------------------------------------------------------------------------
+     0,00x   100,0%     0,0%       69,90     11   100,0%        -6    POSITIVO  s/trade 127/129  ZEROU
+     0,25x   100,0%     0,0%       69,90     11   100,0%        -6    POSITIVO  s/trade 127/129  ZEROU
+     0,50x   100,0%     0,0%       69,90     11   100,0%        -6    POSITIVO  s/trade 127/129  ZEROU
+     1,00x   100,0%     0,0%       73,30     11   100,0%        -2    POSITIVO  s/trade 127/129  ZEROU
+     2,00x   100,0%     0,0%       59,50      9   100,0%        -8    POSITIVO  s/trade 127/129  ZEROU
+     4,00x    79,2%    84,2%     -246,80     48    79,2%        53  indefinido  s/trade 122/129
+
+  OOS (62 pregoes)
+      fila     win%   BE emp     liquido    opssaiu alvo caixa min    veredito
+  ----------------------------------------------------------------------------
+     0,00x    88,4%    82,5%    2.833,20    482    88,4%       270    POSITIVO
+     0,25x    88,4%    82,5%    2.849,80    482    88,4%       270    POSITIVO
+     0,50x    88,6%    82,7%    2.864,10    481    88,4%       270    POSITIVO
+     1,00x    87,9%    82,6%    2.617,80    480    87,9%       226    POSITIVO
+     2,00x   100,0%     0,0%       85,20      4   100,0%       -10    POSITIVO  s/trade 61/62  ZEROU
+     4,00x    80,0%    84,3%     -270,40     40    80,0%        30  indefinido  s/trade 55/62
+
+
+===== alvo 7,60 / stop 12   (alvo mediano = 132,4 ticks reais)   <== PRODUCAO =====
+
+  IS (129 pregoes)
+      fila     win%   BE emp     liquido    opssaiu alvo caixa min    veredito
+  ----------------------------------------------------------------------------
+     0,00x    66,7%    61,9%      160,00     12    33,3%       -22  indefinido  s/trade 124/129  ZEROU
+     0,25x    66,7%    61,9%      160,00     12    33,3%       -22  indefinido  s/trade 124/129  ZEROU
+     0,50x    66,7%    61,9%      160,00     12    33,3%       -22  indefinido  s/trade 124/129  ZEROU
+     1,00x    66,7%    62,2%      150,20     12    33,3%       -32  indefinido  s/trade 124/129  ZEROU
+     2,00x    55,6%    50,9%      106,90      9    22,2%       -75  indefinido  s/trade 124/129  ZEROU
+     4,00x    55,6%    49,4%      147,90      9    22,2%       -34  indefinido  s/trade 124/129  ZEROU
+
+  OOS (62 pregoes)
+      fila     win%   BE emp     liquido    opssaiu alvo caixa min    veredito
+  ----------------------------------------------------------------------------
+     0,00x    50,0%    74,2%     -289,00      2    50,0%        11  indefinido  s/trade 61/62
+     0,25x    50,0%    74,2%     -289,00      2    50,0%        11  indefinido  s/trade 61/62
+     0,50x    50,0%    74,2%     -289,00      2    50,0%        11  indefinido  s/trade 61/62
+     1,00x    50,0%    74,2%     -289,00      2    50,0%        11  indefinido  s/trade 61/62
+     2,00x    54,3%    45,5%    4.108,40    164    22,6%       128    POSITIVO
+     4,00x    38,9%    42,9%     -193,00     18    11,1%       -20  indefinido  s/trade 55/62  ZEROU
+
+
+===== quanto do resultado sobrevive a fila de 500 =====
+geometria              janela   liq fila 0  liq fila 500  retencao   win 0  win 500
+-----------------------------------------------------------------------------------
+a0,08 s20                  IS      -205,60       -202,20       98%   81,2%    81,2%
+a0,08 s20                 OOS     2.235,60      2.122,50       95%   88,6%    88,3%
+a0,15 s20                  IS        69,90         73,30      105%  100,0%   100,0%
+a0,15 s20                 OOS     2.833,20      2.617,80       92%   88,4%    87,9%
+a7,60 s12                  IS       160,00        150,20       94%   66,7%    66,7%
+a7,60 s12                 OOS      -289,00       -289,00      100%   50,0%    50,0%
