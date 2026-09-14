@@ -68,15 +68,17 @@ def _level_rank(level: str) -> int:
     return _LEVEL_ORDER.get(level.lower(), _LEVEL_ORDER["info"])
 
 
-def _format_payload_inline(payload: Optional[dict]) -> str:
-    """Formata o payload em uma linha curta ("chave=valor | chave=valor").
+def _format_payload_bullets(payload: Optional[dict]) -> str:
+    """Formata o payload como lista com marcadores ("- chave: valor" por linha).
 
-    Usado pelo Telegram, onde mensagem longa atrapalha leitura no celular.
-    Chaves ordenadas para saida deterministica (facilita teste e leitura).
+    Usado pelo Telegram: uma linha corrida ("chave=valor | chave=valor")
+    obriga a rolar a tela pra separar os campos no celular; uma linha por
+    item e o formato que o app ja sabe exibir bem. Chaves ordenadas para
+    saida deterministica (facilita teste e leitura).
     """
     if not payload:
         return ""
-    return " | ".join(f"{key}={value}" for key, value in sorted(payload.items()))
+    return "\n".join(f"- {key}: {value}" for key, value in sorted(payload.items()))
 
 
 def _format_payload_block(payload: Optional[dict]) -> str:
@@ -115,10 +117,13 @@ class TelegramNotifier(Notifier):
         self._on_error = on_error
 
     def notify(self, level: str, source: str, message: str, payload: Optional[dict] = None) -> None:
-        text = f"[{level}] {source}: {message}"
-        extra = _format_payload_inline(payload)
-        if extra:
-            text = f"{text}\n{extra}"
+        # Titulo (nivel + origem) numa linha, descricao do evento na
+        # seguinte, payload como lista de marcadores — separado do texto
+        # corrido em vez de espremido numa linha so "chave=valor | chave=valor".
+        text = f"[{level}] {source}\n{message}"
+        bullets = _format_payload_bullets(payload)
+        if bullets:
+            text = f"{text}\n\n{bullets}"
 
         url = f"https://api.telegram.org/bot{self._bot_token}/sendMessage"
         data = urllib.parse.urlencode({"chat_id": self._chat_id, "text": text}).encode("utf-8")
