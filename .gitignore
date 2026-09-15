@@ -33,3 +33,8 @@ data/raw_ticks/*.parquet
 # arquivo novo, porque `.parquet.bak-<data>` nao casa com `*.parquet`.
 data/raw_ticks/*.bak-*
 data/raw_ticks/*.uniao.parquet
+# O glob acima (`data/raw_ticks/*.parquet`) so' pega o PRIMEIRO nivel -- mesmo
+# buraco do `.bak-` logo abaixo dele. A coleta por pregao do WIN@ mora num
+# subdiretorio (`win_por_pregao/`, 60 arquivos, 600 MB) e por isso reaparecia
+# inteira no `git status` como arquivo novo.
+data/raw_ticks/**/*.parquet
