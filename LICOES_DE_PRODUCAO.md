@@ -3115,6 +3115,195 @@ dinheiro de não ter trava nenhuma, só que via mais eventos de stop.
 
 ---
 
+### 4.28 O flatten de fim de pregão NUNCA disparou ao vivo para robô de futuro — dois cortes derivados do MESMO campo se anulam, e o diário mostra ZERO eventos FLATTEN em toda a história
+
+O único caminho de saída obrigatório do desenho ("day trade nunca carrega
+overnight") é inalcançável em produção/sombra para futuro desde sempre —
+verificado no código e nos dados, não é hipótese.
+
+Mecanismo: dois cortes colidem, ambos derivados do mesmo campo
+`SymbolProfile.session_end_time`.
+
+1. `backtest/intraday/machine.py::on_closed_bar` achata a posição quando
+   `ts.time() >= session_end_time_for(ts)` — para futuro,
+   `backtest/intraday/profiles.py::_futures_profile` fixa esse horário no
+   FECHAMENTO nominal: WIN@ 21:25 UTC (18:25 BRT), WDO@ 21:30 UTC (18:30 BRT).
+2. O MESMO campo é o fim da janela em que o robô tem permissão para agir:
+   `live/intraday_runtime.py::_fase_do_instrumento` → `live/clock.py::phase_em_janela`
+   só devolve `OPEN` enquanto `agora < fim`; fora disso `run_once` devolve
+   `idle` — o futuro nunca alcança a fase `CLOSING_AUCTION`.
+
+Somado a `live/bar_feed.py::_MIN_BAR_AGE_SECONDS = 60` (a barra M1 só fica
+elegível 60s depois de rotulada), a última barra que um robô de futuro
+processa ao vivo é a **21:23 UTC (18:23 BRT)**: às 21:25:00 a fase já virou
+`POST_CLOSE` e a barra 21:24 (que acabou de ficar elegível) não tem mais
+quem a consuma. A condição de flatten (`ts.time() >= 21:25`/`21:30`) é
+logicamente inalcançável.
+
+Os números:
+
+- `data/raw_intraday/WIN_A_.parquet`: em **190 de 194 pregões** a última
+  barra M1 é 21:24 — a barra do corte quase nunca chega a existir.
+  `WDO_A_.parquet`: **180 de 180 pregões** terminam em 21:29.
+- `db/live.sqlite`, tabela `live_events`: **zero** eventos `FLATTEN` em toda
+  a história, em todas as contas.
+- `strategy/daytrade/registry.py` registra que **39,1%** das saídas do
+  `copa_win` no backtest são por achatamento — essas saídas simplesmente não
+  ocorrem ao vivo. Caso concreto, 2026-09-14, slot `dt-copa_win-win@-shadow`:
+  SHORT 1 contrato WIN@ @186.200 aberto às 10:30 BRT, ainda aberto às 18:00
+  BRT, ia atravessar o corte das 18:25 sem fechar.
+- `live/intraday_runtime.py::_restore` descarta snapshot de pregão anterior
+  ("estado de ontem não é estado, é lixo"): em sombra a posição só some, sem
+  nunca ser realizada — o P&L da sombra fica incompleto justamente nas
+  saídas pelo sino; em execução real a posição ficaria órfã, aberta
+  overnight, sem stop nem alvo vigiados por ninguém.
+
+O contraste prova que é bug e não escolha de design: o caminho de AÇÃO faz
+certo. `core/b3_session.py::closing_bar_minute_utc` usa
+`continuous_end − 1min`, com docstring explícita sobre o porquê ("um corte
+no fechamento cheio nunca casaria com barra nenhuma"), e a fase de ação
+ainda aceita `CLOSING_AUCTION` depois do corte — a barra 19:54 é consumida
+às 19:55. `_futures_profile` fez exatamente o que aquela docstring documenta
+como erro.
+
+> **Regra (portável).** O corte de um achatamento obrigatório tem de ser o
+> RÓTULO de uma barra que existe de verdade no dado (medido, não o horário
+> nominal do regulamento), e a janela em que o robô tem permissão para agir
+> tem de terminar DEPOIS desse corte — nunca no mesmo instante. Corte de
+> saída e portão de atividade derivados do MESMO campo se anulam em
+> silêncio: são dois empregos diferentes, e cada um precisa do seu próprio
+> valor.
+>
+> Corolário de método: todo caminho de saída OBRIGATÓRIO exige evidência de
+> que já disparou pelo menos uma vez em produção. Zero ocorrências no diário
+> de um evento que o backtest atribui a ~39% das saídas é alarme, não
+> normalidade — um caminho de saída nunca observado ao vivo é hipótese,
+> igual a backtest não aferido contra extrato.
+>
+> Corolário de medição: enquanto isto não for corrigido, nenhum número de
+> SOMBRA de robô de futuro que dependa do achatamento descreve o backtest —
+> a sombra perde exatamente as operações que o backtest fecha pelo sino.
+>
+> **Pergunte à plataforma nova:** pergunta 105 (nova).
+> (5.2)
+
+---
+
+### 4.29 A suíte estava verde sobre as três camadas do bug do 4.28 — porque nenhum teste perguntava se o corte era ALCANÇÁVEL, só se ele estava CERTO
+
+Irmão direto do item 4.28: aquele documentou O QUE quebrou (dois cortes do
+mesmo campo se anulando); este documenta por que uma suíte com milhares de
+testes, todos verdes, nunca acusou.
+
+Corrigir a primeira camada não resolveu nada — só depois de rodar é que a
+segunda e a terceira apareceram, e as duas últimas só foram encontradas
+porque alguém foi LER O LOG DE PRODUÇÃO em vez de confiar na suíte:
+
+| camada | o que fazia | onde | como foi corrigida |
+|---|---|---|---|
+| motor | corte de achatamento igual ao fim nominal do pregão (21:25 WIN@ / 21:30 WDO@ UTC) | `backtest/intraday/profiles.py` | `SymbolProfile.flatten_cut_time`, campo novo, = fim − 5min (`core/b3_session.py::FOLGA_ACHATAMENTO_MINUTOS=5`, `flatten_cut_utc`) |
+| runtime | `live/clock.py::phase_em_janela` desligava o robô no MESMO instante do corte de achatamento | `live/clock.py`, `live/intraday_runtime.py` | `session_end_time` passou a significar só "fim do pregão / até quando o robô age" |
+| **supervisor** | `live/clock.py::_active_window` dormia pelo calendário da AÇÃO: o slot `dt-copa_win-win@-shadow` imprimiu "[fora do horario de pregao] proximo passo em 15.0h" às **18:00 BRT** com posição SHORT aberta e o pregão do WIN correndo até 18:25 | `live/clock.py` | `_active_window` passa a terminar no fechamento MAIS TARDE do dia entre os instrumentos do slot, mais 1h de folga |
+
+Se a correção tivesse parado na primeira camada, o achatamento continuaria
+não acontecendo — com dois testes novos passando e dando a impressão de
+coberto.
+
+**A suíte não só deixou passar, ela CONGELOU o valor errado.**
+`tests/test_intraday_live_runtime.py::test_status_reporta_fuso_corte_e_ordem_em_pe`
+afirmava `corte_flatten_utc == "19:54:00"` e passava havia meses. O teste
+estava certo sobre o que o código FAZIA e cego sobre o que o código
+PRECISAVA fazer: conferia o rótulo exibido no painel, nunca que o corte
+fosse alcançável. Nenhum teste do repo relacionava os dois números (corte de
+achatamento × janela em que o robô pode agir) — eles moram em módulos
+diferentes (`backtest/intraday/profiles.py` e `live/clock.py`), cada um com
+cobertura própria, todos verdes. O bug morava exatamente na JUNTA entre eles,
+que é onde nenhum teste de unidade olha.
+
+Corolário concreto: a correção **quebrou** 2 testes — o acima e
+`tests/test_live_clock.py::test_in_active_window_uma_hora_depois_do_leilao_de_fechamento`
+— os dois estavam congelando o comportamento defeituoso. Teste que quebra
+quando um bug é corrigido não é rede de proteção, é cimento.
+
+> **Regra (portável, sobrevive à troca de linguagem e de corretora).**
+>
+> 1. Todo caminho de saída OBRIGATÓRIO precisa de um teste de
+>    ALCANÇABILIDADE, não só de correção. "Dado o relógio real e as latências
+>    reais, existe algum instante em que esta condição pode ser avaliada?" é
+>    pergunta diferente de "a condição está certa", e só a primeira pega este
+>    bug. O teste que agora trava isso é
+>    `tests/test_intraday_profiles.py::test_a_barra_do_corte_ainda_cabe_na_janela_em_que_o_robo_pode_agir`
+>    — reprova com os valores antigos (conferido).
+> 2. Quando um valor atravessa a fronteira de dois módulos, o teste tem de
+>    morar na JUNTA. Dois módulos com cobertura própria e nenhum teste do PAR
+>    é o desenho exato em que este bug sobreviveu.
+> 3. Ao corrigir um bug, conte quantas camadas do sistema repetem a mesma
+>    suposição errada — aqui foram três, em três módulos, e as duas últimas
+>    só apareceram ao ler o log de produção depois da primeira correção.
+>    Suíte verde depois de corrigir a camada 1 não é evidência de que o
+>    caminho funciona.
+> 4. Teste que precisa ser EDITADO para um bug ser corrigido merece revisão,
+>    não atualização automática. Ele estava afirmando um comportamento, e
+>    ninguém tinha perguntado se aquele comportamento era desejado.
+
+Suíte final depois da correção completa: 2029 passed, 1 skipped.
+
+> **Pergunte à plataforma nova:** pergunta 106 (nova). (4.28)
+
+---
+
+### 4.30 Um ratchet de stop de UM passo se auto-dispara — o nível novo nasceu do lado errado do preço, no pior instante possível
+
+Testado em 2026-09-15 (`scripts/daytrade/wdo_orb_ratchet_stop_2026_09_15.py`),
+`wdo_orb`. A primeira versão de um "ratchet" de stop armava em UM passo só:
+quando o preço andava 70% da distância até o stop (contra a posição), o stop
+era movido para 50% dessa distância. No instante em que a regra arma, o preço
+JÁ está a −70%; o stop novo em −50% nasce **atrás** do preço na direção
+errada — do lado que ele já ultrapassou — e dispara na barra seguinte. Não é
+proteção: é uma ordem a mercado disfarçada de proteção, executada no pior
+momento possível (o fundo da excursão adversa).
+
+**O número**, medido no pregão de 2026-09-11 (2 operações do `wdo_orb`): a
+regra que simplesmente FECHAVA a posição nesse ponto (70% da distância) dava
+**−R$80,50 por operação**; o ratchet de um passo dava **−R$110,50**,
+executando a −21 ticks em vez de −15. A "proteção" custou **R$30,00 a MAIS
+por operação** do que não ter proteção nenhuma naquele ponto — e teria
+passado despercebida, porque o número continua parecendo um stop normal no
+relatório: a operação sai por `stop`, com o valor do stop, e nada na tabela
+denuncia que o stop foi movido para um lugar que o preço já tinha visitado.
+
+O erro foi pego por um smoke test de 4 pregões ANTES da varredura completa.
+Se tivesse ido direto para os 134 pregões, o resultado teria sido lido como
+"o ratchet piora o robô" — refutando a hipótese pelo motivo ERRADO, um bug de
+implementação com roupa de veredito de estratégia.
+
+A correção: gatilho de DOIS passos (foi a −70% **e** voltou a −50%) com o
+stop novo indo para **−70%** — o pior ponto JÁ VISITADO pelo preço, que por
+definição está atrás do preço atual e portanto não pode se auto-disparar.
+
+Vale amarrar ao que o motor já garante: `strategy/daytrade/base.py` só aceita
+um `AdjustStop` quando o nível novo é **mais protetor** que o atual — essa
+checagem impede AFROUXAR o stop (item 1.10), mas não impede APERTÁ-LO para um
+ponto que o preço já ultrapassou, que é exatamente o buraco deste item. Um
+stop pode ficar mais apertado (mais protetor, na métrica que o motor confere)
+e ainda assim nascer do lado errado do preço corrente.
+
+> **Regra (portável — vale para qualquer regra de movimentação de stop, nesta
+> linguagem ou na de destino da portabilidade):** um nível de stop novo tem
+> de ficar num ponto que o preço já visitou e do qual já se afastou — nunca à
+> frente do preço atual na direção adversa. Antes de aceitar qualquer ordem
+> de movimentação de stop, compare o nível novo com o preço corrente: se ele
+> já foi ultrapassado, o efeito real não é proteger, é emitir uma ordem a
+> mercado no pior preço da excursão. E a consequência de método, que é o que
+> generaliza: **uma regra de proteção mal desenhada não aparece como erro no
+> relatório — aparece como uma saída de stop normal**, então ela não se
+> denuncia sozinha; a única defesa é o teste pequeno com inspeção das
+> operações individuais (preço de execução, instante do disparo) antes de
+> rodar a base inteira.
+> **Pergunte à plataforma nova:** pergunta 108 (nova).
+
+---
+
 ## Parte 5 — Dados, relógio e instrumento
 
 ### 5.1 Fuso errado desliga proteção em silêncio
@@ -6389,6 +6578,103 @@ WDO@ que foi emprestada na escala errada), item 6.30 (fila não generaliza
 entre instrumentos — aqui o erro é a UNIDADE de medida da fila, não só o
 efeito dela).
 
+### 6.39 Ordens muito acima de trades é assinatura de caixa travado, e ela aparece como ruído, não como erro
+
+2026-09-14, `scripts/daytrade/wdo_orb_4semanas_coleta_2026_09_14.py` /
+`wdo_orb_4semanas_analise_2026_09_14.py`, `wdo_orb` (WDO@, tick a tick real,
+4 semanas fechadas 2026-08-17→2026-09-11, capital real R$375 por semana
+isolada). Na semana S1 (17–21/08) o motor registrou **177 ordens para apenas
+2 trades** — 149 delas recusadas por capital (`ordens_recusadas_por_capital`).
+A semana S3 (31/08–04/09) teve 92 ordens para 5 trades, 77 recusas. Nas
+semanas em que o caixa não travou (S2, e a corrida contínua de R$1.000 sem
+reposição) a razão fica quase 1:1 — 7 ordens para 7 trades, 32 ordens para 28
+trades. O mecanismo: quando o caixa cai abaixo do que sustenta o contrato, o
+motor recusa a ordem e chama `on_order_rejected`, que na `WdoOrb` zera
+`_armou_hoje`; o robô rearma na barra seguinte, é recusado de novo, e o ciclo
+se repete centenas de vezes até o fim do pregão. Nada disso levanta erro nem
+aparece no líquido — a janela simplesmente devolve poucos trades, exatamente
+como uma janela em que o mercado não deu sinal.
+
+**A regra (invariante portável).** A razão ordens/trades é um termômetro de
+censura de leitura barata. Quando ela dispara (dezenas de ordens por trade) a
+janela está medindo o portão de capital, não a estratégia — isso já era
+sabido (item 6.15, censura), mas faltava o SINTOMA que denuncia a censura sem
+precisar reconstruir a caminhada de caixa. Um backtest que devolve poucos
+trades pode ser "não houve sinal" ou "o robô estava amordaçado"; ordens/trades
+separa os dois casos, e é a leitura mais barata das duas. Corolário para a
+operação real: o mesmo loop acontece ao vivo e enche o diário de tentativas
+silenciosas, sem nunca soar como falha.
+
+Referência cruzada: item 6.15 (censura perto do piso de capital).
+
+### 6.40 O motivo de saída carimbado na operação pode conter duas saídas com economias opostas
+
+2026-09-14, mesma coleta do item 6.39, corrida contínua de R$1.000 (28
+operações). 16 delas saíram carimbadas com `exit_reason=target`. Só **3
+(10,7% do total)** eram alvo de verdade — o preço pagou os ticks pedidos,
+R$/op **+229,50**. As outras **13 (46,4%)** eram o corte de relógio: 60
+minutos depois da entrada a `WdoOrb` troca o alvo pelo preço corrente
+(`saida_limite_minutos=60`, via `AdjustTarget`) e a saída continua carimbada
+`target`, com R$/op de apenas **+28,73** — algumas negativas (pior: −R$70,50).
+Somado sem separar, "saiu no alvo" parecia responder por 57% das operações
+com resultado bom; na verdade o alvo pleno acontece em 1 a cada 9, e o alvo
+pedido (média 53 ticks) nunca é atingido em 89% das operações. Sem separar os
+dois, a distribuição de payoff do robô fica irreconhecível — o ganho médio
+"do alvo" mistura +229,50 com +28,73.
+
+**A regra (invariante portável).** Um `exit_reason` só descreve a operação
+quando existe UM caminho de código capaz de produzi-lo. Toda vez que uma
+estratégia altera dinamicamente o nível do alvo (trailing, corte por tempo,
+re-âncora), o carimbo de saída passa a ser um agregado de duas economias
+diferentes e precisa de um sub-motivo. O repo já tinha resolvido exatamente
+isso uma vez, para outro caso: o campo `exit_detail` existe em
+`IntradayTrade` (`backtest/intraday/machine.py`) e carrega `"target_timeout"`
+quando a fatia de saída estoura o prazo — mas a saída por AJUSTE de alvo não
+preenche `exit_detail` nenhum, então ela é indistinguível do alvo cheio no
+dado bruto. Quando o nível de saída puder ser movido depois de armado,
+registre no trade QUAL nível foi pago, não só que "o alvo" foi pago.
+
+Referência cruzada: item 4.21 (a mesma confusão entre "preencheu no nível" e
+"estourou o prazo e saiu a mercado", carimbada com o mesmo `motivo=alvo` —
+pergunta 32 da Parte 8).
+
+### 6.41 Teste de permutação unilateral é cego para metade da resposta — perder de forma sistemática É prever, só que com o sinal trocado
+
+2026-09-15, sonda de estágio 1 (`scripts/daytrade/cross_asset_confirmacao_probe_2026_09_15.py`,
+144 células) testando se o WIN@ confirma o WDO@ direcionalmente. O teste de
+permutação foi codado com **p unilateral** — `p = P(nulo >= real)`, isto é, "o
+real ganha mais dinheiro que o nulo?". A célula de fumaça devolveu
+**−R$2,18/operação, acerto 45,38% (n=7.333), p=0,33** — aposta perdedora, e
+uma sonda de uma cauda só teria fechado a linha ali: "0 sobreviventes de 144
+células".
+
+Ao pontuar as DUAS caudas do MESMO vetor de permutações já computado
+(`p = P(nulo >= real)` e `p_rev = P(nulo <= real)`, **custo zero em
+permutação extra**), a rodada completa achou **7 sobreviventes ao
+Bonferroni**, e o efeito que segurou no OOS estava na cauda oposta: **+R$4,04
+por operação no IS (n=1.719, acerto 50,38% contra breakeven empírico de
+47,48%)** e **+R$4,18 no OOS (n=582, 51,72% contra 48,58%)**, p de permutação
+no piso (2e-4) no IS. A cauda descartada pela primeira leitura era onde o
+sinal vivia — invertido.
+
+O único preço real de medir as duas caudas é de contabilidade, não de
+computação: a família de testes **dobra** (144 células × 2 caudas = 288
+testes), então o α de Bonferroni cai de 3,47e-4 para 1,74e-4 — e o número de
+permutações precisa subir junto para que o **p mínimo atingível**
+(`1/(N_perm+1)`) continue abaixo do novo α. Nesta rodada, 4.000 → 6.000
+permutações (p mínimo 1,67e-4 < 1,74e-4 do α dobrado).
+
+**A regra (invariante portável).** Toda sonda que pergunta "este estado
+prevê o movimento seguinte?" deve pontuar as DUAS caudas do mesmo conjunto de
+permutações. Medir só "o real ganha mais que o nulo" deixa a sonda **cega
+para metade da resposta**, porque perder de forma sistemática É prever — só
+que com o sinal trocado. As duas caudas não custam permutação extra; o que
+custam é dobrar a família de testes declarada, e a correção de múltiplos
+testes precisa refletir isso. **Corolário operacional:** ao dobrar a família,
+confira que o p MÍNIMO ATINGÍVEL pelo número de permutações continua abaixo
+do α corrigido — senão nenhuma célula pode sobreviver por construção, e a
+sonda vira um gerador de zeros que parece rigoroso.
+
 ---
 
 ## Parte 7 — Disciplina de trabalho
@@ -7353,6 +7639,50 @@ dinheiro ou meses.
      dado em si estava perfeitamente disponível pela sessão já aberta — sem
      separar as duas, todo blip de autenticação vira alarme de cegueira de
      dado. (5.25)
+103. A plataforma expõe a CONTAGEM de ordens recusadas por falta de margem,
+     separada das recusadas por outros motivos? Se não expuser, como se
+     distingue "o robô não viu sinal" de "o robô viu e foi recusado"? Aqui a
+     razão ordens/trades disparou para 177:2 e 92:5 nas semanas em que o
+     caixa travou, contra quase 1:1 nas semanas livres — sem essa contagem
+     separada, as duas leituras ("sem sinal" e "amordaçado") ficam
+     indistinguíveis no líquido. (6.39)
+104. A plataforma nova permite carimbar um sub-motivo na saída, ou o motivo
+     é um enum fechado da corretora? Se for fechado, onde fica registrado o
+     nível PEDIDO no momento do preenchimento, para separar "alvo cheio" de
+     "alvo ajustado por corte de tempo/trailing" depois? Aqui as duas
+     saíam com o mesmo `exit_reason=target` e tinham R$/op de +229,50 contra
+     +28,73 — uma diferença de 8x escondida atrás do mesmo rótulo. (6.40)
+105. O corte de um achatamento/saída obrigatória de fim de pregão e o fim da
+     janela em que o robô tem permissão para agir vêm do MESMO campo de
+     configuração, ou de dois valores independentes? Qual é o RÓTULO da
+     última barra que o feed desta plataforma realmente entrega no fim do
+     pregão deste instrumento (medido no dado, não no horário nominal do
+     regulamento), e a janela de atividade se estende além dele? Aqui os
+     dois vinham do mesmo campo (`session_end_time`) e o corte de futuro
+     nunca disparou ao vivo — zero eventos FLATTEN no diário inteiro, apesar
+     de o backtest atribuir 39,1% das saídas a esse caminho. (4.28)
+106. Para cada caminho de saída obrigatório (achatamento, disjuntor, freio
+     de perda): existe teste que prove que a condição é ALCANÇÁVEL com os
+     relógios e atrasos reais da plataforma nova — e não apenas que ela está
+     escrita corretamente? Quantas camadas (motor, runtime,
+     agendador/supervisor) precisam concordar para ele disparar, e existe
+     um teste que morde a JUNTA entre elas, não só cada uma isolada? Aqui
+     foram três camadas concordando por acidente e nenhum teste no par
+     entre `profiles.py` e `clock.py` — a suíte inteira ficou verde sobre um
+     caminho de saída que nunca disparou. (4.29)
+107. A ferramenta de teste estatístico usada nesta plataforma reporta p
+     unilateral ou bicaudal por padrão? Se unilateral, a sonda pontua as DUAS
+     caudas do mesmo conjunto de permutações (perder de forma sistemática É
+     prever, com o sinal trocado), e o número de reamostragens é suficiente
+     para que o p mínimo atingível (`1/(N_perm+1)`) fique abaixo do α já
+     corrigido pela família DOBRADA que as duas caudas declaram? (6.41)
+108. A plataforma rejeita, ou aceita silenciosamente, uma modificação de stop
+     para um nível que o preço corrente já ultrapassou? Se aceita, ela
+     executa a mercado imediatamente ou deixa a ordem parada até o próximo
+     toque? Um ratchet/trailing de um passo só que arma depois do preço já
+     ter passado do nível novo se auto-dispara no pior instante possível — e
+     o resultado sai do robô com a MESMA aparência de um stop normal, sem se
+     denunciar no relatório. (4.30)
 
 ---
 
@@ -7504,7 +7834,15 @@ estratégia quando RECUSA uma ordem e não avisa quando ela EXPIRA por prazo
 — uma ORB de laboratório passou 14 de 72 pregões (19,4%) em silêncio
 acreditando ter ordem no livro, +R$413,00 (+33%) de líquido do outro lado,
 e a defesa correta já existia pronta na `CopaWin` sem nunca ter sido
-copiada (4.25). Mais o
+copiada (4.25). Mais 2 itens em 2026-09-14: o único caminho de saída
+obrigatório do desenho ("day trade nunca carrega overnight") nunca tinha
+disparado ao vivo para futuro — dois cortes derivados do MESMO campo se
+anulando em silêncio, zero eventos FLATTEN em toda a história do diário
+(4.28); e, ao corrigir aquele bug, o motivo pelo qual milhares de testes
+verdes nunca acusaram — três camadas repetindo a mesma suposição errada
+(motor, runtime, supervisor), um teste que CONGELAVA o valor defeituoso
+havia meses, e nenhum teste morando na junta entre os dois módulos onde o
+bug de fato vivia (4.29). Mais o
 registro acumulado do projeto. Quando um item aqui contradisser o código, o
 código ganha — e este
 arquivo está desatualizado.*
