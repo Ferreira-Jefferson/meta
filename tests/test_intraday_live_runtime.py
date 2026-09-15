@@ -2007,8 +2007,13 @@ def test_status_reporta_fuso_corte_e_ordem_em_pe(tmp_path, pregao_aberto):
 
     assert s["daytrade"]["offset_horas"] == pytest.approx(3.0)
     assert s["daytrade"]["relogio_alarme"] is None
-    # SESSION cai em 21/08/2026, dentro do horario de verao dos EUA
-    assert s["daytrade"]["corte_flatten_utc"] == "19:54:00"
+    # SESSION cai em 21/08/2026, dentro do horario de verao dos EUA (pregao
+    # continuo ate 16:55 BRT). O corte fica FOLGA_ACHATAMENTO_MINUTOS antes:
+    # 16:50 BRT = 19:50 UTC (ate 2026-09-14 era 19:54, colado no fim -- ver o
+    # item 4.28 de LICOES_DE_PRODUCAO.md).
+    assert s["daytrade"]["corte_flatten_utc"] == "19:50:00"
+    # E o painel mostra o MESMO valor, nao o fim do pregao.
+    assert s["daytrade"]["corte_flatten_brt"] == "16:50"
     assert s["daytrade"]["ordem_em_pe"]["lado"] == "long"
     assert s["daytrade"]["ordem_em_pe"]["preco"] == pytest.approx(9.80)
     # Sombra nunca manda ordem pra corretora -- sem ticket de verdade pra
@@ -6790,3 +6795,75 @@ def test_sombra_declara_a_fila_CALIBRADA_quando_ela_existe(tmp_path, pregao_aber
     assert len(linhas) == 1
     assert linhas[0]["level"] == "info"
     assert "438" in linhas[0]["message"] and "489" in linhas[0]["message"]
+
+
+# ---------- o sino: a posicao TEM de morrer no dia, sombra e real ----------
+#
+# 2026-09-14. Ate esta data nao existia teste nenhum de que o achatamento de
+# fim de pregao acontecesse AO VIVO -- so' no motor, com barra sintetica. E de
+# fato nao acontecia: `db/live.sqlite` tinha ZERO eventos FLATTEN em toda a
+# historia (itens 4.28/4.29 de LICOES_DE_PRODUCAO.md). Os dois testes abaixo
+# fecham o caminho inteiro, nas DUAS modalidades, porque sao caminhos de
+# codigo diferentes: em sombra o fechamento e' simulado pela barra; em real
+# ele tem de virar ORDEM A MERCADO na corretora (`exit_market`), que e' a
+# excecao unica do desenho de execucao fechado -- protecao nao espera fila.
+
+
+def _barras_ate_o_sino() -> list:
+    """Roteiro que abre uma posicao e chega na barra do CORTE (19:50 UTC =
+    16:50 BRT em 21/08/2026, horario de verao dos EUA).
+
+    Tudo acontece no fim do pregao de proposito: uma posicao aberta as 13:00
+    e uma barra as 19:50 no MESMO passo nao testam o sino -- o runtime trata
+    o salto como BURACO (`_handle_gap`, 6,8h parado) e acha por outro
+    caminho, com `machine.flattened` REABERTO para forcar recalibracao. Foi
+    exatamente o que a primeira versao destes testes mediu sem querer."""
+    return [
+        _bar("19:46", 10.00, 10.00, 10.00, 10.00),   # semente/ancora
+        _bar("19:47", 10.00, 10.00, 9.79, 9.85),     # preenche a limite de entrada
+        _bar("19:48", 9.85, 9.86, 9.85, 9.85),
+        _bar("19:50", 9.85, 9.86, 9.84, 9.84),       # <- a barra do CORTE
+    ]
+
+
+def test_sombra_acha_a_posicao_no_corte_de_fim_de_pregao(tmp_path, pregao_aberto):
+    rt, _feed = _runtime(tmp_path, _barras_ate_o_sino(),
+                         fixed_anchor_until=time(20, 0))
+
+    rt.run_once(now=_agora("19:51:00"))
+
+    assert rt.machine.flattened is True, "o pregao nao foi achatado"
+    assert rt.machine.positions == [], "posicao sobreviveu ao fim do pregao"
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        eventos = store.recent_events(conn, acc.id, limit=50)
+    linhas = [e.get("message") or "" for e in eventos]
+    assert any("FLATTEN" in m for m in linhas), f"nenhuma linha de FLATTEN no diario: {linhas}"
+
+
+def test_live_acha_a_posicao_no_corte_mandando_ordem_a_mercado(tmp_path, pregao_aberto):
+    """Em execucao REAL nao basta a maquina marcar a posicao como fechada --
+    a corretora tem de receber uma ordem A MERCADO, com o ticket da posicao
+    real. Sem isto o robo acharia que esta flat e a posicao passaria a noite
+    aberta na corretora: o pior dos dois mundos, porque o diario diz uma
+    coisa e a conta tem outra.
+
+    A mercado e' a EXCECAO UNICA do desenho de execucao fechado (CLAUDE.md):
+    protecao nao espera fila."""
+    broker = _FakeMT5Broker()
+    broker.preco_de_saida = 9.84
+    rt, _feed = _runtime_live(tmp_path, _barras_ate_o_sino(), broker,
+                              fixed_anchor_until=time(20, 0))
+    broker.posicao = {"side": "long", "price": 9.80, "quantity": 1, "ticket": 77}
+
+    rt.run_once(now=_agora("19:51:00"))
+
+    assert rt.machine.flattened is True
+    assert rt.machine.positions == []
+    assert len(broker.ordens_a_mercado) == 1, "o achatamento nao virou ordem na corretora"
+    saida = broker.ordens_a_mercado[0]
+    assert saida.order_type == OrderType.MARKET
+    assert saida.side == OrderSide.SELL
+    # o fechamento leva o ticket da posicao REAL, nunca uma ordem as cegas
+    assert broker.close_tickets == [77]

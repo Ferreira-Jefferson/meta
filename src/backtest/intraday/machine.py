@@ -157,7 +157,7 @@ class IntradayBacktestConfig:
     # So vale com `session_end_policy="fixed"`.
     session_end_time: time = time(17, 50)
     # De onde sai o corte de flatten:
-    #   "b3_equities" -> `core.b3_session.closing_bar_minute_utc(dia)`, que
+    #   "b3_equities" -> `core.b3_session.flatten_cut_utc(dia)`, que
     #                    anda 1h com o horario de verao dos EUA. E' o correto
     #                    para ACAO: o pregao a vista da B3 fecha 16:55 sob DST
     #                    americano e 17:55 fora dele (hora de Brasilia).
@@ -1287,7 +1287,7 @@ class IntradaySessionMachine:
         desloca 1h com o horario de verao dos EUA — ver `session_end_policy`
         em `IntradayBacktestConfig` e a medicao em `core.b3_session`."""
         if self.config.session_end_policy == "b3_equities":
-            return b3_session.closing_bar_minute_utc(ts.date())
+            return b3_session.flatten_cut_utc(ts.date())
         return self.config.session_end_time
 
     def is_previous_session_bar(self, ts: pd.Timestamp) -> bool:

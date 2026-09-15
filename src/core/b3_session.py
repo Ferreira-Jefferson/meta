@@ -170,6 +170,49 @@ def closing_bar_minute_utc(d: date) -> time:
     return fim.astimezone(timezone.utc).time()
 
 
+#: Quantos minutos ANTES do fim do pregao o robo tem de estar achatado.
+#:
+#: Ordem do dono, 2026-09-14, depois de ver a posicao do `copa_win` atravessar
+#: o corte das 18:25 sem fechar: "finalizar as ordens ao menos uns 5 minutos
+#: antes do pregao finalizar".
+#:
+#: Nao e' margem de PRECO -- medido nos parquets canonicos, o livro nao alarga
+#: no fim (spread mediano 1 tick ate' a ultima barra) e ate' o pior minuto tem
+#: contraparte de sobra para 1-2 contratos (WIN@ minimo 766 contratos na barra
+#: 21:24; WDO@ minimo 43 na 21:29). E' margem de CHANCES: o achatamento dispara
+#: na PRIMEIRA barra a partir do corte (`ts.time() >= corte`, `machine.
+#: on_closed_bar` secao 2), entao a distancia entre o corte e o fim da janela
+#: de atividade e' literalmente quantas barras o robo tem para conseguir sair.
+#: Com corte colado no fim, essa distancia e' ZERO e basta um engasgo do feed
+#: para a posicao virar overnight -- o terminal MT5 ja parou de entregar tick
+#: novo por 44,8 min sem erro nenhum (2026-09-08, custou R$116). Ver o item
+#: 4.28 de LICOES_DE_PRODUCAO.md.
+FOLGA_ACHATAMENTO_MINUTOS: int = 5
+
+
+@lru_cache(maxsize=None)
+def flatten_cut_utc(d: date) -> time:
+    """Rotulo, em UTC, da barra a partir da qual um robo de ACAO acha a posicao.
+
+    E' `closing_bar_minute_utc` recuado de `FOLGA_ACHATAMENTO_MINUTOS` -- o
+    corte que o motor compara, enquanto aquela funcao continua respondendo a
+    pergunta FACTUAL que ela sempre respondeu ("qual e' o rotulo da ultima
+    barra do pregao"). Sao duas perguntas diferentes e por isso duas funcoes:
+    misturar as duas foi exatamente o que quebrou o lado do FUTURO (item 4.28
+    de LICOES_DE_PRODUCAO.md), onde um campo so' fazia o trabalho de tres.
+
+        16:55 Brasilia (DST dos EUA)   -> corte 16:50 -> 19:50 UTC
+        17:55 Brasilia (padrao)        -> corte 17:50 -> 20:50 UTC
+
+    O robo continua autorizado a agir ate' o fim do leilao de fechamento
+    (`live.clock.phase` devolve `CLOSING_AUCTION` depois de `continuous_end`,
+    e `run_once` aceita essa fase), entao o corte tem ~10 minutos de barras
+    para acontecer em vez de uma so'."""
+    fim = datetime.combine(d, continuous_end(d), tzinfo=SAO_PAULO) - timedelta(
+        minutes=FOLGA_ACHATAMENTO_MINUTOS)
+    return fim.astimezone(timezone.utc).time()
+
+
 # ---------- relogio do servidor MT5 ------------------------------------
 
 def server_utc_offset_hours(instant: datetime | None = None) -> float:

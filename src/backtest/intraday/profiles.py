@@ -25,9 +25,10 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from datetime import time
+from datetime import date, datetime, time, timedelta
 from typing import Literal
 
+from core.b3_session import FOLGA_ACHATAMENTO_MINUTOS
 from core.instruments import (
     ACAO_B3_POINT_VALUE_BRL,
     ACAO_B3_PRICE_TICK_SIZE,
@@ -80,6 +81,28 @@ class SymbolProfile:
     # existe para impedir. `core.b3_session` ja avisava, na propria
     # docstring, que futuro NAO desloca e que aquele modulo "fala de ACAO".
     session_start_time: time | None = None
+    # Rotulo, em UTC, da barra a partir da qual o motor ACHATA a posicao --
+    # o que vira `IntradayBacktestConfig.session_end_time` em `config_for`.
+    # `None` (toda acao) = o corte vem do calendario
+    # (`session_end_policy="b3_equities"` -> `core.b3_session.flatten_cut_utc`)
+    # e este campo nem e' lido.
+    #
+    # EXISTE PORQUE UM CAMPO SO' FAZIA O TRABALHO DE TRES (item 4.28 de
+    # LICOES_DE_PRODUCAO.md, achado 2026-09-14). `session_end_time` respondia
+    # ao mesmo tempo (a) "quando o mercado fecha", (b) "em que barra eu acho a
+    # posicao" e (c) "ate' quando o robo pode agir" -- e (b) e (c) sao
+    # incompativeis no mesmo instante: `live.clock.phase_em_janela` desliga o
+    # robo em `session_end_time`, entao a barra que carregaria o achatamento
+    # nunca chegava a ser lida. Resultado medido: ZERO eventos FLATTEN em toda
+    # a historia de `db/live.sqlite`, contra 39,1% das saidas que o backtest
+    # do `copa_win` credita ao sino.
+    #
+    # Agora `session_end_time` responde SO' (a) e (c) -- o fim de pregao
+    # medido, que continua sendo o portao de atividade -- e este campo
+    # responde (b), sempre ANTES dele. Derivado, nunca digitado a mao: o
+    # recuo e' `core.b3_session.FOLGA_ACHATAMENTO_MINUTOS`, o mesmo do lado
+    # de acao, para os dois caminhos nao divergirem em silencio.
+    flatten_cut_time: time | None = None
     # Tamanho do TICK DE PRECO do instrumento, quando o simbolo de onde a
     # economia e' lida reporta um valor que nao serve para posicionar ordem.
     # `None` (default) = usa o que o terminal devolveu, o caso de toda acao.
@@ -246,6 +269,14 @@ _FEE_NOTE_FUTURO = (
 )
 
 
+def _recua(t: time, minutos: int) -> time:
+    """`t` (hora do dia, UTC) recuada de `minutos`. Gemea em espirito de
+    `core.b3_session.flatten_cut_utc`, que faz o mesmo para o calendario de
+    ACAO -- aqui a hora e' fixa (futuro nao desloca), entao a data usada para
+    a subtracao e' irrelevante e nao ha fuso envolvido."""
+    return (datetime.combine(date(2026, 1, 1), t) - timedelta(minutes=minutos)).time()
+
+
 def _futures_profile(
     economics: InstrumentEconomics,
     session_end_time: time,
@@ -294,6 +325,7 @@ def _futures_profile(
         fee_note=_FEE_NOTE_FUTURO,
         exchange_fee_pct_per_leg=0.0,
         session_end_time=session_end_time,
+        flatten_cut_time=_recua(session_end_time, FOLGA_ACHATAMENTO_MINUTOS),
         session_end_policy="fixed",
         # 09:00 de Brasilia. Igual para WIN e WDO, e NAO desloca com o
         # horario de verao dos EUA -- e' o mesmo fato que
@@ -855,7 +887,10 @@ def config_for(
     return IntradayBacktestConfig(
         costs=costs,
         initial_capital=initial_capital,
-        session_end_time=profile.session_end_time,
+        # O motor chama este campo de CORTE DE ACHATAMENTO (ver a docstring
+        # de `IntradayBacktestConfig.session_end_time`), que NAO e' o fim do
+        # pregao -- ver `SymbolProfile.flatten_cut_time`.
+        session_end_time=(profile.flatten_cut_time or profile.session_end_time),
         session_end_policy=profile.session_end_policy,
         default_quantity=(profile.default_quantity if default_quantity is None else default_quantity),
         target_fills_as_maker=target_fills_as_maker,

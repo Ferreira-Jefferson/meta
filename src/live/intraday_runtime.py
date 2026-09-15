@@ -5323,11 +5323,17 @@ class IntradayLiveRuntime:
                 # 18:30 em Brasilia: numero UTC com rotulo BRT, a MESMA familia
                 # de erro que ja custou uma base de tick inteira neste projeto
                 # (itens 5.x de LICOES_DE_PRODUCAO.md). Converte-se de verdade.
-                "corte_flatten_brt": (
-                    b3_session.continuous_end(session).strftime("%H:%M")
-                    if self.config.session_end_policy == "b3_equities"
-                    else _utc_time_para_brt(self.config.session_end_time).strftime("%H:%M")
-                ),
+                # 2026-09-14: os dois ramos viravam UM so'. O de acao mostrava
+                # `continuous_end` (o FIM DO PREGAO) enquanto o motor achatava
+                # 1min antes, e o de futuro so' funcionava porque corte e fim
+                # eram o mesmo numero -- o que era, ele proprio, o bug do item
+                # 4.28. Agora o corte e' sempre ANTES do fim (folga de
+                # `FOLGA_ACHATAMENTO_MINUTOS`), entao mostrar o fim do pregao no
+                # campo "Flatten" seria mentir em ate' 5 minutos nos dois lados.
+                # Fonte unica: o MESMO valor que o motor compara, so' convertido.
+                "corte_flatten_brt": _utc_time_para_brt(
+                    self.machine.session_end_time_for(pd.Timestamp(session))
+                ).strftime("%H:%M"),
                 "relogio_alarme": (self.clock_feed.server_clock_alarm
                                    if self.clock_feed is not None else None),
                 # Piso de caixa DE HOJE (ver `_check_capital`). `None` = ainda

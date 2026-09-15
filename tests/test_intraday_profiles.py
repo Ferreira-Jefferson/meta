@@ -785,3 +785,104 @@ def test_o_painel_monta_a_config_de_leitura_sem_nunca_disparar_a_recusa():
             initial_capital=1000.0,
         )
         assert cfg.costs.point_value_brl == pytest.approx(perfil.point_value_brl), symbol
+
+
+# ---------------------------------------------------------------------------
+# Corte de achatamento x janela de atividade (item 4.28 de LICOES_DE_PRODUCAO)
+# ---------------------------------------------------------------------------
+#
+# O bug que estes testes congelam: `SymbolProfile.session_end_time` respondia,
+# sozinho, a tres perguntas incompativeis -- "quando o mercado fecha", "em que
+# barra eu acho a posicao" e "ate quando o robo pode agir". As duas ultimas se
+# anulam quando valem o mesmo instante: o runtime desligava o robo (`live.
+# clock.phase_em_janela`) exatamente quando o motor precisaria de uma barra
+# para achatar. Resultado medido em 2026-09-14: ZERO eventos FLATTEN em toda a
+# historia de `db/live.sqlite`, contra 39,1% das saidas que o backtest do
+# `copa_win` credita ao sino.
+#
+# Nada no repo afirmava a relacao entre os dois numeros -- por isso o bug
+# atravessou a suite inteira sem quebrar nada.
+
+
+def test_todo_futuro_acha_a_posicao_antes_do_fim_do_pregao():
+    """O corte fica `FOLGA_ACHATAMENTO_MINUTOS` ANTES do fim medido, nunca em
+    cima dele."""
+    from datetime import date, datetime
+
+    from core.b3_session import FOLGA_ACHATAMENTO_MINUTOS
+
+    for symbol, perfil in FUTURES_PROFILES.items():
+        assert perfil.flatten_cut_time is not None, symbol
+        assert perfil.flatten_cut_time < perfil.session_end_time, symbol
+        d = date(2026, 1, 1)
+        folga = (datetime.combine(d, perfil.session_end_time)
+                 - datetime.combine(d, perfil.flatten_cut_time))
+        assert folga.total_seconds() / 60 == FOLGA_ACHATAMENTO_MINUTOS, symbol
+
+
+def test_o_motor_compara_o_corte_e_nao_o_fim_do_pregao():
+    """`config_for` alimenta o motor com o CORTE. Se algum dia voltar a passar
+    `session_end_time`, o achatamento volta a ser inalcancavel ao vivo."""
+    for symbol, perfil in FUTURES_PROFILES.items():
+        cfg = config_for(
+            perfil,
+            trade_tick_value=float(perfil.point_value_brl) * float(perfil.price_tick_size),
+            trade_tick_size=perfil.price_tick_size,
+            initial_capital=1000.0,
+        )
+        assert cfg.session_end_time == perfil.flatten_cut_time, symbol
+
+
+def test_a_barra_do_corte_ainda_cabe_na_janela_em_que_o_robo_pode_agir():
+    """O invariante que faltava, e o unico que pega o bug de verdade.
+
+    Uma barra M1 e' rotulada pela ABERTURA e so' e' aceita 60s depois
+    (`live.bar_feed._MIN_BAR_AGE_SECONDS`), entao a barra do corte so' fica
+    consumivel em `corte + 60s`. Nesse instante o robo TEM de continuar
+    autorizado a agir -- senao o achatamento e' logicamente impossivel, que era
+    o estado ate 2026-09-14 (corte 21:25, janela fechando as 21:25)."""
+    from datetime import datetime, timedelta, timezone
+
+    from live import clock
+    from live.bar_feed import _MIN_BAR_AGE_SECONDS
+    from live.clock import SessionPhase
+
+    dia = datetime(2026, 9, 14, tzinfo=timezone.utc).date()  # segunda, pregao
+    for symbol, perfil in FUTURES_PROFILES.items():
+        corte = datetime.combine(dia, perfil.flatten_cut_time, tzinfo=timezone.utc)
+        consumivel = corte + timedelta(seconds=_MIN_BAR_AGE_SECONDS)
+        fase = clock.phase_em_janela(consumivel, perfil.session_start_time,
+                                     perfil.session_end_time)
+        assert fase is SessionPhase.OPEN, (
+            f"{symbol}: a barra do corte ({perfil.flatten_cut_time}) so' fica "
+            f"consumivel as {consumivel.time()}, quando o robo ja esta' em "
+            f"{fase.name} -- o achatamento nunca acontece"
+        )
+
+
+def test_a_janela_ativa_do_supervisor_cobre_o_pregao_de_todo_futuro():
+    """A TERCEIRA camada do mesmo erro, achada em 2026-09-14 depois de corrigir
+    as outras duas: nao basta o motor ter o corte certo e o robo estar
+    autorizado a agir -- o SUPERVISOR (`scripts/run_live.py::_loop_travado`)
+    precisa estar acordado. Ele dormia pelo calendario da ACAO e imprimiu
+    "[fora do horario de pregao] proximo passo em 15.0h" as 18:00 BRT com
+    posicao aberta e o pregao do WIN correndo ate 18:25.
+
+    Amarra `live.clock._ULTIMO_FECHAMENTO_BRT` aos perfis de futuro: um
+    instrumento novo que feche mais tarde quebra este teste em vez de dormir
+    em cima do proprio achatamento."""
+    from datetime import datetime, timedelta, timezone
+
+    from live import clock
+    from live.bar_feed import _MIN_BAR_AGE_SECONDS
+
+    dia = datetime(2026, 9, 14, tzinfo=timezone.utc).date()  # segunda, pregao
+    for symbol, perfil in FUTURES_PROFILES.items():
+        for nome, momento_utc in (("corte", perfil.flatten_cut_time),
+                                  ("fim do pregao", perfil.session_end_time)):
+            quando = (datetime.combine(dia, momento_utc, tzinfo=timezone.utc)
+                      + timedelta(seconds=_MIN_BAR_AGE_SECONDS))
+            assert clock.in_active_window(quando), (
+                f"{symbol}: supervisor dormindo em {nome} ({momento_utc} UTC) "
+                f"-- a barra desse minuto nunca chega a ser lida"
+            )

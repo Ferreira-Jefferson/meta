@@ -225,13 +225,25 @@ def test_in_active_window_uma_hora_antes_da_abertura() -> None:
     assert in_active_window(datetime.combine(_NORMAL_DAY, time(9, 0))) is True
 
 
-def test_in_active_window_uma_hora_depois_do_leilao_de_fechamento() -> None:
-    # sob horario de verao dos EUA o leilao termina 17:00 -> +1h de folga = 18:00
+def test_in_active_window_uma_hora_depois_do_fechamento_mais_tarde_do_dia() -> None:
+    """2026-09-14: a janela deixou de sair SO' do calendario de acao.
+
+    Ate aqui ela terminava no leilao da acao + 1h (18:00 sob horario de verao
+    dos EUA), e era isso que punha o supervisor de um robo de FUTURO para
+    dormir as 18:00 com posicao aberta e o pregao correndo ate 18:25/18:30 --
+    25 minutos antes do proprio corte de achatamento. Agora o fim e' o MAIOR
+    entre os dois fechamentos, e o futuro (18:30) domina nos dois regimes."""
+    # o leilao da acao + 1h continua DENTRO da janela, nos dois regimes
     assert in_active_window(datetime.combine(_NORMAL_DAY, time(18, 0))) is True
-    assert in_active_window(datetime.combine(_NORMAL_DAY, time(18, 1))) is False
-    # fora dele, a mesma folga cai 1h depois
     assert in_active_window(datetime.combine(_US_STANDARD_DAY, time(19, 0))) is True
-    assert in_active_window(datetime.combine(_US_STANDARD_DAY, time(19, 1))) is False
+    # ...e o pregao de futuro (18:30) + 1h e' quem agora fecha a janela
+    assert in_active_window(datetime.combine(_NORMAL_DAY, time(19, 30))) is True
+    assert in_active_window(datetime.combine(_NORMAL_DAY, time(19, 31))) is False
+    assert in_active_window(datetime.combine(_US_STANDARD_DAY, time(19, 30))) is True
+    assert in_active_window(datetime.combine(_US_STANDARD_DAY, time(19, 31))) is False
+    # o minuto em que o WIN acha a posicao (18:20) nunca pode cair fora
+    assert in_active_window(datetime.combine(_NORMAL_DAY, time(18, 20))) is True
+    assert in_active_window(datetime.combine(_US_STANDARD_DAY, time(18, 20))) is True
 
 
 def test_in_active_window_meio_do_pregao_e_true() -> None:

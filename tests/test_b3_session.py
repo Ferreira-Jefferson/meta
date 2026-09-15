@@ -20,7 +20,9 @@ from core.b3_session import (
     OPEN_HALF_DAY,
     after_hours_end,
     closing_auction_end,
+    FOLGA_ACHATAMENTO_MINUTOS,
     closing_bar_minute_utc,
+    flatten_cut_utc,
     continuous_end,
     server_utc_offset_hours,
     server_wall_clock_to_utc,
@@ -94,6 +96,28 @@ def test_corte_de_flatten_e_um_minuto_antes_do_fim_do_continuo() -> None:
         fim_local = datetime.combine(d, continuous_end(d), tzinfo=MT5_SERVER_TIMEZONE)
         corte_utc = datetime.combine(d, closing_bar_minute_utc(d), tzinfo=timezone.utc)
         assert (fim_local - corte_utc).total_seconds() == 60.0
+
+
+def test_o_corte_de_achatamento_da_acao_tem_a_folga_pedida() -> None:
+    """Ordem do dono, 2026-09-14: achatar ao menos 5 minutos antes do fim do
+    pregao. `closing_bar_minute_utc` continua respondendo "qual e' o rotulo da
+    ULTIMA barra" (pergunta factual, usada para validar dado); quem o motor
+    compara e' `flatten_cut_utc`, que recua a folga.
+
+    Duas funcoes de proposito: enquanto era uma so', o numero que dizia onde o
+    pregao acaba era o mesmo que dizia onde o robo devia sair -- e no lado do
+    FUTURO essa fusao tornou o achatamento impossivel (item 4.28 de
+    LICOES_DE_PRODUCAO.md)."""
+    for d in (date(2026, 8, 21), date(2026, 1, 19)):
+        fim_local = datetime.combine(d, continuous_end(d), tzinfo=MT5_SERVER_TIMEZONE)
+        corte_utc = datetime.combine(d, flatten_cut_utc(d), tzinfo=timezone.utc)
+        assert (fim_local - corte_utc).total_seconds() == FOLGA_ACHATAMENTO_MINUTOS * 60.0
+        # e sempre ANTES da ultima barra, nunca depois dela
+        assert flatten_cut_utc(d) < closing_bar_minute_utc(d)
+
+    assert flatten_cut_utc(date(2026, 8, 21)) == time(19, 50)   # 16:50 BRT
+    assert flatten_cut_utc(date(2026, 1, 19)) == time(20, 50)   # 17:50 BRT
+
 
 
 # ---------- fuso do servidor MT5 ----------------------------------------

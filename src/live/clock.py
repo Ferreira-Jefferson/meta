@@ -261,13 +261,37 @@ def phase_em_janela(now: datetime | None, abertura_utc: time,
 _ACTIVE_WINDOW_PAD: timedelta = timedelta(hours=1)
 
 
+#: Fim do pregao do instrumento que fecha MAIS TARDE entre os que este projeto
+#: opera (WDO@: 18:30 de Brasilia). Amarrado a `backtest.intraday.profiles.
+#: FUTURES_PROFILES` por teste (`test_a_janela_ativa_cobre_o_pregao_de_todo_
+#: futuro`), nao por import -- `clock` e' lido por todo mundo e nao deve
+#: arrastar o modulo de perfis junto.
+#:
+#: EXISTE PORQUE A JANELA ATIVA SAIA SO' DO CALENDARIO DE ACAO, e isso dormia
+#: em cima do pregao de futuro. Medido em 2026-09-14 no slot
+#: `dt-copa_win-win@-shadow`: o supervisor imprimiu "[fora do horario de
+#: pregao] proximo passo em 15.0h" as 18:00 BRT (leilao da acao 17:00 + 1h de
+#: folga) com uma posicao SHORT ABERTA e o pregao do WIN correndo ate 18:25.
+#: O robo nao estava travado nem idle -- estava DORMINDO, 25 minutos antes do
+#: proprio corte de achatamento. E' a mesma familia do item 4.28 (o relogio da
+#: acao gateando robo de futuro) numa TERCEIRA camada, acima de `run_once`.
+_ULTIMO_FECHAMENTO_BRT: time = time(18, 30)
+
+
 def _active_window(d: date) -> tuple[datetime, datetime]:
-    """Janela [1h antes da abertura, 1h depois do fim do leilao de fechamento]
+    """Janela [1h antes da abertura, 1h depois do fechamento MAIS TARDE do dia]
     de um dia de pregao `d`. Usada por quem faz trabalho PERIODICO (loops de
-    atualizacao, polling do dashboard) para saber quando vale a pena rodar —
-    nao tem nenhum uso em decisao de trade (isso continua sendo so `phase()`)."""
+    atualizacao, polling do dashboard, o laco do supervisor) para saber quando
+    vale a pena rodar — nao tem nenhum uso em decisao de trade (isso continua
+    sendo so `phase()`/`phase_em_janela()`).
+
+    O fim e' o MAIOR entre o leilao de fechamento da ACAO (que desloca 1h com
+    o horario de verao dos EUA) e `_ULTIMO_FECHAMENTO_BRT` (o futuro, que nao
+    desloca): um supervisor de futuro dormindo no horario da acao nao chega
+    nem a ver a barra em que deveria achatar."""
     start = datetime.combine(d, session_open(d), tzinfo=SAO_PAULO) - _ACTIVE_WINDOW_PAD
-    end = datetime.combine(d, closing_auction_end(d), tzinfo=SAO_PAULO) + _ACTIVE_WINDOW_PAD
+    fim_do_dia = max(closing_auction_end(d), _ULTIMO_FECHAMENTO_BRT)
+    end = datetime.combine(d, fim_do_dia, tzinfo=SAO_PAULO) + _ACTIVE_WINDOW_PAD
     return start, end
 
 
