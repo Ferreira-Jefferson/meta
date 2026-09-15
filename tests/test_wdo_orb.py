@@ -130,9 +130,9 @@ def test_a_ordem_fica_offset_ticks_ATRAS_do_rompimento_nos_dois_lados():
 
 def test_stop_e_alvo_saem_do_TAMANHO_da_faixa_ancorados_no_limite():
     """Faixa de 17,5 pontos = 35 ticks (a mediana medida do IS) -> o TETO
-    (30, desde 2026-09-11) morde: stop 30 ticks, alvo 60. Os niveis contam a
-    partir do LIMITE pedido, nao do preco que rompeu: e' esse nivel que a
-    ordem vai ocupar."""
+    (30, desde 2026-09-11) morde: stop 30 ticks, alvo 45 (1,5x desde
+    2026-09-14). Os niveis contam a partir do LIMITE pedido, nao do preco que
+    rompeu: e' esse nivel que a ordem vai ocupar."""
     robo = WdoOrb()
     _faixa(robo, hi=5_117.5, lo=5_100.0)
 
@@ -140,7 +140,7 @@ def test_stop_e_alvo_saem_do_TAMANHO_da_faixa_ancorados_no_limite():
 
     limite = 5_118.5 - 1.0
     assert acao.initial_stop == pytest.approx(limite - 30 * 0.5)
-    assert acao.initial_target == pytest.approx(limite + 60 * 0.5)
+    assert acao.initial_target == pytest.approx(limite + 45 * 0.5)
 
 
 @pytest.mark.parametrize("faixa_pontos, stop_esperado", [
@@ -168,7 +168,7 @@ def test_short_espelha_a_geometria_do_long():
 
     limite = 5_099.0 + 1.0
     assert acao.initial_stop == pytest.approx(limite + 30 * 0.5)
-    assert acao.initial_target == pytest.approx(limite - 60 * 0.5)
+    assert acao.initial_target == pytest.approx(limite - 45 * 0.5)
 
 
 def test_dentro_da_faixa_nao_arma_nada():

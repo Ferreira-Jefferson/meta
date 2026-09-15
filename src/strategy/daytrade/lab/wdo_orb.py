@@ -107,6 +107,59 @@ degrau. Isso e' estrutural a operar com R$375 e 1 contrato fixo, nao um
 parametro de estrategia. Ver LICOES_DE_PRODUCAO.md e a memoria do projeto
 `wdo_orb_teto1_stop30_producao_2026_09_11`.
 
+O ALVO BAIXOU DE 2,0x PARA 1,5x O STOP (2026-09-14, ver `alvo_multiplo`).
+Veio de uma investigacao que comecou pelo lado oposto: o dono achou que as 4
+semanas de 17/08 a 11/09 mostravam "uma tendencia longa de perdas e outra de
+ganhos" e queria saber quando cada uma comeca. Teste de sequencias
+(Wald-Wolfowitz) sobre as 28 operacoes: 15 blocos observados contra 14,36
+esperados por acaso, z=+0,26. NAO ha tendencia para prever -- as sequencias
+longas que a vista percebe sao o que o acaso produz em 28 lances.
+
+O que a mesma coleta mostrou, e virou esta mudanca: o alvo pedido era 53 ticks
+em media, o vencedor andava 26 (MFE mediana) e so' 10,7% das operacoes
+chegavam ao alvo -- 46,4% saiam pelo corte de relogio, com R$/op 8x menor.
+
+Medido em 134 pregoes (IS 72 + OOS_LIMPO 43 + as 19 recentes), capital R$375
+REPOSTO por pregao, `scripts/daytrade/wdo_orb_geometria_is_oos_2026_09_14.py`:
+
+    multiplo   R$/op IS   R$/op OOS   pregoes+ IS   pregoes+ OOS
+    1,0x         8,82        9,58        48,6          50,0
+    1,25x       18,67        8,80        58,3          64,3
+    1,5x        22,95       11,14        55,6          61,9   <- NOVO default
+    2,0x        24,60        9,66        54,2          57,1   <- era isto
+    2,5x        23,29       10,52        52,8          57,1
+
+E CONFIRMADO por bootstrap emparelhado por PREGAO (5.000 reamostragens,
+`wdo_orb_t15_robustez_2026_09_14.py`), que e' o teste que separa o achado do
+sorteio:
+
+    R$/op maior em          40,9% das reamostragens  (mediana -0,58)
+    mais pregoes positivos: 95,0%                    (mediana +2,63pp)
+
+**A leitura honesta: o 1,5x NAO ganha mais dinheiro.** Ganha com mais
+frequencia, pelo mesmo dinheiro. Foi promovido porque e' exatamente o criterio
+que o dono declarou -- "melhor ganhar pouco, mas ganhar sempre, do que ganhar
+muito e devolver por mercado" -- e porque e' o UNICO eixo que sobreviveu ao
+bootstrap em toda a rodada de 2026-09-14. No walk-forward mensal ele fez 3
+vitorias, 4 empates e ZERO derrotas em pregoes positivos.
+
+O que NAO passou nessa mesma rodada, para nao ser retentado sem motivo novo:
+cortar o fade (ele e' a perna FORTE: +41,60/op no IS e +44,50 no OOS, contra
++17,28 e -8,60 do rompimento); filtrar a entrada por agitacao de mercado
+(1 confirmacao em 8, com o sinal INVERTIDO nas janelas grandes); qualquer
+preditor medido no instante do sinal (0 de 15 variaveis passam Benjamini-
+Hochberg no IS, e nenhuma chega nem a p<0,05 sem correcao); operar so' vendido
+(o fade short, a melhor perna, so' existe DEPOIS de um rompimento long --
+cortar o long custa R$1.098,50); encurtar o stop (sign-flip perfeito: piora
+monotonicamente no IS, melhora monotonicamente no OOS); e a COMBINACAO
+alvo 1,5x + teto de stop 25, que fica pior que as duas partes isoladas
+(19,7% no bootstrap de R$/op, contra 40,9% do alvo sozinho).
+
+LIMITE DESTA PROMOCAO: o 1,5x foi escolhido OLHANDO o IS e o OOS, entao as
+duas janelas foram gastas na escolha e nao existe validacao cega dela. O que
+ele tem e' nao inverter de sinal em janela nenhuma e sobreviver ao
+reembaralhamento -- o piso para merecer uma janela cega, que so' o tempo da'.
+
 O DESENHO DE EXECUCAO (ordem do dono, 2026-09-10 -- ver CLAUDE.md):
 
   * entrada por `EnterLimit` PARADA no livro, nunca `Enter` a mercado. Num
@@ -187,12 +240,27 @@ class WdoOrb(IntradayStrategy):
     #: tick (ver a proibicao do T1 em CLAUDE.md, vale para este robo tambem).
     stop_min_ticks: int = 20
     stop_max_ticks: int = 30
-    #: alvo = stop x isto. TESTADO e' 2,0. Geometria FIXA (abaixo) foi testada
-    #: e REFUTADA de forma monotonica: S10/T20 deu +R$0,88/op e S20/T40
-    #: +R$2,34/op contra +R$15,71/op da faixa adaptativa, na MESMA janela. O
-    #: mecanismo: com stop largo o perdedor sai pelo relogio com perda
-    #: PEQUENA; com stop apertado o mesmo trade sai no stop CHEIO.
-    alvo_multiplo: float = 2.0
+    #: alvo = stop x isto. BAIXOU DE 2,0 PARA 1,5 EM 2026-09-14 -- ver a nota
+    #: no topo do modulo para a medicao completa. Em uma linha: o 1,5x nao
+    #: ganha mais DINHEIRO (R$/op fica igual, mediana -0,58 no bootstrap), ele
+    #: ganha com mais FREQUENCIA -- 95,0% das reamostragens tem mais pregoes
+    #: positivos, e ele e' >= ao 2,0x em 6 de 6 comparacoes pareadas de stop.
+    #: E' o criterio do dono ("ganhar pouco e ganhar sempre") aplicado ao unico
+    #: eixo que sobreviveu a rodada inteira de 2026-09-14.
+    #:
+    #: NAO baixe mais sem medir: 1,25x e 1,0x pioram o R$/op no OOS (8,80 e
+    #: 9,58 contra 11,14 do 1,5x), e o alvo tem de ficar longe de 1 tick (a
+    #: proibicao do T1 em CLAUDE.md vale aqui).
+    #:
+    #: Geometria FIXA (`stop_ticks_fixo`/`alvo_ticks_fixo`) ja' foi chamada de
+    #: "refutada de forma monotonica" nesta docstring, com S10/T20 a +R$0,88/op
+    #: e S20/T40 a +R$2,34 contra +R$15,71 da faixa adaptativa. Aquilo foi
+    #: medido em OUTRO desenho de execucao (corte a mercado, sem fade, fila
+    #: antiga). Remedidas em 2026-09-14 no desenho vigente: S20/T40 da' +18,14
+    #: (IS) e +9,81 (OOS); S10/T20 da' -1,99 (IS) e +13,94 (OOS). Nenhuma vira
+    #: candidata -- S10/T20 inverte de sinal entre as janelas -- mas
+    #: "monotonicamente refutada" deixou de descrever os numeros.
+    alvo_multiplo: float = 1.5
     quantity: int = 1
 
     #: Fecha a posicao a MERCADO N minutos depois da entrada. E' o desenho
