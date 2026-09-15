@@ -33,9 +33,15 @@ from __future__ import annotations
 
 import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
+
+RAIZ = Path(__file__).resolve().parents[2]
+#: resultado vai para scratch/, NUNCA para o diretorio de codigo -- CSV
+#: solto em scripts/ vira arquivo novo no `git status` e acaba commitado.
+SAIDA = RAIZ / "scratch" / "cross_asset_confirmacao_probe_2026_09_15.csv"
 
 CORTE_IS = pd.Timestamp("2026-06-13", tz="America/Sao_Paulo")
 
@@ -230,7 +236,8 @@ def main():
                   f"n={r['is_n']:>6} p={r['is_p']:.4f}{marca}", flush=True)
 
     df = pd.DataFrame(linhas).sort_values("is_rs", ascending=False)
-    df.to_csv("scripts/daytrade/cross_asset_confirmacao_probe_2026_09_15.csv", index=False)
+    SAIDA.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(SAIDA, index=False)
 
     print("\n" + "=" * 100)
     print(f"TOP 10 POR IS -- CONTINUACAO (de {len(df)} celulas)")
