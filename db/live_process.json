@@ -13,6 +13,74 @@
         "notify_min_level": "warn",
         "mt5_shares_per_lot": 1.0,
         "mt5_fractional_map": null,
+        "mt5_symbol_map": {
+          "WIN@": "WINV26"
+        }
+      }
+    },
+    "dt-wdo_orb-wdo@-shadow": {
+      "pid": null,
+      "started_at": null,
+      "config": {
+        "mode": "mt5",
+        "capital": 375.0,
+        "strategy": "wdo_orb",
+        "slot": "dt-wdo_orb-wdo@-shadow",
+        "execution_mode": "shadow",
+        "notify_min_level": "warn",
+        "mt5_shares_per_lot": 1.0,
+        "mt5_fractional_map": null,
+        "mt5_symbol_map": {
+          "WDO@": "WDOV26"
+        }
+      }
+    },
+    "dt-wdo_grid_reload_maker-wdo@-shadow": {
+      "pid": null,
+      "started_at": null,
+      "config": {
+        "mode": "mt5",
+        "capital": 375.0,
+        "strategy": "wdo_grid_reload_maker",
+        "slot": "dt-wdo_grid_reload_maker-wdo@-shadow",
+        "execution_mode": "shadow",
+        "notify_min_level": "warn",
+        "mt5_shares_per_lot": 1.0,
+        "mt5_fractional_map": null,
+        "mt5_symbol_map": {
+          "WDO@": "WDOV26"
+        }
+      }
+    },
+    "dt-wdo_grid_fade_off_t3-wdo@-shadow": {
+      "pid": null,
+      "started_at": null,
+      "config": {
+        "mode": "mt5",
+        "capital": 375.0,
+        "strategy": "wdo_grid_fade_off_t3",
+        "slot": "dt-wdo_grid_fade_off_t3-wdo@-shadow",
+        "execution_mode": "shadow",
+        "notify_min_level": "warn",
+        "mt5_shares_per_lot": 1.0,
+        "mt5_fractional_map": null,
+        "mt5_symbol_map": {
+          "WDO@": "WDOV26"
+        }
+      }
+    },
+    "dt-gremah-pmam3-shadow": {
+      "pid": null,
+      "started_at": null,
+      "config": {
+        "mode": "mt5",
+        "capital": 375.0,
+        "strategy": "gremah",
+        "slot": "dt-gremah-pmam3-shadow",
+        "execution_mode": "shadow",
+        "notify_min_level": "warn",
+        "mt5_shares_per_lot": 1.0,
+        "mt5_fractional_map": null,
         "mt5_symbol_map": {}
       }
     }
