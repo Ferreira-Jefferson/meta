@@ -1,0 +1,67 @@
+============================================================================================================================================
+CATÁLOGO DE DEFINIÇÕES DE LATERALIZAÇÃO — WIN@ M1, IS apenas
+============================================================================================================================================
+  129 pregões | 2025-12-01 a 2026-06-12 | 72730 barras totais
+  min. duração do evento: 10 barras (exceto retângulo, que tem morte própria)
+  retângulo: W=20, tol=0.2, largura mín=328 (parâmetros de PRODUÇÃO)
+
+--------------------------------------------------------------------------------------------------------------------------------------------
+EVENTOS POR DEFINIÇÃO (cada linha sai assim que a unidade termina)
+--------------------------------------------------------------------------------------------------------------------------------------------
+  inside_bar_seq         n=  399 (  3,09/pregão)  duração med    18b  largura med    318pts  cobertura  11,0%  pico 17h BRT (23,6% dos eventos vs 10,6% das barras da sessão)
+  bollinger_squeeze      n=  660 (  5,12/pregão)  duração med    17b  largura med    307pts  cobertura  18,3%  pico 12h BRT (19,7% dos eventos vs 10,6% das barras da sessão)
+  nr7_cluster            n=  127 (  0,98/pregão)  duração med    14b  largura med    292pts  cobertura   2,7%  pico 17h BRT (17,3% dos eventos vs 10,6% das barras da sessão)
+  razao_amplitude_atr    n= 1112 (  8,62/pregão)  duração med    39b  largura med    642pts  cobertura  76,9%  pico  9h BRT (14,0% dos eventos vs 10,4% das barras da sessão)
+  atr_compressao         n=   71 (  0,55/pregão)  duração med    14b  largura med    409pts  cobertura   1,6%  pico  9h BRT (43,7% dos eventos vs 10,4% das barras da sessão)
+  volume_secando         n=  491 (  3,81/pregão)  duração med    23b  largura med    416pts  cobertura  18,1%  pico 12h BRT (22,2% dos eventos vs 10,6% das barras da sessão)
+  retangulo_producao     n=  434 (  3,36/pregão)  duração med    16b  largura med    434pts  cobertura  16,1%  pico 10h BRT (27,0% dos eventos vs 10,6% das barras da sessão)
+
+============================================================================================================================================
+DISTRIBUIÇÃO POR PREGÃO E TAXA DE ROMPIMENTO — retângulo de referência (produção)
+============================================================================================================================================
+  eventos/pregão: mediana 3,0  média 3,36  min 0  max 11  NULO (uniforme) seria 3,36 todo dia
+  pregões SEM nenhum retângulo: 7/129 (5,4%)
+
+  por dia da semana (fração dos EVENTOS vs fração dos PREGÕES = nulo):
+    seg:   18,2% dos eventos (n= 79)  vs   20,9% dos pregões (nulo, n=27)
+    ter:   19,1% dos eventos (n= 83)  vs   20,2% dos pregões (nulo, n=26)
+    qua:   18,9% dos eventos (n= 82)  vs   19,4% dos pregões (nulo, n=25)
+    qui:   23,0% dos eventos (n=100)  vs   19,4% dos pregões (nulo, n=25)
+    sex:   20,7% dos eventos (n= 90)  vs   20,2% dos pregões (nulo, n=26)
+
+  taxa de rompimento (morte confirmada vs sobreviveu até o fim do pregão):
+    morreu por rompimento: 417/434 (96,1%)
+    NUNCA rompeu (fim de pregão): 17/434 (3,9%)
+    -- 'nunca rompeu' é o retângulo que ficou vivo até o fechamento: sob a regra de
+       morte de produção, é o piso da resposta a 'existe lateralização que nunca rompe?'
+
+============================================================================================================================================
+MATRIZ DE CONCORDÂNCIA — P(coluna=lateral | linha=lateral), barra a barra, todo o IS
+============================================================================================================================================
+  NULO de cada célula: a fração de barras que a definição da COLUNA marca como lateral
+  no IS inteiro (concordância por acaso, se as duas fossem independentes).
+
+                            retangulo_pr  atr_compress  bollinger_sq  razao_amplit   nr7_cluster  inside_bar_s  volume_secan
+  retangulo_producao              100,0%          4,1%         38,5%         97,2%          5,7%         11,7%         37,3%
+  atr_compressao                   24,9%        100,0%         35,1%         94,9%         12,0%         24,9%         65,3%
+  bollinger_squeeze                26,2%          3,9%        100,0%         99,7%          9,3%         21,9%         48,8%
+  razao_amplitude_atr              19,6%          3,2%         29,5%        100,0%          6,8%         17,7%         25,6%
+  nr7_cluster                      14,8%          5,1%         35,2%         87,9%        100,0%         25,4%         32,9%
+  inside_bar_seq                   11,4%          4,0%         31,4%         85,6%          9,6%        100,0%         31,7%
+  volume_secando                   28,0%          8,1%         53,6%         95,1%          9,5%         24,3%        100,0%
+
+  NULO por coluna (fração da coluna que é lateral, no IS inteiro):
+                                   16,1%          2,6%         23,5%         79,6%          6,2%         16,4%         21,4%
+
+============================================================================================================================================
+COMO LER
+============================================================================================================================================
+  * Todas as bandeiras são CAUSAIS (só olham para trás) — não há look-ahead aqui.
+  * Os limiares de 2-7 são ESCOLHAS documentadas na docstring, não medições: esta
+    rodada cataloga e compara, a calibração fina é agenda futura.
+  * 'cobertura' é a fração do tempo de sessão em que a definição está ATIVA — compare
+    contra o retângulo antes de tratar qualquer definição como rara ou frequente.
+  * A matriz de concordância lê-se por LINHA: 'dado que X está ativo, Y também está em Z%'.
+  * Só o IS. A janela cega fica intacta.
+
+FIM.

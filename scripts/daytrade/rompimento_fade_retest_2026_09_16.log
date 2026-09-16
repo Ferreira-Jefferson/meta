@@ -1,0 +1,81 @@
+========================================================================================================================================================================
+ROMPIMENTO DE RETÂNGULO -- a aposta INVERSA (fade do retest, aposta em REENTRADA)
+========================================================================================================================================================================
+  WIN@ M1 | 129 pregões IS | 2025-12-01 a 2026-06-12
+  retângulo W=20, tolerância 0.2, largura mínima 328
+  capital de referência R$ 1.100 (piso do win_retangulo -- ajustado no fim se o rebaixamento real exigir mais)
+  *** ordem só é armada DEPOIS que o fechamento confirma a reentrada -- ver docstring ***
+
+  ok S+0,30L/A=opos/ttl60     n= 153 trades  romp=211 nunca_reentra= 47 armadas=164 expira= 11 mec.falhou=6 caixa_min=1.003,40 zerado=False
+  ok S+0,30L/A=opos/ttl20     n= 155 trades  romp=215 nunca_reentra= 46 armadas=169 expira= 14 mec.falhou=6 caixa_min=1.003,40 zerado=False
+  ok S+0,30L/A=meio/ttl60     n= 162 trades  romp=223 nunca_reentra= 50 armadas=173 expira= 11 mec.falhou=6 caixa_min=545,50 zerado=False
+  ok S+0,15L/A=opos/ttl60     n= 158 trades  romp=215 nunca_reentra= 44 armadas=171 expira= 13 mec.falhou=7 caixa_min=956,40 zerado=False
+  ok S+0,00L/A=meio/ttl60     n= 161 trades  romp=228 nunca_reentra= 48 armadas=180 expira= 19 mec.falhou=6 caixa_min=87,30 zerado=False
+  ok S+0,30L/A=meio/ttl20     n= 164 trades  romp=228 nunca_reentra= 50 armadas=178 expira= 14 mec.falhou=6 caixa_min=377,50 zerado=False
+  ok S+0,15L/A=meio/ttl60     n= 165 trades  romp=226 nunca_reentra= 48 armadas=178 expira= 13 mec.falhou=6 caixa_min=185,70 zerado=False
+  ok S+0,15L/A=opos/ttl20     n= 161 trades  romp=220 nunca_reentra= 43 armadas=177 expira= 16 mec.falhou=7 caixa_min=956,40 zerado=False
+  ok S+0,15L/A=meio/ttl20     n= 165 trades  romp=231 nunca_reentra= 48 armadas=183 expira= 18 mec.falhou=6 caixa_min=47,70 zerado=False
+  ok S+0,00L/A=meio/ttl20     n= 162 trades  romp=232 nunca_reentra= 48 armadas=184 expira= 22 mec.falhou=6 caixa_min=77,80 zerado=False
+  ok S+0,00L/A=opos/ttl20     n= 160 trades  romp=221 nunca_reentra= 45 armadas=176 expira= 16 mec.falhou=7 caixa_min=374,30 zerado=False
+  ok S+0,00L/A=opos/ttl60     n= 157 trades  romp=216 nunca_reentra= 46 armadas=170 expira= 13 mec.falhou=7 caixa_min=752,80 zerado=False
+
+========================================================================================================================================================================
+FUNIL DA POPULAÇÃO (idêntico nas 12 variantes -- rompimento/detecção não muda com stop/alvo/ttl; só o desfecho pós-fill muda)
+========================================================================================================================================================================
+  rompimentos confirmados: 211
+  (a) NUNCA reentra por fechamento (ordem nunca é armada): 47 (22,3%)
+  checagem mecânica no instante da confirmação do rompimento: reportada 100% de falha por construção (ver docstring) -- não medida célula a célula porque é necessidade matemática, não evento estocástico
+  checagem mecânica no instante da REENTRADA confirmada: falhou 6 vez(es) de 170 tentativas -- deve ser ~0
+  (b)+(c) reentra por fechamento e ordem é armada: 164 (77,7%)
+  a partir daqui o desfecho DEPENDE do prazo (ttl) -- ver cada linha da tabela:
+     (b) ordem armada mas expira SEM preencher | (c) ordem preenche -> vira trade
+
+========================================================================================================================================================================
+TABELA PADRÃO -- 12 variantes (stop k×largura além do extremo / alvo meio|oposta / ttl min)
+========================================================================================================================================================================
+variante                        retorno   liquido R$  MaxDD %    MaxDD R$ lucro/DD   win% trades     R$/dia trd/dia  capital final pregoes        romp.nunca reentra      armadasexpira s/fill   mec.falhou       BEemp%     pior op.    caixa min   rebaix.op.    sem trade
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+S+0,00L/A=meio/ttl20             -92,9%    -1.022,20   -95,8%    1.778,90    -0,57  66,0%    162      -7,92     1,3          77,80     129          232           48          184           22            6        70,3%      -260,50        77,80     1.769,90       36/129  desliz.alvo 1,0t fila NAO CALIBRADA
+S+0,00L/A=meio/ttl60             -92,1%    -1.012,70   -95,3%    1.779,40    -0,57  65,8%    161      -7,85     1,2          87,30     129          228           48          180           19            6        70,1%      -260,50        87,30     1.770,40       37/129  desliz.alvo 1,0t fila NAO CALIBRADA
+S+0,00L/A=opos/ttl20             -50,5%      -555,20   -85,8%    2.246,50    -0,25  51,9%    160      -4,30     1,2         544,80     129          221           45          176           16            7        53,7%      -289,50       374,30     2.203,90       32/129  desliz.alvo 1,0t fila NAO CALIBRADA
+S+0,00L/A=opos/ttl60             -11,9%      -130,70   -73,0%    1.910,00    -0,07  52,9%    157      -1,01     1,2         969,30     129          216           46          170           13            7        53,3%      -289,50       752,80     1.825,40       33/129  desliz.alvo 1,0t fila NAO CALIBRADA
+S+0,15L/A=meio/ttl20             -95,7%    -1.052,30   -97,6%    1.974,50    -0,53  68,5%    165      -8,16     1,3          47,70     129          231           48          183           18            6        72,5%      -275,50        47,70     1.965,50       33/129  desliz.alvo 1,0t fila NAO CALIBRADA
+S+0,15L/A=meio/ttl60             -69,6%      -765,30   -91,7%    1.862,60    -0,41  69,1%    165      -5,93     1,3         334,70     129          226           48          178           13            6        72,0%      -275,50       185,70     1.837,50       33/129  desliz.alvo 1,0t fila NAO CALIBRADA
+S+0,15L/A=opos/ttl20              17,3%       190,50   -62,9%    1.896,40     0,10  57,1%    161       1,48     1,2       1.290,50     129          220           43          177           16            7        56,6%      -304,50       956,40     1.838,20       32/129  desliz.alvo 1,0t fila NAO CALIBRADA
+S+0,15L/A=opos/ttl60              35,4%       389,20   -59,4%    1.833,20     0,21  57,6%    158       3,02     1,2       1.489,20     129          215           44          171           13            7        56,4%      -304,50       956,40     1.733,00       33/129  desliz.alvo 1,0t fila NAO CALIBRADA
+S+0,30L/A=meio/ttl20             -58,0%      -638,00   -82,0%    1.706,90    -0,37  71,3%    164      -4,95     1,3         462,00     129          228           50          178           14            6        73,7%      -289,50       377,50     1.694,70       32/129  desliz.alvo 1,0t fila NAO CALIBRADA
+S+0,30L/A=meio/ttl60             -42,7%      -470,00   -74,6%    1.559,40    -0,30  71,6%    162      -3,64     1,3         630,00     129          223           50          173           11            6        73,3%      -289,50       545,50     1.536,70       33/129  desliz.alvo 1,0t fila NAO CALIBRADA
+S+0,30L/A=opos/ttl20              34,4%       378,50   -55,3%    1.612,90     0,23  60,0%    155       2,93     1,2       1.478,50     129          215           46          169           14            6        58,9%      -320,50     1.003,40     1.554,70       32/129  desliz.alvo 1,0t fila NAO CALIBRADA
+S+0,30L/A=opos/ttl60              48,6%       534,50   -54,6%    1.630,90     0,33  60,1%    153       4,14     1,2       1.634,50     129          211           47          164           11            6        58,5%      -320,50     1.003,40     1.530,70       33/129  desliz.alvo 1,0t fila NAO CALIBRADA
+
+========================================================================================================================================================================
+IC95% DO ACERTO CONTRA O BREAKEVEN -- só as variantes com n suficiente para não ser ruído puro
+========================================================================================================================================================================
+  variante                       n     win%   BE nominal   BE empírico           IC95 acerto   escapa do BE?
+  S+0,00L/A=meio/ttl20         162    66,0%            —         70,3%[58,8% ; 73,3%]             não
+  S+0,00L/A=meio/ttl60         161    65,8%            —         70,1%[58,5% ; 73,2%]             não
+  S+0,00L/A=opos/ttl20         160    51,9%            —         53,7%[44,1% ; 59,6%]             não
+  S+0,00L/A=opos/ttl60         157    52,9%            —         53,3%[45,1% ; 60,7%]             não
+  S+0,15L/A=meio/ttl20         165    68,5%            —         72,5%[61,4% ; 75,6%]             não
+  S+0,15L/A=meio/ttl60         165    69,1%            —         72,0%[62,0% ; 76,1%]             não
+  S+0,15L/A=opos/ttl20         161    57,1%            —         56,6%[49,5% ; 64,8%]             não
+  S+0,15L/A=opos/ttl60         158    57,6%            —         56,4%[49,9% ; 65,3%]             não
+  S+0,30L/A=meio/ttl20         164    71,3%            —         73,7%[64,4% ; 78,3%]             não
+  S+0,30L/A=meio/ttl60         162    71,6%            —         73,3%[64,7% ; 78,5%]             não
+  S+0,30L/A=opos/ttl20         155    60,0%            —         58,9%[52,3% ; 67,7%]             não
+  S+0,30L/A=opos/ttl60         153    60,1%            —         58,5%[52,4% ; 67,9%]             não
+
+========================================================================================================================================================================
+COMO LER
+========================================================================================================================================================================
+  * O mecanismo de fade IMEDIATO (armar no instante do rompimento) é INEXECUTÁVEL --
+    a checagem mecânica falharia 100% das vezes, por construção (ver docstring). A
+    variante medida aqui só arma DEPOIS que o fechamento confirma a reentrada -- uma
+    fatia mais tardia e mais conservadora da mesma população de 83%.
+  * 'sem trade' conta pregões sem trade FECHADO -- inclui pregões com ordem armada
+    que nunca preencheu, que a coluna 'expira s/fill' não mostra por pregão.
+  * WIN@ não tem fidelidade.py calibrada -- 'fila NÃO CALIBRADA' é premissa otimista
+    dos dois lados (entrada e saída enchem no toque).
+  * Só o IS. A janela cega fica intacta.
+
+FIM.

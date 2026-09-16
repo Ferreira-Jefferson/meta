@@ -1,0 +1,67 @@
+============================================================================================================================================
+ROMPIMENTO DE RETÂNGULO — o fenômeno existe? (IS apenas, ainda não é estratégia)
+============================================================================================================================================
+  WIN@ M1 | 129 pregões | 2025-12-01 a 2026-06-12
+  retângulo W=20, tolerância 0.2, largura mínima 328 | rompimento = a regra de MORTE do robô de fade
+  horizonte 60 barras | pedágio ida-e-volta 7,5 pontos
+  *** dois vícios de método da 1a passada corrigidos aqui — ver a docstring ***
+
+============================================================================================================================================
+Q1 — QUANTOS ROMPEM, PARA QUE LADO, DEPOIS DE QUANTO TEMPO
+============================================================================================================================================
+  rompimentos: 417   (3,2 por pregão)
+  ALTA 191 (45,8%)  |  BAIXA 226 (54,2%)
+  barras vivo antes de romper: mediana 18 (p25 10, p75 34)
+  largura rompida: mediana 435 pontos (p25 374, p75 528)
+  JÁ ANDOU da borda até a detecção: mediana 263 pontos — é o degrau que viciava a 1a passada
+
+============================================================================================================================================
+Q2 — DEPOIS DE ROMPER, CONTINUA? (do PREÇO DE DETECÇÃO, contra o nulo)
+============================================================================================================================================
+  rompimento               n= 417  MFE med   401,0  MAE med   434,0  MFE>MAE   48,9%  razão 0,92
+  NULO (instante sorteado) n= 417  MFE med   372,0  MAE med   340,0  MFE>MAE   52,8%  razão 1,09
+
+  quem chega primeiro, do preço de detecção:
+    limiar        rompimento          NULO    diferença
+    20 pts             12,2%         20,6%      -8,4 pp
+    40 pts             26,4%         37,6%     -11,3 pp
+    60 pts             37,4%         44,1%      -6,7 pp
+    100 pts            43,6%         44,5%      -0,8 pp
+    150 pts            48,1%         47,9%       0,1 pp
+
+============================================================================================================================================
+Q3 — O PREÇO VOLTA À BORDA? (sem reteste NÃO EXISTE entrada por ordem-limite)
+============================================================================================================================================
+  retesta a borda em até 60 barras: 69,3% (289 de 417)
+  barras até o reteste: mediana 7 (p25 3, p75 17)
+    retesta em até  5 barras: 29,3% de TODOS os rompimentos
+    retesta em até 10 barras: 41,0% de TODOS os rompimentos
+    retesta em até 20 barras: 54,7% de TODOS os rompimentos
+    retesta em até 30 barras: 59,7% de TODOS os rompimentos
+
+============================================================================================================================================
+Q4 — DEPOIS DO RETESTE, QUEM CHEGA PRIMEIRO? (ordem de chegada, da BORDA)
+============================================================================================================================================
+  n=288 retestes com continuação observável (de 417 rompimentos)
+
+    limiar         a favor 1o   contra 1o    nenhum   % decididos a favor
+    20 pts                 93         195         0                 32,3%
+    40 pts                118         170         0                 41,0%
+    60 pts                136         152         0                 47,2%
+    100 pts               151         137         0                 52,4%
+    150 pts               153         134         1                 53,3%
+
+  O nulo desta tabela é 50%: alvo e stop simétricos, sem custo. Abaixo de 50%
+  o reteste é pior que cara-ou-coroa; em 50% ele empata e o pedágio decide.
+
+============================================================================================================================================
+COMO LER
+============================================================================================================================================
+  * NÃO é estratégia: não há entrada, alvo, stop nem custo. É a pergunta anterior.
+  * Q3 é eliminatória por MECANISMO: sem reteste, o desenho de execução fechado
+    (entrada só por ordem-limite) não tem como entrar.
+  * Q4 é eliminatória por ECONOMIA: com alvo e stop simétricos o nulo é 50%, e
+    ainda é preciso pagar 7,5 pontos de ida-e-volta.
+  * Só o IS. A janela cega fica intacta para o que sobreviver.
+
+FIM.
