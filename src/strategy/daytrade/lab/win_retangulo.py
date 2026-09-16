@@ -87,10 +87,12 @@ magnitude. **Não é validação.** Quatro limites, declarados:
 3. **NUNCA operou com dinheiro real.** Em sombra desde 2026-09-15 (slot
    `dt-win_retangulo-win@-shadow`), e a sombra não fecha o buraco da fila:
    ela não manda ordem, então enche no toque igual ao backtest.
-4. **A tabela do topo é de `escala_por_caixa=False`** (1 contrato fixo), que
-   é como o robô foi medido e congelado. Com a escala ligada — o default
-   desde 2026-09-15 — o líquido quase dobra e o rebaixamento triplica; ver
-   `capital_minimo_recomendado_brl`.
+4. **A tabela do topo vale para quem começa no piso de R$1.100**, que é
+   onde a escada de `_dimensiona` roda 1 contrato. Com caixa maior o robô
+   escala e os R$ mudam — as OPERAÇÕES não: em todas as janelas medidas o
+   número de trades e o acerto ficam idênticos (615/44,9% no IS, 182/45,1%
+   no OOS, 79/46,8% no último mês), porque a quantidade não interfere em
+   qual retângulo é aceito.
 
 ## Fila: por que este desenho aguenta o que o WDO F1 maker não aguentou
 
@@ -133,6 +135,12 @@ from strategy.daytrade.base import (
     Bar, EnterLimit, IntradayAction, IntradayOpenPosition, IntradayStrategy,
     contracts_from_capital_operacional, no_tick,
 )
+
+#: Caixa exigido para o PRIMEIRO contrato: pior rebaixamento POR OPERAÇÃO
+#: medido no IS com 1 contrato (R$989,50) + margem crua do WIN@ (R$100),
+#: arredondado. É a base da escada de `_dimensiona` — o contrato `n` exige
+#: `PISO_UM_CONTRATO_BRL × n^expoente`.
+PISO_UM_CONTRATO_BRL = 1_100.0
 
 #: Tolerância das bordas, em fração da largura — "podendo ficar um pouco
 #: abaixo e/ou um pouco acima". É só o FALLBACK da função pura, para quem a
@@ -312,26 +320,20 @@ class WinRetangulo(IntradayStrategy):
     #: existe para cortar essa cauda — ver a docstring dele para as três
     #: medições que tiraram o teto do lugar de alavanca.
     #:
-    #: **SUBIU para R$3.400 em 2026-09-15, quando `escala_por_caixa` entrou
-    #: ligado.** Com 1 contrato fixo o piso era R$1.100 (R$989,50 de
-    #: rebaixamento por operação + margem). Dimensionando pelo caixa, as
-    #: MESMAS operações entram com até 5 contratos e o rebaixamento por
-    #: operação vai a **R$3.229,00 no IS** — piso R$3.329,00, arredondado
-    #: para R$3.400.
+    #: Continua R$1.100 COM `escala_por_caixa` ligado, e isso não é
+    #: descuido: a escada de `_dimensiona` foi feita para que R$1.100 rode
+    #: exatamente 1 contrato. O segundo contrato só aparece em R$2.933, o
+    #: terceiro em R$5.243 — quem começa no piso opera igual ao desenho
+    #: congelado e só escala se a conta de fato crescer.
     #:
-    #: Isso é o preço da alavancagem, e ele não é disfarçável: o líquido
-    #: quase dobra nas três janelas medidas (IS 3.720,70 → 7.266,20; OOS
-    #: 1.274,00 → 2.491,50; último mês 957,50 → 1.322,00) com o acerto
-    #: PARADO (44,9 → 44,6; 45,1 → 45,1; 46,8 → 47,4) e praticamente as
-    #: mesmas operações (615 → 597; 182 → 182; 79 → 78). Não é estratégia
-    #: melhor, é a mesma estratégia em tamanho maior — e `lucro/DD` piora nas
-    #: três (3,57 → 2,17; 3,31 → 1,91; 3,53 → 1,29).
-    #:
-    #: **Quem tiver só os R$1.100 deve passar `escala_por_caixa=False`**, e aí
-    #: o piso volta a ser R$1.100 e os números voltam a ser exatamente os da
-    #: tabela do topo deste módulo. Rodar com escala num caixa de R$1.100 é
-    #: aceitar o sorteio que o piso existe para recusar.
-    capital_minimo_recomendado_brl: float | None = 3_400.0
+    #: Uma tentativa anterior de escala (2026-09-15, descartada no mesmo dia)
+    #: amarrava a quantidade à LARGURA do retângulo em vez do caixa. Ela
+    #: alavancava sem exigir caixa: o líquido quase dobrava nas três janelas
+    #: (IS 3.720,70 → 7.266,20) com o acerto PARADO e as mesmas operações,
+    #: ou seja, era a mesma estratégia em tamanho maior — e o piso saltava
+    #: para R$3.400. Ficou registrada aqui porque o número bonito dela pode
+    #: reaparecer numa medição futura e precisa ser reconhecido pelo que era.
+    capital_minimo_recomendado_brl: float | None = PISO_UM_CONTRATO_BRL
 
     def __init__(
         self,
@@ -345,6 +347,8 @@ class WinRetangulo(IntradayStrategy):
         tolerancia_borda: float = 0.20,
         risco_maximo_brl: float = 80.0,
         escala_por_caixa: bool = True,
+        caixa_primeiro_contrato_brl: float | None = None,
+        expoente_escala: float = 1.415,
     ) -> None:
         """Todos os defaults são os valores CONGELADOS na passada do OOS.
 
@@ -489,6 +493,12 @@ class WinRetangulo(IntradayStrategy):
         self.tolerancia_borda = float(tolerancia_borda)
         self.risco_maximo_brl = float(risco_maximo_brl)
         self.escala_por_caixa = bool(escala_por_caixa)
+        if expoente_escala <= 1.0:
+            raise ValueError(
+                f"expoente_escala={expoente_escala} tem de ser > 1: em 1,0 o "
+                "caixa por contrato fica CONSTANTE e o risco em % da conta "
+                "para de cair quando a posicao cresce")
+        self.expoente_escala = float(expoente_escala)
         economia = economics_for(self.symbol)
         self.tick_size = economia.price_tick_size
         self.valor_do_ponto_brl = economia.point_value_brl
@@ -498,6 +508,10 @@ class WinRetangulo(IntradayStrategy):
         #: sempre. O motor aplica o teto dele por cima
         #: (`IntradaySessionMachine._cap_capital_atual`), então este número
         #: nunca passa do que a margem sustenta mesmo se a conta aqui errar.
+        self.caixa_primeiro_contrato_brl = float(
+            caixa_primeiro_contrato_brl
+            if caixa_primeiro_contrato_brl is not None
+            else PISO_UM_CONTRATO_BRL)
         self._teto_margem = int(self.quantidade)
         self._caixa_brl = 0.0
         self._reset_sessao()
@@ -514,57 +528,48 @@ class WinRetangulo(IntradayStrategy):
             self._teto_margem = max(1, contracts_from_capital_operacional(
                 self._caixa_brl, self.margem_por_contrato_brl))
 
-    def _dimensiona(self, largura: float) -> int:
-        """Quantos contratos entram neste retângulo, com o risco por contrato
-        DIMINUINDO a cada contrato novo (pedido do dono, 2026-09-15).
+    def _dimensiona(self) -> int:
+        """Quantos contratos o CAIXA sustenta agora, com cada contrato novo
+        exigindo mais caixa que o anterior (regra do dono, 2026-09-15).
 
-        O contrato `k` recebe orçamento `risco_maximo_brl / k`, então `n`
-        contratos custam `risco_maximo_brl × H(n)` — o harmônico. O risco
-        total cresce, mas sempre menos que linear, e cada contrato adicional
-        entra mais barato que o anterior. Na prática, quantidade alta só
-        aparece em retângulo mais APERTADO:
+        `C(n) = caixa_primeiro_contrato_brl × n^expoente`, com expoente > 1.
+        O expoente é o que faz o risco CAIR conforme a posição cresce: com
+        expoente 1 o caixa por contrato seria constante (dobrar a posição
+        dobraria o risco em reais e manteria o risco em % do caixa); acima de
+        1 o caixa exigido por contrato sobe, então cada contrato adicional
+        carrega uma fatia MENOR da conta.
 
-        | n | orçamento total | largura máxima |
+        Calibração do expoente (palavras do dono): "se preciso de 3k para
+        rodar 1 contrato no mínimo precisaria de 6k para 2, mas como a ideia é
+        reduzir o risco conforme aumento contrato, 8k seria um bom capital
+        para operar dois". 8/3 em vez de 6/3 ⇒ `2^expoente = 8/3` ⇒
+        expoente ≈ 1,415.
+
+        A escada que sai disso, com o piso medido de 1 contrato:
+
+        | contratos | caixa exigido | caixa por contrato |
         |---|---|---|
-        | 1 | R$ 80,00 | 800 pontos |
-        | 2 | R$120,00 | 600 |
-        | 3 | R$146,67 | 489 |
-        | 4 | R$166,67 | 417 |
-        | 5 | R$182,67 | 365 |
+        | 1 | R$ 1.100 | R$ 1.100 |
+        | 2 | R$ 2.933 | R$ 1.467 |
+        | 3 | R$ 5.243 | R$ 1.748 |
+        | 4 | R$ 7.822 | R$ 1.955 |
 
-        **Por que o risco decide e a margem só limita.** Item 3.9 de
-        `LICOES_DE_PRODUCAO.md`: margem protege a CORRETORA (chamada de
-        margem), não o DONO (ruína por sequência de stops). Medido no
-        `CopaWin`: o caixa subiu 43% num dia bom, o teto por margem escalou a
-        entrada de 12 para 15 contratos, e o MESMO stop de sempre perdeu
-        R$3.457,50 num único trade — a conta foi de R$3.000,00 a R$68,50
-        (−97,7%) com margem e reserva funcionando exatamente como desenhadas.
-        Deixar a margem escolher a quantidade aqui foi medido e reprovado: no
-        caixa mínimo de R$1.100 a escada de margem autoriza 4 contratos de
-        largada, e o resultado é ou o robô mudo (orçamento de risco travado
-        recusa todo retângulo acima de 200 pontos, ZERO operações em 129, 65 e
-        21 pregões) ou o piso de caixa em R$2.056, acima do capital que existe.
-
-        **Ancorar o orçamento no caixa também foi medido e reprovado**: com
-        orçamento = % do caixa a posição cresce junto com a conta, um stop de
-        −R$847,50 crateia o caixa e o robô CALA — 90 de 129 pregões sem operar
-        no IS, 615 operações caindo para 142. Janela censurada não mede
-        estratégia, mede a restrição que parou o robô.
+        **Não é a escada de MARGEM, e a diferença é o ponto todo.** A margem
+        (`contracts_from_capital_operacional`) autoriza 4 contratos já com
+        R$1.100 — ela protege a CORRETORA de chamada de margem, não o dono de
+        ruína por sequência de stops (item 3.9 de `LICOES_DE_PRODUCAO.md`: no
+        `CopaWin` o teto por margem escalou a entrada de 12 para 15 contratos
+        e o mesmo stop levou a conta de R$3.000,00 a R$68,50). A margem
+        continua valendo como teto de cima; quem manda é esta escada.
         """
         if not self.escala_por_caixa:
             return int(self.quantidade)
-        risco_unitario = (self.stop_fracao_largura * largura
-                          * self.valor_do_ponto_brl)
-        if risco_unitario <= 0:
-            return int(self.quantidade)
-        n = 0
-        harmonico = 0.0
-        for k in range(1, self._teto_margem + 1):
-            harmonico += 1.0 / k
-            if risco_unitario * k > self.risco_maximo_brl * harmonico:
-                break
-            n = k
-        return max(1, n)
+        n = 1
+        while True:
+            exigido = self.caixa_primeiro_contrato_brl * (n + 1) ** self.expoente_escala
+            if self._caixa_brl < exigido or n + 1 > self._teto_margem:
+                return n
+            n += 1
 
     # -- estado ------------------------------------------------------------
     def _reset_sessao(self) -> None:
@@ -631,7 +636,7 @@ class WinRetangulo(IntradayStrategy):
         # Quantos contratos este retângulo comporta AGORA. Avaliado aqui (e não
         # na hora de armar) pelo mesmo motivo do teto: é propriedade do
         # retângulo mais o caixa, e os dois já são conhecidos.
-        self._contratos = self._dimensiona(ret["largura"])
+        self._contratos = self._dimensiona()
         self._fora_seguidas = 0
 
     def _morreu(self, bar: Bar) -> bool:
