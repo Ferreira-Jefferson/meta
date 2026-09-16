@@ -5677,6 +5677,10 @@ dois casos acima vieram de setups de pivô parecidos.
 > custaria se você tivesse errado. Rode o controle ANTES de comemorar um
 > resultado positivo, não depois de alguém desconfiar.
 
+E rode o controle — qualquer controle, oráculo ou placebo — na janela CEGA
+junto com o tratamento, não só no IS: ver item 6.42, onde um placebo que
+perdia R$2.949,40 no IS virou o VENCEDOR em R$ no OOS.
+
 ### 6.25 Antes de ler o veredito de uma grade, confirme que cada eixo mexeu em alguma coisa
 
 Numa rodada de cinco setups públicos, três grades tinham eixo morto — um
@@ -6674,6 +6678,62 @@ testes precisa refletir isso. **Corolário operacional:** ao dobrar a família,
 confira que o p MÍNIMO ATINGÍVEL pelo número de permutações continua abaixo
 do α corrigido — senão nenhuma célula pode sobreviver por construção, e a
 sonda vira um gerador de zeros que parece rigoroso.
+
+### 6.42 Um controle que nunca atravessou a janela cega não é controle — o placebo do detector de retângulo INVERTEU no OOS e ganhou em R$
+
+2026-09-15, `copa_win` / WIN@ M1, linha de pesquisa do "retângulo de
+lateralização". A estratégia nova — entrada por ordem-limite na linha do MEIO
+de um retângulo detectado, alvo além da borda oposta — foi validada contra um
+CONTROLE construído do jeito certo: mesmo motor, mesma geometria, mesmo piso
+de largura, mesma política, com os testes de FORMA do detector removidos (a
+banda vira o q90/q10 cru das últimas 20 barras). No IS o placebo deu
+**−2.949,40** e, numa segunda passada, **−2.315,60**, contra **+2.834,10** do
+detector completo. A conclusão registrada — "o detector é load-bearing" —
+ficou de pé **uma semana inteira**.
+
+O controle nunca tinha sido rodado na janela cega. Quando finalmente foi, o
+resultado inverteu:
+
+| janela | detector completo | controle (placebo) |
+|---|---|---|
+| IS, líquido R$ | **+2.834,10** | −2.949,40 / −2.315,60 |
+| OOS, líquido R$ | +737,70 (101 trades) | **+1.306,70 (373 trades)** |
+| IS, R$/operação | **+35,16** | −12,29 |
+| OOS, R$/operação | **+36,52** | +17,52 |
+
+O placebo GANHA em R$ na janela cega. O que sobrou de verdade é bem menor do
+que a conclusão original: por OPERAÇÃO o detector paga nas duas janelas
+(35,16 contra −12,29 no IS; 36,52 contra 17,52 no OOS) e o sinal dele **não
+inverte**, enquanto o do placebo inverte — isso é real e é o que resta. Mas a
+vantagem em R$ TOTAL era artefato do IS, e era ela que estava sendo citada.
+
+Os dois erros são independentes e os dois estavam no mesmo relatório.
+
+O primeiro é de desenho do experimento. Um controle rodado só na janela de
+desenvolvimento mede se o filtro separa **exatamente no lugar onde o filtro
+foi ajustado** — que é a única pergunta que ele não pode responder. Enquanto
+o placebo fica no IS, a diferença entre tratamento e controle é só mais um
+parâmetro livre escolhido no IS, com a agravante de parecer o oposto disso:
+ter um controle dá a sensação de rigor que dispensa a checagem seguinte
+(mesma família do item 3.8 — um mecanismo presente e desligado encerra a
+pergunta que a ausência dele teria provocado).
+
+O segundo é de leitura. O detector corta **3,7× as operações** (101 contra
+373 no OOS). Um filtro assim pode ter edge melhor por trade e ainda assim
+render menos dinheiro: R$/operação e líquido TOTAL respondem a perguntas
+diferentes — qualidade do sinal contra quanto ele produz — e um relatório que
+só cita uma das duas escolhe o veredito sem dizer que escolheu.
+
+> **Regra (invariante portável).** Controle e tratamento atravessam a janela
+> cega JUNTOS, na mesma passada. Um placebo que só existe no IS não é
+> controle, é decoração: ele confirma a separação no ponto onde ela foi
+> ajustada. E ao comparar os dois, separe SEMPRE o ganho POR OPERAÇÃO do
+> ganho TOTAL, e diga qual dos dois está decidindo — filtro que corta
+> operação move as duas colunas em direções opostas por construção.
+
+Mesma família do item 6.24 (controle-oráculo) do lado do experimento e do
+item 6.23 (breakeven empírico) do lado da leitura: o nulo certo não é só a
+fórmula certa, é o nulo medido na janela certa e lido na unidade certa.
 
 ---
 
