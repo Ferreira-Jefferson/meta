@@ -213,17 +213,82 @@ def test_limite_de_entrada_sem_prazo_e_recusado_na_construcao():
 
 
 def test_o_piso_de_caixa_declarado_e_o_medido():
-    """R$1.100 = pior rebaixamento POR OPERAÇÃO medido (R$989,50) + margem
-    crua do WIN@ (R$100). Os três números que ele NÃO é, cada um com o motivo:
+    """R$3.400 = pior rebaixamento POR OPERAÇÃO com `escala_por_caixa` ligada
+    (R$3.229,00 no IS) + margem crua do WIN@ (R$100), arredondado.
 
-      R$250 — piso de tabela do instrumento, não diz nada sobre esta estratégia
-      R$290 — piso exato daquela sequência de operações (a R$275 o robô cala
-              para sempre); sorteio sobre quais operações vieram primeiro
-      R$650 — a primeira resposta, derivada do rebaixamento da SÉRIE DIÁRIA
-              (R$525,60). O portão de capital não vê série diária: o caixa
-              anda POR OPERAÇÃO, e por operação o rebaixamento é maior.
+    Com 1 contrato fixo o piso era R$1.100 (R$989,50 + R$100). A escala não
+    muda quais operações acontecem — muda o TAMANHO delas —, então o
+    rebaixamento sobe junto com o lucro e o piso acompanha. Os números que o
+    piso NÃO é, cada um com o motivo:
+
+      R$250   — piso de tabela do instrumento, não diz nada sobre a estratégia
+      R$290   — piso exato daquela sequência de operações (a R$275 o robô cala
+                para sempre); sorteio sobre quais operações vieram primeiro
+      R$650   — derivado do rebaixamento da SÉRIE DIÁRIA (R$525,60), que o
+                portão de capital não vê: o caixa anda POR OPERAÇÃO
+      R$1.100 — o piso de `escala_por_caixa=False`, que continua correto para
+                quem roda assim
     """
-    assert WinRetangulo.capital_minimo_recomendado_brl == 1_100.0
+    assert WinRetangulo.capital_minimo_recomendado_brl == 3_400.0
+
+
+def test_a_escala_por_caixa_nasce_ligada():
+    """Pedido do dono (2026-09-15): o robô tem de saber aumentar E diminuir
+    contrato conforme o capital disponível. Antes disso ele pedia
+    `quantidade=1` fixo e o motor só sabia reduzir."""
+    assert WinRetangulo().escala_por_caixa is True
+
+
+def test_contrato_novo_so_entra_em_retangulo_mais_apertado():
+    """"Sempre diminuindo o risco a cada novo contrato" vira uma regra exata:
+    o contrato `k` recebe orçamento `risco_maximo_brl / k`, então `n`
+    contratos custam `risco × H(n)` (harmônico). Como o risco por contrato é
+    proporcional à LARGURA, quantidade alta só cabe em retângulo apertado — a
+    quantidade tem de ser NÃO-CRESCENTE na largura."""
+    robo = WinRetangulo()
+    robo.on_capital_update(10_000.0)
+    larguras = [328.0, 400.0, 500.0, 600.0, 800.0]
+    quantidades = [robo._dimensiona(L) for L in larguras]
+    assert quantidades == sorted(quantidades, reverse=True)
+    assert quantidades[0] > quantidades[-1], "largura não está mexendo em nada"
+
+
+def test_o_risco_por_contrato_cai_a_cada_contrato_novo():
+    """O invariante que o dono pediu, escrito como desigualdade: o orçamento
+    do contrato `k` é estritamente menor que o do contrato `k-1`. Sem isso o
+    risco total cresceria LINEAR com a quantidade, que é exatamente o caminho
+    do item 3.9 (a conta do CopaWin foi de R$3.000,00 a R$68,50 num trade, com
+    margem e reserva funcionando como desenhadas)."""
+    robo = WinRetangulo()
+    robo.on_capital_update(10_000.0)
+    orcamentos = [robo.risco_maximo_brl / k for k in range(1, 6)]
+    assert all(b < a for a, b in zip(orcamentos, orcamentos[1:]))
+    # E o total cresce MENOS que linear: 5 contratos custam menos que 5x um.
+    total_5 = sum(orcamentos)
+    assert total_5 < 5 * orcamentos[0]
+
+
+def test_a_quantidade_encolhe_quando_o_caixa_cai():
+    """"Aumentar E diminuir" — a metade de diminuir é a que protege. O caixa
+    entra pelo `on_capital_update` que o motor chama a cada barra com
+    `capital inicial + P&L realizado`, então a quantidade acompanha a conta de
+    verdade em vez de ser uma foto tirada no início."""
+    robo = WinRetangulo()
+    robo.on_capital_update(10_000.0)
+    muitos = robo._dimensiona(400.0)
+    robo.on_capital_update(300.0)
+    poucos = robo._dimensiona(400.0)
+    assert poucos < muitos
+    assert poucos >= 1, "nunca pede menos de 1: quem recusa abaixo da margem é o motor"
+
+
+def test_sem_escala_o_robo_e_exatamente_o_de_antes():
+    """`escala_por_caixa=False` tem de reproduzir o desenho congelado (1
+    contrato fixo, piso R$1.100), porque é ele que a tabela do topo do módulo
+    descreve e é ele que atravessou o OOS."""
+    robo = WinRetangulo(escala_por_caixa=False)
+    robo.on_capital_update(10_000.0)
+    assert all(robo._dimensiona(L) == 1 for L in (328.0, 400.0, 600.0, 800.0))
 
 
 def test_o_robo_nao_gere_posicao_aberta():

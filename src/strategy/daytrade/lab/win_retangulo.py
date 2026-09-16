@@ -84,7 +84,13 @@ magnitude. **Não é validação.** Quatro limites, declarados:
 2. **Estatisticamente é "indefinido".** Com 101 operações no OOS o IC95 do
    acerto (36,2% a 55,2%) engloba o breakeven. 62 pregões dão para checar
    inversão de sinal, não para cravar.
-3. **NUNCA operou com dinheiro real nem em sombra.**
+3. **NUNCA operou com dinheiro real.** Em sombra desde 2026-09-15 (slot
+   `dt-win_retangulo-win@-shadow`), e a sombra não fecha o buraco da fila:
+   ela não manda ordem, então enche no toque igual ao backtest.
+4. **A tabela do topo é de `escala_por_caixa=False`** (1 contrato fixo), que
+   é como o robô foi medido e congelado. Com a escala ligada — o default
+   desde 2026-09-15 — o líquido quase dobra e o rebaixamento triplica; ver
+   `capital_minimo_recomendado_brl`.
 
 ## Fila: por que este desenho aguenta o que o WDO F1 maker não aguentou
 
@@ -125,7 +131,7 @@ import pandas as pd
 from core.instruments import economics_for
 from strategy.daytrade.base import (
     Bar, EnterLimit, IntradayAction, IntradayOpenPosition, IntradayStrategy,
-    no_tick,
+    contracts_from_capital_operacional, no_tick,
 )
 
 #: Tolerância das bordas, em fração da largura — "podendo ficar um pouco
@@ -303,9 +309,29 @@ class WinRetangulo(IntradayStrategy):
     #: Contexto do risco: o stop é 0,50 × a largura do retângulo, então NÃO é
     #: fixo: pior operação medida −R$110,50 no IS e −R$85,50 no OOS, ou seja
     #: até 10% do caixa de partida numa operação só. `risco_maximo_brl`
-    #: existe para cortar essa cauda e nasce DESLIGADO — ver a docstring
-    #: dele para as três medições que tiraram o teto do lugar de alavanca.
-    capital_minimo_recomendado_brl: float | None = 1_100.0
+    #: existe para cortar essa cauda — ver a docstring dele para as três
+    #: medições que tiraram o teto do lugar de alavanca.
+    #:
+    #: **SUBIU para R$3.400 em 2026-09-15, quando `escala_por_caixa` entrou
+    #: ligado.** Com 1 contrato fixo o piso era R$1.100 (R$989,50 de
+    #: rebaixamento por operação + margem). Dimensionando pelo caixa, as
+    #: MESMAS operações entram com até 5 contratos e o rebaixamento por
+    #: operação vai a **R$3.229,00 no IS** — piso R$3.329,00, arredondado
+    #: para R$3.400.
+    #:
+    #: Isso é o preço da alavancagem, e ele não é disfarçável: o líquido
+    #: quase dobra nas três janelas medidas (IS 3.720,70 → 7.266,20; OOS
+    #: 1.274,00 → 2.491,50; último mês 957,50 → 1.322,00) com o acerto
+    #: PARADO (44,9 → 44,6; 45,1 → 45,1; 46,8 → 47,4) e praticamente as
+    #: mesmas operações (615 → 597; 182 → 182; 79 → 78). Não é estratégia
+    #: melhor, é a mesma estratégia em tamanho maior — e `lucro/DD` piora nas
+    #: três (3,57 → 2,17; 3,31 → 1,91; 3,53 → 1,29).
+    #:
+    #: **Quem tiver só os R$1.100 deve passar `escala_por_caixa=False`**, e aí
+    #: o piso volta a ser R$1.100 e os números voltam a ser exatamente os da
+    #: tabela do topo deste módulo. Rodar com escala num caixa de R$1.100 é
+    #: aceitar o sorteio que o piso existe para recusar.
+    capital_minimo_recomendado_brl: float | None = 3_400.0
 
     def __init__(
         self,
@@ -318,6 +344,7 @@ class WinRetangulo(IntradayStrategy):
         quantidade: int = 1,
         tolerancia_borda: float = 0.20,
         risco_maximo_brl: float = 80.0,
+        escala_por_caixa: bool = True,
     ) -> None:
         """Todos os defaults são os valores CONGELADOS na passada do OOS.
 
@@ -461,10 +488,83 @@ class WinRetangulo(IntradayStrategy):
         self.quantidade = int(quantidade)
         self.tolerancia_borda = float(tolerancia_borda)
         self.risco_maximo_brl = float(risco_maximo_brl)
+        self.escala_por_caixa = bool(escala_por_caixa)
         economia = economics_for(self.symbol)
         self.tick_size = economia.price_tick_size
         self.valor_do_ponto_brl = economia.point_value_brl
+        self.margem_por_contrato_brl = economia.margin_per_contract_brl
+        #: Quantidade PEDIDA na entrada. Com `escala_por_caixa` ela é
+        #: recalculada a cada retângulo; sem ela fica em `quantidade` para
+        #: sempre. O motor aplica o teto dele por cima
+        #: (`IntradaySessionMachine._cap_capital_atual`), então este número
+        #: nunca passa do que a margem sustenta mesmo se a conta aqui errar.
+        self._teto_margem = int(self.quantidade)
+        self._caixa_brl = 0.0
         self._reset_sessao()
+
+    # -- dimensionamento ---------------------------------------------------
+    def on_capital_update(self, cash_brl: float) -> None:
+        """O caixa corrente decide quantos contratos cabem — para CIMA e para
+        BAIXO. Chamado pelo motor a cada barra com `capital inicial + P&L
+        realizado`, então a quantidade acompanha a conta de verdade em vez de
+        ser uma foto tirada uma vez no início."""
+        super().on_capital_update(cash_brl)
+        self._caixa_brl = float(cash_brl)
+        if self.escala_por_caixa:
+            self._teto_margem = max(1, contracts_from_capital_operacional(
+                self._caixa_brl, self.margem_por_contrato_brl))
+
+    def _dimensiona(self, largura: float) -> int:
+        """Quantos contratos entram neste retângulo, com o risco por contrato
+        DIMINUINDO a cada contrato novo (pedido do dono, 2026-09-15).
+
+        O contrato `k` recebe orçamento `risco_maximo_brl / k`, então `n`
+        contratos custam `risco_maximo_brl × H(n)` — o harmônico. O risco
+        total cresce, mas sempre menos que linear, e cada contrato adicional
+        entra mais barato que o anterior. Na prática, quantidade alta só
+        aparece em retângulo mais APERTADO:
+
+        | n | orçamento total | largura máxima |
+        |---|---|---|
+        | 1 | R$ 80,00 | 800 pontos |
+        | 2 | R$120,00 | 600 |
+        | 3 | R$146,67 | 489 |
+        | 4 | R$166,67 | 417 |
+        | 5 | R$182,67 | 365 |
+
+        **Por que o risco decide e a margem só limita.** Item 3.9 de
+        `LICOES_DE_PRODUCAO.md`: margem protege a CORRETORA (chamada de
+        margem), não o DONO (ruína por sequência de stops). Medido no
+        `CopaWin`: o caixa subiu 43% num dia bom, o teto por margem escalou a
+        entrada de 12 para 15 contratos, e o MESMO stop de sempre perdeu
+        R$3.457,50 num único trade — a conta foi de R$3.000,00 a R$68,50
+        (−97,7%) com margem e reserva funcionando exatamente como desenhadas.
+        Deixar a margem escolher a quantidade aqui foi medido e reprovado: no
+        caixa mínimo de R$1.100 a escada de margem autoriza 4 contratos de
+        largada, e o resultado é ou o robô mudo (orçamento de risco travado
+        recusa todo retângulo acima de 200 pontos, ZERO operações em 129, 65 e
+        21 pregões) ou o piso de caixa em R$2.056, acima do capital que existe.
+
+        **Ancorar o orçamento no caixa também foi medido e reprovado**: com
+        orçamento = % do caixa a posição cresce junto com a conta, um stop de
+        −R$847,50 crateia o caixa e o robô CALA — 90 de 129 pregões sem operar
+        no IS, 615 operações caindo para 142. Janela censurada não mede
+        estratégia, mede a restrição que parou o robô.
+        """
+        if not self.escala_por_caixa:
+            return int(self.quantidade)
+        risco_unitario = (self.stop_fracao_largura * largura
+                          * self.valor_do_ponto_brl)
+        if risco_unitario <= 0:
+            return int(self.quantidade)
+        n = 0
+        harmonico = 0.0
+        for k in range(1, self._teto_margem + 1):
+            harmonico += 1.0 / k
+            if risco_unitario * k > self.risco_maximo_brl * harmonico:
+                break
+            n = k
+        return max(1, n)
 
     # -- estado ------------------------------------------------------------
     def _reset_sessao(self) -> None:
@@ -472,6 +572,7 @@ class WinRetangulo(IntradayStrategy):
         # anterior que o teste de CONTRAÇÃO consome.
         self._hist: deque[Bar] = deque(maxlen=3 * self.janela_barras + 2)
         self._retangulo: dict | None = None
+        self._contratos = int(self.quantidade)
         self._fora_seguidas = 0
         self._barras_esperando: int | None = None
 
@@ -523,10 +624,14 @@ class WinRetangulo(IntradayStrategy):
         # detecção) e não na hora de armar, porque o retângulo inteiro é
         # inoperável — deixá-lo vivo faria o robô tentar de novo a cada barra.
         risco = (self.stop_fracao_largura * ret["largura"]
-                 * self.valor_do_ponto_brl * self.quantidade)
+                 * self.valor_do_ponto_brl)
         if risco > self.risco_maximo_brl:
             return
         self._retangulo = ret
+        # Quantos contratos este retângulo comporta AGORA. Avaliado aqui (e não
+        # na hora de armar) pelo mesmo motivo do teto: é propriedade do
+        # retângulo mais o caixa, e os dois já são conhecidos.
+        self._contratos = self._dimensiona(ret["largura"])
         self._fora_seguidas = 0
 
     def _morreu(self, bar: Bar) -> bool:
@@ -600,7 +705,7 @@ class WinRetangulo(IntradayStrategy):
             limit_price=limite,
             initial_stop=no_tick(stop, self.tick_size),
             initial_target=no_tick(alvo, self.tick_size),
-            quantity=self.quantidade,
+            quantity=self._contratos,
             ttl_bars=self.ttl_barras,
             reason=f"retangulo_W{self.janela_barras}_L{largura:.0f}",
         )]

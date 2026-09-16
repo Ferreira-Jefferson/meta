@@ -1,0 +1,130 @@
+==================================================================================================================================================================================
+win_retangulo -- dimensionar contrato pelo caixa, com risco por contrato DECRESCENTE
+==================================================================================================================================================================================
+  capital inicial R$ 1.100 (piso medido), ACUMULANDO | margem WIN@ R$ 100/contrato | fila NAO CALIBRADA
+  ultimo mes: 2026-08-17 a 2026-09-15 (21 pregoes); 15/09 incluido a pedido, com 561 barras contra ~562 de um completo
+
+  ESCADA DE CONTRATOS por caixa (contracts_from_capital_operacional, margem R$100):
+    caixa a partir de R$    100  ->  1 contrato(s)
+    caixa a partir de R$    500  ->  2 contrato(s)
+    caixa a partir de R$    750  ->  3 contrato(s)
+    caixa a partir de R$  1.000  ->  4 contrato(s)
+    caixa a partir de R$  1.250  ->  5 contrato(s)
+    caixa a partir de R$  1.500  ->  6 contrato(s)
+    caixa a partir de R$  1.750  ->  7 contrato(s)
+    caixa a partir de R$  2.000  ->  8 contrato(s)
+    caixa a partir de R$  2.250  ->  9 contrato(s)
+    caixa a partir de R$  2.500  ->  10 contrato(s)
+    caixa a partir de R$  2.750  ->  11 contrato(s)
+    caixa a partir de R$  3.000  ->  12 contrato(s)
+    caixa a partir de R$  3.250  ->  13 contrato(s)
+    caixa a partir de R$  3.500  ->  14 contrato(s)
+    caixa a partir de R$  3.750  ->  15 contrato(s)
+
+  TETO DE RISCO POR CONTRATO em cada escala (R$):
+    n     S1 total const     S2 raiz   S3 linear  | S1 total   S2 total   S3 total
+    1              80,00       80,00       80,00       80,00      80,00      80,00
+    2              40,00       56,57       80,00       80,00     113,14     160,00
+    3              26,67       46,19       80,00       80,00     138,56     240,00
+    4              20,00       40,00       80,00       80,00     160,00     320,00
+    5              16,00       35,78       80,00       80,00     178,89     400,00
+
+  [pronto] OOS         S0 1 contrato fixo (producao)     182 operacoes
+  [pronto] OOS         S3 por contrato 80 (linear)       158 operacoes
+  [pronto] OOS         S4 risco 1% do caixa              182 operacoes
+  [pronto] OOS         S2 raiz (80/raiz n)                 5 operacoes
+  [pronto] OOS         S1 total constante (80/n)           0 operacoes
+  [pronto] ULTIMO MES  S0 1 contrato fixo (producao)      79 operacoes
+  [pronto] ULTIMO MES  S1 total constante (80/n)           0 operacoes
+  [pronto] ULTIMO MES  S2 raiz (80/raiz n)                 7 operacoes
+  [pronto] ULTIMO MES  S3 por contrato 80 (linear)        14 operacoes
+  [pronto] ULTIMO MES  S4 risco 1% do caixa               79 operacoes
+  [pronto] ULTIMO MES  S5 harmonico, orcamento fixo 80    78 operacoes
+  [pronto] IS          S0 1 contrato fixo (producao)     615 operacoes
+  [pronto] IS          S4 risco 1% do caixa              615 operacoes
+  [pronto] IS          S5 harmonico, orcamento fixo 80   597 operacoes
+  [pronto] IS          S6 harmonico, orcamento = % caixa  142 operacoes
+  [pronto] IS          S3 por contrato 80 (linear)       145 operacoes
+  [pronto] OOS         S5 harmonico, orcamento fixo 80   182 operacoes
+  [pronto] ULTIMO MES  S6 harmonico, orcamento = % caixa   27 operacoes
+  [pronto] OOS         S6 harmonico, orcamento = % caixa  139 operacoes
+  [pronto] IS          S2 raiz (80/raiz n)                52 operacoes
+  [pronto] IS          S1 total constante (80/n)           0 operacoes
+
+==================================================================================================================================================================================
+IS  (129 pregoes)
+==================================================================================================================================================================================
+variante                        retorno   liquido R$  MaxDD %    MaxDD R$ lucro/DD   win% trades     R$/dia trd/dia  capital final pregoes      pts/op      BEemp%     ctr max     ctr med   sem trade    pior op.   risco max
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+S0 1 contrato fixo (producao)    338,2%     3.720,70   -24,0%    1.042,10     3,57  44,9%    615      28,84     4,8       4.820,70     129        30,2       39,7%           1        1,00      10/129      -80,50       80,50  desliz.alvo 1,0t fila NAO CALIBRADA
+S1 total constante (80/n)          0,0%         0,00     0,0%        0,00        —   0,0%      0       0,00     0,0       1.100,00     129           —          --           —           —     129/129           —           —  desliz.alvo 1,0t fila NAO CALIBRADA
+S2 raiz (80/raiz n)               40,8%       448,50   -64,0%      780,90     0,57  46,2%     52       3,48     0,4       1.548,50     129        43,1       43,1%           5        2,90     113/129     -187,50      187,50  desliz.alvo 1,0t fila NAO CALIBRADA
+S3 por contrato 80 (linear)      283,1%     3.114,40   -73,7%    1.818,50     1,71  46,9%    145      24,14     1,1       4.214,40     129       107,4       41,9%          14        3,82      91/129     -578,50      578,50  desliz.alvo 1,0t fila NAO CALIBRADA
+S4 risco 1% do caixa             338,2%     3.720,70   -24,0%    1.042,10     3,57  44,9%    615      28,84     4,8       4.820,70     129        30,2       39,7%           1        1,00      10/129      -80,50       80,50  desliz.alvo 1,0t fila NAO CALIBRADA
+S5 harmonico, orcamento fixo 8   660,6%     7.266,20   -67,3%    3.344,00     2,17  44,6%    597      56,33     4,6       8.366,20     129        60,9       41,0%           5        3,16      10/129     -398,50      398,50  desliz.alvo 1,0t fila NAO CALIBRADA
+S6 harmonico, orcamento = % ca   426,2%     4.688,20   -73,7%    2.074,50     2,26  47,9%    142      36,34     1,1       5.788,20     129       165,1       39,5%          15        3,56      90/129     -847,50      847,50  desliz.alvo 1,0t fila NAO CALIBRADA
+
+  variante                          rebaix./operacao  piso de caixa        IC95 do acerto    BEemp  margem pp
+  S0 1 contrato fixo (producao)               989,50       1.089,50         [41,0 ; 48,8]    39,7%        1,3
+  S1 total constante (80/n)                     0,00         100,00               [— ; —]       —%          —
+  S2 raiz (80/raiz n)                         728,50         828,50         [33,3 ; 59,5]    43,1%       -9,7
+  S3 por contrato 80 (linear)               1.679,50       1.779,50         [39,0 ; 55,0]    41,9%       -3,0
+  S4 risco 1% do caixa                        989,50       1.089,50         [41,0 ; 48,8]    39,7%        1,3
+  S5 harmonico, orcamento fixo 80           3.229,00       3.329,00         [40,6 ; 48,6]    41,0%       -0,3
+  S6 harmonico, orcamento = % caixa          2.074,50       2.174,50         [39,8 ; 56,1]    39,5%        0,4
+
+==================================================================================================================================================================================
+OOS  (65 pregoes)
+==================================================================================================================================================================================
+variante                        retorno   liquido R$  MaxDD %    MaxDD R$ lucro/DD   win% trades     R$/dia trd/dia  capital final pregoes      pts/op      BEemp%     ctr max     ctr med   sem trade    pior op.   risco max
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+S0 1 contrato fixo (producao)    115,8%     1.274,00   -25,2%      384,50     3,31  45,1%    182      19,60     2,8       2.374,00      65        35,0       38,8%           1        1,00       11/65      -74,30       74,30  desliz.alvo 1,0t fila NAO CALIBRADA
+S1 total constante (80/n)          0,0%         0,00     0,0%        0,00        —   0,0%      0       0,00     0,0       1.100,00      65           —          --           —           —       65/65           —           —  desliz.alvo 1,0t fila NAO CALIBRADA
+S2 raiz (80/raiz n)               41,5%       456,00   -29,5%      393,10     1,16  80,0%      5       7,02     0,1       1.556,00      65       456,0       61,5%           5        4,40       63/65     -303,50      303,50  desliz.alvo 1,0t fila NAO CALIBRADA
+S3 por contrato 80 (linear)      380,5%     4.185,00   -78,0%    1.991,00     2,10  46,2%    158      64,38     2,4       5.285,00      65       132,4       40,6%          14        4,25       17/65     -478,50      478,50  desliz.alvo 1,0t fila NAO CALIBRADA
+S4 risco 1% do caixa             115,8%     1.274,00   -25,2%      384,50     3,31  45,1%    182      19,60     2,8       2.374,00      65        35,0       38,8%           1        1,00       11/65      -74,30       74,30  desliz.alvo 1,0t fila NAO CALIBRADA
+S5 harmonico, orcamento fixo 8   226,5%     2.491,50   -54,4%    1.303,00     1,91  45,1%    182      38,33     2,8       3.591,50      65        68,4       41,3%           5        3,54       11/65     -192,50      192,50  desliz.alvo 1,0t fila NAO CALIBRADA
+S6 harmonico, orcamento = % ca   341,6%     3.757,60   -75,4%    1.547,30     2,43  47,5%    139      57,81     2,1       4.857,60      65       135,2       38,9%          12        2,92       17/65     -445,50      445,50  desliz.alvo 1,0t fila NAO CALIBRADA
+
+  variante                          rebaix./operacao  piso de caixa        IC95 do acerto    BEemp  margem pp
+  S0 1 contrato fixo (producao)               373,50         473,50         [38,0 ; 52,3]    38,8%       -0,8
+  S1 total constante (80/n)                     0,00         100,00               [— ; —]       —%          —
+  S2 raiz (80/raiz n)                         303,50         403,50         [37,6 ; 96,4]    61,5%      -24,0
+  S3 por contrato 80 (linear)               1.956,50       2.056,50         [38,6 ; 54,0]    40,6%       -1,9
+  S4 risco 1% do caixa                        373,50         473,50         [38,0 ; 52,3]    38,8%       -0,8
+  S5 harmonico, orcamento fixo 80           1.265,00       1.365,00         [38,0 ; 52,3]    41,3%       -3,3
+  S6 harmonico, orcamento = % caixa          1.538,00       1.638,00         [39,4 ; 55,7]    38,9%        0,4
+
+==================================================================================================================================================================================
+ULTIMO MES  (21 pregoes)
+==================================================================================================================================================================================
+variante                        retorno   liquido R$  MaxDD %    MaxDD R$ lucro/DD   win% trades     R$/dia trd/dia  capital final pregoes      pts/op      BEemp%     ctr max     ctr med   sem trade    pior op.   risco max
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+S0 1 contrato fixo (producao)     87,0%       957,50   -15,7%      271,50     3,53  46,8%     79      45,60     3,8       2.057,50      21        60,6       36,7%           1        1,00        0/21      -72,50       72,50  desliz.alvo 1,0t fila NAO CALIBRADA
+S1 total constante (80/n)          0,0%         0,00     0,0%        0,00        —   0,0%      0       0,00     0,0       1.100,00      21           —          --           —           —       21/21           —           —  desliz.alvo 1,0t fila NAO CALIBRADA
+S2 raiz (80/raiz n)               41,3%       454,50   -30,1%      442,00     1,03  57,1%      7      21,64     0,3       1.554,50      21       324,6       41,7%           5        4,43       18/21     -187,50      187,50  desliz.alvo 1,0t fila NAO CALIBRADA
+S3 por contrato 80 (linear)      276,2%     3.038,50   -35,5%      885,00     3,43  64,3%     14     144,69     0,7       4.138,50      21     1.085,2       37,9%          12        6,50       17/21     -618,00      618,00  desliz.alvo 1,0t fila NAO CALIBRADA
+S4 risco 1% do caixa              87,0%       957,50   -15,7%      271,50     3,53  46,8%     79      45,60     3,8       2.057,50      21        60,6       36,7%           1        1,00        0/21      -72,50       72,50  desliz.alvo 1,0t fila NAO CALIBRADA
+S5 harmonico, orcamento fixo 8   120,2%     1.322,00   -46,7%    1.025,50     1,29  47,4%     78      62,95     3,7       2.422,00      21        84,7       42,5%           5        3,26        0/21     -187,50      187,50  desliz.alvo 1,0t fila NAO CALIBRADA
+S6 harmonico, orcamento = % ca   390,5%     4.295,50   -31,2%    1.359,00     3,16  59,3%     27     204,55     1,3       5.395,50      21       795,5       38,2%          12        6,04       10/21     -445,50      445,50  desliz.alvo 1,0t fila NAO CALIBRADA
+
+  variante                          rebaix./operacao  piso de caixa        IC95 do acerto    BEemp  margem pp
+  S0 1 contrato fixo (producao)               261,50         361,50         [36,2 ; 57,7]    36,7%       -0,5
+  S1 total constante (80/n)                     0,00         100,00               [— ; —]       —%          —
+  S2 raiz (80/raiz n)                         341,50         441,50         [25,0 ; 84,2]    41,7%      -16,6
+  S3 por contrato 80 (linear)                 618,00         718,00         [38,8 ; 83,7]    37,9%        0,9
+  S4 risco 1% do caixa                        261,50         361,50         [36,2 ; 57,7]    36,7%       -0,5
+  S5 harmonico, orcamento fixo 80             976,00       1.076,00         [36,7 ; 58,4]    42,5%       -5,7
+  S6 harmonico, orcamento = % caixa            891,00         991,00         [40,7 ; 75,5]    38,2%        2,6
+
+==================================================================================================================================================================================
+COMO LER
+==================================================================================================================================================================================
+  * S0 e' o robo de PRODUCAO de hoje. S1-S4 sao desenhos novos: nenhum deles tem
+    janela cega propria, porque o OOS ja foi visto ao escolher os parametros atuais.
+  * `piso de caixa` = rebaixamento POR OPERACAO + margem crua R$100. E' o numero que
+    o portao de capital de fato ve; a serie diaria suaviza e engana.
+  * S3 (linear) nao atende ao pedido -- esta' aqui so' para medir o tamanho do freio.
+  * O ULTIMO MES esta inteiro dentro do OOS: e' zoom nas mesmas operacoes.
+
+FIM.
