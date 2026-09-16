@@ -1,0 +1,20 @@
+================================================================================================================================
+win_retangulo -- COM e SEM o teto de risco de R$80 por operacao
+================================================================================================================================
+  capital R$ 1.100 | 1 contrato | corte do perfil | fila NAO CALIBRADA
+  o robo hoje roda SEM teto (`risco_maximo_brl=inf`): e' a coluna 'sem'
+
+  janela                      liq SEM    liq COM   diferenca  ops SEM  ops COM  win SEM  win COM  pior SEM  pior COM  ops trocadas
+  --------------------------------------------------------------------------------------------------------------------------------
+  IS  (129 pregoes)          4.512,70   3.720,70     -792,00      615      615    45,4%    44,9%   -110,50    -80,50            32
+  OOS (64 pregoes)           1.097,50   1.464,50      367,00      179      179    44,7%    45,8%    -85,50    -74,30             4
+  2 semanas (9 pregoes)        373,50     584,50      211,00       33       33    48,5%    51,5%    -85,50    -72,50             2
+  11/09 sex                    160,00     160,00        0,00        8        8    50,0%    50,0%    -72,50    -72,50             0
+  14/09 seg                     32,00      32,00        0,00        2        2    50,0%    50,0%    -62,50    -62,50             0
+  15/09 ter (parcial)         -190,50    -190,50        0,00        3        3     0,0%     0,0%    -63,50    -63,50             0
+
+  'ops trocadas' = operacoes que existem numa versao e nao na outra
+  (diferenca simetrica dos conjuntos). E' o tamanho REAL do efeito do teto:
+  o resto das operacoes e' identico nas duas.
+
+FIM.

@@ -1,0 +1,37 @@
+==================================================================================================================================
+win_retangulo -- ONDE SE PERDEM AS OPORTUNIDADES (config de producao, capital R$1.100)
+==================================================================================================================================
+  IS 129 pregoes | OOS 64 pregoes
+
+  ok OOS (>= 2026-06-13)
+  ok IS  (< 2026-06-13)
+
+variante                        retorno   liquido R$  MaxDD %    MaxDD R$ lucro/DD   win% trades     R$/dia trd/dia  capital final pregoes
+------------------------------------------------------------------------------------------------------------------------------------------
+IS  (< 2026-06-13)               338,2%     3.720,70   -24,0%    1.042,10     3,57  44,9%    615      28,84     4,8       4.820,70     129  desliz.alvo 1,0t fila NAO CALIBRADA
+OOS (>= 2026-06-13)              133,1%     1.464,50   -25,2%      384,50     3,81  45,8%    179      22,88     2,8       2.564,50      64  desliz.alvo 1,0t fila NAO CALIBRADA
+
+==================================================================================================================================
+FUNIL DE OPORTUNIDADES
+==================================================================================================================================
+           janela     candidatos    rej_largura      rej_risco      validados          armou   bloq_posicao     bloq_outro  expirados_ttl    rej_capital    preenchidos
+  IS  (< 2026-06-13)           4622           4156             31            435            434              1              0            574              0            615
+  OOS (>= 2026-06-13)           2771           2630              2            139            139              0              0            220              0            179
+
+  IS  (< 2026-06-13): de 435 retangulos validados, 434 armaram (99,8%), 1 nunca armaram por POSICAO ABERTA (0,2%), 0 por outro motivo. Dos que armaram, 615 preencheram (141,7%), 574 expiraram por TTL, 0 foram rejeitados no portao de capital/margem.
+  OOS (>= 2026-06-13): de 139 retangulos validados, 139 armaram (100,0%), 0 nunca armaram por POSICAO ABERTA (0,0%), 0 por outro motivo. Dos que armaram, 179 preencheram (128,8%), 220 expiraram por TTL, 0 foram rejeitados no portao de capital/margem.
+
+==================================================================================================================================
+LEITURA -- e' candidato a frente C fechar ou nao
+==================================================================================================================================
+  * `bloq_outro` inclui retangulos que morreram (3 barras fora da margem de morte)
+    antes de qualquer barra chegar ao ponto de decisao de armar, ou cujo fechamento
+    ficou exatamente no meio em toda a vida (limite nao tem lado -- caso raro).
+  * O motor nao piramida por desenho (Enter com posicao aberta some, sem grid dos 2
+    lados -- ver memoria do projeto). 'Armar em retangulos concorrentes' exigiria
+    reescrever o motor para aceitar 2+ posicoes simultaneas do MESMO robo, o que o
+    desenho de execucao fechado deste projeto nao contempla -- se a fatia bloqueada
+    por posicao aberta for grande, ela e' custo ESTRUTURAL do desenho, nao um bug a
+    corrigir aqui.
+
+FIM.

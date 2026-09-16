@@ -1,0 +1,228 @@
+============================================================================================================
+copa_win -- LATERALIZACAO: medir, e testar NAO OPERAR nela (WIN@, R$3.000, producao)
+============================================================================================================
+191 pregoes completos (2025-12-01 a 2026-09-10), corte IS/OOS em 2026-06-13, folga de achatamento 5min (producao).
+config vinda de registry._KWARGS_PADRAO['copa_win'] -- janela_rompimento=10, vol_min_ticks=8 (piso de AMPLITUDE, nao de regime).
+
+============================================================================================================
+FASE 1 -- DESCRITIVA: quais sao os resultados quando o copa_win opera em LATERALIZACAO?
+============================================================================================================
+  rodada CONTINUA: trades=564  stops=58  sinais logados=629
+  CONFERENCIA OK -- a lente nao mexeu em nenhuma decisao.
+  564 trades casados com sinal -> scratch/copawin_lateralizacao_trades.csv   (IS 341 / OOS 223)
+
+  distribuicao das medidas no instante do SINAL (IS, n=341):
+    medida                                         n      p10      q33  mediana      q67      p90
+    ---------------------------------------------------------------------------------------------
+    compacidade da faixa (10 barras do robo)     341    0,206    0,244    0,277    0,320    0,432
+    |ER| 10min                                   341    0,178    0,325    0,443    0,542    0,788
+    |ER| 20min                                   341    0,047    0,181    0,273    0,356    0,586
+    |ER| 30min                                   341    0,038    0,150    0,231    0,316    0,469
+    |ER| 60min                                   341    0,048    0,138    0,190    0,265    0,365
+    |ER| desde a abertura                        341    0,027    0,078    0,114    0,162    0,288
+
+  RESULTADO POR FAIXA -- tercos CONGELADOS NO IS e aplicados igual ao OOS
+  (faixa '1-lateral' = o terco mais lateral da medida)
+
+  --- compacidade da faixa (10 barras do robo)   (cortes IS: 0,244 / 0,320) ---
+janela        faixa   n  liquido  rs_por_op  win_pct  stop_pct
+    IS    1-lateral 114    705.3       6.19     52.6      16.7
+    IS       2-meio 113   4873.0      43.12     60.2       9.7
+    IS 3-direcional 114   3861.6      33.87     55.3       7.0
+janela        faixa  n  liquido  rs_por_op  win_pct  stop_pct
+   OOS    1-lateral 59   2291.6      38.84     69.5      10.2
+   OOS       2-meio 81   2241.7      27.68     65.4      11.1
+   OOS 3-direcional 83   4612.0      55.57     71.1       6.0
+
+  --- |ER| 10min   (cortes IS: 0,325 / 0,542) ---
+janela        faixa   n  liquido  rs_por_op  win_pct  stop_pct
+    IS    1-lateral 114   3761.7      33.00     57.0      10.5
+    IS       2-meio 113   -122.1      -1.08     51.3      15.9
+    IS 3-direcional 114   5800.3      50.88     59.6       7.0
+janela        faixa  n  liquido  rs_por_op  win_pct  stop_pct
+   OOS    1-lateral 43   -661.3     -15.38     65.1      14.0
+   OOS       2-meio 86   8585.3      99.83     73.3       3.5
+   OOS 3-direcional 94   1221.3      12.99     66.0      11.7
+
+  --- |ER| 20min   (cortes IS: 0,181 / 0,356) ---
+janela        faixa   n  liquido  rs_por_op  win_pct  stop_pct
+    IS    1-lateral 114    980.1       8.60     50.0      14.9
+    IS       2-meio 113   6152.0      54.44     64.6       9.7
+    IS 3-direcional 114   2307.8      20.24     53.5       8.8
+janela        faixa  n  liquido  rs_por_op  win_pct  stop_pct
+   OOS    1-lateral 69   1606.0      23.28     69.6      10.1
+   OOS       2-meio 60   1696.5      28.28     63.3      11.7
+   OOS 3-direcional 94   5842.8      62.16     71.3       6.4
+
+  --- |ER| 30min   (cortes IS: 0,150 / 0,316) ---
+janela        faixa   n  liquido  rs_por_op  win_pct  stop_pct
+    IS    1-lateral 114   3555.5      31.19     54.4      12.3
+    IS       2-meio 113   5766.3      51.03     59.3       9.7
+    IS 3-direcional 114    118.1       1.04     54.4      11.4
+janela        faixa  n  liquido  rs_por_op  win_pct  stop_pct
+   OOS    1-lateral 61   3609.0      59.16     73.8       8.2
+   OOS       2-meio 76    286.5       3.77     57.9      13.2
+   OOS 3-direcional 86   5249.8      61.04     74.4       5.8
+
+  --- |ER| 60min   (cortes IS: 0,138 / 0,265) ---
+janela        faixa   n  liquido  rs_por_op  win_pct  stop_pct
+    IS    1-lateral 114   2236.3      19.62     55.3      18.4
+    IS       2-meio 113   4431.6      39.22     57.5       7.1
+    IS 3-direcional 114   2772.0      24.32     55.3       7.9
+janela        faixa  n  liquido  rs_por_op  win_pct  stop_pct
+   OOS    1-lateral 73  -1773.3     -24.29     57.5      19.2
+   OOS       2-meio 71   4799.6      67.60     73.2       5.6
+   OOS 3-direcional 79   6119.0      77.46     74.7       2.5
+
+  --- |ER| desde a abertura   (cortes IS: 0,078 / 0,162) ---
+janela        faixa   n  liquido  rs_por_op  win_pct  stop_pct
+    IS    1-lateral 114  -1935.8     -16.98     47.4      14.9
+    IS       2-meio 113   4877.0      43.16     59.3      10.6
+    IS 3-direcional 114   6498.7      57.01     61.4       7.9
+janela        faixa  n  liquido  rs_por_op  win_pct  stop_pct
+   OOS    1-lateral 78   2788.2      35.75     67.9       9.0
+   OOS       2-meio 80   2690.3      33.63     71.2      11.2
+   OOS 3-direcional 65   3666.8      56.41     66.2       6.2
+
+============================================================================================================
+OPERAR EM LATERAL E' PIOR? (R$/op do terco LATERAL menos o do terco DIRECIONAL)
+  negativo nas DUAS janelas = lateral e' de fato o terco ruim; sinal trocado entre
+  IS e OOS REFUTA a leitura, e nenhum portao da fase 2 deveria funcionar.
+============================================================================================================
+                                  medida  IS_lat_menos_dir  OOS_lat_menos_dir         mesmo_sentido
+compacidade da faixa (10 barras do robo)            -27.68             -16.73 LATERAL PIOR nas duas
+                              |ER| 10min            -17.88             -28.37 LATERAL PIOR nas duas
+                              |ER| 20min            -11.64             -38.88 LATERAL PIOR nas duas
+                              |ER| 30min             30.15              -1.88               INVERTE
+                              |ER| 60min             -4.70            -101.75 LATERAL PIOR nas duas
+                   |ER| desde a abertura            -73.99             -20.66 LATERAL PIOR nas duas
+
+
+============================================================================================================
+FASE 2 -- NAO OPERAR QUANDO IDENTIFICAR LATERALIZACAO (backtest de verdade, nao contrafactual)
+============================================================================================================
+13 variantes x 3 janelas = 39 rodadas. Limiares CONGELADOS na distribuicao IS dos sinais (fase 1).
+Criterio congelado: so' conta quem melhora o liquido no IS E no OOS.
+
+  IS (<2026-06-13)      corta aber_60 < q20 (0,085)              liquido=    5.496,50  trades=  334  sem_trade=  0d  barras_vetadas=  3169
+  IS (<2026-06-13)      corta aber_10 < q20 (0,245)              liquido=    6.761,60  trades=  335  sem_trade=  0d  barras_vetadas=  4026
+  IS (<2026-06-13)      corta aber_30 < q33 (0,149)              liquido=    2.240,00  trades=  331  sem_trade=  0d  barras_vetadas=  4669
+  IS (<2026-06-13)      producao (sem filtro)                    liquido=    9.439,90  trades=  341  sem_trade=  0d  barras_vetadas=     0
+  IS (<2026-06-13)      corta aber_10 < q33 (0,322)              liquido=    7.282,80  trades=  331  sem_trade=  0d  barras_vetadas=  5331
+  IS (<2026-06-13)      corta aber_30 < q20 (0,087)              liquido=    1.699,10  trades=  327  sem_trade=  0d  barras_vetadas=  2282
+  OOS (>=2026-06-13)    producao (sem filtro)                    liquido=    3.360,50  trades=  165  sem_trade=  0d  barras_vetadas=     0
+  IS (<2026-06-13)      corta comp_faixa < q50 (0,277)           liquido=    6.046,10  trades=  329  sem_trade=  0d  barras_vetadas=  4372
+  IS (<2026-06-13)      corta aber_10 < q50 (0,443)              liquido=    7.002,90  trades=  336  sem_trade=  0d  barras_vetadas=  8137
+  IS (<2026-06-13)      corta comp_faixa < q20 (0,224)           liquido=    6.370,60  trades=  339  sem_trade=  0d  barras_vetadas=  1059
+  OOS (>=2026-06-13)    corta comp_faixa < q20 (0,224)           liquido=    2.204,20  trades=  164  sem_trade=  0d  barras_vetadas=   476
+  IS (<2026-06-13)      corta comp_faixa < q33 (0,243)           liquido=    8.971,60  trades=  351  sem_trade=  0d  barras_vetadas=  2001
+  IS (<2026-06-13)      corta aber_30 < q50 (0,231)              liquido=      590,20  trades=  314  sem_trade=  0d  barras_vetadas=  9101
+  OOS (>=2026-06-13)    corta aber_10 < q33 (0,322)              liquido=    2.025,40  trades=  155  sem_trade=  0d  barras_vetadas=  2454
+  OOS (>=2026-06-13)    corta aber_30 < q20 (0,087)              liquido=    5.032,00  trades=  162  sem_trade=  0d  barras_vetadas=  1093
+  OOS (>=2026-06-13)    corta comp_faixa < q33 (0,243)           liquido=      994,80  trades=  156  sem_trade=  0d  barras_vetadas=   876
+  OOS (>=2026-06-13)    corta comp_faixa < q50 (0,277)           liquido=      603,50  trades=  153  sem_trade=  0d  barras_vetadas=  1950
+  OOS (>=2026-06-13)    corta aber_30 < q33 (0,149)              liquido=    4.012,60  trades=  158  sem_trade=  0d  barras_vetadas=  2172
+  OOS (>=2026-06-13)    corta aber_10 < q20 (0,245)              liquido=    2.624,50  trades=  156  sem_trade=  0d  barras_vetadas=  1859
+  OOS (>=2026-06-13)    corta aber_10 < q50 (0,443)              liquido=      307,30  trades=  157  sem_trade=  0d  barras_vetadas=  4311
+  OOS (>=2026-06-13)    corta aber_60 < q33 (0,136)              liquido=      273,40  trades=  142  sem_trade=  0d  barras_vetadas=  3427
+  OOS (>=2026-06-13)    corta aber_30 < q50 (0,231)              liquido=    3.558,20  trades=  148  sem_trade=  0d  barras_vetadas=  4626
+  OOS (>=2026-06-13)    corta aber_60 < q50 (0,190)              liquido=    5.283,00  trades=  137  sem_trade=  0d  barras_vetadas=  6398
+  OOS (>=2026-06-13)    corta aber_60 < q20 (0,085)              liquido=    3.783,10  trades=  158  sem_trade=  0d  barras_vetadas=  1483
+  HISTORICO COMPLETO    producao (sem filtro)                    liquido=   18.585,20  trades=  564  sem_trade=  0d  barras_vetadas=     0
+  HISTORICO COMPLETO    corta comp_faixa < q33 (0,243)           liquido=   11.168,40  trades=  531  sem_trade=  0d  barras_vetadas=  2877
+  HISTORICO COMPLETO    corta aber_10 < q33 (0,322)              liquido=   12.372,00  trades=  521  sem_trade=  0d  barras_vetadas=  7806
+  IS (<2026-06-13)      corta aber_60 < q33 (0,136)              liquido=   -2.979,40  trades=  132  sem_trade= 77d  barras_vetadas= 27467
+  HISTORICO COMPLETO    corta comp_faixa < q50 (0,277)           liquido=    8.075,00  trades=  503  sem_trade=  0d  barras_vetadas=  6334
+  HISTORICO COMPLETO    corta aber_10 < q20 (0,245)              liquido=   10.847,50  trades=  519  sem_trade=  0d  barras_vetadas=  5908
+  IS (<2026-06-13)      corta aber_60 < q50 (0,190)              liquido=    3.513,70  trades=  286  sem_trade=  0d  barras_vetadas= 14381
+  HISTORICO COMPLETO    corta comp_faixa < q20 (0,224)           liquido=    9.163,20  trades=  519  sem_trade=  0d  barras_vetadas=  1529
+  HISTORICO COMPLETO    corta aber_30 < q20 (0,087)              liquido=    7.271,90  trades=  495  sem_trade=  0d  barras_vetadas=  3375
+  HISTORICO COMPLETO    corta aber_60 < q20 (0,085)              liquido=   10.610,50  trades=  510  sem_trade=  0d  barras_vetadas=  4652
+  HISTORICO COMPLETO    corta aber_30 < q33 (0,149)              liquido=    6.582,50  trades=  496  sem_trade=  0d  barras_vetadas=  6776
+  HISTORICO COMPLETO    corta aber_10 < q50 (0,443)              liquido=    8.462,40  trades=  515  sem_trade=  0d  barras_vetadas= 12306
+  HISTORICO COMPLETO    corta aber_60 < q50 (0,190)              liquido=    9.902,60  trades=  439  sem_trade=  0d  barras_vetadas= 20710
+  HISTORICO COMPLETO    corta aber_30 < q50 (0,231)              liquido=    4.108,30  trades=  463  sem_trade=  0d  barras_vetadas= 13735
+  HISTORICO COMPLETO    corta aber_60 < q33 (0,136)              liquido=   -2.979,40  trades=  132  sem_trade=139d  barras_vetadas= 46027
+
+
+===== WIN@, R$ 3.000 -- IS (<2026-06-13) (129 pregoes) =====
+variante                        retorno   liquido R$  MaxDD %    MaxDD R$ lucro/DD   win% trades     R$/dia trd/dia  capital final pregoes       preg+       bl20+        mes+        seq-      BEemp%    veredito      sem_tr       bloqB
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+producao (sem filtro)            314,7%     9.439,90   -30,1%    2.547,50     3,71  56,0%    341      73,18     2,6      12.439,90     129         59%         94%        100%           8       48,2%    POSITIVO       0/129           0  desliz.alvo 1,0t fila NAO CALIBRADA
+corta comp_faixa < q20 (0,224)   212,4%     6.370,60   -29,2%    2.894,80     2,20  56,0%    339      49,38     2,6       9.370,60     129         57%         86%         86%           8       50,9%  indefinido       0/129        1059  desliz.alvo 1,0t fila NAO CALIBRADA
+corta comp_faixa < q33 (0,243)   299,1%     8.971,60   -23,2%    2.996,30     2,99  57,0%    351      69,55     2,7      11.971,60     129         60%         81%         86%           7       50,0%    POSITIVO       0/129        2001  desliz.alvo 1,0t fila NAO CALIBRADA
+corta comp_faixa < q50 (0,277)   201,5%     6.046,10   -47,9%    4.427,10     1,37  55,6%    329      46,87     2,6       9.046,10     129         57%         75%         57%           6       50,6%  indefinido       0/129        4372  desliz.alvo 1,0t fila NAO CALIBRADA
+corta aber_10 < q20 (0,245)      225,4%     6.761,60   -33,6%    2.587,20     2,61  53,7%    335      52,42     2,6       9.761,60     129         54%         88%        100%           8       48,0%    POSITIVO       0/129        4026  desliz.alvo 1,0t fila NAO CALIBRADA
+corta aber_10 < q33 (0,322)      242,8%     7.282,80   -50,9%    2.402,20     3,03  53,8%    331      56,46     2,6      10.282,80     129         54%         82%         86%           8       47,6%    POSITIVO       0/129        5331  desliz.alvo 1,0t fila NAO CALIBRADA
+corta aber_10 < q50 (0,443)      233,4%     7.002,90   -38,6%    2.670,20     2,62  55,4%    336      54,29     2,6      10.002,90     129         59%         80%         57%           8       49,7%    POSITIVO       0/129        8137  desliz.alvo 1,0t fila NAO CALIBRADA
+corta aber_30 < q20 (0,087)       56,6%     1.699,10   -90,4%    4.230,10     0,40  52,9%    327      13,17     2,5       4.699,10     129         57%         55%         71%           8       51,5%  indefinido       0/129        2282  desliz.alvo 1,0t fila NAO CALIBRADA
+corta aber_30 < q33 (0,149)       74,7%     2.240,00   -93,0%    4.683,20     0,48  52,6%    331      17,36     2,6       5.240,00     129         55%         61%         71%          12       50,6%  indefinido       0/129        4669  desliz.alvo 1,0t fila NAO CALIBRADA
+corta aber_30 < q50 (0,231)       19,7%       590,20   -54,8%    2.859,70     0,21  51,9%    314       4,58     2,4       3.590,20     129         57%         55%         71%           5       51,4%  indefinido       0/129        9101  desliz.alvo 1,0t fila NAO CALIBRADA
+corta aber_60 < q20 (0,085)      183,2%     5.496,50   -61,3%    2.584,10     2,13  55,1%    334      42,61     2,6       8.496,50     129         58%         68%         71%           5       50,4%  indefinido       0/129        3169  desliz.alvo 1,0t fila NAO CALIBRADA
+corta aber_60 < q33 (0,136)      -99,3%    -2.979,40   -99,3%    3.089,20    -0,96  50,8%    132     -23,10     1,0          20,60     129         50%         10%          0%           6       57,5%  indefinido      77/129       27467  desliz.alvo 1,0t fila NAO CALIBRADA
+corta aber_60 < q50 (0,190)      117,1%     3.513,70   -47,2%    2.725,70     1,29  50,0%    286      27,24     2,2       6.513,70     129         53%         69%         86%           6       46,2%  indefinido       0/129       14381  desliz.alvo 1,0t fila NAO CALIBRADA
+
+
+===== WIN@, R$ 3.000 -- OOS (>=2026-06-13) (62 pregoes) =====
+variante                        retorno   liquido R$  MaxDD %    MaxDD R$ lucro/DD   win% trades     R$/dia trd/dia  capital final pregoes       preg+       bl20+        mes+        seq-      BEemp%    veredito      sem_tr       bloqB
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+producao (sem filtro)            112,0%     3.360,50   -25,9%    1.178,50     2,85  57,0%    165      54,20     2,7       6.360,50      62         61%        100%         75%           5       50,3%  indefinido        0/62           0  desliz.alvo 1,0t fila NAO CALIBRADA
+corta comp_faixa < q20 (0,224)    73,5%     2.204,20   -39,9%    1.321,00     1,67  56,1%    164      35,55     2,6       5.204,20      62         61%         98%         75%           5       51,8%  indefinido        0/62         476  desliz.alvo 1,0t fila NAO CALIBRADA
+corta comp_faixa < q33 (0,243)    33,2%       994,80   -51,1%    1.602,50     0,62  55,8%    156      16,05     2,5       3.994,80      62         55%         79%         75%           4       53,8%  indefinido        0/62         876  desliz.alvo 1,0t fila NAO CALIBRADA
+corta comp_faixa < q50 (0,277)    20,1%       603,50   -40,5%    2.167,00     0,28  53,6%    153       9,73     2,5       3.603,50      62         55%         74%         50%           4       52,4%  indefinido        0/62        1950  desliz.alvo 1,0t fila NAO CALIBRADA
+corta aber_10 < q20 (0,245)       87,5%     2.624,50   -26,3%    1.321,50     1,99  55,1%    156      42,33     2,5       5.624,50      62         60%         95%         50%           5       49,6%  indefinido        0/62        1859  desliz.alvo 1,0t fila NAO CALIBRADA
+corta aber_10 < q33 (0,322)       67,5%     2.025,40   -23,5%    1.478,40     1,37  53,5%    155      32,67     2,5       5.025,40      62         56%         88%         50%           5       49,3%  indefinido        0/62        2454  desliz.alvo 1,0t fila NAO CALIBRADA
+corta aber_10 < q50 (0,443)       10,2%       307,30   -45,3%    1.864,60     0,16  47,1%    157       4,96     2,5       3.307,30      62         52%         30%         75%           4       46,5%  indefinido        0/62        4311  desliz.alvo 1,0t fila NAO CALIBRADA
+corta aber_30 < q20 (0,087)      167,7%     5.032,00   -23,3%    1.129,00     4,46  59,9%    162      81,16     2,6       8.032,00      62         68%        100%         75%           3       49,4%    POSITIVO        0/62        1093  desliz.alvo 1,0t fila NAO CALIBRADA
+corta aber_30 < q33 (0,149)      133,8%     4.012,60   -32,7%    1.226,00     3,27  57,6%    158      64,72     2,5       7.012,60      62         63%        100%         75%           3       49,1%    POSITIVO        0/62        2172  desliz.alvo 1,0t fila NAO CALIBRADA
+corta aber_30 < q50 (0,231)      118,6%     3.558,20   -27,7%    1.143,10     3,11  53,4%    148      57,39     2,4       6.558,20      62         53%        100%        100%           4       45,2%    POSITIVO        0/62        4626  desliz.alvo 1,0t fila NAO CALIBRADA
+corta aber_60 < q20 (0,085)      126,1%     3.783,10   -35,4%    1.244,90     3,04  57,0%    158      61,02     2,5       6.783,10      62         58%         81%         75%           5       49,3%  indefinido        0/62        1483  desliz.alvo 1,0t fila NAO CALIBRADA
+corta aber_60 < q33 (0,136)        9,1%       273,40   -65,9%    2.086,70     0,13  50,0%    142       4,41     2,3       3.273,40      62         47%         33%         50%           5       49,4%  indefinido        0/62        3427  desliz.alvo 1,0t fila NAO CALIBRADA
+corta aber_60 < q50 (0,190)      176,1%     5.283,00   -37,7%    1.465,80     3,60  59,1%    137      85,21     2,2       8.283,00      62         56%         98%         75%           5       45,8%    POSITIVO        0/62        6398  desliz.alvo 1,0t fila NAO CALIBRADA
+
+
+===== WIN@, R$ 3.000 -- HISTORICO COMPLETO (191 pregoes) =====
+variante                        retorno   liquido R$  MaxDD %    MaxDD R$ lucro/DD   win% trades     R$/dia trd/dia  capital final pregoes       preg+       bl20+        mes+        seq-      BEemp%    veredito      sem_tr       bloqB
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+producao (sem filtro)            619,5%    18.585,20   -30,1%    2.547,50     7,30  61,0%    564      97,30     3,0      21.585,20     191         60%         96%        100%           8       52,6%    POSITIVO       0/191           0  desliz.alvo 1,0t fila NAO CALIBRADA
+corta comp_faixa < q20 (0,224)   305,4%     9.163,20   -29,2%    2.894,80     3,17  57,4%    519      47,97     2,7      12.163,20     191         60%         79%         70%           8       52,6%    POSITIVO       0/191        1529  desliz.alvo 1,0t fila NAO CALIBRADA
+corta comp_faixa < q33 (0,243)   372,3%    11.168,40   -25,5%    3.385,30     3,30  58,4%    531      58,47     2,8      14.168,40     191         59%         73%         80%           7       52,9%    POSITIVO       0/191        2877  desliz.alvo 1,0t fila NAO CALIBRADA
+corta comp_faixa < q50 (0,277)   269,2%     8.075,00   -47,9%    4.427,10     1,82  57,3%    503      42,28     2,6      11.075,00     191         57%         69%         60%           6       52,9%    POSITIVO       0/191        6334  desliz.alvo 1,0t fila NAO CALIBRADA
+corta aber_10 < q20 (0,245)      361,6%    10.847,50   -33,6%    2.587,20     4,19  56,8%    519      56,79     2,7      13.847,50     191         56%         92%         90%           8       51,1%    POSITIVO       0/191        5908  desliz.alvo 1,0t fila NAO CALIBRADA
+corta aber_10 < q33 (0,322)      412,4%    12.372,00   -50,9%    2.402,20     5,15  56,8%    521      64,77     2,7      15.372,00     191         55%         87%         80%           8       50,3%    POSITIVO       0/191        7806  desliz.alvo 1,0t fila NAO CALIBRADA
+corta aber_10 < q50 (0,443)      282,1%     8.462,40   -38,6%    2.670,20     3,17  54,8%    515      44,31     2,7      11.462,40     191         57%         73%         60%           8       50,2%    POSITIVO       0/191       12306  desliz.alvo 1,0t fila NAO CALIBRADA
+corta aber_30 < q20 (0,087)      242,4%     7.271,90   -90,4%    4.230,10     1,72  55,8%    495      38,07     2,6      10.271,90     191         61%         72%         80%           8       51,4%  indefinido       0/191        3375  desliz.alvo 1,0t fila NAO CALIBRADA
+corta aber_30 < q33 (0,149)      219,4%     6.582,50   -93,0%    4.683,20     1,41  54,6%    496      34,46     2,6       9.582,50     191         58%         73%         80%          12       50,7%  indefinido       0/191        6776  desliz.alvo 1,0t fila NAO CALIBRADA
+corta aber_30 < q50 (0,231)      136,9%     4.108,30   -54,8%    2.859,70     1,44  52,3%    463      21,51     2,4       7.108,30     191         55%         69%         80%           5       49,6%  indefinido       0/191       13735  desliz.alvo 1,0t fila NAO CALIBRADA
+corta aber_60 < q20 (0,085)      353,7%    10.610,50   -61,3%    2.584,10     4,11  57,6%    510      55,55     2,7      13.610,50     191         59%         75%         80%           5       51,8%    POSITIVO       0/191        4652  desliz.alvo 1,0t fila NAO CALIBRADA
+corta aber_60 < q33 (0,136)      -99,3%    -2.979,40   -99,3%    3.089,20    -0,96  50,8%    132     -15,60     0,7          20,60     191         50%          6%          0%           6       57,5%  indefinido     139/191       46027  desliz.alvo 1,0t fila NAO CALIBRADA
+corta aber_60 < q50 (0,190)      330,1%     9.902,60   -47,2%    2.725,70     3,63  54,4%    439      51,85     2,3      12.902,60     191         54%         77%         90%           6       47,4%    POSITIVO       0/191       20710  desliz.alvo 1,0t fila NAO CALIBRADA
+
+
+============================================================================================================
+VEREDITO -- delta de liquido contra a producao, nas DUAS janelas cegas
+============================================================================================================
+  variante                                         d IS        d OOS  trades IS  trades OOS                veredito
+  -----------------------------------------------------------------------------------------------------------------
+  corta comp_faixa < q20 (0,224)              -3.069,30    -1.156,30        339         164               nao passa
+  corta comp_faixa < q33 (0,243)                -468,30    -2.365,70        351         156               nao passa
+  corta comp_faixa < q50 (0,277)              -3.393,80    -2.757,00        329         153               nao passa
+  corta aber_10 < q20 (0,245)                 -2.678,30      -736,00        335         156               nao passa
+  corta aber_10 < q33 (0,322)                 -2.157,10    -1.335,10        331         155               nao passa
+  corta aber_10 < q50 (0,443)                 -2.437,00    -3.053,20        336         157               nao passa
+  corta aber_30 < q20 (0,087)                 -7.740,80     1.671,50        327         162               nao passa
+  corta aber_30 < q33 (0,149)                 -7.199,90       652,10        331         158               nao passa
+  corta aber_30 < q50 (0,231)                 -8.849,70       197,70        314         148               nao passa
+  corta aber_60 < q20 (0,085)                 -3.943,40       422,60        334         158               nao passa
+  corta aber_60 < q33 (0,136)                -12.419,30    -3.087,10        132         142               nao passa
+  corta aber_60 < q50 (0,190)                 -5.926,20     1.922,50        286         137               nao passa
+
+  NENHUMA das 12 celulas melhora o liquido nas duas janelas.
+  A hipotese 'nao operar em lateralizacao' esta' REFUTADA para o copa_win no
+  desenho de producao -- a lateralizacao e' visivel (fase 1 mede), mas cortar
+  o terco lateral nao paga.
+
+RESSALVA: WIN@ sem fila calibrada (fidelidade.py so' tem WDO@) -- preenchimento no
+TOQUE em toda linha. OOS do WIN@ ja foi gasto varias vezes; nao e' teste cego.
+
+FIM.

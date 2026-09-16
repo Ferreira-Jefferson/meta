@@ -1,0 +1,49 @@
+================================================================================================================
+win_retangulo -- a LARGURA do retangulo preve o resultado?
+================================================================================================================
+  uma rodada SEM teto por janela; cada operacao carrega a largura do
+  retangulo que a gerou, anotada no instante do ARMAMENTO
+
+  ok OOS: 169 de 169 operacoes casadas com um retangulo
+  ok IS: 615 de 615 operacoes casadas com um retangulo
+
+================================================================================================================
+IS -- resultado por FAIXA DE LARGURA (615 operacoes)
+================================================================================================================
+  faixa (pontos)         n     R$/op    win%     soma R$  risco medio   R$ por R$ de risco
+  328-400              252      1,97   42,5%      496,20        36,03                0,055
+  400-470              151     10,85   49,7%    1.637,70        43,80                0,248
+  470-550               99     -1,23   39,4%     -121,90        51,00               -0,024
+  550-650               55     12,16   47,3%      668,70        59,12                0,206
+  650-800               41     29,94   56,1%    1.227,50        69,81                0,429
+  800-1000              11     34,86   54,5%      383,50        84,39                0,413
+  1000+                  6     36,83   50,0%      221,00       109,24                0,337
+
+  correlacao de POSTO largura x resultado em R$ : -0,049
+  correlacao de POSTO largura x resultado/risco  : 0,338
+
+================================================================================================================
+OOS -- resultado por FAIXA DE LARGURA (169 operacoes)
+================================================================================================================
+  faixa (pontos)         n     R$/op    win%     soma R$  risco medio   R$ por R$ de risco
+  328-400               90      1,83   42,2%      165,00        35,70                0,051
+  400-470               35      3,67   42,9%      128,50        42,50                0,086
+  470-550               27     10,53   48,1%      284,30        49,71                0,212
+  550-650               13     20,21   53,8%      262,70        58,14                0,348
+  650-800                2    118,00  100,0%      236,00        74,35                1,587
+  800-1000               2    -85,50    0,0%     -171,00        84,03               -1,018
+
+  correlacao de POSTO largura x resultado em R$ : -0,031
+  correlacao de POSTO largura x resultado/risco  : 0,306
+
+================================================================================================================
+LEITURA
+================================================================================================================
+  Se R$/op CRESCE com a largura, todo teto de largura corta o que paga --
+  e o teto passa a ser exclusivamente um limite de RISCO, cujo valor sai
+  do caixa disponivel e nunca do backtest.
+  A ultima coluna normaliza pelo risco: e' 'quanto paga por real arriscado',
+  que e' a comparacao justa entre faixas -- retangulo largo ganha mais em
+  R$ so' porque aposta mais, e essa coluna tira isso da conta.
+
+FIM.

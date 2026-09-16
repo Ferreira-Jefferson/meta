@@ -1,0 +1,27 @@
+========================================================================================================================
+win_retangulo -- MFE das operacoes fechadas por STOP: chegaram perto do alvo?
+========================================================================================================================
+  capital R$ 1.100 | IS 129 pregoes | OOS 64 pregoes
+  mfe_frac = excursao maxima a favor / distancia ate o alvo (reconstruida da razao
+  fixa alvo/stop = 1,6x, valida para QUALQUER largura L)
+
+  ok OOS (>= 2026-06-13): 97 stops, 97 com MFE medido
+  ok IS  (< 2026-06-13): 333 stops, 333 com MFE medido
+
+========================================================================================================================
+  janela                       n   mediana     p75     p90     max    >=50%    >=90%   >=100%
+  IS  (< 2026-06-13)         333     0,453   0,620   0,798   1,134    42,0%     3,0%     0,3%
+  OOS (>= 2026-06-13)         97     0,405   0,560   0,786   1,361    34,0%     4,1%     3,1%
+
+========================================================================================================================
+LEITURA
+========================================================================================================================
+  Se a fracao de stops que chega a >=90%/100% do caminho ate o alvo for ALTA e
+  replicar nas duas janelas, o alvo esta' bem calibrado -- boa parte das perdas
+  'quase' virou vitoria, e o breakeven e' genuinamente apertado, nao um alvo fora
+  de alcance. Se a fracao for BAIXA (a maioria dos stops nunca anda mais que uma
+  fracao pequena do caminho), o alvo de 0,80xL e' geometricamente distante do que
+  a maioria das reversoes alcanca -- e' achado, mas NAO vira regra de gestao (ja
+  refutada 24x no copa_win): serve so' para calibrar expectativa sobre o alvo.
+
+FIM.

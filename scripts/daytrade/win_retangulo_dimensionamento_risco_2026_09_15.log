@@ -1,0 +1,45 @@
+======================================================================================================================================================
+win_retangulo -- DIMENSIONAMENTO POR RISCO: ha' espaco com o capital REAL (R$1.100)?
+======================================================================================================================================================
+  capital R$ 1.100 (REAL, nao inflado) | margem WIN@ R$100/contrato | buffer 2,0 | reserva 1,25
+  contratos que a PILHA DE MARGEM permitiria hoje: 4 (contracts_from_capital_operacional) -- ISSO NAO E' a restricao ativa, ver abaixo
+
+  ok 1 contrato, teto 80 (PRODUCAO) / OOS: n=179 caixa_min=949,50 zerado=False
+  ok 2 contratos, teto 160 (preserva a geometria) / OOS: n=179 caixa_min=799,00 zerado=False
+  ok 2 contratos, teto 80 (o que a margem PERMITE hoje) / OOS: n=128 caixa_min=827,00 zerado=False
+  ok 1 contrato, teto 80 (PRODUCAO) / IS: n=615 caixa_min=946,40 zerado=False
+  ok 2 contratos, teto 160 (preserva a geometria) / IS: n=615 caixa_min=792,80 zerado=False
+  ok 2 contratos, teto 80 (o que a margem PERMITE hoje) / IS: n=16 caixa_min=448,00 zerado=False
+
+======================================================================================================================================================
+IS -- tabela padrao
+======================================================================================================================================================
+variante                        retorno   liquido R$  MaxDD %    MaxDD R$ lucro/DD   win% trades     R$/dia trd/dia  capital final pregoes      BEemp%    pior op.   caixa min  rebaix.op. piso equiv.   sem trade
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+1 contrato, teto 80 (PRODUCAO)   338,2%     3.720,70   -24,0%    1.042,10     3,57  44,9%    615      28,84     4,8       4.820,70     129       39,7%      -80,50      946,40      989,50    1.089,50      10/129  desliz.alvo 1,0t fila NAO CALIBRADA
+2 contratos, teto 80 (o que a    -59,3%      -652,00   -60,6%      688,40    -0,95  18,8%     16      -5,05     0,1         448,00     129       42,0%      -81,00      448,00      649,00      749,00     124/129  desliz.alvo 1,0t fila NAO CALIBRADA
+2 contratos, teto 160 (preserv   676,5%     7.441,40   -39,4%    2.084,20     3,57  44,9%    615      57,69     4,8       8.541,40     129       39,7%     -161,00      792,80    1.979,00    2.079,00      10/129  desliz.alvo 1,0t fila NAO CALIBRADA
+
+======================================================================================================================================================
+OOS -- tabela padrao
+======================================================================================================================================================
+variante                        retorno   liquido R$  MaxDD %    MaxDD R$ lucro/DD   win% trades     R$/dia trd/dia  capital final pregoes      BEemp%    pior op.   caixa min  rebaix.op. piso equiv.   sem trade
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+1 contrato, teto 80 (PRODUCAO)   133,1%     1.464,50   -25,2%      384,50     3,81  45,8%    179      22,88     2,8       2.564,50      64       38,5%      -74,30      949,50      373,50      473,50       11/64  desliz.alvo 1,0t fila NAO CALIBRADA
+2 contratos, teto 80 (o que a      5,6%        62,00   -56,6%    1.019,00     0,06  40,6%    128       0,97     2,0       1.162,00      64       40,4%      -83,00      827,00      916,00    1.016,00       19/64  desliz.alvo 1,0t fila NAO CALIBRADA
+2 contratos, teto 160 (preserv   266,3%     2.929,00   -42,0%      769,00     3,81  45,8%    179      45,77     2,8       4.029,00      64       38,5%     -148,60      799,00      747,00      847,00       11/64  desliz.alvo 1,0t fila NAO CALIBRADA
+
+======================================================================================================================================================
+LEITURA
+======================================================================================================================================================
+  A pilha de MARGEM (contracts_from_capital_operacional) sozinha sugeriria espaco
+  para ate 4 contratos com R$1.100 -- mas essa funcao NAO esta' conectada a esta
+  estrategia (quantidade e' fixo, nao dinamico), e o teto de risco por operacao
+  (`risco_maximo_brl`), que E' a restricao ativa, nao escala com a quantidade
+  sozinho. As duas linhas de 2 contratos mostram as duas faces do mesmo problema:
+  manter o teto em R$80 muda a GEOMETRIA (so' sobra a faixa de largura que paga
+  pior); subir o teto para preservar a geometria dobra o 'caixa min' realizado --
+  compare contra o caixa min de 1 contrato para ver quanto capital FALTARIA, sem
+  adotar esse capital maior (a ordem do dono proibe testar com capital inflado).
+
+FIM.

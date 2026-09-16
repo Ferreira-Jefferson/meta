@@ -1,0 +1,114 @@
+========================================================================================================================
+win_retangulo -- POR QUE o teto de R$80? E existe teto deduzivel do dado previo?
+========================================================================================================================
+  capital R$ 1.100 (piso novo) | tol 20% | demais parametros do robo
+  fila NAO calibrada para WIN@: preenche no TOQUE
+
+  ... 10/38
+  ... 20/38
+  ... 30/38
+
+========================================================================================================================
+(A) O TETO E' FILTRO OU EMBARALHAMENTO?
+========================================================================================================================
+  Se fosse FILTRO, o conjunto de operacoes de um teto menor seria
+  SUBCONJUNTO do maior (contido = 100%). Se for EMBARALHAMENTO, as
+  duas linhas do tempo divergem e a intersecao desaba.
+
+  --- IS ---
+        teto  trades    iguais ao sem teto   contido no sem teto   so nele
+         120     614                   614                100,0%         0
+         100     614                   612                 99,7%         2
+          90     616                   609                 98,9%         7
+          80     615                   599                 97,4%        16
+          70     613                   589                 96,1%        24
+          60     596                   548                 91,9%        48
+
+  --- OOS ---
+        teto  trades    iguais ao sem teto   contido no sem teto   so nele
+         120     169                   169                100,0%         0
+         100     169                   169                100,0%         0
+          90     169                   169                100,0%         0
+          80     169                   167                 98,8%         2
+          70     168                   163                 97,0%         5
+          60     164                   160                 97,6%         4
+
+========================================================================================================================
+(B) A LARGURA E' O EIXO CERTO? -- resultado por faixa de largura, SEM teto
+========================================================================================================================
+  IS: sem dado de largura por operacao
+  OOS: sem dado de largura por operacao
+========================================================================================================================
+(C) AS TRES REGRAS DE TETO -- o eixo tem estrutura, ou e' ruido?
+========================================================================================================================
+
+  ### TETO ABSOLUTO em R$ -- IS
+  variante                        liquido  trades   win%     be%  pts/op  pior op. rejeit. aceitos    sem_tr
+  abs sem                        4.512,70     615  45,4%   39,2%    36,7   -110,50       0     433    10/129
+  abs 120                        4.308,20     614  45,3%   39,4%    35,1   -110,50       4     432    10/129
+  abs 100                        4.482,20     614  45,4%   39,3%    36,5   -101,50      14     432    10/129
+  abs 90                         4.134,20     616  45,1%   39,5%    33,6    -86,50      17     433    10/129
+  abs 80                         3.720,70     615  44,9%   39,7%    30,2    -80,50      31     435    10/129
+  abs 70                         4.460,70     613  45,7%   39,4%    36,4    -79,70      69     422    10/129
+  abs 60                         2.805,00     596  44,3%   40,1%    23,5    -79,70     174     410    10/129
+
+  ### TETO ABSOLUTO em R$ -- OOS
+  variante                        liquido  trades   win%     be%  pts/op  pior op. rejeit. aceitos    sem_tr
+  abs sem                          905,50     169  44,4%   39,5%    26,8    -85,50       0     133     11/62
+  abs 120                          905,50     169  44,4%   39,5%    26,8    -85,50       0     133     11/62
+  abs 100                          905,50     169  44,4%   39,5%    26,8    -85,50       0     133     11/62
+  abs 90                           905,50     169  44,4%   39,5%    26,8    -85,50       0     133     11/62
+  abs 80                         1.272,50     169  45,6%   38,7%    37,6    -74,30       2     133     11/62
+  abs 70                           936,00     168  44,6%   39,5%    27,9    -74,30      13     131     11/62
+  abs 60                           879,00     164  44,5%   39,5%    26,8    -74,30      25     129     11/62
+
+  ### TETO = k x AMPLITUDE DO PREGAO ate agora -- IS
+  variante                        liquido  trades   win%     be%  pts/op  pior op. rejeit. aceitos    sem_tr
+  pregao k=0,10                   -680,30     139  37,4%   42,1%   -24,5    -79,70    1701     105    95/129
+  pregao k=0,15                    666,80     310  42,9%   40,9%    10,8    -86,50    1102     221    58/129
+  pregao k=0,20                  2.240,40     448  44,6%   40,2%    25,0   -110,50     656     296    37/129
+  pregao k=0,25                  2.935,70     507  44,8%   39,8%    29,0   -110,50     394     361    23/129
+  pregao k=0,30                  3.372,70     557  44,7%   39,6%    30,3   -110,50     198     399    17/129
+  pregao k=0,40                  4.541,70     609  45,5%   39,2%    37,3   -110,50      29     425    11/129
+  pregao k=0,60                  4.512,70     615  45,4%   39,2%    36,7   -110,50       0     433    10/129
+
+  ### TETO = k x AMPLITUDE DO PREGAO ate agora -- OOS
+  variante                        liquido  trades   win%     be%  pts/op  pior op. rejeit. aceitos    sem_tr
+  pregao k=0,10                     17,00      18  44,4%   43,4%     4,7    -44,50     539      19     55/62
+  pregao k=0,15                    206,50      51  45,1%   40,9%    20,2    -51,50     411      51     39/62
+  pregao k=0,20                    730,80      96  46,9%   39,6%    38,1    -59,70     250      83     25/62
+  pregao k=0,25                    475,30     141  42,6%   39,4%    16,9    -64,50     108     110     17/62
+  pregao k=0,30                  1.001,00     162  44,4%   38,8%    30,9    -85,50      38     123     14/62
+  pregao k=0,40                    940,50     167  44,3%   39,2%    28,2    -85,50       7     131     11/62
+  pregao k=0,60                    905,50     169  44,4%   39,5%    26,8    -85,50       0     133     11/62
+
+  ### TETO = quantil ROLANTE das larguras ja vistas -- IS
+  variante                        liquido  trades   win%     be%  pts/op  pior op. rejeit. aceitos    sem_tr
+  quantil q=0,50                 2.614,00     552  44,6%   40,2%    23,7   -104,50     354     379    12/129
+  quantil q=0,60                 2.258,70     571  44,0%   40,4%    19,8   -104,50     272     393    12/129
+  quantil q=0,70                 3.066,20     592  44,6%   40,0%    25,9   -104,50     189     409    11/129
+  quantil q=0,80                 3.593,70     605  44,8%   39,6%    29,7   -104,50     111     418    10/129
+  quantil q=0,90                 2.991,80     616  44,2%   40,0%    24,3   -110,50      49     427    10/129
+
+  ### TETO = quantil ROLANTE das larguras ja vistas -- OOS
+  variante                        liquido  trades   win%     be%  pts/op  pior op. rejeit. aceitos    sem_tr
+  quantil q=0,50                 1.007,50     147  46,3%   39,5%    34,3    -56,50     125     114     13/62
+  quantil q=0,60                   984,20     156  45,5%   39,4%    31,5    -80,30      92     121     13/62
+  quantil q=0,70                   994,20     160  45,0%   39,2%    31,1    -74,30      53     127     11/62
+  quantil q=0,80                   884,50     161  44,7%   39,6%    27,5    -80,30      39     125     12/62
+  quantil q=0,90                   769,00     166  44,0%   39,7%    23,2    -74,30      19     132     11/62
+
+========================================================================================================================
+CONCORDANCIA IS x OOS -- qual regra ORDENA igual nas duas janelas?
+========================================================================================================================
+  TETO ABSOLUTO em R$                           correlacao de POSTO IS x OOS:    0,12
+                                                melhor no IS: abs sem            melhor no OOS: abs 80
+  TETO = k x AMPLITUDE DO PREGAO ate agora      correlacao de POSTO IS x OOS:    0,86
+                                                melhor no IS: pregao k=0,40      melhor no OOS: pregao k=0,30
+  TETO = quantil ROLANTE das larguras ja vistas correlacao de POSTO IS x OOS:   -0,30
+                                                melhor no IS: quantil q=0,80     melhor no OOS: quantil q=0,50
+
+  Correlacao de posto perto de 0 (ou negativa) = o eixo nao carrega
+  informacao: a ordem das celulas numa janela nao diz nada sobre a outra.
+
+FIM.
