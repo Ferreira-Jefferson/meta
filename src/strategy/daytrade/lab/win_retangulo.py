@@ -66,9 +66,9 @@ sobre a qual o veredito estatístico (acerto, IC95, breakeven) foi construído
 e continua valendo como está. Com a escala LIGADA (default desde
 2026-09-15), as mesmas 615/179 operações e o mesmo acerto se repetem — a
 quantidade não muda qual retângulo é aceito —, mas os valores em R$ sobem
-conforme o caixa cresce dentro da janela, e o pior rebaixamento por operação
-sobe de R$989,50 para R$1.979,00 no IS. Ver `capital_minimo_recomendado_brl`
-para o piso corrigido.
+conforme o caixa cresce dentro da janela. O piso de caixa (R$1.100) segue
+correto de qualquer forma — ver `capital_minimo_recomendado_brl` para o
+porquê e o teste que confirma.
 
 Para comparar: com `tolerancia_borda=0.08` (o primeiro congelado) e sem teto
 de risco, os mesmos números eram R$2.980,10 / 403 operações / 33 pregões
@@ -329,36 +329,31 @@ class WinRetangulo(IntradayStrategy):
     #: existe para cortar essa cauda — ver a docstring dele para as três
     #: medições que tiraram o teto do lugar de alavanca.
     #:
-    #: **SUBIU de R$1.100 para R$2.100 em 2026-09-16 — o piso tinha ficado
-    #: ÓRFÃO.** `PISO_UM_CONTRATO_BRL = R$1.100` continua correto como base
-    #: da ESCADA (é o caixa que compra o 1º contrato; o 2º só aparece em
-    #: R$2.933, o 3º em R$5.206) — o que estava errado era usar essa MESMA
-    #: constante como piso de SEGURANÇA. As duas perguntas parecem a mesma e
-    #: não são: uma é "quanto compra 1 contrato", a outra é "quanto aguenta
-    #: o pior rebaixamento".
+    #: **CONFIRMADO em R$1.100 em 2026-09-16, depois de um alarme falso no
+    #: mesmo dia.** Ao ligar `escala_por_caixa` (default desde
+    #: `4806636`/`ca252a7`), o pior REBAIXAMENTO POR OPERAÇÃO (pico do caixa
+    #: menos o vale seguinte) subiu de R$989,50 para R$1.979,00 no IS — e a
+    #: primeira leitura disso tratou R$1.979,00 como se fosse "distância até
+    #: zerar" e propôs R$2.100. **Estava ERRADO**: rebaixamento é a queda a
+    #: partir do PICO, e com a escala ligada o caixa sobe bem acima do
+    #: capital de partida (é o próprio lucro que paga o 2º contrato, em
+    #: R$2.933) ANTES de qualquer drawdown grande acontecer — então o pico
+    #: já não é mais R$1.100, e a queda de R$1.979,00 não parte dali.
     #:
-    #: R$1.100 respondia a segunda pergunta quando foi medido — mas a
-    #: medição (R$989,50 de rebaixamento por operação) rodou com
-    #: `quantidade=1` FIXA, ANTES de a escala pelo caixa virar default
-    #: (commits `4806636`/`ca252a7`, 2026-09-15 21:40). Rodando hoje o robô
-    #: de produção sem nenhuma modificação, na MESMA janela e MESMO capital
-    #: de partida: o caixa cresce com o lucro acumulado dentro do próprio
-    #: IS, ultrapassa R$2.933 no meio da série, e um rebaixamento chega a
-    #: acontecer já com 2 contratos — **R$1.979,00 por operação**, quase o
-    #: dobro do número que sustentava R$1.100. Ver item 6.43 de
-    #: `LICOES_DE_PRODUCAO.md`.
+    #: O teste que decide de verdade — pedido do dono, "o robô precisa
+    #: chegar no valor por conta própria" — é rodar com R$1.100 fresco a
+    #: partir de CADA um dos 129 dias do IS (não só do dia 1, que é um
+    #: sorteio) e medir o CAIXA MÍNIMO de fato tocado em cada simulação.
+    #: Resultado: **0 de 124 pontos de partida silenciam o robô**; o pior
+    #: caso toca R$172,00, sempre acima da margem crua de R$100. R$1.100
+    #: está certo, com ~R$72 de folga sobre o pior cenário observado.
     #:
-    #: Daí **R$2.100** (R$1.979,00 + R$100 de margem crua, arredondado). No
-    #: OOS a escada nunca escala além de 1 contrato, então lá o rebaixamento
-    #: continua R$373,50 — é o IS, com mais pregões para o caixa crescer,
-    #: quem decide o piso.
-    #:
-    #: A REGRA que fica, e que generaliza além deste robô: **todo piso de
-    #: capital publicado descreve uma VERSÃO do robô com um mecanismo de
-    #: dimensionamento específico.** Mudar o dimensionamento sem remedir o
-    #: piso é a mesma classe de erro que rodar backtest com capital
-    #: arbitrário — só que mais traiçoeira, porque o número antigo continua
-    #: parecendo medido.
+    #: A REGRA que fica, e que generaliza além deste robô: **rebaixamento
+    #: pico-a-vale só vira piso de segurança quando o pico é o CAPITAL DE
+    #: PARTIDA.** Num robô que dimensiona pelo caixa, o pico se move — o
+    #: teste certo é o caixa mínimo absoluto, medido a partir de todo ponto
+    #: de partida possível, não a queda relativa a um pico que o próprio
+    #: robô já deixou para trás.
     #:
     #: Uma tentativa anterior de escala (2026-09-15, descartada no mesmo dia)
     #: amarrava a quantidade à LARGURA do retângulo em vez do caixa. Ela
@@ -367,7 +362,7 @@ class WinRetangulo(IntradayStrategy):
     #: ou seja, era a mesma estratégia em tamanho maior — e o piso saltava
     #: para R$3.400. Ficou registrada aqui porque o número bonito dela pode
     #: reaparecer numa medição futura e precisa ser reconhecido pelo que era.
-    capital_minimo_recomendado_brl: float | None = 2_100.0
+    capital_minimo_recomendado_brl: float | None = PISO_UM_CONTRATO_BRL
 
     def __init__(
         self,
