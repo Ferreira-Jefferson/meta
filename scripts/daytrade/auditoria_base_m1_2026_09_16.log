@@ -1,0 +1,95 @@
+========================================================================================================================
+WIN@ — base M1 canônica
+========================================================================================================================
+  110.014 barras | 2025-12-01 12:03:00+00:00 a 2026-09-15 21:23:00+00:00
+
+  [1] carimbos DUPLICADOS .......... 0
+  [2] campos VAZIOS (NaN) .......... {'open': 0, 'high': 0, 'low': 0, 'close': 0}
+  [3] preço <= 0 ................... 0
+  [5] high < max(open,close) ....... 0
+      low  > min(open,close) ....... 0
+      high < low ................... 0
+
+  [6] dias ÚTEIS sem NENHUMA barra . 11 de 207 (feriados da B3 entram aqui)
+      2025-12-24, 2025-12-25, 2025-12-31, 2026-01-01, 2026-02-16, 2026-02-17, 2026-04-03, 2026-04-21, 2026-05-01, 2026-06-04, 2026-09-07
+
+  [7] BURACOS dentro do pregão (minuto sem barra, no miolo do dia)
+      blocos: 6 | minutos ausentes: 17
+        bloco de   1 min:     3 ocorrência(s)
+        bloco de   2 min:     1 ocorrência(s)
+        bloco de   6 min:     2 ocorrência(s)
+      dias com buraco de 10+ min: 0
+
+  [8] COBERTURA por pregão (barras no dia)
+      mediana 563 | p10 562 | mínimo 325 | máximo 566
+      pregões com < 400 barras (excluídos de toda medição): 2
+        2026-02-18: 325 barras
+        2026-07-31: 351 barras
+
+  [9] PRIMEIRA barra do dia (UTC; esperado 12:00 = 09:00 BRT)
+        12:00:00  em 92 pregões
+        12:03:00  em 63 pregões
+        12:02:00  em 38 pregões
+        16:00:00  em 1 pregões
+        12:04:00  em 1 pregões
+      ÚLTIMA barra do dia (UTC; esperado ~21:2x = ~18:2x BRT)
+        21:24:00  em 192 pregões
+        21:31:00  em 2 pregões
+        21:25:00  em 1 pregões
+        21:23:00  em 1 pregões
+
+  [10] SALTOS intradiários > 1% entre barras consecutivas: 1
+        2026-01-26 14:30:00+00:00  1,15%
+
+========================================================================================================================
+WDO@ — base M1 canônica
+========================================================================================================================
+  107.242 barras | 2025-12-08 19:08:00+00:00 a 2026-09-15 20:53:00+00:00
+
+  [1] carimbos DUPLICADOS .......... 0
+  [2] campos VAZIOS (NaN) .......... {'open': 0, 'high': 0, 'low': 0, 'close': 0}
+  [3] preço <= 0 ................... 0
+  [5] high < max(open,close) ....... 0
+      low  > min(open,close) ....... 0
+      high < low ................... 0
+
+  [6] dias ÚTEIS sem NENHUMA barra . 11 de 202 (feriados da B3 entram aqui)
+      2025-12-24, 2025-12-25, 2025-12-31, 2026-01-01, 2026-02-16, 2026-02-17, 2026-04-03, 2026-04-21, 2026-05-01, 2026-06-04, 2026-09-07
+
+  [7] BURACOS dentro do pregão (minuto sem barra, no miolo do dia)
+      blocos: 0 | minutos ausentes: 0
+      dias com buraco de 10+ min: 0
+
+  [8] COBERTURA por pregão (barras no dia)
+      mediana 570 | p10 570 | mínimo 67 | máximo 570
+      pregões com < 400 barras (excluídos de toda medição): 5
+        2026-09-14: 67 barras
+        2025-12-08: 142 barras
+        2026-02-18: 330 barras
+        2026-07-31: 357 barras
+        2026-09-11: 371 barras
+
+  [9] PRIMEIRA barra do dia (UTC; esperado 12:00 = 09:00 BRT)
+        12:00:00  em 184 pregões
+        12:03:00  em 3 pregões
+        19:08:00  em 1 pregões
+        16:00:00  em 1 pregões
+        15:33:00  em 1 pregões
+      ÚLTIMA barra do dia (UTC; esperado ~21:2x = ~18:2x BRT)
+        21:29:00  em 189 pregões
+        18:10:00  em 1 pregões
+        20:53:00  em 1 pregões
+
+  [10] SALTOS intradiários > 1% entre barras consecutivas: 0
+
+========================================================================================================================
+COMO LER
+========================================================================================================================
+  * Bloco de 1 minuto ausente é NORMAL: minuto sem nenhum negócio não gera barra.
+    O que denuncia feed caído é bloco LONGO (10+ min) em pregão de liquidez normal.
+  * Dia útil sem barra nenhuma é feriado da B3 na maioria dos casos — confira a
+    lista contra o calendário antes de chamar de falha.
+  * Violação de OHLC é a mais grave: uma barra com `high < close` faz o motor
+    preencher ordem-limite num preço que nunca existiu no livro.
+
+FIM.

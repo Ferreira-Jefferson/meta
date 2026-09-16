@@ -1,0 +1,37 @@
+====================================================================================================
+REPARO DA BASE M1 — WDO@
+====================================================================================================
+  arquivo: C:\Users\Jeffe\Documents\study\meta\data\raw_intraday\WDO_A_.parquet
+  ANTES: 107.242 barras | 2025-12-08 19:08:00+00:00 a 2026-09-15 20:53:00+00:00
+      2026-09-11:  371 barras  12:00:00 -> 18:10:00 UTC
+      2026-09-14:   67 barras  20:23:00 -> 21:29:00 UTC
+      2026-09-15:  534 barras  12:00:00 -> 20:53:00 UTC
+
+  [1] BACKUP gravado: WDO_A_.parquet.bak-20260916-010740 (1,9 MB)
+  [2] FETCH do terminal: 100.000 barras | 2025-12-30 19:11:00+00:00 a 2026-09-15 21:29:00+00:00
+      2026-09-11:  570 barras  12:00:00 -> 21:29:00 UTC
+      2026-09-14:  570 barras  12:00:00 -> 21:29:00 UTC
+      2026-09-15:  570 barras  12:00:00 -> 21:29:00 UTC
+
+  [3] COMPARAÇÃO
+      só no parquet (fora da janela do servidor): 7.980
+      só no terminal (o que vai entrar) .......: 738
+      em comum ................................: 99.262
+      maior divergência de preço nas barras comuns: 42.001000000000204
+
+  [4] recorte do fetch: 1.710 barras, só ('2026-09-11', '2026-09-14', '2026-09-15')
+
+  [4] UNIÃO gravada (atômica). Linhas novas: 738
+
+  [5] DEPOIS: 107.980 barras | 2025-12-08 19:08:00+00:00 a 2026-09-15 21:29:00+00:00
+      2026-09-11:  570 barras  12:00:00 -> 21:29:00 UTC
+      2026-09-14:  570 barras  12:00:00 -> 21:29:00 UTC
+      2026-09-15:  570 barras  12:00:00 -> 21:29:00 UTC
+
+      pregões com < 400 barras agora: 3
+        2025-12-08: 142 barras
+        2026-02-18: 330 barras
+        2026-07-31: 357 barras
+      nenhuma barra antiga perdida: SIM
+
+FIM.
