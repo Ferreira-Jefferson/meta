@@ -30,6 +30,7 @@ from strategy.daytrade.lab.gremah import Gremah
 from strategy.daytrade.lab.wdo_grid_fade_off_t3 import WdoGridFadeOffT3
 from strategy.daytrade.lab.wdo_grid_reload_maker import WdoGridReloadMaker
 from strategy.daytrade.lab.wdo_orb import WdoOrb
+from strategy.daytrade.lab.win_retangulo import WinRetangulo
 
 # A ORDEM DESTE DICIONÁRIO É O PÓDIO DE DAY TRADE — o primeiro é o TOP-1.
 #
@@ -287,6 +288,20 @@ _ROBOTS: dict[str, type[IntradayStrategy]] = {
     WdoGridReloadMaker.name: WdoGridReloadMaker,
     Gremah.name: Gremah,
     WdoGridFadeOffT3.name: WdoGridFadeOffT3,
+    # ULTIMO de proposito, e nao por merito de numero. `win_retangulo` e' o
+    # unico desenho deste projeto que atravessou o OOS mantendo acerto E
+    # magnitude (45,7% -> 45,5%, 35,16 -> 36,52 pts/op), mas:
+    #   1. NUNCA operou -- nem com dinheiro real, nem em sombra;
+    #   2. no OOS o veredito estatistico e' "indefinido", nao "positivo":
+    #      com 101 operacoes o IC95 do acerto (36,2%-55,2%) engloba o
+    #      breakeven empirico de 38,9%;
+    #   3. o CONTROLE mostrou que o lucro bruto nao vem do retangulo -- um
+    #      placebo com a banda q90/q10 crua rendeu MAIS em R$ no OOS
+    #      (+1.306,70 contra +737,70). O detector compra qualidade por
+    #      operacao e 1/3 do rebaixamento, nao volume de lucro.
+    # Posicao no podio e' declaracao de CONFIANCA acumulada. Subir daqui
+    # exige pregao real, nao mais backtest.
+    WinRetangulo.name: WinRetangulo,
 }
 
 #: kwargs extras pra robôs cujo construtor exige parâmetro sem default

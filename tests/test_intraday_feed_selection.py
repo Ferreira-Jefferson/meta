@@ -127,16 +127,29 @@ def test_podio_declarado_2026_09_04():
     nao ha teste cego para este robo; ela custa 8x mais capital que o TOP-2
     (piso R$3.000 contra R$375); nunca operou com dinheiro real; e o WIN@ nao
     tem fidelidade de execucao calibrada. Ver o comentario datado sobre
-    `_ROBOTS` em `strategy/daytrade/registry.py`."""
+    `_ROBOTS` em `strategy/daytrade/registry.py`.
+
+    Decisao do dono, 2026-09-15: `win_retangulo` entra no CATALOGO em ULTIMO
+    lugar. E' o unico desenho do projeto que atravessou o OOS mantendo acerto
+    E magnitude (45,7% -> 45,5%; 35,16 -> 36,52 pontos por operacao), e o
+    piso de caixa dele foi MEDIDO e nao herdado de tabela (R$650 = MaxDD
+    R$525,60 + margem crua R$100; a R$275 o robo cala para sempre depois de
+    duas perdas seguidas). Nao e' promocao, e a posicao diz exatamente isso:
+    nunca operou nem em sombra, no OOS o veredito e' INDEFINIDO (IC95% do
+    acerto [36,2 ; 55,2] engloba o breakeven empirico de 38,9%), e o CONTROLE
+    mostrou que o lucro bruto nao vem do detector -- um placebo com a banda
+    q90/q10 crua rendeu MAIS em R$ no OOS (+1.306,70 contra +737,70),
+    operando 3,7x mais. O que o detector compra e' qualidade por operacao
+    (36,52 contra 17,52 pontos) e um terco do rebaixamento."""
     robos = list_daytrade_robots()
 
     assert [r.key for r in robos] == [
         "copa_win", "wdo_orb", "wdo_grid_reload_maker", "gremah",
-        "wdo_grid_fade_off_t3",
+        "wdo_grid_fade_off_t3", "win_retangulo",
     ]
-    assert [r.rank for r in robos] == [1, 2, 3, 4, 5]
-    assert [r.feed_kind for r in robos] == ["m1", "tick", "tick", "m1", "tick"]
-    assert [r.is_futuro for r in robos] == [True, True, True, False, True]
+    assert [r.rank for r in robos] == [1, 2, 3, 4, 5, 6]
+    assert [r.feed_kind for r in robos] == ["m1", "tick", "tick", "m1", "tick", "m1"]
+    assert [r.is_futuro for r in robos] == [True, True, True, False, True, True]
 
 
 def test_gremah_cobre_os_nove_simbolos_confirmados():
