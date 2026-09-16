@@ -61,6 +61,15 @@ Janelas congeladas (corte 2026-06-13), 1 contrato, custo de ida-e-volta de
 | pior operação | −R$ 80,50 | −R$ 74,30 |
 | pregões sem operar | 10/129 | 11/64 |
 
+Esta tabela é com `escala_por_caixa=False` (1 contrato fixo) — é a geometria
+sobre a qual o veredito estatístico (acerto, IC95, breakeven) foi construído
+e continua valendo como está. Com a escala LIGADA (default desde
+2026-09-15), as mesmas 615/179 operações e o mesmo acerto se repetem — a
+quantidade não muda qual retângulo é aceito —, mas os valores em R$ sobem
+conforme o caixa cresce dentro da janela, e o pior rebaixamento por operação
+sobe de R$989,50 para R$1.979,00 no IS. Ver `capital_minimo_recomendado_brl`
+para o piso corrigido.
+
 Para comparar: com `tolerancia_borda=0.08` (o primeiro congelado) e sem teto
 de risco, os mesmos números eram R$2.980,10 / 403 operações / 33 pregões
 parados no IS e R$737,70 / 101 / 23 no OOS.
@@ -320,11 +329,36 @@ class WinRetangulo(IntradayStrategy):
     #: existe para cortar essa cauda — ver a docstring dele para as três
     #: medições que tiraram o teto do lugar de alavanca.
     #:
-    #: Continua R$1.100 COM `escala_por_caixa` ligado, e isso não é
-    #: descuido: a escada de `_dimensiona` foi feita para que R$1.100 rode
-    #: exatamente 1 contrato. O segundo contrato só aparece em R$2.933, o
-    #: terceiro em R$5.243 — quem começa no piso opera igual ao desenho
-    #: congelado e só escala se a conta de fato crescer.
+    #: **SUBIU de R$1.100 para R$2.100 em 2026-09-16 — o piso tinha ficado
+    #: ÓRFÃO.** `PISO_UM_CONTRATO_BRL = R$1.100` continua correto como base
+    #: da ESCADA (é o caixa que compra o 1º contrato; o 2º só aparece em
+    #: R$2.933, o 3º em R$5.206) — o que estava errado era usar essa MESMA
+    #: constante como piso de SEGURANÇA. As duas perguntas parecem a mesma e
+    #: não são: uma é "quanto compra 1 contrato", a outra é "quanto aguenta
+    #: o pior rebaixamento".
+    #:
+    #: R$1.100 respondia a segunda pergunta quando foi medido — mas a
+    #: medição (R$989,50 de rebaixamento por operação) rodou com
+    #: `quantidade=1` FIXA, ANTES de a escala pelo caixa virar default
+    #: (commits `4806636`/`ca252a7`, 2026-09-15 21:40). Rodando hoje o robô
+    #: de produção sem nenhuma modificação, na MESMA janela e MESMO capital
+    #: de partida: o caixa cresce com o lucro acumulado dentro do próprio
+    #: IS, ultrapassa R$2.933 no meio da série, e um rebaixamento chega a
+    #: acontecer já com 2 contratos — **R$1.979,00 por operação**, quase o
+    #: dobro do número que sustentava R$1.100. Ver item 6.43 de
+    #: `LICOES_DE_PRODUCAO.md`.
+    #:
+    #: Daí **R$2.100** (R$1.979,00 + R$100 de margem crua, arredondado). No
+    #: OOS a escada nunca escala além de 1 contrato, então lá o rebaixamento
+    #: continua R$373,50 — é o IS, com mais pregões para o caixa crescer,
+    #: quem decide o piso.
+    #:
+    #: A REGRA que fica, e que generaliza além deste robô: **todo piso de
+    #: capital publicado descreve uma VERSÃO do robô com um mecanismo de
+    #: dimensionamento específico.** Mudar o dimensionamento sem remedir o
+    #: piso é a mesma classe de erro que rodar backtest com capital
+    #: arbitrário — só que mais traiçoeira, porque o número antigo continua
+    #: parecendo medido.
     #:
     #: Uma tentativa anterior de escala (2026-09-15, descartada no mesmo dia)
     #: amarrava a quantidade à LARGURA do retângulo em vez do caixa. Ela
@@ -333,7 +367,7 @@ class WinRetangulo(IntradayStrategy):
     #: ou seja, era a mesma estratégia em tamanho maior — e o piso saltava
     #: para R$3.400. Ficou registrada aqui porque o número bonito dela pode
     #: reaparecer numa medição futura e precisa ser reconhecido pelo que era.
-    capital_minimo_recomendado_brl: float | None = PISO_UM_CONTRATO_BRL
+    capital_minimo_recomendado_brl: float | None = 2_100.0
 
     def __init__(
         self,

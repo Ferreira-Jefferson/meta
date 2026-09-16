@@ -213,22 +213,35 @@ def test_limite_de_entrada_sem_prazo_e_recusado_na_construcao():
 
 
 def test_o_piso_de_caixa_declarado_e_o_medido():
-    """R$1.100 = pior rebaixamento POR OPERAÇÃO medido (R$989,50) + margem
-    crua do WIN@ (R$100). Ele é ao mesmo tempo o piso de partida e a BASE da
-    escada de contratos, de propósito: quem começa aqui roda 1 contrato, que é
-    exatamente o desenho que atravessou o OOS.
+    """R$2.100 = pior rebaixamento POR OPERAÇÃO medido com a escala LIGADA
+    (R$1.979,00, no IS) + margem crua do WIN@ (R$100).
 
-    Os números que ele NÃO é, cada um com o motivo:
+    O piso ficou ÓRFÃO em 2026-09-16: R$1.100 vinha de um rebaixamento de
+    R$989,50 medido com `quantidade=1` FIXA, ANTES de `escala_por_caixa`
+    virar default. Rodando o robô de produção sem modificação nenhuma, na
+    mesma janela e mesmo capital de partida, o caixa cresce com o lucro
+    acumulado dentro do próprio IS, ultrapassa R$2.933 (o 2º degrau da
+    escada) no meio da série, e um rebaixamento com 2 contratos custa quase
+    o dobro. Ver item 6.43 de `LICOES_DE_PRODUCAO.md`.
+
+    `PISO_UM_CONTRATO_BRL = R$1.100` continua correto como BASE da escada —
+    é o caixa que compra o 1º contrato — mas deixou de ser o piso de
+    segurança: são perguntas diferentes que só coincidiam enquanto a
+    quantidade era fixa.
+
+    Os números que R$2.100 NÃO é, cada um com o motivo:
 
       R$250   — piso de tabela do instrumento, não diz nada sobre a estratégia
       R$290   — piso exato daquela sequência de operações (a R$275 o robô cala
                 para sempre); sorteio sobre quais operações vieram primeiro
       R$650   — derivado do rebaixamento da SÉRIE DIÁRIA (R$525,60), que o
                 portão de capital não vê: o caixa anda POR OPERAÇÃO
+      R$1.100 — o piso medido ANTES da escala pelo caixa virar default;
+                continua sendo a base da escada, não o piso de segurança
       R$3.400 — piso da escala por LARGURA, desenho descartado no mesmo dia em
                 que foi medido: ele alavancava sem exigir caixa
     """
-    assert WinRetangulo.capital_minimo_recomendado_brl == 1_100.0
+    assert WinRetangulo.capital_minimo_recomendado_brl == 2_100.0
 
 
 def test_a_escala_por_caixa_nasce_ligada():
@@ -273,9 +286,11 @@ def test_expoente_1_e_recusado_na_construcao():
 
 
 def test_no_piso_de_caixa_o_robo_opera_um_contrato_so():
-    """O piso declarado e a base da escada são o MESMO número de propósito:
-    quem começa no piso opera exatamente o desenho congelado, e só escala se a
-    conta crescer de verdade. O 2º contrato só aparece em R$2.933."""
+    """O piso declarado (R$2.100, margem de segurança) e a base da escada
+    (`PISO_UM_CONTRATO_BRL`, R$1.100) são números DIFERENTES desde 2026-09-16
+    — o piso passou a incluir a margem de rebaixamento, a base continua sendo
+    só o que compra o 1º contrato. Quem começa no piso opera 1 contrato de
+    qualquer forma: o 2º só aparece em R$2.933, acima dos dois."""
     robo = WinRetangulo()
     robo.on_capital_update(WinRetangulo.capital_minimo_recomendado_brl)
     assert robo._dimensiona() == 1
