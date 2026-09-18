@@ -1,0 +1,268 @@
+[split] IS  = 2026-02-27 .. 2026-07-06 (88 pregoes)
+[split] OOS = 2026-07-07 .. 2026-09-09 (44 pregoes)
+  [1/264] 2026-02-27 cap=    375  n=   57  pnl=R$   -233.50  caixa_min=R$  141.50  recusas=373
+  [2/264] 2026-02-27 cap=  15000  n=  102  pnl=R$   -521.00  caixa_min=R$14474.50  recusas=0
+  [3/264] 2026-03-02 cap=  15000  n=  174  pnl=R$  -1327.00  caixa_min=R$13628.50  recusas=0
+  [4/264] 2026-03-04 cap=  15000  n=  191  pnl=R$    179.50  caixa_min=R$14898.00  recusas=0
+  [5/264] 2026-03-04 cap=    375  n=  191  pnl=R$    179.50  caixa_min=R$  273.00  recusas=0
+  [6/264] 2026-03-02 cap=    375  n=    4  pnl=R$   -237.00  caixa_min=R$  138.00  recusas=908
+  [7/264] 2026-03-03 cap=  15000  n=  362  pnl=R$   -886.00  caixa_min=R$13987.50  recusas=0
+  [8/264] 2026-03-03 cap=    375  n=  212  pnl=R$   -246.00  caixa_min=R$  129.00  recusas=606
+  [9/264] 2026-03-05 cap=  15000  n=  245  pnl=R$  -1017.50  caixa_min=R$13813.50  recusas=0
+  [10/264] 2026-03-05 cap=    375  n=   47  pnl=R$   -243.50  caixa_min=R$  131.50  recusas=878
+  [11/264] 2026-03-06 cap=  15000  n=  297  pnl=R$  -1868.50  caixa_min=R$13061.00  recusas=0
+  [12/264] 2026-03-06 cap=    375  n=   25  pnl=R$   -262.50  caixa_min=R$  112.50  recusas=1007
+  [13/264] 2026-03-09 cap=  15000  n=  258  pnl=R$    -14.00  caixa_min=R$14569.00  recusas=0
+  [14/264] 2026-03-09 cap=    375  n=   70  pnl=R$   -245.00  caixa_min=R$  126.50  recusas=721
+  [15/264] 2026-03-10 cap=    375  n=   36  pnl=R$   -263.00  caixa_min=R$  112.00  recusas=721
+  [16/264] 2026-03-10 cap=  15000  n=  201  pnl=R$   -125.50  caixa_min=R$14546.00  recusas=0
+  [17/264] 2026-03-11 cap=    375  n=   62  pnl=R$   -266.00  caixa_min=R$  109.00  recusas=459
+  [18/264] 2026-03-11 cap=  15000  n=  141  pnl=R$     24.50  caixa_min=R$14709.00  recusas=0
+  [19/264] 2026-03-12 cap=  15000  n=  236  pnl=R$  -1518.00  caixa_min=R$13109.00  recusas=0
+  [20/264] 2026-03-12 cap=    375  n=   66  pnl=R$   -298.00  caixa_min=R$   77.00  recusas=709
+  [21/264] 2026-03-13 cap=    375  n=   45  pnl=R$   -257.50  caixa_min=R$  117.50  recusas=829
+  [22/264] 2026-03-13 cap=  15000  n=  251  pnl=R$  -1145.50  caixa_min=R$13689.50  recusas=0
+  [23/264] 2026-03-16 cap=    375  n=  154  pnl=R$    278.00  caixa_min=R$  302.50  recusas=0
+  [24/264] 2026-03-16 cap=  15000  n=  154  pnl=R$    278.00  caixa_min=R$14927.50  recusas=0
+  [25/264] 2026-03-17 cap=  15000  n=  134  pnl=R$  -1297.00  caixa_min=R$13688.50  recusas=0
+  [26/264] 2026-03-17 cap=    375  n=   13  pnl=R$   -241.50  caixa_min=R$  130.50  recusas=731
+  [27/264] 2026-03-18 cap=  15000  n=  196  pnl=R$   -368.00  caixa_min=R$14579.50  recusas=0
+  [28/264] 2026-03-18 cap=    375  n=   97  pnl=R$   -248.50  caixa_min=R$  126.50  recusas=509
+  [29/264] 2026-03-20 cap=  15000  n=  225  pnl=R$  -1312.50  caixa_min=R$13631.50  recusas=0
+  [30/264] 2026-03-20 cap=    375  n=    3  pnl=R$   -256.50  caixa_min=R$  118.50  recusas=1013
+  [31/264] 2026-03-19 cap=  15000  n=  342  pnl=R$  -1561.00  caixa_min=R$13241.00  recusas=0
+  [32/264] 2026-03-19 cap=    375  n=   24  pnl=R$   -292.00  caixa_min=R$   83.00  recusas=954
+  [33/264] 2026-03-23 cap=    375  n=    8  pnl=R$   -289.00  caixa_min=R$   86.00  recusas=1005
+  [34/264] 2026-03-23 cap=  15000  n=  302  pnl=R$   -481.00  caixa_min=R$14147.50  recusas=0
+  [35/264] 2026-03-25 cap=  15000  n=  168  pnl=R$  -1024.00  caixa_min=R$13947.00  recusas=0
+  [36/264] 2026-03-25 cap=    375  n=    8  pnl=R$   -294.00  caixa_min=R$   81.00  recusas=781
+  [37/264] 2026-03-24 cap=  15000  n=  258  pnl=R$    -29.00  caixa_min=R$14520.50  recusas=0
+  [38/264] 2026-03-26 cap=  15000  n=  143  pnl=R$   -706.50  caixa_min=R$14048.50  recusas=0
+  [39/264] 2026-03-24 cap=    375  n=    4  pnl=R$   -242.00  caixa_min=R$  133.00  recusas=986
+  [40/264] 2026-03-26 cap=    375  n=    5  pnl=R$   -227.50  caixa_min=R$  147.50  recusas=775
+  [41/264] 2026-03-27 cap=    375  n=   35  pnl=R$   -267.50  caixa_min=R$  107.50  recusas=651
+  [42/264] 2026-03-27 cap=  15000  n=  129  pnl=R$   -664.50  caixa_min=R$14282.00  recusas=0
+  [43/264] 2026-03-30 cap=  15000  n=  155  pnl=R$   -327.50  caixa_min=R$14648.00  recusas=0
+  [44/264] 2026-04-02 cap=  15000  n=  117  pnl=R$    116.50  caixa_min=R$14514.00  recusas=0
+  [45/264] 2026-03-31 cap=    375  n=   76  pnl=R$   -243.00  caixa_min=R$  132.00  recusas=526
+  [46/264] 2026-04-01 cap=    375  n=  128  pnl=R$     96.00  caixa_min=R$  136.50  recusas=0
+  [47/264] 2026-03-30 cap=    375  n=  147  pnl=R$   -293.50  caixa_min=R$   81.50  recusas=36
+  [48/264] 2026-04-01 cap=  15000  n=  128  pnl=R$     96.00  caixa_min=R$14761.50  recusas=0
+  [49/264] 2026-03-31 cap=  15000  n=  182  pnl=R$    369.00  caixa_min=R$14659.50  recusas=0
+  [50/264] 2026-04-02 cap=    375  n=   31  pnl=R$   -245.50  caixa_min=R$  129.50  recusas=462
+  [51/264] 2026-04-07 cap=  15000  n=  117  pnl=R$    121.50  caixa_min=R$14827.50  recusas=0
+  [52/264] 2026-04-06 cap=    375  n=   77  pnl=R$    426.50  caixa_min=R$  355.00  recusas=0
+  [53/264] 2026-04-06 cap=  15000  n=   77  pnl=R$    426.50  caixa_min=R$14980.00  recusas=0
+  [54/264] 2026-04-07 cap=    375  n=  117  pnl=R$    121.50  caixa_min=R$  202.50  recusas=0
+  [55/264] 2026-04-08 cap=  15000  n=  171  pnl=R$    309.50  caixa_min=R$14769.00  recusas=0
+  [56/264] 2026-04-09 cap=    375  n=   90  pnl=R$      5.00  caixa_min=R$  320.00  recusas=0
+  [57/264] 2026-04-08 cap=    375  n=  171  pnl=R$    309.50  caixa_min=R$  144.00  recusas=0
+  [58/264] 2026-04-09 cap=  15000  n=   90  pnl=R$      5.00  caixa_min=R$14945.00  recusas=0
+  [59/264] 2026-04-10 cap=    375  n=  105  pnl=R$    217.50  caixa_min=R$  244.50  recusas=0
+  [60/264] 2026-04-10 cap=  15000  n=  105  pnl=R$    217.50  caixa_min=R$14869.50  recusas=0
+  [61/264] 2026-04-13 cap=    375  n=  136  pnl=R$    162.00  caixa_min=R$  137.00  recusas=0
+  [62/264] 2026-04-14 cap=    375  n=   29  pnl=R$   -274.50  caixa_min=R$  100.50  recusas=343
+  [63/264] 2026-04-14 cap=  15000  n=   57  pnl=R$   -358.50  caixa_min=R$14552.00  recusas=0
+  [64/264] 2026-04-15 cap=    375  n=   55  pnl=R$     77.50  caixa_min=R$  174.50  recusas=0
+  [65/264] 2026-04-13 cap=  15000  n=  136  pnl=R$    162.00  caixa_min=R$14762.00  recusas=0
+  [66/264] 2026-04-15 cap=  15000  n=   55  pnl=R$     77.50  caixa_min=R$14799.50  recusas=0
+  [67/264] 2026-04-16 cap=    375  n=   55  pnl=R$    -47.50  caixa_min=R$  183.50  recusas=0
+  [68/264] 2026-04-20 cap=  15000  n=   63  pnl=R$    233.50  caixa_min=R$14994.50  recusas=0
+  [69/264] 2026-04-20 cap=    375  n=   63  pnl=R$    233.50  caixa_min=R$  369.50  recusas=0
+  [70/264] 2026-04-16 cap=  15000  n=   55  pnl=R$    -47.50  caixa_min=R$14808.50  recusas=0
+  [71/264] 2026-04-22 cap=    375  n=   48  pnl=R$   -279.00  caixa_min=R$   96.00  recusas=182
+  [72/264] 2026-04-17 cap=  15000  n=  100  pnl=R$   -225.00  caixa_min=R$14536.50  recusas=0
+  [73/264] 2026-04-17 cap=    375  n=   20  pnl=R$   -280.00  caixa_min=R$   95.00  recusas=569
+  [74/264] 2026-04-22 cap=  15000  n=   72  pnl=R$   -351.00  caixa_min=R$14596.00  recusas=0
+  [75/264] 2026-04-27 cap=    375  n=   51  pnl=R$    294.50  caixa_min=R$  263.00  recusas=0
+  [76/264] 2026-04-24 cap=  15000  n=  106  pnl=R$      2.00  caixa_min=R$14789.50  recusas=0
+  [77/264] 2026-04-24 cap=    375  n=  106  pnl=R$      2.00  caixa_min=R$  164.50  recusas=0
+  [78/264] 2026-04-23 cap=  15000  n=  151  pnl=R$   -285.50  caixa_min=R$14608.00  recusas=0
+  [79/264] 2026-04-27 cap=  15000  n=   51  pnl=R$    294.50  caixa_min=R$14888.00  recusas=0
+  [80/264] 2026-04-23 cap=    375  n=  124  pnl=R$   -232.00  caixa_min=R$  143.00  recusas=133
+  [81/264] 2026-04-28 cap=    375  n=  108  pnl=R$     46.00  caixa_min=R$  340.00  recusas=0
+  [82/264] 2026-04-28 cap=  15000  n=  108  pnl=R$     46.00  caixa_min=R$14965.00  recusas=0
+  [83/264] 2026-04-29 cap=    375  n=   34  pnl=R$   -227.00  caixa_min=R$  135.50  recusas=214
+  [84/264] 2026-04-29 cap=  15000  n=   70  pnl=R$   -300.00  caixa_min=R$14603.50  recusas=0
+  [85/264] 2026-04-30 cap=  15000  n=   90  pnl=R$   -370.00  caixa_min=R$14545.50  recusas=0
+  [86/264] 2026-04-30 cap=    375  n=    4  pnl=R$   -242.00  caixa_min=R$  133.00  recusas=660
+  [87/264] 2026-05-04 cap=  15000  n=   75  pnl=R$   -162.50  caixa_min=R$14673.00  recusas=0
+  [88/264] 2026-05-04 cap=    375  n=   48  pnl=R$   -264.00  caixa_min=R$  108.50  recusas=202
+  [89/264] 2026-05-05 cap=    375  n=   49  pnl=R$    120.50  caixa_min=R$  355.00  recusas=0
+  [90/264] 2026-05-05 cap=  15000  n=   49  pnl=R$    120.50  caixa_min=R$14980.00  recusas=0
+  [91/264] 2026-05-06 cap=    375  n=    7  pnl=R$   -298.50  caixa_min=R$   76.50  recusas=567
+  [92/264] 2026-05-08 cap=    375  n=   52  pnl=R$    114.00  caixa_min=R$  192.50  recusas=0
+  [93/264] 2026-05-11 cap=    375  n=   45  pnl=R$   -127.50  caixa_min=R$  111.50  recusas=0
+  [94/264] 2026-05-08 cap=  15000  n=   52  pnl=R$    114.00  caixa_min=R$14817.50  recusas=0
+  [95/264] 2026-05-07 cap=  15000  n=   80  pnl=R$   -285.00  caixa_min=R$14690.50  recusas=0
+  [96/264] 2026-05-06 cap=  15000  n=   81  pnl=R$   -235.50  caixa_min=R$14569.00  recusas=0
+  [97/264] 2026-05-07 cap=    375  n=   52  pnl=R$   -231.00  caixa_min=R$  140.50  recusas=199
+  [98/264] 2026-05-11 cap=  15000  n=   45  pnl=R$   -127.50  caixa_min=R$14736.50  recusas=0
+  [99/264] 2026-05-12 cap=    375  n=   55  pnl=R$     22.50  caixa_min=R$  278.00  recusas=0
+  [100/264] 2026-05-12 cap=  15000  n=   55  pnl=R$     22.50  caixa_min=R$14903.00  recusas=0
+  [101/264] 2026-05-14 cap=  15000  n=  136  pnl=R$   -698.00  caixa_min=R$14262.00  recusas=0
+  [102/264] 2026-05-14 cap=    375  n=    7  pnl=R$   -298.50  caixa_min=R$   76.50  recusas=704
+  [103/264] 2026-05-13 cap=  15000  n=  195  pnl=R$  -1262.50  caixa_min=R$13655.00  recusas=0
+  [104/264] 2026-05-13 cap=    375  n=   39  pnl=R$   -274.50  caixa_min=R$   87.50  recusas=497
+  [105/264] 2026-05-15 cap=    375  n=   55  pnl=R$   -267.50  caixa_min=R$  107.50  recusas=530
+  [106/264] 2026-05-15 cap=  15000  n=  159  pnl=R$   -669.50  caixa_min=R$14258.50  recusas=0
+  [107/264] 2026-05-18 cap=    375  n=   99  pnl=R$   -104.50  caixa_min=R$  145.50  recusas=0
+  [108/264] 2026-05-18 cap=  15000  n=   99  pnl=R$   -104.50  caixa_min=R$14770.50  recusas=0
+  [109/264] 2026-05-19 cap=    375  n=   67  pnl=R$   -238.50  caixa_min=R$  136.50  recusas=300
+  [110/264] 2026-05-19 cap=  15000  n=   97  pnl=R$   -323.50  caixa_min=R$14570.50  recusas=0
+  [111/264] 2026-05-20 cap=  15000  n=   98  pnl=R$   -204.00  caixa_min=R$14666.50  recusas=0
+  [112/264] 2026-05-21 cap=  15000  n=   88  pnl=R$   -609.00  caixa_min=R$14274.00  recusas=0
+  [113/264] 2026-05-20 cap=    375  n=   57  pnl=R$   -258.50  caixa_min=R$  116.50  recusas=369
+  [114/264] 2026-05-22 cap=    375  n=  104  pnl=R$    358.00  caixa_min=R$  287.00  recusas=0
+  [115/264] 2026-05-21 cap=    375  n=   21  pnl=R$   -255.50  caixa_min=R$  119.50  recusas=526
+  [116/264] 2026-05-22 cap=  15000  n=  104  pnl=R$    358.00  caixa_min=R$14912.00  recusas=0
+  [117/264] 2026-05-25 cap=  15000  n=   47  pnl=R$   -273.50  caixa_min=R$14662.50  recusas=0
+  [118/264] 2026-05-25 cap=    375  n=   39  pnl=R$   -229.50  caixa_min=R$  145.50  recusas=124
+  [119/264] 2026-05-26 cap=    375  n=   86  pnl=R$    267.00  caixa_min=R$  218.00  recusas=0
+  [120/264] 2026-05-26 cap=  15000  n=   86  pnl=R$    267.00  caixa_min=R$14843.00  recusas=0
+  [121/264] 2026-05-28 cap=    375  n=  102  pnl=R$    -46.00  caixa_min=R$  176.00  recusas=0
+  [122/264] 2026-05-27 cap=  15000  n=  100  pnl=R$   -105.00  caixa_min=R$14644.50  recusas=0
+  [123/264] 2026-05-28 cap=  15000  n=  102  pnl=R$    -46.00  caixa_min=R$14801.00  recusas=0
+  [124/264] 2026-05-27 cap=    375  n=   39  pnl=R$   -234.50  caixa_min=R$  140.50  recusas=451
+  [125/264] 2026-05-29 cap=    375  n=   56  pnl=R$   -263.00  caixa_min=R$  112.00  recusas=269
+  [126/264] 2026-05-29 cap=  15000  n=   89  pnl=R$   -364.50  caixa_min=R$14484.50  recusas=0
+  [127/264] 2026-06-02 cap=    375  n=   90  pnl=R$    275.00  caixa_min=R$  368.50  recusas=0
+  [128/264] 2026-06-01 cap=    375  n=   62  pnl=R$   -251.00  caixa_min=R$  124.00  recusas=253
+  [129/264] 2026-06-01 cap=  15000  n=   86  pnl=R$   -408.00  caixa_min=R$14478.00  recusas=0
+  [130/264] 2026-06-02 cap=  15000  n=   90  pnl=R$    275.00  caixa_min=R$14993.50  recusas=0
+  [131/264] 2026-06-03 cap=  15000  n=  101  pnl=R$   -305.50  caixa_min=R$14653.50  recusas=0
+  [132/264] 2026-06-03 cap=    375  n=   22  pnl=R$   -241.00  caixa_min=R$  134.00  recusas=582
+  [133/264] 2026-06-05 cap=  15000  n=  133  pnl=R$   -346.50  caixa_min=R$14492.00  recusas=0
+  [134/264] 2026-06-05 cap=    375  n=   22  pnl=R$   -226.00  caixa_min=R$  149.00  recusas=741
+  [135/264] 2026-06-09 cap=    375  n=  129  pnl=R$    -24.50  caixa_min=R$  260.50  recusas=0
+  [136/264] 2026-06-09 cap=  15000  n=  129  pnl=R$    -24.50  caixa_min=R$14885.50  recusas=0
+  [137/264] 2026-06-08 cap=  15000  n=  181  pnl=R$   -260.50  caixa_min=R$14455.00  recusas=0
+  [138/264] 2026-06-08 cap=    375  n=   35  pnl=R$   -237.50  caixa_min=R$  124.50  recusas=652
+  [139/264] 2026-06-10 cap=  15000  n=  149  pnl=R$   -634.50  caixa_min=R$14294.00  recusas=0
+  [140/264] 2026-06-10 cap=    375  n=   15  pnl=R$   -292.50  caixa_min=R$   82.50  recusas=669
+  [141/264] 2026-06-12 cap=  15000  n=   92  pnl=R$   -491.00  caixa_min=R$14307.50  recusas=0
+  [142/264] 2026-06-12 cap=    375  n=   21  pnl=R$   -255.50  caixa_min=R$  119.50  recusas=523
+  [143/264] 2026-06-11 cap=    375  n=   31  pnl=R$   -230.50  caixa_min=R$  142.50  recusas=606
+  [144/264] 2026-06-11 cap=  15000  n=  138  pnl=R$    -44.00  caixa_min=R$14721.00  recusas=0
+  [145/264] 2026-06-15 cap=    375  n=   55  pnl=R$   -232.50  caixa_min=R$  142.50  recusas=319
+  [146/264] 2026-06-15 cap=  15000  n=  100  pnl=R$   -345.00  caixa_min=R$14630.50  recusas=0
+  [147/264] 2026-06-16 cap=    375  n=   90  pnl=R$   -285.00  caixa_min=R$   90.00  recusas=99
+  [148/264] 2026-06-16 cap=  15000  n=  101  pnl=R$   -185.50  caixa_min=R$14678.00  recusas=0
+  [149/264] 2026-06-19 cap=    375  n=   33  pnl=R$   -276.50  caixa_min=R$   98.50  recusas=240
+  [150/264] 2026-06-19 cap=  15000  n=   56  pnl=R$   -433.00  caixa_min=R$14518.50  recusas=0
+  [151/264] 2026-06-22 cap=    375  n=   92  pnl=R$    194.00  caixa_min=R$  210.50  recusas=0
+  [152/264] 2026-06-18 cap=    375  n=   49  pnl=R$   -269.50  caixa_min=R$  105.50  recusas=562
+  [153/264] 2026-06-22 cap=  15000  n=   92  pnl=R$    194.00  caixa_min=R$14835.50  recusas=0
+  [154/264] 2026-06-17 cap=    375  n=   33  pnl=R$   -226.50  caixa_min=R$  148.50  recusas=560
+  [155/264] 2026-06-17 cap=  15000  n=  159  pnl=R$  -1384.50  caixa_min=R$13615.50  recusas=0
+  [156/264] 2026-06-18 cap=  15000  n=  130  pnl=R$   -650.00  caixa_min=R$14289.00  recusas=0
+  [157/264] 2026-06-23 cap=    375  n=   65  pnl=R$     67.50  caixa_min=R$  292.00  recusas=0
+  [158/264] 2026-06-23 cap=  15000  n=   65  pnl=R$     67.50  caixa_min=R$14917.00  recusas=0
+  [159/264] 2026-06-26 cap=  15000  n=   87  pnl=R$   -118.50  caixa_min=R$14649.50  recusas=0
+  [160/264] 2026-06-26 cap=    375  n=   15  pnl=R$   -307.50  caixa_min=R$   67.50  recusas=474
+  [161/264] 2026-06-24 cap=  15000  n=   78  pnl=R$   -349.00  caixa_min=R$14612.50  recusas=0
+  [162/264] 2026-06-24 cap=    375  n=   10  pnl=R$   -260.00  caixa_min=R$  115.00  recusas=604
+  [163/264] 2026-06-25 cap=  15000  n=  130  pnl=R$    175.00  caixa_min=R$14684.50  recusas=0
+  [164/264] 2026-06-25 cap=    375  n=   47  pnl=R$   -253.50  caixa_min=R$  121.50  recusas=486
+  [165/264] 2026-06-29 cap=    375  n=   24  pnl=R$   -227.00  caixa_min=R$  135.00  recusas=293
+  [166/264] 2026-06-29 cap=  15000  n=   67  pnl=R$    -78.50  caixa_min=R$14760.00  recusas=0
+  [167/264] 2026-06-30 cap=  15000  n=   91  pnl=R$   -215.50  caixa_min=R$14543.50  recusas=0
+  [168/264] 2026-06-30 cap=    375  n=   33  pnl=R$   -306.50  caixa_min=R$   68.50  recusas=435
+  [169/264] 2026-07-03 cap=    375  n=   15  pnl=R$   -307.50  caixa_min=R$   67.50  recusas=308
+  [170/264] 2026-07-01 cap=  15000  n=   97  pnl=R$   -208.50  caixa_min=R$14590.50  recusas=0
+  [171/264] 2026-07-01 cap=    375  n=   62  pnl=R$   -246.00  caixa_min=R$  129.00  recusas=314
+  [172/264] 2026-07-03 cap=  15000  n=   40  pnl=R$   -385.00  caixa_min=R$14500.50  recusas=0
+  [173/264] 2026-07-02 cap=    375  n=  144  pnl=R$    158.00  caixa_min=R$  203.50  recusas=0
+  [174/264] 2026-07-02 cap=  15000  n=  144  pnl=R$    158.00  caixa_min=R$14828.50  recusas=0
+  [175/264] 2026-07-06 cap=    375  n=   64  pnl=R$   -302.00  caixa_min=R$   73.00  recusas=86
+  [176/264] 2026-07-06 cap=  15000  n=   83  pnl=R$   -191.50  caixa_min=R$14698.00  recusas=0
+  [177/264] 2026-07-07 cap=    375  n=   62  pnl=R$   -301.00  caixa_min=R$   74.00  recusas=1
+  [178/264] 2026-07-07 cap=  15000  n=   63  pnl=R$   -351.50  caixa_min=R$14648.50  recusas=0
+  [179/264] 2026-07-09 cap=  15000  n=   54  pnl=R$   -267.00  caixa_min=R$14718.50  recusas=0
+  [180/264] 2026-07-09 cap=    375  n=   33  pnl=R$   -226.50  caixa_min=R$  148.50  recusas=277
+  [181/264] 2026-07-08 cap=    375  n=   26  pnl=R$   -298.00  caixa_min=R$   77.00  recusas=491
+  [182/264] 2026-07-08 cap=  15000  n=   69  pnl=R$   -374.50  caixa_min=R$14611.00  recusas=0
+  [183/264] 2026-07-10 cap=  15000  n=   74  pnl=R$   -302.00  caixa_min=R$14579.50  recusas=0
+  [184/264] 2026-07-10 cap=    375  n=   35  pnl=R$   -282.50  caixa_min=R$   92.50  recusas=311
+  [185/264] 2026-07-13 cap=    375  n=   68  pnl=R$    -74.00  caixa_min=R$  161.00  recusas=0
+  [186/264] 2026-07-13 cap=  15000  n=   68  pnl=R$    -74.00  caixa_min=R$14786.00  recusas=0
+  [187/264] 2026-07-14 cap=  15000  n=   98  pnl=R$     26.00  caixa_min=R$14755.50  recusas=0
+  [188/264] 2026-07-14 cap=    375  n=   98  pnl=R$     26.00  caixa_min=R$  130.50  recusas=0
+  [189/264] 2026-07-15 cap=    375  n=   72  pnl=R$     54.00  caixa_min=R$  292.50  recusas=0
+  [190/264] 2026-07-15 cap=  15000  n=   72  pnl=R$     54.00  caixa_min=R$14917.50  recusas=0
+  [191/264] 2026-07-16 cap=  15000  n=   57  pnl=R$      6.50  caixa_min=R$14826.50  recusas=0
+  [192/264] 2026-07-16 cap=    375  n=   57  pnl=R$      6.50  caixa_min=R$  201.50  recusas=0
+  [193/264] 2026-07-17 cap=    375  n=   71  pnl=R$    364.50  caixa_min=R$  300.00  recusas=0
+  [194/264] 2026-07-17 cap=  15000  n=   71  pnl=R$    364.50  caixa_min=R$14925.00  recusas=0
+  [195/264] 2026-07-21 cap=    375  n=   46  pnl=R$    137.00  caixa_min=R$  272.50  recusas=0
+  [196/264] 2026-07-21 cap=  15000  n=   46  pnl=R$    137.00  caixa_min=R$14897.50  recusas=0
+  [197/264] 2026-07-20 cap=    375  n=   44  pnl=R$   -152.00  caixa_min=R$  116.50  recusas=0
+  [198/264] 2026-07-20 cap=  15000  n=   44  pnl=R$   -152.00  caixa_min=R$14741.50  recusas=0
+  [199/264] 2026-07-22 cap=  15000  n=   44  pnl=R$      8.00  caixa_min=R$14818.00  recusas=0
+  [200/264] 2026-07-22 cap=    375  n=   44  pnl=R$      8.00  caixa_min=R$  193.00  recusas=0
+  [201/264] 2026-07-23 cap=    375  n=   73  pnl=R$    113.50  caixa_min=R$  324.50  recusas=0
+  [202/264] 2026-07-23 cap=  15000  n=   73  pnl=R$    113.50  caixa_min=R$14949.50  recusas=0
+  [203/264] 2026-07-24 cap=  15000  n=   54  pnl=R$   -322.00  caixa_min=R$14648.50  recusas=0
+  [204/264] 2026-07-27 cap=    375  n=   50  pnl=R$    130.00  caixa_min=R$  302.00  recusas=0
+  [205/264] 2026-07-24 cap=    375  n=   50  pnl=R$   -235.00  caixa_min=R$  140.00  recusas=79
+  [206/264] 2026-07-27 cap=  15000  n=   50  pnl=R$    130.00  caixa_min=R$14927.00  recusas=0
+  [207/264] 2026-07-31 cap=    375  n=    1  pnl=R$    -20.50  caixa_min=R$  340.00  recusas=0
+  [208/264] 2026-07-31 cap=  15000  n=    1  pnl=R$    -20.50  caixa_min=R$14965.00  recusas=0
+  [209/264] 2026-07-28 cap=    375  n=   54  pnl=R$    278.00  caixa_min=R$  360.00  recusas=0
+  [210/264] 2026-07-28 cap=  15000  n=   54  pnl=R$    278.00  caixa_min=R$14985.00  recusas=0
+  [211/264] 2026-08-05 cap=    375  n=   36  pnl=R$   -268.00  caixa_min=R$  107.00  recusas=309
+  [212/264] 2026-07-30 cap=  15000  n=   50  pnl=R$   -400.00  caixa_min=R$14599.50  recusas=0
+  [213/264] 2026-08-06 cap=    375  n=   54  pnl=R$     88.00  caixa_min=R$  297.00  recusas=0
+  [214/264] 2026-07-29 cap=    375  n=  136  pnl=R$    -33.00  caixa_min=R$  255.00  recusas=0
+  [215/264] 2026-08-05 cap=  15000  n=   81  pnl=R$    -25.50  caixa_min=R$14686.50  recusas=0
+  [216/264] 2026-08-06 cap=  15000  n=   54  pnl=R$     88.00  caixa_min=R$14922.00  recusas=0
+  [217/264] 2026-07-30 cap=    375  n=   37  pnl=R$   -273.50  caixa_min=R$  101.50  recusas=205
+  [218/264] 2026-07-29 cap=  15000  n=  136  pnl=R$    -33.00  caixa_min=R$14880.00  recusas=0
+  [219/264] 2026-08-10 cap=    375  n=   30  pnl=R$   -255.00  caixa_min=R$  120.00  recusas=110
+  [220/264] 2026-08-07 cap=    375  n=   69  pnl=R$    320.50  caixa_min=R$  282.50  recusas=0
+  [221/264] 2026-08-07 cap=  15000  n=   69  pnl=R$    320.50  caixa_min=R$14907.50  recusas=0
+  [222/264] 2026-08-10 cap=  15000  n=   37  pnl=R$   -338.50  caixa_min=R$14647.00  recusas=0
+  [223/264] 2026-08-11 cap=    375  n=   56  pnl=R$   -288.00  caixa_min=R$   87.00  recusas=195
+  [224/264] 2026-08-11 cap=  15000  n=   83  pnl=R$   -461.50  caixa_min=R$14506.50  recusas=0
+  [225/264] 2026-08-13 cap=  15000  n=   59  pnl=R$    -14.50  caixa_min=R$14869.50  recusas=0
+  [226/264] 2026-08-12 cap=    375  n=    5  pnl=R$   -237.50  caixa_min=R$  137.50  recusas=545
+  [227/264] 2026-08-12 cap=  15000  n=   75  pnl=R$   -752.50  caixa_min=R$14206.00  recusas=0
+  [228/264] 2026-08-13 cap=    375  n=   59  pnl=R$    -14.50  caixa_min=R$  244.50  recusas=0
+  [229/264] 2026-08-17 cap=    375  n=   92  pnl=R$    289.00  caixa_min=R$  214.50  recusas=0
+  [230/264] 2026-08-18 cap=  15000  n=   59  pnl=R$   -144.50  caixa_min=R$14753.00  recusas=0
+  [231/264] 2026-08-17 cap=  15000  n=   92  pnl=R$    289.00  caixa_min=R$14839.50  recusas=0
+  [232/264] 2026-08-18 cap=    375  n=   59  pnl=R$   -144.50  caixa_min=R$  128.00  recusas=0
+  [233/264] 2026-08-14 cap=    375  n=   14  pnl=R$   -227.00  caixa_min=R$  148.00  recusas=665
+  [234/264] 2026-08-19 cap=    375  n=   51  pnl=R$   -310.50  caixa_min=R$   64.50  recusas=330
+  [235/264] 2026-08-14 cap=  15000  n=  101  pnl=R$   -535.50  caixa_min=R$14361.00  recusas=0
+  [236/264] 2026-08-24 cap=    375  n=   56  pnl=R$    -43.00  caixa_min=R$  167.00  recusas=0
+  [237/264] 2026-08-19 cap=  15000  n=   73  pnl=R$   -521.50  caixa_min=R$14454.00  recusas=0
+  [238/264] 2026-08-20 cap=  15000  n=   67  pnl=R$    181.50  caixa_min=R$15000.00  recusas=0
+  [239/264] 2026-08-21 cap=  15000  n=   68  pnl=R$   -269.00  caixa_min=R$14499.50  recusas=0
+  [240/264] 2026-08-21 cap=    375  n=   11  pnl=R$   -270.50  caixa_min=R$  104.50  recusas=475
+  [241/264] 2026-08-20 cap=    375  n=   67  pnl=R$    181.50  caixa_min=R$  375.00  recusas=0
+  [242/264] 2026-08-24 cap=  15000  n=   56  pnl=R$    -43.00  caixa_min=R$14792.00  recusas=0
+  [243/264] 2026-08-25 cap=    375  n=   28  pnl=R$   -284.00  caixa_min=R$   91.00  recusas=138
+  [244/264] 2026-08-31 cap=    375  n=    4  pnl=R$   -237.00  caixa_min=R$  138.00  recusas=25
+  [245/264] 2026-08-31 cap=  15000  n=   18  pnl=R$   -299.00  caixa_min=R$14638.00  recusas=0
+  [246/264] 2026-08-25 cap=  15000  n=   46  pnl=R$   -268.00  caixa_min=R$14706.50  recusas=0
+  [247/264] 2026-08-26 cap=  15000  n=   37  pnl=R$   -233.50  caixa_min=R$14699.00  recusas=0
+  [248/264] 2026-08-26 cap=    375  n=   17  pnl=R$   -298.50  caixa_min=R$   76.50  recusas=300
+  [249/264] 2026-08-27 cap=    375  n=   55  pnl=R$     22.50  caixa_min=R$  220.00  recusas=0
+  [250/264] 2026-08-27 cap=  15000  n=   55  pnl=R$     22.50  caixa_min=R$14845.00  recusas=0
+  [251/264] 2026-08-28 cap=    375  n=   23  pnl=R$   -246.50  caixa_min=R$  128.50  recusas=510
+  [252/264] 2026-08-28 cap=  15000  n=   97  pnl=R$   -598.50  caixa_min=R$14392.00  recusas=0
+  [253/264] 2026-09-01 cap=    375  n=   95  pnl=R$    197.50  caixa_min=R$  232.50  recusas=0
+  [254/264] 2026-09-01 cap=  15000  n=   95  pnl=R$    197.50  caixa_min=R$14857.50  recusas=0
+  [255/264] 2026-09-02 cap=  15000  n=  116  pnl=R$   -123.00  caixa_min=R$14623.50  recusas=0
+  [256/264] 2026-09-02 cap=    375  n=   31  pnl=R$   -230.50  caixa_min=R$  144.50  recusas=489
+  [257/264] 2026-09-03 cap=    375  n=   28  pnl=R$   -259.00  caixa_min=R$  116.00  recusas=437
+  [258/264] 2026-09-03 cap=  15000  n=   81  pnl=R$   -280.50  caixa_min=R$14597.00  recusas=0
+  [259/264] 2026-09-04 cap=  15000  n=   71  pnl=R$   -500.50  caixa_min=R$14337.50  recusas=0
+  [260/264] 2026-09-04 cap=    375  n=    4  pnl=R$   -247.00  caixa_min=R$  128.00  recusas=476
+  [261/264] 2026-09-08 cap=    375  n=   41  pnl=R$   -225.50  caixa_min=R$   93.50  recusas=385
+  [262/264] 2026-09-08 cap=  15000  n=   72  pnl=R$   -531.00  caixa_min=R$14417.50  recusas=0
+  [263/264] 2026-09-09 cap=    375  n=   27  pnl=R$   -288.50  caixa_min=R$   86.50  recusas=388
+  [264/264] 2026-09-09 cap=  15000  n=   57  pnl=R$   -623.50  caixa_min=R$14353.50  recusas=0
+
+[ok] 21465 operacoes gravadas em C:\Users\Jeffe\Documents\study\meta\scratch\wdof1_duracao_operacoes_2026_09_15.csv (17.5 min)

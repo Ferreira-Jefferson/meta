@@ -1,0 +1,51 @@
+﻿[camada2] toxicidade calibrada em 2026-08-28 (congelada): corte=0.7193, p90 tamanho=43.0
+[camada2] capital real de partida: R$375.00 | FATOR_HA=0.75 | K_HC=0.5
+
+[2026-09-09] gatilhos=14554 ajustesHA= 1 ajustesHC= 2 | BASE  2op win  0.0% liq R$  -166.00 caixaMin R$ 209.00 | HA  2op win  0.0% liq R$  -166.00 caixaMin R$ 209.00 | HC  2op win  0.0% liq R$  -166.00 caixaMin R$ 209.00
+[2026-09-08] gatilhos=13955 ajustesHA= 3 ajustesHC= 2 | BASE  1op win100.0% liq R$    74.50 caixaMin R$ 375.00 | HA  1op win100.0% liq R$    74.50 caixaMin R$ 375.00 | HC  1op win100.0% liq R$    74.50 caixaMin R$ 375.00
+[2026-08-28] gatilhos=11594 ajustesHA= 1 ajustesHC= 1 | BASE  1op win100.0% liq R$   149.50 caixaMin R$ 375.00 | HA  1op win100.0% liq R$   109.50 caixaMin R$ 375.00 | HC  1op win100.0% liq R$    84.50 caixaMin R$ 375.00
+[2026-09-11] gatilhos=15198 ajustesHA= 1 ajustesHC= 2 | BASE  2op win  0.0% liq R$  -311.00 caixaMin R$  64.00 | HA  2op win  0.0% liq R$  -311.00 caixaMin R$  64.00 | HC  2op win  0.0% liq R$  -311.00 caixaMin R$  64.00
+[2026-09-10] gatilhos=14194 ajustesHA= 1 ajustesHC= 3 | BASE  2op win 50.0% liq R$    44.00 caixaMin R$ 375.00 | HA  2op win 50.0% liq R$    44.00 caixaMin R$ 375.00 | HC  2op win 50.0% liq R$    24.00 caixaMin R$ 375.00
+
+====================================================================================================
+QUAIS TRADES O ALVO REALMENTE MUDOU -- casado por (data, entrada_brt)
+====================================================================================================
+
+HA: 4/8 trades com alvo diferente do BASE
+  2026-09-09 09:53:15 BRT | alvo BASE=44t (pnl R$-15.50, target) -> alvo HA=33t (pnl R$-15.50, target)
+  2026-09-08 10:08:46 BRT | alvo BASE=45t (pnl R$+74.50, target) -> alvo HA=34t (pnl R$+74.50, target)
+  2026-08-28 09:50:45 BRT | alvo BASE=30t (pnl R$+149.50, target) -> alvo HA=22t (pnl R$+109.50, target)
+  2026-09-11 09:37:49 BRT | alvo BASE=45t (pnl R$-155.50, stop) -> alvo HA=34t (pnl R$-155.50, stop)
+
+HC: 8/8 trades com alvo diferente do BASE
+  2026-09-09 09:16:24 BRT | alvo BASE=44t (pnl R$-150.50, stop) -> alvo HC=26t (pnl R$-150.50, stop)
+  2026-09-09 09:53:15 BRT | alvo BASE=44t (pnl R$-15.50, target) -> alvo HC=27t (pnl R$-15.50, target)
+  2026-09-08 10:08:46 BRT | alvo BASE=45t (pnl R$+74.50, target) -> alvo HC=30t (pnl R$+74.50, target)
+  2026-08-28 09:50:45 BRT | alvo BASE=30t (pnl R$+149.50, target) -> alvo HC=17t (pnl R$+84.50, target)
+  2026-09-11 09:30:29 BRT | alvo BASE=45t (pnl R$-155.50, stop) -> alvo HC=31t (pnl R$-155.50, stop)
+  2026-09-11 09:37:49 BRT | alvo BASE=45t (pnl R$-155.50, stop) -> alvo HC=24t (pnl R$-155.50, stop)
+  2026-09-10 09:21:21 BRT | alvo BASE=30t (pnl R$+149.50, target) -> alvo HC=26t (pnl R$+129.50, target)
+  2026-09-10 11:35:04 BRT | alvo BASE=30t (pnl R$-105.50, stop) -> alvo HC=17t (pnl R$-105.50, stop)
+
+====================================================================================================
+CALIBRACAO (08-28, autoajustado -- NAO conta como prova)
+====================================================================================================
+  BASE:   1 trades | liquido R$    149.50 | win 100.0% | R$/op  149.50
+  HA:   1 trades | liquido R$    109.50 | win 100.0% | R$/op  109.50
+  HC:   1 trades | liquido R$     84.50 | win 100.0% | R$/op   84.50
+
+====================================================================================================
+CONFIRMACAO (09-08..09-11, corte congelado)
+====================================================================================================
+  BASE:   7 trades | liquido R$   -358.50 | win  28.6% | R$/op  -51.21
+  HA:   7 trades | liquido R$   -358.50 | win  28.6% | R$/op  -51.21
+  HC:   7 trades | liquido R$   -378.50 | win  28.6% | R$/op  -54.07
+
+====================================================================================================
+AGREGADO (5 pregoes)
+====================================================================================================
+  BASE:   8 trades | liquido R$   -209.00 | win  37.5% | R$/op  -26.12
+  HA:   8 trades | liquido R$   -249.00 | win  37.5% | R$/op  -31.12
+  HC:   8 trades | liquido R$   -294.00 | win  37.5% | R$/op  -36.75
+
+[camada2] arquivos em C:\Users\Jeffe\Documents\study\meta\scratch\wdo_orb_toxicidade_geometria_camada2_2026_09_16

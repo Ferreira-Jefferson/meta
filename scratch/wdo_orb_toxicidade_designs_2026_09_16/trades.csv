@@ -1,0 +1,14 @@
+celula,data,entrada_utc,entrada_brt,tipo,side,pnl_brl,exit_reason,caixa_antes
+BASE,2026-09-09,12:16:24.366000,09:16:24,rompimento,short,-150.5,stop,375.0
+BASE,2026-09-09,12:53:15.684000,09:53:15,fade,short,-15.5,target,224.5
+A,2026-09-09,12:16:24.366000,09:16:24,rompimento,short,-150.5,stop,375.0
+BASE,2026-09-08,13:08:46.468000,10:08:46,rompimento,short,74.5,target,375.0
+BASE,2026-08-28,12:50:45.290000,09:50:45,rompimento,long,149.5,target,375.0
+BASE,2026-09-11,12:30:29.679000,09:30:29,rompimento,long,-155.5,stop,375.0
+BASE,2026-09-11,12:37:49.339000,09:37:49,fade,long,-155.5,stop,219.5
+A,2026-09-11,12:30:29.679000,09:30:29,rompimento,long,-155.5,stop,375.0
+A,2026-09-11,14:44:09.042000,11:44:09,fade,long,14.5,target,219.5
+BASE,2026-09-10,12:21:21.445000,09:21:21,rompimento,long,149.5,target,375.0
+BASE,2026-09-10,14:35:04.436000,11:35:04,fade,long,-105.5,stop,524.5
+A,2026-09-10,12:50:54.935000,09:50:54,rompimento,long,149.5,target,375.0
+A,2026-09-10,14:35:04.436000,11:35:04,fade,long,-105.5,stop,524.5

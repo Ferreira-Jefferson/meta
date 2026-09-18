@@ -1,0 +1,65 @@
+==================================================================================================================================
+WDO@ -- `wdo_retangulo` NATIVO: calibracao do piso de largura (IS) + passada IS/OOS
+==================================================================================================================================
+IS  : 72 pregoes (2026-02-27 a 2026-06-12)
+OOS : 51 pregoes (2026-06-15 a 2026-08-25)
+capital real R$ 375 | fila REAL de fidelidade.py | desenho de execucao FECHADO (EnterLimit, alvo fatiado sem prazo)
+
+----------------------------------------------------------------------------------------------------------------------------------
+1) CALIBRACAO -- distribuicao de largura no WDO IS, por janela W (antes de QUALQUER filtro)
+----------------------------------------------------------------------------------------------------------------------------------
+  W     retangulos  pregoes com  mediana pts mediana tk   q33 pts  q67 pts (piso)  q67 ticks
+  ------------------------------------------------------------------------------------------
+  20           467        72/72          4,7        9,4       3,7             6,3       12,6
+  30           343        72/72          5,7       11,4       4,3             7,3       14,6
+
+  piso ESTRUTURAL (formula de pedagio x4, ver wdo_retangulo.LARGURA_MINIMA_TICKS): 4,4 ticks (2,20 pontos)
+  piso EMPIRICO adotado no candidato = q67 (terco SUPERIOR) do PROPRIO W, no IS --
+  mesmo metodo do win_retangulo (328,0 pontos no W20 do WIN); numero aqui e' proprio do WDO.
+
+  ok OOS  2 W20 sem piso empirico          liquido=     -244,13  trades=   63  win=  34,9%  sem_trade= 43/51
+  ok OOS  4 W20 SEM FILA (so' contexto)    liquido=     -258,19  trades=   24  win=  29,2%  sem_trade= 41/51
+  ok OOS  3 W30 (ref, piso tercil)         liquido=     -243,97  trades=   29  win=  34,5%  sem_trade= 36/51
+  ok OOS  1 CANDIDATO W20 (piso tercil)    liquido=     -258,19  trades=   24  win=  29,2%  sem_trade= 41/51
+  ok IS   2 W20 sem piso empirico          liquido=     -268,33  trades=   14  win=  21,4%  sem_trade= 69/72
+  ok IS   4 W20 SEM FILA (so' contexto)    liquido=     -246,33  trades=   10  win=  20,0%  sem_trade= 69/72
+  ok IS   3 W30 (ref, piso tercil)         liquido=     -293,50  trades=    7  win=  14,3%  sem_trade= 69/72
+  ok IS   1 CANDIDATO W20 (piso tercil)    liquido=     -246,33  trades=   10  win=  20,0%  sem_trade= 69/72
+
+
+==================================================================================================================================
+WDO@ wdo_retangulo -- IS (72 pregoes), capital R$ 375
+==================================================================================================================================
+variante                        retorno   liquido R$  MaxDD %    MaxDD R$ lucro/DD   win% trades     R$/dia trd/dia  capital final pregoes        BEemp%     IC95 win%      veredito        sem_tr          seq-
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+1 CANDIDATO W20 (piso tercil)    -65,7%      -246,33   -70,0%      300,47    -0,82  20,0%     10      -3,42     0,1         128,67      72         37,4%    [5,7;51,0]    indefinido         69/72             2  desliz.alvo 1,0t fila 329/494
+2 W20 sem piso empirico          -71,6%      -268,33   -76,7%      350,43    -0,77  21,4%     14      -3,73     0,2         106,67      72         37,9%    [7,6;47,6]    indefinido         69/72             3  desliz.alvo 1,0t fila 329/494
+3 W30 (ref, piso tercil)         -78,3%      -293,50   -82,1%      373,49    -0,79  14,3%      7      -4,08     0,1          81,50      72         48,1%    [2,6;51,3]    indefinido         69/72             2  desliz.alvo 1,0t fila 329/494
+4 W20 SEM FILA (so' contexto)    -65,7%      -246,33   -70,0%      300,47    -0,82  20,0%     10      -3,42     0,1         128,67      72         37,4%    [5,7;51,0]    indefinido         69/72             2  fila 0/0
+
+
+==================================================================================================================================
+WDO@ wdo_retangulo -- OOS (51 pregoes), capital R$ 375
+==================================================================================================================================
+variante                        retorno   liquido R$  MaxDD %    MaxDD R$ lucro/DD   win% trades     R$/dia trd/dia  capital final pregoes        BEemp%     IC95 win%      veredito        sem_tr          seq-
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+1 CANDIDATO W20 (piso tercil)    -68,9%      -258,19   -78,4%      422,98    -0,61  29,2%     24      -5,06     0,5         116,81      51         38,5%   [14,9;49,2]    indefinido         41/51             4  desliz.alvo 1,0t fila 329/494
+2 W20 sem piso empirico          -65,1%      -244,13   -67,8%      275,64    -0,89  34,9%     63      -4,79     1,2         130,87      51         40,9%   [24,3;47,2]    indefinido         43/51             3  desliz.alvo 1,0t fila 329/494
+3 W30 (ref, piso tercil)         -65,1%      -243,97   -70,2%      308,81    -0,79  34,5%     29      -4,78     0,6         131,03      51         41,6%   [19,9;52,7]    indefinido         36/51             3  desliz.alvo 1,0t fila 329/494
+4 W20 SEM FILA (so' contexto)    -68,9%      -258,19   -78,4%      422,98    -0,61  29,2%     24      -5,06     0,5         116,81      51         38,5%   [14,9;49,2]    indefinido         41/51             4  fila 0/0
+
+
+==================================================================================================================================
+IS x OOS -- replica ou inverte?
+==================================================================================================================================
+  variante                               liq IS      liq OOS   win IS  win OOS   BE IS  BE OOS       sinal
+  --------------------------------------------------------------------------------------------------------
+  1 CANDIDATO W20 (piso tercil)         -246,33      -258,19    20,0%    29,2%   37,4%   38,5%   replica -
+  2 W20 sem piso empirico               -268,33      -244,13    21,4%    34,9%   37,9%   40,9%   replica -
+  3 W30 (ref, piso tercil)              -293,50      -243,97    14,3%    34,5%   48,1%   41,6%   replica -
+  4 W20 SEM FILA (so' contexto)         -246,33      -258,19    20,0%    29,2%   37,4%   38,5%   replica -
+
+  veredito = IC95 do win% contra o breakeven EMPIRICO: POSITIVO so' se o intervalo INTEIRO fica acima do breakeven.
+  'sem_tr' = pregoes sem NENHUM trade -- uma linha com sem_tr alto e' CENSURADA: o liquido mede o portao que parou o robo, nao a estrategia (item 6.15 de LICOES_DE_PRODUCAO.md).
+
+FIM.
