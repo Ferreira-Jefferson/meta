@@ -1994,6 +1994,110 @@ def test_sem_barra_nova_apenas_espera(tmp_path, pregao_aberto):
     assert any(p.action == "daytrade_espera" for p in passos)
 
 
+# ---------- piso de relogio de parede (2026-09-15) --------------------------
+#
+# INCIDENTE REAL, 2026-09-14: `copa_win` em sombra (conta 545) parou de
+# receber barra as 10:31 BRT com 1 WIN@ SHORT aberto a 186.200 -- o corte das
+# 18:20 nunca teve barra NENHUMA para disparar o flatten normal (bloco (2) de
+# `IntradaySessionMachine.on_closed_bar`, so' dispara quando uma barra CHEGA
+# com horario >= o corte). O ledger da sombra ficou "aberto" o pregao
+# inteiro, R$138,50 otimista contra o backtest do mesmo dia (que fecha no
+# achatamento a 187.390). Estes testes reproduzem a FORMA do incidente: o
+# feed entrega a barra que abre a posicao e depois NUNCA MAIS entrega barra
+# nenhuma -- exatamente o caso que `if not barras:` sozinho nao resolvia.
+
+def test_piso_de_relogio_achata_quando_feed_morre_sem_barra_apos_o_corte(tmp_path, pregao_aberto):
+    barras = [
+        _bar("13:00", 10.00, 10.00, 10.00, 10.00),  # abertura: arma o grid
+        _bar("13:01", 10.00, 10.00, 9.79, 9.85),    # toca o nivel long (9.80) -> abre posicao
+    ]
+    rt, _feed = _runtime(tmp_path, barras)
+
+    rt.run_once(now=_agora("13:02:00"))
+    assert rt.machine.positions, "a entrada precisa ter preenchido antes do feed 'morrer'"
+    assert rt.machine.flattened is False
+
+    # O roteiro de barras acaba aqui -- toda consulta seguinte ao feed
+    # devolve lista vazia, como um terminal MT5 travado. `now` esta bem
+    # depois do corte de flatten (`session_end_policy="b3_equities"`, 21/08
+    # sob horario de verao dos EUA -> 19:54 UTC).
+    passos = rt.run_once(now=_agora("20:30:00"))
+
+    nomes = [p.action for p in passos]
+    assert "daytrade_piso_relogio" in nomes, f"esperava o piso disparar; passos={nomes}"
+    assert rt.machine.flattened is True
+    assert not rt.machine.positions, "a posicao tinha de ser fechada pelo piso, sem barra nenhuma"
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        eventos = [e["message"] for e in store.recent_events(conn, acc.id, limit=50)]
+    assert any("PISO DE RELOGIO" in m for m in eventos), eventos
+    assert any("PISO RELOGIO" in m for m in eventos), (
+        "a linha de fechamento do trade tem de marcar o motivo (exit_detail), "
+        "senao o ledger fica indistinguivel de um flatten normal"
+    )
+    # Nenhuma ordem foi mandada para a corretora (sombra) -- so' journalizada.
+    assert isinstance(rt.broker, _ExplodingBroker)
+
+
+def test_piso_de_relogio_nao_dispara_duas_vezes(tmp_path, pregao_aberto):
+    """Idempotente: uma vez achatado, passos seguintes (mesmo bem depois do
+    corte, mesmo sem barra nenhuma) nao repetem o evento nem tentam fechar
+    uma posicao que ja nao existe."""
+    barras = [
+        _bar("13:00", 10.00, 10.00, 10.00, 10.00),
+        _bar("13:01", 10.00, 10.00, 9.79, 9.85),
+    ]
+    rt, _feed = _runtime(tmp_path, barras)
+    rt.run_once(now=_agora("13:02:00"))
+    assert rt.machine.positions
+
+    primeiro = rt.run_once(now=_agora("20:30:00"))
+    assert "daytrade_piso_relogio" in [p.action for p in primeiro]
+
+    segundo = rt.run_once(now=_agora("20:35:00"))
+    assert "daytrade_piso_relogio" not in [p.action for p in segundo], (
+        "o piso ja disparou nesta sessao -- nao pode disparar de novo"
+    )
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        eventos = [e["message"] for e in store.recent_events(conn, acc.id, limit=50)]
+    assert sum("PISO DE RELOGIO" in m for m in eventos) == 1
+
+
+def test_piso_de_relogio_nao_dispara_se_bloco_por_barra_ja_achatou(tmp_path, pregao_aberto):
+    """O caminho SAUDAVEL (barra de verdade cruzando o corte) continua sendo
+    quem achata primeiro -- o piso so' e' a rede de seguranca. Roteiro com
+    uma barra depois do corte: o flatten normal (bloco (2)) resolve, e o
+    piso nunca tem nada a fazer.
+
+    `_ScriptedBarFeed.closed_bars_since` devolve TODO o roteiro ainda nao
+    entregue de uma vez, sem olhar `now` -- entao a entrada e a barra que
+    cruza o corte chegam na MESMA chamada de `run_once`, exatamente como um
+    feed real que ficou momentaneamente atras e entrega tudo de uma vez
+    quando volta."""
+    barras = [
+        _bar("13:00", 10.00, 10.00, 10.00, 10.00),
+        _bar("13:01", 10.00, 10.00, 9.79, 9.85),   # abre posicao
+        _bar("19:55", 9.85, 9.85, 9.85, 9.85),     # depois do corte (19:54 UTC)
+    ]
+    rt, _feed = _runtime(tmp_path, barras)
+
+    passos = rt.run_once(now=_agora("19:56:00"))
+
+    assert rt.machine.flattened is True
+    assert not rt.machine.positions
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        eventos = [e["message"] for e in store.recent_events(conn, acc.id, limit=50)]
+    assert not any("PISO DE RELOGIO" in m for m in eventos), (
+        "o flatten normal por barra ja resolveu -- o piso nao tinha nada a fazer"
+    )
+    assert "daytrade_piso_relogio" not in [p.action for p in passos]
+
+
 def test_status_reporta_fuso_corte_e_ordem_em_pe(tmp_path, pregao_aberto):
     """Um offset de servidor errado nao produz erro nenhum — produz o robo
     rodando a fase errada em silencio. O painel tem de mostrar o fuso em uso, o
@@ -2196,7 +2300,41 @@ def test_caixa_abaixo_do_minimo_do_dia_nao_opera(tmp_path, pregao_aberto):
     """Regra do dono (2026-08-24): depois de iniciado, o piso do dia e' so' o
     custo do lote NO PRECO DE HOJE (o 2x fica so' na barreira de entrada, ver
     `live_control.start`). Com `default_quantity=1` a R$10,00, o minimo e'
-    R$10,00 -- R$5,00 em caixa nao pode operar."""
+    R$10,00 -- R$5,00 em caixa nao pode operar.
+
+    So' vale para `execution_mode="live"` (pedido do dono, 2026-09-17, ver
+    `_check_capital`): o piso protege dinheiro REAL de uma ordem que a
+    corretora recusaria, e em sombra nao ha ordem nenhuma. `_runtime()`
+    default e' sombra, entao este teste passa `execution_mode="live"`
+    explicito -- a contraprova de sombra e' `test_sombra_opera_mesmo_com_
+    caixa_abaixo_do_minimo_do_dia` logo abaixo.
+
+    Chama `_check_capital` DIRETO, nao `run_once`: em `execution_mode="live"`
+    o warm start (`_start_session`) manda a ordem-limite pra corretora ANTES
+    deste gate ser consultado (mesmo motivo documentado em
+    `test_gate_de_caixa_em_sombra_le_cash_sombra_nao_cash`), e o dublê de
+    corretora deste arquivo (`_ExplodingBroker`) existe para explodir se
+    isso acontecer aqui."""
+    rt, _feed = _runtime(tmp_path, [_bar("13:00", 10.00, 10.00, 10.00, 10.00)],
+                        execution_mode="live")
+    _set_cash(rt, 5.00)
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        alarme = rt._check_capital(conn, acc, SESSION, preco=10.00)
+
+    assert alarme is not None, "deveria recusar por caixa"
+    assert "nao cobre o minimo" in alarme
+
+
+def test_sombra_opera_mesmo_com_caixa_abaixo_do_minimo_do_dia(tmp_path, pregao_aberto):
+    """Contraprova do teste acima, e o proprio pedido do dono (2026-09-17):
+    um robo de SIMULACAO (`execution_mode="shadow"`, o default de
+    `_runtime()`) nunca manda ordem pra corretora, entao o piso de caixa nao
+    protege dinheiro nenhum ali -- so' um robo REAL pode ser recusado por
+    falta de caixa. Mesmo roteiro do teste de cima, so' que em sombra e com
+    `run_once` de verdade: o robo continua operando com R$5,00 de caixa
+    contra um piso nominal de R$10,00."""
     barras = [
         _bar("13:00", 10.00, 10.00, 10.00, 10.00),
         _bar("13:01", 10.00, 10.00, 9.79, 9.85),
@@ -2206,12 +2344,9 @@ def test_caixa_abaixo_do_minimo_do_dia_nao_opera(tmp_path, pregao_aberto):
 
     passos = rt.run_once(now=_agora("13:02:30"))
 
-    skip = [p for p in passos if p.action == "daytrade_skip"]
-    assert skip, f"deveria recusar por caixa; passos={[p.action for p in passos]}"
-    assert skip[0].detail["motivo"] == "caixa abaixo do minimo"
-    # e nao operou de verdade: nenhuma posicao, nenhum trade
-    assert rt.machine.position is None
-    assert rt._snapshot.trades == 0
+    assert not any(p.action == "daytrade_skip" for p in passos), (
+        f"sombra nao pode ser recusada por caixa; passos={[p.action for p in passos]}"
+    )
 
 
 def test_caixa_suficiente_opera_normalmente(tmp_path, pregao_aberto):
@@ -2280,18 +2415,20 @@ def test_gate_de_caixa_em_live_le_cash_nao_cash_sombra(tmp_path, pregao_aberto):
 def test_minimo_do_dia_sai_do_preco_e_da_quantidade_reais(tmp_path, pregao_aberto):
     """O piso nao e' um numero fixo em lugar nenhum: sai de `preco_de_hoje x
     quantidade_do_robo`. Um papel que dobrou de preco exige o dobro de caixa
-    no mesmo robo."""
-    barras = [
-        _bar("13:00", 40.00, 40.00, 40.00, 40.00),  # semente (warm start)
-        _bar("13:01", 40.00, 40.00, 39.90, 40.00),  # a consumida: e o close DELA que vale
-    ]
-    rt, _feed = _runtime(tmp_path, barras)
+    no mesmo robo.
+
+    So' vale para execucao real -- ver a docstring de
+    `test_caixa_abaixo_do_minimo_do_dia_nao_opera` para o porque de
+    `execution_mode="live"` e `_check_capital` direto em vez de `run_once`."""
+    rt, _feed = _runtime(tmp_path, [_bar("13:00", 40.00, 40.00, 40.00, 40.00)],
+                        execution_mode="live")
     _set_cash(rt, 10.00)
 
-    rt.run_once(now=_agora("13:02:30"))
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        rt._check_capital(conn, acc, SESSION, preco=40.00)
 
     # 1 acao (default_quantity do harness) a R$40,00 -> piso R$40.
-    # O preco vem do close da ULTIMA barra fechada -- o mais recente que existe.
     assert rt._capital_minimo_hoje == pytest.approx(40.0)
     assert "40.00" in rt._capital_alarm
 
@@ -2299,21 +2436,21 @@ def test_minimo_do_dia_sai_do_preco_e_da_quantidade_reais(tmp_path, pregao_abert
 def test_caixa_e_conferido_uma_vez_por_pregao_nao_a_cada_barra(tmp_path, pregao_aberto):
     """O numero so muda de pregao para pregao. Reavaliar a cada barra
     encheria `live_events` com o mesmo alarme centenas de vezes por dia e
-    enterraria os eventos que exigem acao."""
-    barras = [
-        _bar("13:00", 10.00, 10.00, 10.00, 10.00),
-        _bar("13:01", 10.00, 10.00, 9.79, 9.85),
-        _bar("13:02", 9.85, 9.90, 9.80, 9.88),
-    ]
-    rt, feed = _runtime(tmp_path, barras)
-    _set_cash(rt, 5.00)
+    enterraria os eventos que exigem acao.
 
-    rt.run_once(now=_agora("13:02:30"))
-    rt.run_once(now=_agora("13:03:30"))
-    rt.run_once(now=_agora("13:04:30"))
+    So' vale para execucao real -- ver a docstring de
+    `test_caixa_abaixo_do_minimo_do_dia_nao_opera` para o porque de
+    `execution_mode="live"` e `_check_capital` direto (3x, simulando 3
+    passos do mesmo pregao) em vez de `run_once`."""
+    rt, _feed = _runtime(tmp_path, [_bar("13:00", 10.00, 10.00, 10.00, 10.00)],
+                        execution_mode="live")
+    _set_cash(rt, 5.00)
 
     with store.live_journal(rt.db_path) as conn:
         acc = store.load_account(conn, SLOT.id)
+        rt._check_capital(conn, acc, SESSION, preco=10.00)
+        rt._check_capital(conn, acc, SESSION, preco=10.00)
+        rt._check_capital(conn, acc, SESSION, preco=10.00)
         eventos = store.recent_events(conn, acc.id, limit=50)
     alarmes = [e for e in eventos if "nao cobre o minimo" in str(e)]
     assert len(alarmes) == 1, f"alarme de caixa repetido {len(alarmes)}x no diario"
@@ -2347,13 +2484,15 @@ def test_sem_caixa_mas_com_posicao_aberta_ainda_roda_para_poder_fechar(tmp_path,
 
 
 def test_status_mostra_o_minimo_do_dia_e_o_alarme(tmp_path, pregao_aberto):
-    barras = [
-        _bar("13:00", 10.00, 10.00, 10.00, 10.00),  # semente
-        _bar("13:01", 10.00, 10.00, 9.95, 10.00),
-    ]
-    rt, _feed = _runtime(tmp_path, barras)
+    """So' vale para execucao real -- ver a docstring de
+    `test_caixa_abaixo_do_minimo_do_dia_nao_opera` para o porque de
+    `execution_mode="live"` e `_check_capital` direto em vez de `run_once`."""
+    rt, _feed = _runtime(tmp_path, [_bar("13:00", 10.00, 10.00, 10.00, 10.00)],
+                        execution_mode="live")
     _set_cash(rt, 5.00)
-    rt.run_once(now=_agora("13:02:30"))
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        rt._check_capital(conn, acc, SESSION, preco=10.00)
 
     dt = rt.status()["daytrade"]
 
@@ -5885,17 +6024,22 @@ def test_impedimento_por_caixa_diz_quanto_falta_e_de_onde_vem_o_minimo(
     R$3,00 era preciso abrir o log do processo.
 
     O texto e' de TELA (decimal BR) e tem de carregar as tres coisas que
-    respondem "e agora?": quanto falta, de onde sai o minimo, e quanto ha."""
-    barras = [
-        _bar("13:00", 10.00, 10.00, 10.00, 10.00),
-        _bar("13:01", 10.00, 10.00, 9.79, 9.85),
-    ]
-    rt, _feed = _runtime(tmp_path, barras)
+    respondem "e agora?": quanto falta, de onde sai o minimo, e quanto ha.
+
+    So' vale para execucao real -- ver a docstring de
+    `test_caixa_abaixo_do_minimo_do_dia_nao_opera` para o porque de
+    `execution_mode="live"` e `_check_capital`/`_gravar_impedimento` diretos
+    (o par que `run_once` chamaria em sequencia) em vez de `run_once`."""
+    rt, _feed = _runtime(tmp_path, [_bar("13:00", 10.00, 10.00, 10.00, 10.00)],
+                        execution_mode="live")
     _set_cash(rt, 7.50)
 
-    rt.run_once(now=_agora("13:02:30"))
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        # O gate cobra o preco da ULTIMA barra fechada (9,85), nao o da primeira.
+        rt._check_capital(conn, acc, SESSION, preco=9.85)
+        rt._gravar_impedimento(conn, acc, rt._capital_impedimento, SESSION)
 
-    # O gate cobra o preco da ULTIMA barra fechada (9,85), nao o da primeira.
     impedimento = rt.status()["daytrade"]["impedimento"]
     assert impedimento is not None
     assert "faltam R$ 2,35" in impedimento, impedimento
@@ -5909,20 +6053,25 @@ def test_impedimento_por_caixa_some_quando_o_dono_completa_o_caixa(
 ):
     """O piso do dia nao e' sentenca: reposto o caixa, o robo volta no MESMO
     pregao (mesma regra ja provada para o AutoTrading em
-    `test_pregao_recusado_grava_impedimento_e_o_painel_o_enxerga`)."""
-    barras = [
-        _bar("13:00", 10.00, 10.00, 10.00, 10.00),
-        _bar("13:01", 10.00, 10.00, 9.79, 9.85),
-    ]
-    rt, feed = _runtime(tmp_path, barras)
+    `test_pregao_recusado_grava_impedimento_e_o_painel_o_enxerga`).
+
+    So' vale para execucao real -- mesmo motivo (e mesma tecnica de chamada
+    direta) do teste par acima."""
+    rt, _feed = _runtime(tmp_path, [_bar("13:00", 10.00, 10.00, 10.00, 10.00)],
+                        execution_mode="live")
     _set_cash(rt, 7.50)
-    rt.run_once(now=_agora("13:02:30"))
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        rt._check_capital(conn, acc, SESSION, preco=9.85)
+        rt._gravar_impedimento(conn, acc, rt._capital_impedimento, SESSION)
     assert rt.status()["daytrade"]["impedimento"] is not None
 
     _set_cash(rt, 500.00)
     rt._capital_checked_for = None  # novo pregao/reavaliacao: releia o caixa
-    feed._barras.append(_bar("13:02", 9.85, 9.90, 9.85, 9.88))
-    rt.run_once(now=_agora("13:03:00"))
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        rt._check_capital(conn, acc, SESSION, preco=9.85)
+        rt._gravar_impedimento(conn, acc, rt._capital_impedimento, SESSION)
 
     assert rt.status()["daytrade"]["impedimento"] is None
 

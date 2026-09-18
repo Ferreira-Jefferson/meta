@@ -1137,7 +1137,15 @@ def start(config: ProcessConfig) -> dict:
     — `Slot.min_cash_brl` pro swing, `capital_minimo_brl` do robô ESCOLHIDO
     pro day trade. Isto é checado AQUI, e não só no template, porque o botão
     desabilitado não cobre um POST repetido, um fragmento HTMX velho, nem a
-    linha de comando."""
+    linha de comando.
+
+    **Só para `execution_mode="live"` (pedido do dono, 2026-09-17).** O piso
+    protege dinheiro REAL de uma ordem que a corretora recusaria — em modo
+    sombra não há ordem nenhuma pra recusar, é um robô de teste medindo
+    contra o dado real, e pode subir com qualquer caixa (inclusive zero).
+    Day trade em sombra pula o gate inteiro; swing nunca honra `execution_
+    mode` (sempre "live", ver `dashboard.app.operacao_iniciar`), então
+    continua com o piso de sempre."""
     from core.config import slot_by_id
 
     slot = slot_by_id(config.slot)
@@ -1193,38 +1201,43 @@ def start(config: ProcessConfig) -> dict:
 
         create_account(config)
 
-        piso = min_cash_for(slot, config.strategy)
         # Swing NUNCA honra `execution_mode` (não tem conceito de sombra --
         # ver `dashboard.app.operacao_iniciar`, que já força "live" para ele
         # antes de chegar aqui) -- mas `start()` é chamado direto pela CLI e
         # pelos testes também, então não pode CONFIAR que `config.execution_
         # mode` já veio corrigido; refaz a mesma regra aqui.
         modo_do_gate = config.execution_mode if slot.is_intraday else "live"
-        caixa = available_cash(config.slot, modo_do_gate)
-        # Soma o capital JA' comprometido numa posicao aberta deste slot
-        # (2026-08-24, mesmo dia da correcao que passou a debitar o custo da
-        # entrada do caixa -- ver `live.intraday_runtime._on_opened`): sem
-        # isto, reiniciar o processo para so' continuar vigiando uma posicao
-        # que ja existe (restart no meio do pregao, deploy, etc.) ficava
-        # bloqueado pelo piso, porque o caixa LIVRE caiu abaixo dele assim
-        # que a entrada comecou a ser debitada -- mas o CAIXA + A POSICAO
-        # continuam valendo o mesmo de antes.
-        if slot.is_intraday:
-            from journal import live_store
-            with live_store.live_journal() as conn:
-                conta = live_store.load_account(conn, config.slot)
-            comprometido = capital_em_posicao(conta)
-        else:
-            comprometido = 0.0
-        if caixa is None or (caixa + comprometido) < piso:
-            rotulo_saldo = "sombra" if modo_do_gate == "shadow" else "real"
-            raise RuntimeError(
-                f"caixa {rotulo_saldo} do slot '{slot.label}' é R$ "
-                f"{0.0 if caixa is None else caixa:.2f}"
-                f"{f' (+ R$ {comprometido:.2f} ja em posicao aberta)' if comprometido else ''}"
-                f", abaixo do mínimo de R$ {piso:.2f} para operar — informe o "
-                "caixa destinado a este robô no painel antes de iniciar."
-            )
+        # Piso de caixa SÓ para execução real (pedido do dono, 2026-09-17):
+        # em sombra não há ordem nenhuma que a corretora possa recusar por
+        # falta de caixa, então o gate não protege dinheiro nenhum -- só
+        # impediria um teste deliberadamente pequeno de subir. Ver a
+        # docstring da função.
+        if modo_do_gate == "live":
+            piso = min_cash_for(slot, config.strategy)
+            caixa = available_cash(config.slot, modo_do_gate)
+            # Soma o capital JA' comprometido numa posicao aberta deste slot
+            # (2026-08-24, mesmo dia da correcao que passou a debitar o custo
+            # da entrada do caixa -- ver `live.intraday_runtime._on_opened`):
+            # sem isto, reiniciar o processo para so' continuar vigiando uma
+            # posicao que ja existe (restart no meio do pregao, deploy, etc.)
+            # ficava bloqueado pelo piso, porque o caixa LIVRE caiu abaixo
+            # dele assim que a entrada comecou a ser debitada -- mas o CAIXA
+            # + A POSICAO continuam valendo o mesmo de antes.
+            if slot.is_intraday:
+                from journal import live_store
+                with live_store.live_journal() as conn:
+                    conta = live_store.load_account(conn, config.slot)
+                comprometido = capital_em_posicao(conta)
+            else:
+                comprometido = 0.0
+            if caixa is None or (caixa + comprometido) < piso:
+                raise RuntimeError(
+                    f"caixa real do slot '{slot.label}' é R$ "
+                    f"{0.0 if caixa is None else caixa:.2f}"
+                    f"{f' (+ R$ {comprometido:.2f} ja em posicao aberta)' if comprometido else ''}"
+                    f", abaixo do mínimo de R$ {piso:.2f} para operar — informe o "
+                    "caixa destinado a este robô no painel antes de iniciar."
+                )
 
         argv = [
             sys.executable, str(_SCRIPT),

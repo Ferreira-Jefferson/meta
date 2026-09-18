@@ -1094,6 +1094,97 @@ class IntradayLiveRuntime:
                       f"{self._falhas_de_leitura_seguidas} passo(s) de falha")
             self._falhas_de_leitura_seguidas = 0
 
+    def _aplicar_piso_de_relogio(self, conn, account: AccountState, session: date,
+                                 now: datetime) -> Optional[StepReport]:
+        """PISO DE RELOGIO DE PAREDE (2026-09-15) -- achata a sessao mesmo
+        que NENHUMA barra tenha chegado depois do corte de flatten.
+
+        POR QUE ISTO EXISTE. Ate aqui a UNICA protecao contra posicao
+        overnight era o bloco (2) de `IntradaySessionMachine.on_closed_bar`,
+        que so' dispara quando uma BARRA chega com horario >= o corte. Um
+        feed que para de entregar barra apaga esse unico caminho -- medido
+        de verdade em 2026-09-14: `copa_win` em sombra (conta 545) parou de
+        receber barra as 10:31 BRT com 1 WIN@ SHORT aberto; o corte das
+        18:20 nunca teve barra para disparar, e o ledger da sombra ficou
+        R$138,50 OTIMISTA (posicao que o backtest do mesmo dia fecha a
+        187.390 continuou "aberta" ate o dia seguinte). Em 2026-09-15 a
+        ULTIMA barra normal do dia (feed saudavel) chegou 32 minutos ANTES
+        do corte -- nao ha piso hoje nem no caso saudavel.
+
+        Chamado em TODO passo de `run_once`, com ou sem barra nova -- e' o
+        ponto inteiro: amarrar isto a `barras` nao-vazio reproduziria
+        exatamente o buraco que motivou a tarefa (o feed que morreu nunca
+        entrega a barra que faria o gatilho por barra disparar).
+
+        A DECISAO (se deve achatar agora, com que preco) mora inteira em
+        `IntradaySessionMachine.force_flatten_by_wall_clock` -- `live/` nao
+        decide nada (AGENTS.md), so' fornece o relogio (`now`, tz-aware
+        UTC) e aplica os eventos que a maquina devolver, exatamente como
+        `_consume`/`_handle_gap` ja fazem para os outros gatilhos. Devolve
+        `None` quando a maquina nao achou motivo para achatar (cedo demais,
+        sessao ja achatada, ou sessao nem comecou) -- o caminho comum, a
+        cada passo, no pregao inteiro."""
+        now_ts = pd.Timestamp(now)
+        if now_ts.tzinfo is None:
+            now_ts = now_ts.tz_localize("UTC")
+        try:
+            eventos = self.machine.force_flatten_by_wall_clock(now_ts)
+        except BrokerExecutionError as erro:
+            # MEDIO 7, mesma defesa em profundidade que `_handle_gap` aplica
+            # ao MESMO `force_flatten` (`IntradaySessionMachine.
+            # force_flatten` -- ver a docstring dela): journaliza AGORA
+            # qualquer evento que ja tenha sido confirmado de verdade na
+            # corretora antes da excecao, para uma excecao DEPOIS nao apagar
+            # um fechamento que ja moveu dinheiro real. `bar` e' so'
+            # repassado adiante (nao usado por `_on_closed`), entao um
+            # preco de referencia 0.0 aqui e' inofensivo.
+            self._aplica_eventos_parciais_antes_de_falhar(
+                conn, account, erro, Bar(ts=now_ts, open=0.0, high=0.0, low=0.0, close=0.0, volume=0.0))
+            # So' `FECHAMENTO_RECUSADO`/`AGUARDANDO_PROTECAO` sao esperados
+            # (a corretora ainda nao confirmou, ou recusou e o robo tenta de
+            # novo no proximo passo); qualquer outro `kind` e' divergencia
+            # de dado e precisa propagar (mesmo tratamento que `_handle_gap`/
+            # `_tenta_zerar_por_freio_duro` dao a `force_flatten`).
+            if erro.kind not in self._KINDS_QUE_REAVALIAM:
+                raise
+            self._registra_espera_ou_falha(conn, account, session, erro)
+            return None
+        if not eventos:
+            return None
+        # So' chega aqui na PRIMEIRA vez que o piso dispara nesta sessao
+        # (`force_flatten_by_wall_clock` e' idempotente por `self.flattened`
+        # -- ver a docstring dela): o log abaixo e' exatamente 1 linha por
+        # pregao, nunca 1 por passo.
+        corte = self.machine.session_end_time_for(now_ts)
+        corte_dt = datetime.combine(now_ts.date(), corte, tzinfo=timezone.utc)
+        minutos_apos_corte = round((now_ts.to_pydatetime() - corte_dt).total_seconds() / 60.0, 1)
+        feed_vivo = not bool(getattr(self.bar_feed, "falha_de_leitura", None))
+        preco_ref = next(
+            (evento.trade.exit_price for evento in eventos if isinstance(evento, PositionClosed)),
+            0.0,
+        )
+        bar_sintetica = Bar(ts=now_ts, open=preco_ref, high=preco_ref, low=preco_ref,
+                            close=preco_ref, volume=0.0)
+        for evento in eventos:
+            self._apply(conn, account, evento, bar_sintetica)
+        # CHECKPOINT (MEDIO 7, mesmo motivo de `_handle_gap`/`_consume`):
+        # torna duravel AGORA o que acabou de se mover de verdade na
+        # corretora, antes de qualquer coisa depois deste ponto poder
+        # levantar e o rollback apagar o que ja e' fato consumado.
+        self._checkpoint(conn, account)
+        self._drena_orfas_de_saida(conn, account, now_ts)
+        self._log(conn, account.id, "error",
+                  f"PISO DE RELOGIO DE PAREDE: achatou {self.strategy.symbol} "
+                  f"{minutos_apos_corte:.1f} min apos o corte SEM nenhuma barra ter "
+                  f"chegado (feed {'vivo' if feed_vivo else 'MORTO'}) -- preco de "
+                  f"referencia = ultimo close conhecido",
+                  {"sessao": session.isoformat(), "minutos_apos_corte": minutos_apos_corte,
+                   "feed_vivo": feed_vivo, "eventos": len(eventos),
+                   "preco_referencia": preco_ref})
+        return StepReport("daytrade_piso_relogio", session,
+                          detail={"minutos_apos_corte": minutos_apos_corte,
+                                  "feed_vivo": feed_vivo})
+
     def _log(self, conn, account_id, level: str, message: str, payload: Optional[dict] = None) -> None:
         store.log_event(conn, account_id, level, "daytrade", message, payload)
         self.notifier.notify(level, "daytrade", message, payload)
@@ -1974,6 +2065,18 @@ class IntradayLiveRuntime:
             barras = self.bar_feed.closed_bars_since(self._snapshot.last_bar_ts)
             self._vigia_leitura_do_feed(conn, account)
             if not barras:
+                # PISO DE RELOGIO DE PAREDE (2026-09-15): sem barra nenhuma
+                # este passo, o caminho por BARRA (`on_closed_bar`, bloco
+                # (2)) nao tem como disparar -- e' exatamente o buraco que
+                # deixou uma posicao real aberta o pregao inteiro em
+                # 2026-09-14 (feed morreu as 10:31 BRT, corte das 18:20
+                # nunca teve barra para achatar). Chamado AQUI, e nao so'
+                # depois de `_consume`, porque este ramo pode NUNCA mais
+                # sair dele pelo resto do pregao. Ver a docstring de
+                # `_aplicar_piso_de_relogio`.
+                passo_piso = self._aplicar_piso_de_relogio(conn, account, hoje, now)
+                if passo_piso is not None:
+                    passos.append(passo_piso)
                 self._persist(conn, account)
                 return passos + [StepReport("daytrade_espera", hoje, phase=fase,
                                             detail={"ultima_barra": str(self._snapshot.last_bar_ts)})]
@@ -2015,6 +2118,18 @@ class IntradayLiveRuntime:
                 passos.append(self._handle_gap(conn, account, hoje, barras, parado_ha))
             else:
                 passos.append(self._consume(conn, account, hoje, barras, now))
+
+            # PISO DE RELOGIO DE PAREDE, de novo -- backup para o caso mais
+            # raro em que ESTA barras chegou (feed vivo), mas nenhuma delas
+            # tem `ts` >= o corte, e o relogio de parede JA passou dele
+            # (feed atrasado em relacao ao relogio real, sem atraso grande o
+            # bastante para contar como buraco de `_handle_gap`). No caso
+            # comum (feed em dia) `self.machine.flattened` ja esta' `True`
+            # aqui -- ver a idempotencia na docstring de
+            # `force_flatten_by_wall_clock` -- e esta chamada e' NO-OP.
+            passo_piso = self._aplicar_piso_de_relogio(conn, account, hoje, now)
+            if passo_piso is not None:
+                passos.append(passo_piso)
 
             self._persist(conn, account)
         return passos
@@ -2167,7 +2282,22 @@ class IntradayLiveRuntime:
         TODO pregao, todo dia, sem exceção. O piso dia-a-dia usa 1x a margem
         (nao `MARGIN_BUFFER_FUTUROS`, que so' se aplica na ENTRADA -- ver
         `dashboard.robot_view.capital_minimo_para` -- mesma relaxacao 2x
-        entrada / 1x dia-a-dia que ja existe para acao)."""
+        entrada / 1x dia-a-dia que ja existe para acao).
+
+        SOMBRA NUNCA E' BLOQUEADA POR CAIXA (pedido do dono, 2026-09-17): o
+        piso de caixa protege dinheiro REAL de uma ordem que a corretora
+        recusaria -- em sombra nao ha ordem nenhuma, e' so' um robo de teste
+        medindo contra o dado real. Aplicar o mesmo piso ali nao evita
+        nenhum prejuizo, so' impede o dono de rodar um teste com um caixa
+        pequeno de proposito. `execution_mode="live"` continua com a regra
+        inteira."""
+        if self.execution_mode == "shadow":
+            self._capital_checked_for = session
+            self._capital_minimo_hoje = None
+            self._capital_alarm = None
+            self._capital_impedimento = None
+            return None
+
         if self._capital_checked_for == session:
             return self._capital_alarm
 
@@ -4920,6 +5050,16 @@ class IntradayLiveRuntime:
         # antes ficava enterrado num parentese no fim da linha.
         motivo = self._MOTIVO_SAIDA_TXT.get(trade.exit_reason.value,
                                             trade.exit_reason.value.upper())
+        # `exit_detail="wall_clock_floor"` (2026-09-15, ver `IntradaySessionMachine.
+        # force_flatten_by_wall_clock`) marca um FLATTEN sem barra nenhuma
+        # depois do corte -- preco de execucao em sombra e' uma APROXIMACAO
+        # (ultimo close conhecido), nao o fechamento real da barra. Sem isto
+        # distinguido AQUI, na linha que fica no ledger para sempre, so' a
+        # linha avulsa de `_aplicar_piso_de_relogio` (que nao entra na
+        # tabela de trades) contaria a diferenca -- e o proximo agente que
+        # ler o extrato veria "FLATTEN" igual a qualquer outro dia.
+        if trade.exit_detail == "wall_clock_floor":
+            motivo = f"{motivo} (PISO RELOGIO)"
         # TEMPO DE VIDA e DESLIZE CONTRA O NIVEL PEDIDO -- as duas medidas
         # que faltavam no diario em 2026-09-08 e sem as quais 10 round-trips
         # de menos de 1s e 8 alvos deslizados passaram como "target" normal.
@@ -4966,6 +5106,7 @@ class IntradayLiveRuntime:
                   f"@ {trade.exit_price:.4f} - R$ {evento.pnl_brl:+.2f}",
                   {"numero_ordem": numero, "side": trade.side,
                    "exit_reason": trade.exit_reason.value,
+                   "exit_detail": trade.exit_detail,
                    "pnl_brl": round(evento.pnl_brl, 4), "entry_price": trade.entry_price,
                    "exit_price": trade.exit_price, "execution_mode": self.execution_mode,
                    "assinado_saida": assinado_saida,

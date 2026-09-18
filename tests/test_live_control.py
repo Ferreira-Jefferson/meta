@@ -565,7 +565,12 @@ def test_min_cash_for_daytrade_sem_preco_local_cai_no_piso_generico(monkeypatch)
 def test_start_daytrade_recusa_caixa_abaixo_do_piso_do_robo(isolated, monkeypatch):
     """O ponto central do pedido, de ponta a ponta pelo `start()`: caixa que
     cobriria o piso genérico de R$50 mas não cobre o piso REAL do robô
-    escolhido tem de ser recusado."""
+    escolhido tem de ser recusado.
+
+    `execution_mode="live"` explícito (pedido do dono, 2026-09-17): o piso
+    de caixa só existe para proteger dinheiro real — em sombra (o default de
+    `_cfg()`) o gate inteiro é pulado, ver `test_start_daytrade_em_sombra_
+    ignora_o_piso_de_caixa` logo abaixo."""
     _seed_cash(isolated["db"], DAYTRADE, 100.0)
     monkeypatch.setattr(live_control, "min_cash_for", lambda slot, robot_key=None: 200.0)
     called = []
@@ -575,9 +580,24 @@ def test_start_daytrade_recusa_caixa_abaixo_do_piso_do_robo(isolated, monkeypatc
     )
 
     with pytest.raises(RuntimeError, match="abaixo do mínimo de R\\$ 200"):
-        live_control.start(_cfg(slot=DAYTRADE, strategy="gremah"))
+        live_control.start(_cfg(slot=DAYTRADE, strategy="gremah", execution_mode="live"))
 
     assert called == []
+
+
+def test_start_daytrade_em_sombra_ignora_o_piso_de_caixa(isolated, monkeypatch):
+    """Contraprova, e o pedido do dono em si (2026-09-17): um robô de
+    SIMULAÇÃO (`execution_mode="shadow"`, o default de `_cfg()`) nunca manda
+    ordem pra corretora, então o piso de caixa não protege dinheiro nenhum
+    ali — ele pode subir com qualquer caixa, mesmo abaixo do piso do
+    instrumento/robô. Só `execution_mode="live"` continua recusado (ver o
+    teste par acima)."""
+    _seed_cash(isolated["db"], DAYTRADE, 1.0)
+    monkeypatch.setattr(live_control, "min_cash_for", lambda slot, robot_key=None: 200.0)
+    monkeypatch.setattr(live_control.subprocess, "Popen",
+                        _fake_popen(poll_value=None, captured_argv=[]))
+
+    assert live_control.start(_cfg(slot=DAYTRADE, strategy="gremah"))["pid"] == 99999
 
 
 def test_available_cash_sem_conta_devolve_none(isolated):

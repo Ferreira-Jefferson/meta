@@ -228,6 +228,75 @@ from strategy.daytrade.lab.win_retangulo import WinRetangulo
 # nao substitui `wdo_orb` (TOP-1) nem `wdo_grid_reload_maker` (TOP-2), so'
 # existe para o painel/slot de sombra poderem instancia-la pelo catalogo em
 # vez de importar a classe direto.
+# 2026-09-15, CORRECAO DE ROTULO (o bloco de 2026-09-13 logo abaixo fica
+# como esta', historico -- mas NAO pode mais ser lido sem isto).
+#
+# O QUE ESTA ERRADO LA EMBAIXO, em uma frase: "o unico robo deste catalogo
+# com VEREDITO" e' FALSO. O IC95% [57,0 ; 65,0] contra breakeven 53,01% foi
+# calculado sobre exatamente o mesmo dado que escolheu `alvo_vol`/`entrada_
+# ttl_barras` -- ~1.400 simulacoes sobre os 191 pregoes, e o proprio bloco
+# abaixo ja' declara que o OOS do WIN@ (>=2026-06-13) "JA FOI GASTO varias
+# vezes". Um intervalo de confianca sobre o dado que escolheu o parametro
+# nao e' veredito; e' a descricao do ajuste. **Dado genuinamente cego para
+# esta configuracao: 3 pregoes** (11, 14 e 15/09 -- ela entrou em producao
+# em 11/09), e os tres somam -R$1.069,00 a 1 contrato.
+#
+# O QUE FOI MEDIDO PARA CHEGAR AQUI (2026-09-15, grade de 16 celulas
+# `alvo_vol` {6,65 7,60 8,55 9,50} x `entrada_ttl_barras` {3 5 8 15}, 1
+# contrato fixo, R$3.000 -- 1 contrato porque e' o que o robo de fato opera
+# nesse capital, medido: nunca escala):
+#
+#   1. A ORDENACAO POR IS NAO TRANSFERE. Correlacao de postos IS x OOS
+#      **rho = -0,250** em 16 celulas -- ordenar celula pelo IS e' pior que
+#      sortear para prever o OOS. A producao e' 2a de 16 no IS e **13a de 16
+#      no OOS**. O eixo do prazo e' PENHASCO (ttl3 rende 1/3 do ttl5); o eixo
+#      do alvo e' plato. O comentario de 2026-09-11 ja' dizia que o eixo do
+#      prazo era ruidoso -- e o numero foi escolhido nele assim mesmo.
+#
+#   2. MAS O EDGE NAO E' ARTEFATO DE TER VISTO O DADO. Walk-forward honesto
+#      (escolhe a celula so' pelo PASSADO, colhe os pregoes seguintes; 60 de
+#      aquecimento, 134 colhidos): **+R$10.632,70, R$79,35/pregao**. Isso e'
+#      MAIS do que a producao fixa entrega na mesma janela (+R$8.890,10,
+#      R$66,34/pregao). E as 16 celulas dao positivo -- a PIOR escolha
+#      possivel ainda faz +R$7.016,50 em 134 pregoes. Nao existe escolha ruim
+#      o bastante para virar o sinal: a superficie e' quase plana, e e' por
+#      isso que a selecao importa pouco.
+#
+#   3. A REJEICAO DO `ttl8` (bloco de 2026-09-11) FOI CONFIRMADA, e nao era
+#      ruido. A 1 contrato o ttl8 domina; COMPOSTO a R$3.000, que e' como o
+#      robo vive se ganhar, ele cobra a diferenca na CAUDA -- medido de novo
+#      aqui, 194 pregoes:
+#
+#        metrica            ttl5 (producao)   ttl8
+#        liquido R$              16.578,70    19.772,00
+#        MaxDD %                    -30,1%       -51,0%
+#        MaxDD R$                 3.318,50     7.552,00
+#        pior pregao R$          -1.907,00    -3.120,00
+#        caixa minimo             2.371,30     1.658,50
+#
+#      +R$3.193,30 de liquido por 21 pontos percentuais de rebaixamento e um
+#      pior pregao 64% maior. Sob o criterio DECLARADO do dono ("ganhadora
+#      mesmo que pouco, mas constante") o ttl5 vence, e vence por medida, nao
+#      por sorte. **Por isso a configuracao NAO muda.**
+#
+# ENTAO O QUE ESTE ROBO E', dito sem manchete: a melhor medicao viva do
+# catalogo, com edge que sobrevive a walk-forward, config escolhida por um
+# criterio de cauda que se sustenta -- e **sem nenhum teste cego**. Ele NAO
+# tem veredito. Ele tem 3 pregoes de dado virgem e 10 meses de dado reusado.
+#
+# E O LIMITE QUE NENHUM TESTE DESTA BASE ALCANCA: walk-forward tira o
+# look-ahead da escolha de PARAMETRO, nao o da escolha de DESENHO. A familia
+# inteira (rompimento com reteste, alvo por volatilidade, stop 12xvol, defesa,
+# corte por persistencia) foi concebida olhando para estes mesmos 194
+# pregoes. Dado cego para a FAMILIA: zero. So' pregao adiante resolve.
+#
+# A POSICAO NO PODIO FICA. Nao por merito de manchete -- por comparacao: e'
+# o unico robo deste catalogo com walk-forward, contra `wdo_orb` (veredito
+# INDEFINIDO declarado, IC atravessa o breakeven) e `wdo_grid_reload_maker`
+# (familia REFUTADA em 2026-09-10 pela fila real). Rebaixa-lo para baixo de
+# robo com evidencia MAIS fraca tornaria o podio menos verdadeiro, nao mais.
+# O que estava errado era o rotulo, e o rotulo esta corrigido aqui.
+#
 # 2026-09-13, ORDEM DO DONO: `copa_win` sobe a TOP-1, empurrando `wdo_orb`
 # para TOP-2 e `wdo_grid_reload_maker` para TOP-3.
 #

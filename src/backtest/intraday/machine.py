@@ -824,6 +824,17 @@ class IntradaySessionMachine:
         # nao aguenta mais uma entrada" (sobre RISCO DE RUINA) -- perguntas
         # diferentes, cada uma com sua propria resposta esperada.
         self.ordens_recusadas_por_capital = 0
+        # Ultimo `close`/`ts` de barra VISTA nesta sessao (2026-09-15) --
+        # unica fonte de preco para `force_flatten_by_wall_clock`, que
+        # achata sem ter barra nenhuma para tirar um preco dela. Atualizado
+        # em `on_closed_bar` para toda barra aceita (nao descartada por
+        # `is_previous_session_bar`); zerado em `_reset_session` so' junto
+        # de `clear_resting=True` (sessao NOVA de verdade) -- uma sessao
+        # RETOMADA precisa preservar o que `restore()` acabou de repor do
+        # snapshot persistido, pelo MESMO motivo que preserva `resting_
+        # limit`/`_queue_ahead_remaining` nesse caminho.
+        self._last_bar_close: float | None = None
+        self._last_bar_ts: pd.Timestamp | None = None
 
     # ---------- ciclo de vida da sessao ----------------------------------
 
@@ -945,6 +956,8 @@ class IntradaySessionMachine:
             self.resting_limit_bars_waited = 0
             self._resting_children_qty = []
             self._queue_ahead_remaining = 0.0
+            self._last_bar_close = None
+            self._last_bar_ts = None
 
     # ---------- persistencia (so a operacao ao vivo usa) ------------------
 
@@ -964,6 +977,15 @@ class IntradaySessionMachine:
             "session_pnl": self.session_pnl,
             "realized_pnl": self.realized_pnl,
             "flattened": self.flattened,
+            # Ultimo preco de barra conhecido -- ver a docstring do campo em
+            # `__init__`. Precisa sobreviver a um restart de processo: sem
+            # isto, um restart depois do corte de flatten (com posicao
+            # aberta e nenhuma barra nova ainda) faria
+            # `force_flatten_by_wall_clock` achar `self._last_bar_close is
+            # None` e levantar em vez de achatar.
+            "last_bar_close": self._last_bar_close,
+            "last_bar_ts": (self._last_bar_ts.isoformat()
+                            if self._last_bar_ts is not None else None),
             "positions": [
                 {
                     "side": pos.side,
@@ -1021,6 +1043,10 @@ class IntradaySessionMachine:
         self.session_pnl = float(state.get("session_pnl") or 0.0)
         self.realized_pnl = float(state.get("realized_pnl") or 0.0)
         self.flattened = bool(state.get("flattened"))
+        lb_close = state.get("last_bar_close")
+        self._last_bar_close = float(lb_close) if lb_close is not None else None
+        lb_ts = state.get("last_bar_ts")
+        self._last_bar_ts = pd.Timestamp(lb_ts) if lb_ts else None
         blocos = state.get("positions")
         if blocos is None:
             bloco_legado = state.get("position")
@@ -1290,6 +1316,143 @@ class IntradaySessionMachine:
             return b3_session.flatten_cut_utc(ts.date())
         return self.config.session_end_time
 
+    def _flatten_now(self, ts: pd.Timestamp, price: float, events: list[MachineEvent]) -> None:
+        """Corpo do achatamento forcado de fim de pregao -- extraido
+        (2026-09-15) para existir em UM lugar so'. Ate aqui havia DUAS
+        copias quase identicas (o bloco (2) de `on_closed_bar`, disparado
+        por uma BARRA cujo horario passou do corte ou pela ultima barra do
+        dado; e `force_flatten`, usado por `live/intraday_runtime.
+        _handle_gap` para achatar depois de um buraco) -- e elas ja tinham
+        DIVERGIDO em silencio: so' `force_flatten` zerava `resting_limit_
+        bars_waited`/`_queue_ahead_remaining` no fim, o bloco (2) nao.
+        Inocuo hoje (os dois campos ficam mortos assim que `self.flattened`
+        vira `True` -- nenhuma barra seguinte volta a le-los nesta sessao),
+        mas e' exatamente o tipo de divergencia silenciosa que este arquivo
+        pede para nunca existir (ver o `AGENTS.md`). `force_flatten_by_
+        wall_clock` (o TERCEIRO chamador, 2026-09-15 -- so' ao vivo, quando
+        o relogio de parede passa do corte sem NENHUMA barra ter chegado)
+        reusa `force_flatten` em vez de chamar isto direto, fechando a
+        familia toda numa unica implementacao.
+
+        `events` e' mutado por REFERENCIA (`.append`, nunca reatribuido) --
+        MESMO padrao de `_on_closed_bar_core`: se `_close_position` de uma
+        posicao levantar no meio do laco (posicoes independentes, ver a
+        docstring da classe), os fechamentos JA confirmados antes dela
+        continuam no `events` do CHAMADOR, em vez de sumir dentro de uma
+        lista local descartada pelo `raise` (MEDIO 7 da auditoria
+        adversarial de 2026-08-28 -- ver a docstring de `on_closed_bar`).
+
+        NAO decide SE deve achatar, nem toca em `self.flattened` alem de
+        marca-lo no fim -- quem chama ja fez a checagem de gatilho (o
+        bloco (2) compara `ts` de barra contra o corte; `force_flatten`/
+        `force_flatten_by_wall_clock` sao chamados so' quando o chamador ja
+        decidiu achatar). `price` e' o preco de REFERENCIA do fechamento
+        (antes de slippage/deslize, ver `_close_position`) -- `bar.close`
+        no caminho por barra, o preco mais recente conhecido nos outros
+        dois."""
+        if self.positions:
+            if self.execution is not None and any(p.exit_resting_qty > 0 for p in self.positions):
+                # cancela a fatia de saida REAL em pe' antes de mandar o
+                # flatten -- senao as duas ordens (a limite parada e o
+                # flatten a mercado) ficariam vivas ao mesmo tempo na
+                # corretora, pela mesma posicao. Execucao real nunca tem
+                # mais de 1 posicao (ver a docstring da classe).
+                self.execution.cancel_exit_limit(ts, reason="flatten")
+            for pos in list(self.positions):
+                pos.exit_resting_qty = 0
+                pos.resting_exit_bars_waited = 0
+                events.append(self._close_position(pos, ts, price, IntradayExitReason.FORCED_FLATTEN))
+        self.pending = None
+        if self.resting_limit is not None:
+            events.append(LimitCancelled(order=self.resting_limit, ts=ts, reason="flatten"))
+            self.resting_limit = None
+        self._resting_children_qty = []
+        self.resting_limit_bars_waited = 0
+        self._queue_ahead_remaining = 0.0
+        self.flattened = True
+
+    def force_flatten_by_wall_clock(self, now: pd.Timestamp) -> list[MachineEvent]:
+        """PISO POR RELOGIO DE PAREDE (2026-09-15) -- achata a sessao mesmo
+        que NENHUMA barra tenha chegado depois do corte. So' a operacao AO
+        VIVO chama isto (`live/intraday_runtime.py`); o backtest nunca
+        precisa, porque sempre entrega `is_last_bar=True` na ultima barra
+        do dado (bloco (2) de `on_closed_bar`).
+
+        Reusa `force_flatten` (existente, ate aqui so' chamado por
+        `_handle_gap` depois de um buraco de barras) em vez de reimplementar
+        o achatamento -- ver a docstring de `_flatten_now` para a
+        divergencia silenciosa que ja existia entre as duas copias antes
+        desta unificacao.
+
+        POR QUE EXISTE. O caminho por BARRA so' dispara quando uma barra
+        CHEGA com `ts.time() >= session_end_time_for(ts)` -- um feed que
+        para de entregar barra nunca entrega essa barra, e o achatamento
+        simplesmente nao acontece. Medido, 2026-09-14: `copa_win` em
+        sombra (conta 545) parou de receber barra as 10:31 BRT com 1 WIN@
+        SHORT aberto a 186.200; o corte das 18:20 nunca teve barra para
+        disparar. O backtest do MESMO pregao fecha essa posicao no
+        achatamento a 187.390 -- R$238,50 que nunca foram contabilizados,
+        mais R$100,00 de margem presa numa posicao orfa. O ledger da
+        sombra ficou R$138,50 OTIMISTA, e o vies so' anda para um lado: a
+        posicao que fica aberta tempo demais e' justamente a que esta
+        indo mal. Medido de novo em 2026-09-15 (slots 548/550): a ULTIMA
+        barra do dia de WDO@ chegou 32 minutos antes do corte -- mesmo
+        processo saudavel nao acharia sem este piso.
+
+        PRECO: nao ha' barra nenhuma para tirar um preco de fechamento --
+        usa o ULTIMO `close` que esta maquina de fato viu nesta sessao
+        (`self._last_bar_close`, atualizado em `on_closed_bar` e
+        persistido em `state()`/`restore()` para sobreviver a um
+        restart). E' uma APROXIMACAO deliberada -- o preco de verdade pode
+        ter andado desde a ultima barra vista -- por isso todo
+        `PositionClosed` que este metodo devolve carimba
+        `trade.exit_detail = "wall_clock_floor"`: sem isso ninguem,
+        olhando so' o ledger, consegue distinguir "achatou certo, no
+        horario" de "achatou porque o feed morreu e o preco e' uma
+        estimativa". Em EXECUCAO REAL (`self.execution` setado) este preco
+        so' entra como REFERENCIA para o calculo de deslize -- `_close_
+        position` manda ordem a MERCADO e usa o preco que a CORRETORA de
+        fato executou, exatamente igual ao achatamento por barra.
+
+        `ts` do fechamento e' `now` (o instante em que o piso disparou de
+        verdade), nao o instante teorico do corte -- nao ha' como saber
+        quando a posicao teria fechado sem uma barra, e `now` e' o unico
+        instante que este metodo tem certeza que aconteceu. `now` PRECISA
+        ser tz-aware: comparar horario naive contra o corte de flatten ja
+        custou caro neste projeto (`core.b3_session`, item do fuso do
+        relogio do servidor).
+
+        Idempotente pelo MESMO campo que o caminho por barra usa
+        (`self.flattened`): chamar depois de ja ter achatado (por barra ou
+        por este mesmo piso) e' NO-OP, devolve lista vazia. So' dispara
+        com sessao aberta (`self.session_date is not None`) e relogio de
+        parede JA passado do corte do simbolo (`session_end_time_for`)."""
+        if self.flattened or self.session_date is None:
+            return []
+        if now.tzinfo is None:
+            raise ValueError(
+                f"{self.strategy.symbol}: force_flatten_by_wall_clock recebeu `now` "
+                "sem fuso (naive) -- comparar horario naive contra o corte de flatten "
+                "ja custou caro neste projeto (ver core.b3_session); o chamador "
+                "precisa passar um datetime/Timestamp tz-aware (UTC)."
+            )
+        now_utc = pd.Timestamp(now).tz_convert("UTC")
+        if now_utc.time() < self.session_end_time_for(now_utc):
+            return []
+        price = self._last_bar_close
+        if self.positions and price is None:
+            raise RuntimeError(
+                f"{self.strategy.symbol}: piso de relogio de parede encontrou posicao "
+                "aberta sem NENHUM preco de barra conhecido nesta sessao -- invariante "
+                "quebrado (toda posicao nasce do fill de uma barra, que sempre "
+                "atualiza `_last_bar_close` antes de poder abrir posicao nenhuma)."
+            )
+        events = self.force_flatten(now_utc, price if price is not None else 0.0)
+        for ev in events:
+            if isinstance(ev, PositionClosed):
+                ev.trade.exit_detail = "wall_clock_floor"
+        return events
+
     def is_previous_session_bar(self, ts: pd.Timestamp) -> bool:
         """`ts` esta carimbado num pregao ANTERIOR ao que esta maquina abriu?
 
@@ -1369,6 +1532,15 @@ class IntradaySessionMachine:
 
         if self.is_previous_session_bar(ts):
             return events
+
+        # Ultimo preco/ts de barra vista NESTA sessao -- alimenta o piso de
+        # relogio de parede (`force_flatten_by_wall_clock`), a unica fonte
+        # de preco que existe quando nao ha' barra nenhuma para tirar um
+        # fechamento. Atualizado incondicionalmente aqui (mesmo depois de
+        # `self.flattened`) porque e' so' um registro de "o que a maquina
+        # viu por ultimo", nao uma decisao.
+        self._last_bar_close = bar.close
+        self._last_bar_ts = ts
 
         try:
             self._on_closed_bar_core(bar, is_last_bar, events)
@@ -1486,25 +1658,14 @@ class IntradaySessionMachine:
 
         # (2) flatten forcado — primeira barra da sessao cujo horario >= corte,
         # ou a ultima barra da sessao. Nenhuma entrada nova depois disso.
+        # Corpo extraido para `_flatten_now` (2026-09-15) -- e' a MESMA
+        # implementacao que `force_flatten_by_wall_clock` chama quando o
+        # relogio de parede passa do corte sem NENHUMA barra ter chegado
+        # (feed morto -- ver a docstring la'). Duas copias do mesmo
+        # achatamento podiam divergir sem ninguem perceber; extrair torna
+        # isso impossivel por construcao.
         if not self.flattened and (ts.time() >= self.session_end_time_for(ts) or is_last_bar):
-            if self.positions:
-                if self.execution is not None and any(p.exit_resting_qty > 0 for p in self.positions):
-                    # cancela a fatia de saida REAL em pe' antes de mandar o
-                    # flatten -- senao as duas ordens (a limite parada e o
-                    # flatten a mercado) ficariam vivas ao mesmo tempo na
-                    # corretora, pela mesma posicao. Execucao real nunca tem
-                    # mais de 1 posicao (ver a docstring da classe).
-                    self.execution.cancel_exit_limit(ts, reason="flatten")
-                for pos in list(self.positions):
-                    pos.exit_resting_qty = 0
-                    pos.resting_exit_bars_waited = 0
-                    events.append(self._close_position(pos, ts, bar.close, IntradayExitReason.FORCED_FLATTEN))
-            self.pending = None
-            if self.resting_limit is not None:
-                events.append(LimitCancelled(order=self.resting_limit, ts=ts, reason="flatten"))
-                self.resting_limit = None
-                self._resting_children_qty = []
-            self.flattened = True
+            self._flatten_now(ts, bar.close, events)
 
         if not self.flattened:
             # (3) executa acao filada na ABERTURA desta barra. `Exit` achata
@@ -1811,27 +1972,22 @@ class IntradaySessionMachine:
         aqui mesmo assim por CONSISTENCIA com `on_closed_bar` e defesa em
         profundidade: se o invariante de 1 posicao mudar um dia (ex.:
         piramide em execucao real), este metodo ja' esta' protegido sem
-        precisar lembrar de voltar aqui."""
+        precisar lembrar de voltar aqui.
+
+        Corpo delegado a `_flatten_now` (2026-09-15) -- ver a docstring
+        dela: esta funcao e o bloco (2) de `on_closed_bar` eram DUAS copias
+        do mesmo achatamento que ja tinham divergido em silencio (so' esta
+        zerava `resting_limit_bars_waited`/`_queue_ahead_remaining` no
+        fim). `force_flatten_by_wall_clock` (2026-09-15, so' ao vivo) e' o
+        TERCEIRO chamador -- reusa esta funcao em vez de reimplementar,
+        entao herda a mesma garantia de EVENTOS PARCIAIS sem duplicar
+        nada."""
         eventos: list[MachineEvent] = []
         try:
-            if self.positions:
-                if self.execution is not None and any(p.exit_resting_qty > 0 for p in self.positions):
-                    self.execution.cancel_exit_limit(ts, reason="flatten")
-                for pos in list(self.positions):
-                    pos.exit_resting_qty = 0
-                    pos.resting_exit_bars_waited = 0
-                    eventos.append(self._close_position(pos, ts, price, IntradayExitReason.FORCED_FLATTEN))
-            if self.resting_limit is not None:
-                eventos.append(LimitCancelled(order=self.resting_limit, ts=ts, reason="flatten"))
-                self.resting_limit = None
+            self._flatten_now(ts, price, eventos)
         except Exception as erro:
             erro.partial_events = list(eventos)
             raise
-        self._resting_children_qty = []
-        self.resting_limit_bars_waited = 0
-        self._queue_ahead_remaining = 0.0
-        self.pending = None
-        self.flattened = True
         return eventos
 
     def _clear_stale_enter(self) -> None:

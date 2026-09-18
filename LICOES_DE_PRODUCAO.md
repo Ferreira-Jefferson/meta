@@ -1201,6 +1201,159 @@ caminho de saída é uma parada permanente disfarçada de aviso.
 > risco, sem ninguém perguntando à corretora o que sobrou.
 > **Pergunte à plataforma nova:** pergunta 83 da Parte 8.
 
+### 2.8 O achatamento de fim de pregão dispara por BARRA, não por relógio — um processo congelado e um pregão que acaba antes do corte apagam do MESMO jeito o trade ruim, e o ledger fica otimista para sempre
+
+Em 2026-09-14 às 10:31 BRT o `copa_win` rodando em SOMBRA (conta 545, slot
+`dt-copa_win-win@-shadow`, caixa sombra de R$3.000,00 definido na véspera)
+abriu um SHORT de 1 contrato de WIN@ a 186.200 (stop 189.600 / alvo 184.045).
+A partir daquele instante **o processo não produziu mais nenhum evento de
+decisão até o fim do pregão** — nenhuma saída, e nenhum achatamento às 18:20.
+O watchdog só percebeu às 21:09 BRT ("heartbeat parado há 91 min com o
+processo ainda de pé") e **recusou-se a reiniciar** porque não conseguiu
+consultar a posição no terminal (`Authorization failed` — o modo de falha do
+item 5.25). No pregão seguinte o processo subiu a frio e a posição
+simplesmente deixou de existir.
+
+**O que é FATO, do diário.** A posição ficou aberta, não houve evento de
+saída, e a margem da posição órfã (**R$100,00**) ficou presa no caixa e
+nunca voltou. A aritmética do caixa fecha exatamente nesse desenho, e isso
+é medido, não estimado:
+
+| passo | R$ |
+|---|---|
+| caixa sombra em 14/09 | 3.000,00 |
+| + único trade contabilizado em 14/09 | +231,50 |
+| − margem da posição órfã, nunca liberada | −100,00 |
+| = capital com que o processo subiu em 15/09 | **3.131,50** |
+| − os 7 trades de 15/09 | −900,50 |
+| = `cash_sombra` atual da conta | **2.231,00** |
+
+**O que é ESTIMATIVA, do backtest — não fato medido.** Quanto aquela perda
+teria valido é reconstrução, não extrato. O backtest do MESMO pregão, com a
+MESMA config de produção, fecha esse short no achatamento das 18:20 a
+187.390: **−R$238,50** — e é esse número que sustenta o "ledger R$138,50
+otimista" a seguir. Mas o robô ao vivo, se tivesse achatado, teria achatado
+pelo **último preço que ele CONHECIA**, e o feed dele estava morto desde
+10:31 BRT — quase certamente um preço diferente de 187.390. **A direção do
+viés é certa e é o que o item ensina** (o trade que fica aberto é
+justamente o que está indo mal); **a magnitude exata em reais é estimada,
+não medida.**
+
+Ou seja: **o ledger da sombra está R$138,50 OTIMISTA (estimado)** em relação
+ao que o robô realmente teria feito — R$100,00 de margem presa (fato) mais
+≈R$238,50 do trade que sumiu (estimativa de backtest). A sombra não
+registrou "um trade a menos": ela SUMIU com o trade perdedor e ainda
+encolheu o caixa em silêncio — isso é fato; o TAMANHO do trade que sumiu é
+a melhor estimativa disponível, porque o dado real que o mediria (o preço
+que o robô veria) nunca existiu.
+
+**O contraste que dá força ao item:** no MESMO 15/09, backtest e sombra
+bateram **centavo a centavo** — 7 de 7 operações, mesmos preços, mesmos
+minutos, mesmos motivos de saída, **−R$900,50 nos dois**. O motor não diverge
+da sombra. O que diverge é o pregão em que alguma coisa impede o achatamento
+de acontecer. A única diferença observada entre backtest e sombra em dois
+pregões veio de INFRAESTRUTURA, não de modelo — e ela apontou toda para o
+mesmo lado.
+
+**O mecanismo — e por que "processo congelado" era só metade dele.** O
+achatamento forçado de fim de pregão, em `src/backtest/intraday/machine.py`,
+bloco "(2) flatten forcado", dispara assim:
+
+```python
+if not self.flattened and (ts.time() >= self.session_end_time_for(ts) or is_last_bar):
+```
+
+`ts` é o horário DA BARRA QUE CHEGOU — não existe temporizador de parede.
+Se nenhuma barra chega depois do corte, essa linha nunca é avaliada de novo:
+o achatamento não falha, simplesmente não é chamado. A rede de segurança
+`or is_last_bar` só é alimentada em `src/backtest/intraday/engine.py:299`
+(`is_last_bar=(ts == last_ts)`); `src/live/intraday_runtime.py` não passa
+esse argumento em lugar nenhum, então ao vivo ele é sempre `False`. **O
+backtest tem DOIS caminhos para achatar a posição; a produção tem UM SÓ — e
+o que a produção não tem é justamente a rede.**
+
+**O segundo gatilho, medido no MESMO dia em que o primeiro foi descoberto —
+e que NÃO precisa de processo doente.** Em 15/09 os slots
+`dt-wdo_grid_reload_maker-wdo@-shadow` (conta 548, último evento 17:15 BRT,
+LONG #61 a 5.172,50) e `dt-wdo_grid_fade_off_t3-wdo@-shadow` (conta 550,
+SHORT a 5.168,50) fecharam o pregão com posição aberta e **zero eventos de
+FLATTEN**. A causa não foi travamento: a última barra de WDO@ do dia chegou
+às **17:53 BRT**, **32 minutos antes** do corte das 18:25 BRT. Nenhum
+processo saudável — travado ou não — teria achatado, porque não existiu
+barra depois do corte para avaliar a condição acima. As duas posições
+seguem registradas como abertas em `live_positions`. Isto é EXCEÇÃO — em 189
+de 191 pregões o WDO@ negocia até 18:29 BRT e alcança o corte —, mas uma
+exceção que ACONTECE prova que o desenho não tem PISO.
+
+**Correção de leitura, registrada porque ela mesma foi cometida nesta
+investigação.** O silêncio dos dois slots de WDO NÃO era o modo de falha do
+`copa_win` de cima. São robôs maker **sem prazo**, e o motor **não
+piramida**: enquanto a ordem-limite de saída espera no livro, não há nada a
+registrar — ficar calado com posição aberta é o DESENHO, não sintoma. Os
+dois alvos (5.173,50 e 5.167,00) foram tocados na marca exata depois do
+silêncio, o que, com a fila calibrada (438/489 — ver
+`backtest/intraday/fidelidade.py`), é justamente o caso em que a limite
+toca mas não preenche a tempo. **O defeito não foi o robô parar — foi o
+achatamento não chegar.** Confundir "parou de logar" com "travou" é um erro
+de leitura, e ele foi cometido nesta mesma apuração antes de o dado corrigir.
+
+O travamento de verdade em 2026-09-14 existiu, e é outro, já bem separado
+deste: nos CINCO slots ao mesmo tempo, heartbeat parado às 19:38 BRT (o
+watchdog mediu 91,0/91,1 min para os cinco no mesmo segundo) — evento de
+máquina, não de robô.
+
+> **Regra 1 — um processo de sombra que morre ou congela com posição aberta
+> não produz um resultado "incompleto"; produz um resultado ENVIESADO PARA
+> CIMA, e sempre para o mesmo lado.** O trade que não foi fechado é o trade
+> que não entrou na conta, e trades ficam abertos por tempo demais
+> justamente quando estão indo mal: o vencedor sai pelo alvo, o perdedor
+> fica. O viés não é aleatório — ele seleciona a perda.
+> **Regra 2 — quando o dado real falta, o backtest é a MELHOR ESTIMATIVA
+> disponível do que teria acontecido, não um FATO medido, e o registro tem
+> de rotular qual é qual.** Aqui, que a posição ficou aberta, que não houve
+> saída e que a margem ficou presa são fatos do diário; QUANTO aquela saída
+> teria custado é reconstrução — o backtest fecha no preço que o MERCADO
+> tinha, não no preço que o ROBÔ VIVO teria enxergado com o feed morto. A
+> direção do viés (ele seleciona a perda) é a lição que sobrevive; a
+> magnitude em reais é estimada. Misturar número medido e número simulado
+> na mesma frase sem marcar qual é qual faz o item nascer mais confiante do
+> que a evidência permite.
+> **Regra 3 — toda sessão que termina com posição aberta e sem evento de
+> saída é uma sessão INVÁLIDA, não uma sessão com um trade a menos.** O
+> ledger precisa RECONCILIAR posição aberta contra o fechamento do pregão
+> antes de ser lido como medição; e o caixa precisa liberar a margem da
+> posição órfã, senão ele encolhe em silêncio a cada incidente (R$100,00 por
+> ocorrência neste caso).
+> **Regra 4 (corolário de leitura, o que mais vale) — antes de comparar
+> sombra com backtest, conte as SAÍDAS, não as entradas.** Se a sombra tem N
+> entradas e menos de N saídas, a diferença entre os dois números não mede o
+> motor: mede o que impediu o achatamento — que pode ser um processo morto
+> OU um pregão que terminou antes do corte. As duas causas exigem a mesma
+> reconciliação, mas só uma delas é incidente; a outra é o desenho batendo
+> no próprio piso que não tem.
+> **Regra 5 (a que generaliza) — toda proteção de fim de pregão precisa de
+> um piso por RELÓGIO DE PAREDE, independente do fluxo de dados que ela
+> observa.** Uma proteção acionada pelo próprio dado que pode faltar não é
+> proteção — é uma aposta de que o dado vai chegar. Vale para achatamento,
+> para corte de horário, para qualquer coisa que precise acontecer "até tal
+> hora": se o único gatilho é um evento do feed, a ausência do feed desliga
+> a proteção em silêncio, exatamente no cenário em que ela é mais
+> necessária.
+> **Corolário — quando o backtest tem uma rede que a produção não tem, a
+> produção é mais frágil que a validação que a aprovou, e nada no número do
+> backtest denuncia isso.** Procure, em qualquer motor, os parâmetros e
+> caminhos que só o arnês de teste alimenta (aqui, `is_last_bar`).
+
+**Estado (2026-09-15):** um piso por relógio de parede está sendo
+implementado agora, por ordem do dono ("tem que funcionar para todo e
+qualquer robô do sistema"), com a decisão morando no MOTOR e o `live/`
+apenas chamando — `live/` não decide nada (AGENTS.md). O que este item
+ensina não é o estado do conserto, é o modo de falha e a Regra 5: elas
+continuam verdadeiras depois de a correção entrar, e continuam valendo para
+qualquer proteção futura de "até tal hora" que alguém adicionar ao motor.
+
+> **Pergunte à plataforma nova:** perguntas 109 e 110 da Parte 8.
+
 ---
 
 ## Parte 3 — Dimensionamento e capital
@@ -1704,6 +1857,61 @@ A perda MEDIANA de um único stop já é 117% do capital de R$250.
 > de abertura? Se só a segunda, o robô precisa construir o teto por perda
 > máxima do stop por fora — checar margem nunca é suficiente para stop
 > variável por volatilidade.
+
+### 3.18 O portão de caixa mínimo é para o dinheiro real — não para o robô de teste — CORRIGIDO 2026-09-17
+
+O gate de "caixa mínimo para operar" (day trade) estava sendo aplicado por
+igual a robôs REAIS (`execution_mode="live"`) e a robôs de SIMULAÇÃO/sombra
+(`execution_mode="shadow"`), em dois lugares independentes: (1)
+`live.intraday_runtime.IntradayLiveRuntime._check_capital` — o gate diário
+(1x o lote no preço de hoje) já LIA `cash_sombra` para robôs em sombra, mas
+continuava RECUSANDO o pregão se esse saldo (de teste) fosse baixo; (2)
+`dashboard.live_control.start()` — o piso de entrada (2x o lote + reserva)
+recusava subir um robô em sombra se o `cash_sombra` do slot não cobrisse o
+piso. Nenhum dos dois protegia dinheiro nenhum: um robô sombra nunca manda
+ordem para a corretora. Corrigido por pedido do dono, 2026-09-17: "os robôs
+de simulação precisam ter a quantidade de caixa inicial pra operar, mas isso
+está errado, essa regra só deve ser aplicada para robôs reais, os sombra
+podem executar com qualquer valor, afinal são robôs de teste mesmo."
+
+**A correção:** `_check_capital` retorna `None` (sem alarme, sem
+impedimento, sem sequer calcular o mínimo) sempre que
+`execution_mode == "shadow"`; `live_control.start()` só roda o bloco de
+checagem de piso (`min_cash_for` + `available_cash` + comparação) quando o
+modo do gate é `"live"` — o swing continua sempre `"live"` (não tem conceito
+de sombra) e por isso mantém o piso de sempre.
+
+**O efeito colateral no teste, que vale registrar:** 6 testes de
+`tests/test_intraday_live_runtime.py` verificavam o gate chamando
+`run_once()` em modo sombra (o default do arquivo) — e tiveram de ser
+convertidos para chamar `_check_capital`/`_gravar_impedimento` DIRETO com
+`execution_mode="live"` explícito, porque em modo live de verdade o
+warm-start (`_start_session`) manda ordem-limite para a corretora ANTES do
+gate de caixa ser consultado — rodar esses testes via `run_once()` completo
+em modo live explodiria contra o dublê `_ExplodingBroker` do arquivo. Um
+teste que corrige o modo errado de um gate pode continuar "passando" por
+caminho errado se a chamada de mais alto nível também mudou de
+comportamento. Foram adicionados 2 testes novos provando o comportamento
+correto: `test_sombra_opera_mesmo_com_caixa_abaixo_do_minimo_do_dia`
+(test_intraday_live_runtime.py) e
+`test_start_daytrade_em_sombra_ignora_o_piso_de_caixa` (test_live_control.py)
+— sombra opera com qualquer caixa, inclusive R$1,00 contra um piso de R$200.
+
+> **Regra (portável):** todo gate cujo motivo é "a corretora vai recusar por
+> falta de fundos" só faz sentido quando dinheiro real está em jogo. Um robô
+> de simulação/sombra/paper-trading nunca manda ordem para lugar nenhum —
+> aplicar o mesmo piso a ele não previne perda alguma, só impede o dono de
+> rodar deliberadamente um teste com capital pequeno (ou zero). Antes de
+> portar ou reusar um gate de capital/margem, pergunte qual das duas coisas
+> ele protege: "a corretora vai recusar" (condicione ao modo REAL) ou "o
+> resultado simulado é realista" (esse sim se aplica à simulação — é a
+> fidelidade de execução da Parte 4, outra pergunta).
+> **Pergunte à plataforma nova (pergunta 113):** cada gate de
+> capital/margem/caixa mínimo desta plataforma foi auditado com a pergunta
+> "isto protege dinheiro real, ou só bloqueia um teste?" Se a plataforma
+> tiver um modo sombra/paper equivalente, o mesmo gate não pode ser aplicado
+> a ele sem essa mesma ressalva — senão o robô de teste herda um piso de
+> capital que só faz sentido para o robô real.
 
 ---
 
@@ -4610,6 +4818,78 @@ achando que estão conectados — falha OPOSTA à corrigida aqui.
 
 > **Pergunte à plataforma nova:** perguntas 100 a 102 da Parte 8. (5.25)
 
+### 5.26 Série de contrato CONTÍNUO é re-encadeada a cada rolagem — unir um fetch novo por carimbo de tempo quase reescreveu oito meses de histórico do WDO@
+
+Uma auditoria da base M1 canônica (2026-09-16) achou três pregões truncados
+no `WDO@`: 11/09 com 371 barras de 570, 14/09 com **67 barras de 570**
+(faltava o pregão inteiro até 17:23 BRT) e 15/09 com 534. O terminal MT5
+tinha os três completos, então o conserto parecia trivial: baixar tudo de
+novo e unir — o mesmo padrão que já tinha funcionado na regeneração do
+canônico de tick (5.12/5.13).
+
+**Unir a base inteira quase destruiu oito meses de histórico.** Ao comparar
+o fetch novo com o parquet existente antes de gravar, apareceu: **93.159 das
+107.242 barras comuns divergiam**, com deslocamento de preço de **~37 a ~42
+pontos**. Causa: `WDO@` é um contrato **CONTÍNUO** — uma série sintética que
+a corretora **RE-ENCADEIA a cada rolagem**. O mesmo carimbo de tempo tem
+preço diferente dependendo de QUANDO foi baixado. A fronteira era nítida: da
+rolagem de 28/08 para cá a divergência é **0,000**; antes dela, ~37,4,
+crescendo para ~42 em dezembro.
+
+O `merge_m1` do repo tem a regra "em carimbo sobreposto o fetch NOVO vence"
+— correta para correção legítima de provedor (o caso que 5.12/5.13
+resolveram), catastrófica aqui: ela reescreveria oito meses com outro
+encadeamento e deixaria o arquivo EMENDADO — barras antes de 30/12 no
+ajuste antigo, porque estão fora da janela de 100.000 barras do servidor, e
+o resto no novo. Isso é pior que o buraco original: um buraco você enxerga,
+uma emenda de encadeamento não.
+
+A primeira execução chegou a gravar a união completa. Foi detectada pela
+linha de comparação do próprio script, **restaurada do backup**, e refeita
+cirurgicamente: só as barras dos três dias furados (todos posteriores à
+fronteira de 28/08, logo no mesmo encadeamento dos vizinhos). Resultado
+final: 738 barras adicionadas, 2 alteradas (ambas dentro dos três dias,
+mudança máxima de 1,0 = dois ticks, a barra que ainda se formava na
+captura), nenhuma barra perdida.
+
+**O que salvou:** o procedimento BACKUP → fetch → **COMPARA** → união →
+confere, o mesmo herdado da rodada de 2026-09-07 (5.12/5.13). O passo
+COMPARA não é burocracia: foi ele que transformou um desastre silencioso num
+aviso. Sem ele, a união teria sido gravada e o repo carregaria oito meses de
+preço deslocado ~37-42 pontos sem nenhum sintoma — nenhuma exceção, nenhuma
+lacuna nova para uma auditoria futura encontrar.
+
+De brinde, a mesma auditoria confirmou que o `WIN@` está íntegro: 17 minutos
+ausentes em 110.014 barras, maior buraco de 6 minutos, zero violação de
+OHLC, zero duplicata, e os 11 dias úteis sem barra são todos feriado de B3 —
+o contraste mostra que o defeito é do WDO@ ser contínuo, não de método de
+coleta.
+
+> **Regra**, portável — vale em qualquer corretora e qualquer linguagem:
+>
+> 1. **Série de contrato CONTÍNUO/sintético não é histórico imutável: ela é
+>    RECALCULADA a cada rolagem.** Re-baixar e unir por carimbo de tempo
+>    reescreve o passado em silêncio — o dado antigo e o dado novo podem
+>    concordar em timestamp e discordar em preço, e nenhum dos dois está
+>    "errado": são dois encadeamentos diferentes da mesma série sintética.
+> 2. **Antes de unir qualquer fetch novo a uma base histórica, MEÇA a
+>    divergência nas barras que existem nos dois lados.** Divergência
+>    sistemática (mesmo sinal, crescendo com a distância no tempo) não é
+>    correção do provedor: é outro encadeamento, e unir mistura duas séries
+>    incompatíveis num arquivo só. Divergência zero de um lado da fronteira e
+>    diferente de zero do outro é a assinatura de uma rolagem no meio.
+> 3. **Conserto de base é CIRÚRGICO.** Só o trecho comprovadamente furado, e
+>    só depois de confirmar que aquele trecho está do mesmo lado da última
+>    rolagem que os dados vizinhos — nunca a base inteira "por segurança".
+> 4. **Backup antes, comparação no meio, conferência depois — nessa ordem,
+>    sempre.** É a mesma disciplina do 5.12/5.13 aplicada a uma classe de bug
+>    diferente (encadeamento de contrato contínuo, não fuso de paginação); o
+>    procedimento generaliza porque ataca o sintoma comum — fetch novo
+>    substituindo dado antigo sem prova de que os dois descrevem a mesma
+>    coisa —, não a causa específica.
+>
+> **Pergunte à plataforma nova:** pergunta 111 da Parte 8. (5.26)
+
 ---
 
 ## Parte 6 — Método: os erros que custam meses, não reais
@@ -6735,6 +7015,57 @@ Mesma família do item 6.24 (controle-oráculo) do lado do experimento e do
 item 6.23 (breakeven empírico) do lado da leitura: o nulo certo não é só a
 fórmula certa, é o nulo medido na janela certa e lido na unidade certa.
 
+### 6.43 O piso de capital ficou órfão: o robô ganhou dimensionamento dinâmico DEPOIS de o piso ter sido medido com quantidade fixa
+
+2026-09-16, `win_retangulo` (WIN@), achado de passagem numa investigação sobre
+outra coisa (revivência de retângulo pós-rompimento) — não era a pergunta do
+dia, apareceu no caminho.
+
+O piso publicado do robô (`PISO_UM_CONTRATO_BRL = R$1.100`, em
+`strategy/daytrade/lab/win_retangulo.py`) veio de um rebaixamento por operação
+de **R$989,50**, medido no IS (129 pregões, capital de partida R$1.100). Essa
+medição rodou **antes** de o robô ganhar `escala_por_caixa` — o dimensionamento
+que abre um 2º contrato quando o caixa cresce o suficiente dentro da própria
+janela — que virou o **default da classe** nos commits `4806636`/`ca252a7`
+(2026-09-15 21:40, **depois** da medição que gerou o R$1.100). Rodando hoje o
+robô de PRODUÇÃO, sem nenhuma modificação
+(`strategy.daytrade.registry.get_daytrade_robot("win_retangulo")`), na MESMA
+janela e MESMO capital de partida, o rebaixamento por operação é
+**R$1.979,00** — quase o DOBRO do número que sustenta o piso publicado. O piso
+real seria ~R$2.079,00 (rebaixamento + margem crua de R$100), quase o dobro do
+R$1.100 que o painel (`capital_minimo_recomendado_brl`) mostra e usa hoje. A
+causa mecânica: a escalada libera um 2º contrato quando o caixa ultrapassa
+R$2.933 dentro da própria janela IS, e uma operação de 2 contratos tem
+oscilação em reais maior — isso empurra o rebaixamento pico-a-vale acumulado
+da curva de patrimônio para cima, mesmo começando de 1 contrato.
+
+Esta é uma QUARTA forma de errar um piso de capital, distinta das três já
+catalogadas no item 6.32 (janela censurada, tamanho fixo que a produção não
+roda, data de início única) — lá as três eram erros no MÉTODO de medir; aqui o
+método de medir estava certo no dia em que mediu, e o robô mudou de
+comportamento por baixo dele depois. Nenhuma das quatro precisa de má-fé:
+basta o código evoluir e ninguém voltar para reconferir um número que já foi
+tratado como resolvido.
+
+> **Regra (portável, é o que sobrevive à troca de plataforma):** um piso de
+> capital publicado é uma afirmação sobre uma VERSÃO específica do robô, não
+> sobre o robô para sempre. Toda vez que um robô ganha — ou tem alterado — um
+> mecanismo de dimensionamento DINÂMICO de posição (escala pelo caixa,
+> realocação por capital, risco-%-por-trade que muda contrato conforme o
+> saldo), o piso precisa ser REMEDIDO sob o novo comportamento antes de
+> continuar em uso. Um piso calculado sob "quantidade fixa" não protege contra
+> o rebaixamento maior que aparece quando o próprio robô passa a escalar a
+> posição. Mesma família do item 3.8 (parâmetro de segurança opcional é
+> parâmetro desligado) e do item 4.22 (parâmetro presente e nunca ligado): aqui
+> o número não estava desligado, estava CORRETO no passado — e um piso correto
+> no passado que ninguém revisita depois de uma mudança de sizing é o mesmo
+> risco silencioso, só que com uma data de validade que não está escrita em
+> lugar nenhum.
+>
+> Referência cruzada: item 6.32 (três formas de errar o processo de FIXAR um
+> piso) — esta é a quarta forma, e a única das quatro em que a medição
+> original estava certa quando foi feita.
+
 ---
 
 ## Parte 7 — Disciplina de trabalho
@@ -6871,6 +7202,12 @@ chamada por chamada.
 
 Nenhuma destas é opcional. Cada uma corresponde a um item acima que já custou
 dinheiro ou meses.
+
+> Nota de manutenção: a contagem de perguntas (aqui e no rótulo da página
+> publicada) é DIGITADA, não derivada da lista — já nasceu defasada uma vez.
+> Ao adicionar ou remover uma pergunta, atualize o número à mão nos dois
+> lugares (este arquivo e o artefato) em vez de assumir que algum contador
+> automático cobre isso.
 
 **Sobre a ordem**
 1. Dá para enviar stop e alvo no MESMO comando da entrada? (1.2)
@@ -7743,6 +8080,50 @@ dinheiro ou meses.
      ter passado do nível novo se auto-dispara no pior instante possível — e
      o resultado sai do robô com a MESMA aparência de um stop normal, sem se
      denunciar no relatório. (4.30)
+109. Como eu detecto, no fim de cada pregão, que uma posição ficou aberta sem
+     evento de saída — e a plataforma me deixa reconciliar isso
+     automaticamente contra o fechamento (ou contra o extrato do dia
+     seguinte), em vez de eu descobrir dias depois lendo o extrato na mão?
+     Existe um evento de fim de sessão que eu possa assinar, ou só dá para
+     perguntar "o que eu tenho agora"? E a margem alocada por uma posição
+     órfã volta sozinha para o caixa quando a posição deixa de existir, ou
+     fica presa até alguém reconciliar? Aqui a resposta foi "nenhum dos
+     dois": o trade sumiu (−R$238,50 que a sombra nunca contabilizou) e a
+     margem ficou presa (R$100,00 por ocorrência). (2.8)
+110. A plataforma nova me dá um achatamento de fim de pregão acionado por
+     RELÓGIO, garantido mesmo sem cotação nenhuma chegando depois do corte —
+     ou o gatilho depende do próximo evento do fluxo de dados? Se depender,
+     onde eu ponho o piso por relógio de parede, e ele roda no mesmo
+     processo que decide, ou precisa de um vigia externo? Aqui a resposta
+     foi "depende do dado": o backtest tem uma rede extra que só o teste
+     alimenta (`is_last_bar`), a produção não tem nenhuma, e um pregão que
+     encerrou 32 minutos antes do corte (WDO@, 2026-09-15) bastou para
+     provar que o desenho não tem piso, sem nenhum processo ter travado. (2.8)
+111. Os símbolos contínuos desta plataforma são re-encadeados na rolagem? Se
+     sim, com que regra de ajuste, e existe um símbolo por vencimento (não
+     ajustado) que sirva de base imutável? Sem essa resposta, unir um fetch
+     novo à base histórica por carimbo de tempo pode trocar o encadeamento
+     do passado inteiro sem erro nenhum — só compare a divergência nas
+     barras comuns antes de gravar. (5.26)
+112. Existe, para cada robô com piso de capital publicado, um registro de QUAL
+     versão do dimensionamento de posição estava ativa quando o piso foi
+     medido — e um processo (checklist de release, teste, ou revisão) que
+     force remedir o piso sempre que esse dimensionamento mudar? Sem isso, um
+     piso publicado vira órfão em silêncio: aqui um robô ganhou escala
+     dinâmica de contrato DEPOIS de o piso ter sido medido com quantidade
+     fixa, e o rebaixamento real sob o comportamento novo saiu **quase o
+     dobro** do número que o painel ainda mostrava (R$1.979,00 medido contra
+     R$989,50 publicado, mesma janela, mesmo capital de partida). Um piso é
+     uma alegação sobre uma VERSÃO do robô, não sobre o robô para sempre.
+     (6.43, 3.8, 4.22)
+113. Cada gate de capital/margem/caixa mínimo desta plataforma foi auditado
+     com a pergunta "isto protege dinheiro real, ou só bloqueia um teste?"
+     Se a plataforma tiver um modo sombra/paper equivalente, o mesmo gate
+     não pode ser aplicado a ele sem essa ressalva. Aqui dois gates
+     independentes (o diário em `_check_capital` e o piso de entrada em
+     `live_control.start()`) recusavam pregão/subida de um robô em SOMBRA
+     por falta de caixa — sem nunca proteger dinheiro nenhum, porque sombra
+     nunca manda ordem para a corretora. (3.18)
 
 ---
 

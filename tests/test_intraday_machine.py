@@ -449,6 +449,273 @@ def test_force_flatten_sem_posicao_nao_inventa_trade():
     assert m.realized_pnl == pytest.approx(0.0)
 
 
+# ---------- force_flatten_by_wall_clock: piso de relogio de parede ---------
+#
+# 2026-09-15. O caminho por BARRA (bloco (2) de `on_closed_bar`) so' dispara
+# quando uma barra CHEGA com `ts.time() >= session_end_time_for(ts)` -- um
+# feed que para de entregar barra nunca entrega essa barra. Medido de
+# verdade em 2026-09-14: `copa_win` em sombra parou de receber barra as
+# 10:31 BRT com 1 WIN@ SHORT aberto; o corte das 18:20 nunca teve barra para
+# disparar, e a posicao ficou "aberta" no ledger o pregao inteiro.
+
+def test_piso_de_relogio_fecha_posicao_sem_nenhuma_barra_apos_o_corte():
+    """O caso central da tarefa: sessao com posicao aberta, NENHUMA barra
+    depois do corte -- so' o relogio de parede. Preco usado e' o ULTIMO
+    close que a maquina de fato viu (a barra do fill, 9.85 -- nao 9.80, que
+    e' o nivel da ordem, e nao um close de barra)."""
+    strat = _Scripted({0: [EnterLimit(side="long", limit_price=9.80,
+                                      initial_target=99.0, initial_stop=0.01)]})
+    m = IntradaySessionMachine(strat, _config(session_end_time=time(20, 50)))
+    m.begin_session(pd.Timestamp("2026-01-05").date())
+    m.on_closed_bar(_bar(0, 10.00, 10.00, 10.00, 10.00))
+    m.on_closed_bar(_bar(1, 10.00, 10.00, 9.79, 9.85))  # fill em 9.80, ULTIMO close = 9.85
+    assert m.positions
+    assert m.flattened is False
+
+    ev = m.force_flatten_by_wall_clock(pd.Timestamp("2026-01-05 21:00", tz="UTC"))
+
+    fechadas = [e for e in ev if isinstance(e, PositionClosed)]
+    assert len(fechadas) == 1
+    trade = fechadas[0].trade
+    assert trade.exit_reason == IntradayExitReason.FORCED_FLATTEN
+    assert trade.exit_price == pytest.approx(9.85), (
+        "sem barra nenhuma, o preco de referencia tem de ser o ULTIMO close "
+        "conhecido, nao o nivel da ordem nem um preco inventado"
+    )
+    assert trade.exit_detail == "wall_clock_floor", (
+        "sem isto o ledger nao consegue distinguir este flatten (preco "
+        "aproximado) de um achatamento normal por barra"
+    )
+    assert m.positions == []
+    assert m.flattened is True
+
+
+def test_piso_de_relogio_nao_dispara_antes_do_corte():
+    strat = _Scripted({0: [EnterLimit(side="long", limit_price=9.80)]})
+    m = IntradaySessionMachine(strat, _config(session_end_time=time(20, 50)))
+    m.begin_session(pd.Timestamp("2026-01-05").date())
+    m.on_closed_bar(_bar(0, 10.00, 10.00, 10.00, 10.00))
+    m.on_closed_bar(_bar(1, 10.00, 10.00, 9.79, 9.85))
+    assert m.positions
+
+    ev = m.force_flatten_by_wall_clock(pd.Timestamp("2026-01-05 20:00", tz="UTC"))
+
+    assert ev == []
+    assert m.positions, "cedo demais -- nao pode achatar antes do corte"
+    assert m.flattened is False
+
+
+def test_piso_de_relogio_sem_sessao_aberta_nao_faz_nada():
+    m = IntradaySessionMachine(_Scripted({}), _config(session_end_time=time(0, 0)))
+    ev = m.force_flatten_by_wall_clock(pd.Timestamp("2026-01-05 21:00", tz="UTC"))
+    assert ev == []
+    assert m.flattened is False
+
+
+def test_piso_de_relogio_exige_relogio_tz_aware():
+    """Comparar horario naive contra o corte de flatten ja custou caro neste
+    projeto (fuso do relogio do servidor MT5, `core.b3_session`) -- o piso
+    recusa em vez de arriscar comparar horas de fusos diferentes como se
+    fossem o mesmo."""
+    m = IntradaySessionMachine(_Scripted({}), _config(session_end_time=time(20, 50)))
+    m.begin_session(pd.Timestamp("2026-01-05").date())
+    with pytest.raises(ValueError):
+        m.force_flatten_by_wall_clock(pd.Timestamp("2026-01-05 21:00"))  # naive
+
+
+def test_piso_de_relogio_nao_dispara_duas_vezes():
+    strat = _Scripted({0: [EnterLimit(side="long", limit_price=9.80)]})
+    m = IntradaySessionMachine(strat, _config(session_end_time=time(20, 50)))
+    m.begin_session(pd.Timestamp("2026-01-05").date())
+    m.on_closed_bar(_bar(0, 10.00, 10.00, 10.00, 10.00))
+    m.on_closed_bar(_bar(1, 10.00, 10.00, 9.79, 9.85))
+    assert m.positions
+
+    primeira = m.force_flatten_by_wall_clock(pd.Timestamp("2026-01-05 21:00", tz="UTC"))
+    assert [e for e in primeira if isinstance(e, PositionClosed)]
+
+    segunda = m.force_flatten_by_wall_clock(pd.Timestamp("2026-01-05 21:05", tz="UTC"))
+    assert segunda == [], "ja' achatou -- chamar de novo tem de ser NO-OP"
+
+
+def test_piso_de_relogio_nao_dispara_se_bloco_por_barra_ja_achatou():
+    """O caminho SAUDAVEL (uma barra de verdade cruzando o corte) e' quem
+    achata primeiro -- o piso e' so' a rede de seguranca, nunca compete com
+    ele."""
+    strat = _Scripted({0: [EnterLimit(side="long", limit_price=9.80)]})
+    m = IntradaySessionMachine(strat, _config(session_end_time=time(13, 2)))
+    m.begin_session(pd.Timestamp("2026-01-05").date())
+    m.on_closed_bar(_bar(0, 10.00, 10.00, 10.00, 10.00))
+    ev = m.on_closed_bar(_bar(2, 10.00, 10.00, 10.00, 10.00))  # 13:02 -> corte por BARRA
+    assert m.flattened is True
+    assert [e.reason for e in ev if isinstance(e, LimitCancelled)] == ["flatten"]
+
+    depois = m.force_flatten_by_wall_clock(pd.Timestamp("2026-01-05 15:00", tz="UTC"))
+    assert depois == [], "o bloco (2) ja' achatou -- o piso nao tem nada a fazer"
+
+
+def test_piso_de_relogio_cancela_fatia_de_saida_em_pe_em_execucao_real():
+    """Posicao com fatia-limite de SAIDA em pe' na corretora (`exit_split_unit`
+    + `exit_ttl_bars`): o piso tem de CANCELAR essa ordem antes de mandar o
+    flatten a mercado -- senao as duas (a limite parada e o flatten) ficam
+    vivas ao mesmo tempo pela MESMA posicao (mesma guarda que o bloco (2) ja
+    aplicava, ver `_flatten_now`)."""
+    execucao = _ExecucaoComProtecao(preco=9.90)
+    strat = _Scripted({0: [EnterLimit(side="long", limit_price=9.80, quantity=1,
+                                      initial_target=9.90, initial_stop=0.01,
+                                      exit_split_unit=1, exit_ttl_bars=100)]})
+    m = _maquina_real(strat, execucao, session_end_time=time(20, 50))
+    m.on_closed_bar(_bar(0, 10.00, 10.00, 10.00, 10.00))
+    m.on_closed_bar(_bar(1, 10.00, 10.00, 9.79, 9.85))
+    assert m.positions, "a entrada precisa ter preenchido"
+
+    m.on_closed_bar(_bar(2, 9.85, 9.91, 9.85, 9.90))  # toca o alvo -> arma a fatia de saida
+    assert execucao.place_exit_limit_calls == 1
+    assert m.positions[0].exit_resting_qty > 0, "a fatia de saida precisa estar em pe'"
+
+    ev = m.force_flatten_by_wall_clock(pd.Timestamp("2026-01-05 21:00", tz="UTC"))
+
+    assert execucao.cancel_exit_limit_calls == 1, (
+        "o piso tem de cancelar a fatia de saida em pe' ANTES do flatten a mercado"
+    )
+    assert execucao.market_calls == [IntradayExitReason.FORCED_FLATTEN]
+    assert [e for e in ev if isinstance(e, PositionClosed)]
+    assert m.positions == []
+
+
+def test_piso_de_relogio_acao_corte_dinamico_b3_equities():
+    """`session_end_policy="b3_equities"`: o corte sai do calendario
+    (`core.b3_session.flatten_cut_utc`), nao de um horario fixo -- o piso
+    tem de respeitar o MESMO corte que o bloco (2) usaria para uma barra."""
+    from core import b3_session
+
+    dia = pd.Timestamp("2026-01-05").date()
+    corte = b3_session.flatten_cut_utc(dia)
+    antes = pd.Timestamp(dia).tz_localize("UTC") + (
+        pd.Timedelta(hours=corte.hour, minutes=corte.minute) - pd.Timedelta(minutes=5))
+    depois = pd.Timestamp(dia).tz_localize("UTC") + (
+        pd.Timedelta(hours=corte.hour, minutes=corte.minute) + pd.Timedelta(minutes=5))
+
+    strat = _Scripted({0: [EnterLimit(side="long", limit_price=9.80)]})
+    m = IntradaySessionMachine(strat, _config(session_end_policy="b3_equities"))
+    m.begin_session(dia)
+    m.on_closed_bar(_bar(0, 10.00, 10.00, 10.00, 10.00))
+    m.on_closed_bar(_bar(1, 10.00, 10.00, 9.79, 9.85))
+    assert m.positions
+
+    assert m.force_flatten_by_wall_clock(antes) == []
+    assert m.positions, "antes do corte de ACAO -- nao pode achatar ainda"
+
+    ev = m.force_flatten_by_wall_clock(depois)
+    assert [e for e in ev if isinstance(e, PositionClosed)]
+    assert m.positions == []
+    assert m.flattened is True
+
+
+def test_piso_de_relogio_sem_posicao_ainda_marca_flattened_e_cancela_pendente():
+    """Sem posicao nenhuma, o piso ainda tem efeito: cancela a ordem-limite
+    de ENTRADA em pe' (`resting_limit`) e marca a sessao como achatada, pelo
+    MESMO motivo do bloco (2) -- nenhuma entrada nova pode nascer depois do
+    corte, com ou sem posicao."""
+    strat = _Scripted({0: [EnterLimit(side="long", limit_price=1.00)]})  # nunca toca
+    m = IntradaySessionMachine(strat, _config(session_end_time=time(20, 50)))
+    m.begin_session(pd.Timestamp("2026-01-05").date())
+    m.on_closed_bar(_bar(0, 10.00, 10.00, 10.00, 10.00))
+    assert m.resting_limit is not None
+    assert not m.positions
+
+    ev = m.force_flatten_by_wall_clock(pd.Timestamp("2026-01-05 21:00", tz="UTC"))
+
+    assert [e.reason for e in ev if isinstance(e, LimitCancelled)] == ["flatten"]
+    assert m.resting_limit is None
+    assert m.flattened is True
+
+
+def test_piso_de_relogio_com_posicao_e_sem_preco_conhecido_levanta():
+    """Invariante interno: uma posicao so' existe porque uma barra ja' fez o
+    fill dela, entao `_last_bar_close` nunca deveria estar vazio com
+    `positions` nao-vazio. Se acontecer mesmo assim (bug em outro lugar,
+    estado corrompido por um restart malformado), falhar alto e' mais
+    seguro que inventar um preco de fechamento do nada."""
+    strat = _Scripted({0: [EnterLimit(side="long", limit_price=9.80)]})
+    m = IntradaySessionMachine(strat, _config(session_end_time=time(20, 50)))
+    m.begin_session(pd.Timestamp("2026-01-05").date())
+    m.on_closed_bar(_bar(0, 10.00, 10.00, 10.00, 10.00))
+    m.on_closed_bar(_bar(1, 10.00, 10.00, 9.79, 9.85))
+    assert m.positions
+    m._last_bar_close = None  # simula estado corrompido
+
+    with pytest.raises(RuntimeError):
+        m.force_flatten_by_wall_clock(pd.Timestamp("2026-01-05 21:00", tz="UTC"))
+
+
+# ---------- piso de relogio de parede: reinicio (restore/resume_session) ---
+
+def test_resume_session_depois_do_piso_nao_reabre_posicao():
+    """Restart depois do piso ter achatado: `state()` carrega `flattened=
+    True` e nenhuma posicao -- `resume_session` (chamado pela operacao ao
+    vivo apos `restore()`) nao pode reabrir nada nem replantar ordem
+    nenhuma."""
+    strat = _Scripted({0: [EnterLimit(side="long", limit_price=9.80)]})
+    m = IntradaySessionMachine(strat, _config(session_end_time=time(20, 50)))
+    m.begin_session(pd.Timestamp("2026-01-05").date())
+    m.on_closed_bar(_bar(0, 10.00, 10.00, 10.00, 10.00))
+    m.on_closed_bar(_bar(1, 10.00, 10.00, 9.79, 9.85))
+    assert m.positions
+    m.force_flatten_by_wall_clock(pd.Timestamp("2026-01-05 21:00", tz="UTC"))
+    assert m.flattened is True
+    assert m.positions == []
+
+    outra = IntradaySessionMachine(_Scripted({}), _config(session_end_time=time(20, 50)))
+    outra.restore(m.state())
+    assert outra.flattened is True
+    assert outra.positions == []
+
+    # Mesma sequencia que `live/intraday_runtime.py::_start_session` aplica
+    # de verdade (ver a docstring dela): `resume_session` reseta `flattened`
+    # (e' o MESMO `_reset_session` que toda sessao usa, `begin_session`
+    # inclusive) e o CHAMADOR devolve o valor restaurado por CIMA do reset
+    # -- a maquina, sozinha, nao promete preservar `flattened` atraves de
+    # `resume_session`; quem promete isso e' o runtime.
+    flat_antes = outra.flattened
+    pending = outra.resume_session(pd.Timestamp("2026-01-05").date())
+    outra.flattened = flat_antes
+
+    assert pending is None
+    assert outra.positions == []
+    assert outra.resting_limit is None
+    assert outra.flattened is True
+
+    # O piso, chamado de novo apos o restart, continua NO-OP.
+    ev = outra.force_flatten_by_wall_clock(pd.Timestamp("2026-01-05 21:05", tz="UTC"))
+    assert ev == []
+
+
+def test_restore_preserva_ultimo_preco_para_o_piso_sobreviver_a_um_restart():
+    """O preco que o piso usaria (`_last_bar_close`) precisa sobreviver a um
+    restart de processo -- sem isto, um restart depois do corte (com
+    posicao aberta e nenhuma barra nova ainda chegada) faria o piso
+    encontrar `_last_bar_close is None` e levantar em vez de achatar."""
+    strat = _Scripted({0: [EnterLimit(side="long", limit_price=9.80)]})
+    m = IntradaySessionMachine(strat, _config(session_end_time=time(20, 50)))
+    m.begin_session(pd.Timestamp("2026-01-05").date())
+    m.on_closed_bar(_bar(0, 10.00, 10.00, 10.00, 10.00))
+    m.on_closed_bar(_bar(1, 10.00, 10.00, 9.79, 9.85))  # ultimo close = 9.85
+    assert m.positions
+
+    outra = IntradaySessionMachine(_Scripted({}), _config(session_end_time=time(20, 50)))
+    outra.restore(m.state())
+    pending = outra.resume_session(pd.Timestamp("2026-01-05").date(),
+                                   seed_pending=None)
+    assert pending is None  # ja tem posicao (restaurada) -- nao replanta nada
+    assert outra.positions, "restore() tem de repor a posicao"
+
+    ev = outra.force_flatten_by_wall_clock(pd.Timestamp("2026-01-05 21:00", tz="UTC"))
+    fechadas = [e for e in ev if isinstance(e, PositionClosed)]
+    assert len(fechadas) == 1
+    assert fechadas[0].trade.exit_price == pytest.approx(9.85)
+
+
 # ---------- marcacao a mercado --------------------------------------------
 
 def test_unrealized_brl_reflete_o_lado_da_posicao():
