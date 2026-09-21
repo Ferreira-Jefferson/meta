@@ -38,3 +38,17 @@ data/raw_ticks/*.uniao.parquet
 # subdiretorio (`win_por_pregao/`, 60 arquivos, 600 MB) e por isso reaparecia
 # inteira no `git status` como arquivo novo.
 data/raw_ticks/**/*.parquet
+# MESMO buraco do `.bak-` de `raw_ticks` acima, na pasta irma -- a regeneracao
+# do M1 canonico deixa `.parquet.bak-<data>`, que nao casa com `*.parquet`. So'
+# apareceu porque a linha do `raw_ticks` foi escrita sem varrer as outras
+# instancias do padrao.
+data/raw_intraday/*.bak-*
+# Copias de seguranca do banco AO VIVO, feitas antes de correcao de orfa e de
+# reconciliacao de gap. Sao fotos de estado de runtime desta maquina -- o que
+# precisa sobreviver a troca de maquina esta' no journal, nao aqui.
+db/backups/
+# Saida de rodada: logs de sweep/treino e a pasta de progresso do evolutivo.
+# 45 MB e crescendo, e nada ali e' fonte -- o que vale de uma rodada vira
+# numero em LICOES_DE_PRODUCAO.md, memoria do projeto ou mensagem de commit.
+# Deixar solto faz o `git status` esconder arquivo de verdade no meio do lixo.
+scratch/
