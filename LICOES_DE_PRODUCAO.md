@@ -3512,6 +3512,203 @@ e ainda assim nascer do lado errado do preço corrente.
 
 ---
 
+### 4.31 O alarme de deslize de SAÍDA compara contra o alvo DECLARADO na entrada — quando a própria estratégia move o alvo, ele dispara em 5 de 6 saídas normais
+
+Achado na auditoria da semana de sombra 2026-09-14 a 2026-09-18 (318
+operações fechadas, 6 slots). `live/intraday_runtime.py` grava
+`self._alvo_declarado = evento.target` no instante da ENTRADA (linha 4859) e
+compara contra esse MESMO valor no fechamento (linha 5079, condicionado a
+`trade.exit_reason == IntradayExitReason.TARGET`). O alarme nunca é
+atualizado por uma reprecificação de alvo em vida: `grep AdjustTarget` em
+`intraday_runtime.py` não devolve nenhuma ocorrência — o único lugar que trata
+`AdjustTarget` é o motor (`backtest/intraday/machine.py`).
+
+O `wdo_orb` (TOP-1 do pódio, em sombra) tem `saida_limite_minutos=60.0`: por
+DESENHO, 60 minutos depois da entrada ele manda `AdjustTarget(preço corrente)`
+e passa a esperar a ordem-limite encher no nível NOVO (item 4.26, o mecanismo
+que responde por 81% do líquido da ORB). O alarme de deslize nunca soube disso
+— ele continua comparando o preço de saída contra o alvo do minuto zero.
+
+**O número.** Das 6 operações do `wdo_orb` na semana, **5 dispararam "DESLIZE
+DE SAIDA"**, somando **R$705,00** de deslize (R$275,00 + R$35,00 + R$125,00 +
+R$90,00 + R$180,00) — fantasma nas cinco: o preço executado era o alvo
+REANCORADO, não o declarado na entrada. O resultado líquido real das 6 foi
+**+R$377,00** — o alarme reportou deslize de quase o DOBRO do lucro do robô,
+sem nenhum real perdido de verdade. A única saída que não disparou (17/09) foi
+a que fechou além do alvo original, sem passar pelo corte de 60 minutos.
+
+**Por que não é cosmético.** O comentário no próprio código (junto da linha
+5079) documenta que este alarme é "o ÚNICO jeito de descobrir que o alvo
+fatiado estourou `exit_ttl_bars` e saiu a MERCADO" — o caminho de execução
+mais caro do robô (item 4.21). Um alarme que dispara em 5 de 6 saídas normais
+soterra exatamente o evento que ele existe para achar: quando o estouro de
+prazo REAL acontecer, ele vai chegar misturado a um lote de falsos positivos
+que ninguém mais confere, um por um. É o MESMO modo de falha já corrigido uma
+vez: até 2026-09-09 este alarme disparava em todo STOP (o mesmo comentário
+registra o caso real — short entrada 5107,50/alvo 5106,50 fechado no stop a
+5116,00, "DESLIZE DE SAIDA — R$ +95,00" que era só a distância normal entre
+stop e alvo). Aquela correção fechou a porta do STOP e deixou a porta do ALVO
+MOVIDO aberta — é o item 4.15 ("rótulo por intenção esconde o deslize") de
+novo, num campo que já tinha sido corrigido uma vez para o motivo errado de
+disparo e continua sem tratar o motivo certo.
+
+> **Regra (portável — vale em qualquer linguagem/plataforma, e para qualquer
+> alarme de execução, não só este).** Um alarme que compara "o que a
+> estratégia pediu" contra "o que foi executado" tem de comparar contra o
+> nível VIGENTE no momento da saída, nunca contra o nível declarado na
+> entrada — porque qualquer direito que a estratégia tenha de mover o próprio
+> nível (alvo, stop, o que for) transforma o alarme numa fonte de falso
+> positivo proporcional a QUANTO ela move, e não a nenhuma execução ruim.
+> Corolário de auditoria: quando um alarme passa a disparar na MAIORIA dos
+> eventos que deveria vigiar, ele parou de ser alarme e virou ruído — a taxa
+> de disparo é métrica de saúde do PRÓPRIO ALARME, não só do robô que ele
+> vigia, e merece a mesma suspeita que uma suíte de testes sempre verde
+> (7.3) ou um teste que nunca reprova.
+> (4.15, 4.21, 4.26)
+
+### 4.32 A cadência de reancoragem reseta a fila a cada nível novo — a mesma estratégia armou 1.012 níveis num pregão e preencheu ZERO
+
+Achado na mesma auditoria da semana de sombra 2026-09-14 a 2026-09-18. O motor
+reseta `_queue_ahead_remaining = cfg.queue_ahead_qty` toda vez que um nível
+NOVO é armado (`backtest/intraday/machine.py`, linha ~1966) — por desenho,
+documentado de propósito no comentário de `queue_ahead_qty` (linhas ~355-363):
+"um REARME que recalcula o MESMO nível... NÃO reseta... Um rearme que muda de
+nível de verdade... reseta... É exatamente o custo que o motor antigo cobrava
+ZERO e este parâmetro passa a cobrar." O que ninguém tinha medido é a
+consequência de uma estratégia que reancora RÁPIDO DEMAIS: ela nunca deixa a
+fila do nível novo drenar antes de trocar de nível de novo, e a taxa de
+preenchimento vai a zero por CONSTRUÇÃO, não por falta de sinal.
+
+**O número**, `wdo_grid_reload_maker` (TOP-2 do pódio), fila calibrada em
+329 (entrada) / 494 (saída) contratos:
+
+| pregão | níveis armados (novos + reprecificações) | preenchimentos |
+|---|---|---|
+| 2026-09-14 | 76 (53 + 23) | 49 |
+| 2026-09-15 | 96 (61 + 35) | 61 |
+| **2026-09-16** | **1.012 (587 + 425)** | **0** |
+| **2026-09-17** | **73 (44 + 29)** | **0** |
+| 2026-09-18 | 2 (1 + 1) | 1 |
+
+Em 16/09 o robô armou **1.012** ordens-limite e preencheu **ZERO**. No mesmo
+símbolo, no mesmo dia, o `wdo_grid_fade_off_t3` armou 101 e preencheu 64 — não
+foi o mercado que fechou, foi a CADÊNCIA: uma estratégia que reprecifica antes
+de a fila anterior drenar paga a fila cheia a cada troca, para sempre, e nunca
+acumula tempo suficiente parada num nível para preenchê-lo.
+
+O que isso esconde numa tabela padrão: "0 trades" e "1.012 tentativas, 0
+preenchimentos" são diagnósticos OPOSTOS — o primeiro diz que não houve sinal
+para operar; o segundo diz que o desenho de execução é inviável independente
+de a estratégia estar certa sobre a direção. A tabela de saída hoje (`backtest/
+intraday/report.py`) não distingue os dois: as 12 colunas fixas mostram
+`trades` (contagem de round-trips fechados), não níveis armados.
+
+> **Regra (portável).** Numa estratégia que entra por ordem-limite, a
+> CADÊNCIA de reancoragem é parâmetro de EXECUÇÃO tão decisivo quanto o alvo e
+> o stop — se ela reprecifica mais rápido que o tempo de drenagem da fila do
+> nível, a taxa de preenchimento vai a zero por construção, e nenhuma
+> auditoria de geometria (alvo, stop, filtro de entrada) vai explicar o motivo
+> porque o motivo não está na geometria. Medição obrigatória para qualquer
+> robô maker que reancora: reportar **níveis armados por preenchimento** ao
+> lado do número de trades — "0 trades" sozinho não diz se foi ausência de
+> sinal ou cadência inviável, e são decisões de conserto completamente
+> diferentes (a primeira pede outra estratégia; a segunda pede outro
+> intervalo mínimo entre reancoragens).
+> **Pergunte à plataforma nova:** pergunta 114 (nova). (4.9, 4.14, 4.19, 6.21)
+
+Complemento (2026-09-19, item 6.44): o mecanismo acima é real — reancorar
+rápido demais pode zerar o preenchimento num pregão isolado. Mas a mesma
+cadência varrida AGREGADA em 72 pregões (10s a 180s) não move a variável que
+decide o resultado (o payoff, que fixa o breakeven) — não leia este item como
+"calibre o freio e ganhe": a medição agregada diz que, uma vez fora da faixa
+patológica, não há gradiente utilizável.
+
+### 4.33 Quando `live/` recusa enviar a ordem, a ESTRATÉGIA não fica sabendo — a notificação que o item 4.25 corrigiu no MOTOR não cobria o caminho novo da camada de execução — CORRIGIDO 2026-09-21
+
+> **DESFECHO, 2026-09-21 — corrigido no mesmo dia.** O aviso saiu dos
+> chamadores e foi para o ÚNICO ponto de esquecimento:
+> `IntradaySessionMachine.discard_resting_limit` (em
+> `src/backtest/intraday/machine.py`) passou a receber `ts` OBRIGATÓRIO e a
+> chamar `strategy.on_order_rejected(ts)` quando de fato havia ordem
+> vigiada. Os cinco chamadores em `src/live/intraday_runtime.py` foram
+> atualizados (`_reconcilia_entrada_orfa`, `_descarta_arme_de_barra_velha`,
+> `_recusa_por_cota_de_envio`, o disjuntor de cadência dentro de
+> `_on_limit_placed`, e `_recusa_de_envio`).
+>
+> O invariante que sustenta a correção: **enquanto avisar era
+> responsabilidade de quem chama, cinco chamadores independentes
+> concordaram em não avisar.** Com `ts` obrigatório e o aviso dentro da
+> função, um sexto caminho não tem como esquecer — ou ele avisa, ou não
+> compila. Regra geral: quando o mesmo esquecimento aparece em N pontos, o
+> conserto não é lembrar N vezes, é mover a obrigação para o ponto único
+> por onde todos passam e torná-la impossível de omitir pela assinatura.
+>
+> Vale registrar que o comentário que existia em `_recusa_de_envio`
+> argumentava o CONTRÁRIO — dizia que avisar seria `live/` decidindo por
+> conta própria (regra 6 do `AGENTS.md`) porque "recusa de corretora não
+> existe no backtest". O argumento estava invertido: a regra 7 do mesmo
+> `AGENTS.md` diz que o buraco é REPORTADO à estratégia, que decide se
+> ainda deve algo — "interpretar o buraco é da estratégia, nunca de
+> `live/`". **Não avisar também é uma decisão, tomada por omissão, e é a
+> pior das duas**: no backtest não existe estado em que a estratégia tenha
+> armado uma ordem, a ordem tenha deixado de existir e ninguém a avise —
+> ela sempre preenche, expira ou é recusada. O silêncio produzia um estado
+> que o backtest não sabe reproduzir, que é exatamente o que a regra 6
+> existe para impedir.
+>
+> Testes que travam a regressão, em `tests/test_intraday_live_runtime.py`:
+> `test_barra_velha_AVISA_a_estrategia_que_a_ordem_dela_morreu`,
+> `test_robo_REARMA_no_mesmo_pregao_depois_da_recusa_por_barra_velha` e
+> `test_esquecer_a_ordem_SEMPRE_avisa_a_estrategia_seja_qual_for_o_caminho`
+> (checagem estática da assinatura: falha se `ts` ganhar default ou se o
+> aviso sair da função).
+
+Mesmo pregão de 2026-09-21 (item 5.27, abaixo), e reincidência de 2026-09-14
+e 2026-09-15, slot de sombra `dt-wdo_orb-wdo@-shadow`. O feed de tick do
+`WDO@` congelou por **36 minutos** (09:06:54 até ~09:43 BRT) — três robôs de
+WDO@ pararam no mesmo `ultima_barra=2026-09-21 12:06:54.934+00:00`, 437
+passos `daytrade_espera` seguidos, enquanto um processo NOVO lendo o mesmo
+terminal recebia tick normal em `WDOV26` até 12:43. `falha_de_leitura` ficou
+`None` o tempo todo — a leitura "deu certo" e devolveu lista vazia, então o
+vigia de cegueira criado depois do item 5.17 não dispara para este modo de
+falha.
+
+Quando o feed voltou, o robô consumiu 17.981 barras de uma vez, a estratégia
+armou a entrada do dia, e `live/` recusou o envio CORRETAMENTE por BARRA
+VELHA (atraso 2.177,6s = 36 min, teto 120s); o diário registrou o `warn`
+direitinho. **O defeito:** `IntradayLiveRuntime._descarta_arme_de_barra_velha`
+chama só `machine.discard_resting_limit()` — limpa a ordem vigiada no MOTOR,
+mas não avisa a ESTRATÉGIA, porque `on_order_rejected`/`on_order_expired` só
+são chamados de dentro de `backtest/intraday/machine.py`, nunca deste
+caminho. No `wdo_orb`, `_armou_hoje` fica `True` para sempre: o robô passa o
+resto do pregão em silêncio achando que tem ordem no livro. Mesmo defeito em
+`_recusa_por_cota_de_envio` (cota de vazão). Reproduzido fora do motor:
+depois do arme recusado, quatro rompimentos seguidos devolvem `[]`; uma
+única chamada a `on_order_rejected` devolve o robô ao ar imediatamente.
+
+Frequência medida no log do slot de sombra: recusa por barra velha em
+2026-09-14, 2026-09-15 e 2026-09-21 — **3 dos 7 pregões** desde 11/09. Em
+15/09 e 21/09 o robô fechou o pregão com ZERO entradas.
+
+É a MESMA família do bug que o item 4.25 corrigiu em 2026-09-10 (o motor
+cancelava por prazo sem avisar, `_armou_hoje` ficava ligado — custou 14 dos
+72 pregões do IS, +R$1.236 contra +R$1.649). A correção de então cobriu o
+caminho do MOTOR e deixou descoberto o caminho do `live/`.
+
+> **Regra (portável).** Todo caminho que mata uma ordem tem de avisar QUEM A
+> PEDIU, não só quem a vigiava. Esquecer a ordem na camada de execução e não
+> notificar a camada de decisão produz um robô que acha que está posicionado
+> e fica mudo — e mudo é indistinguível, no fim do dia, de "não houve
+> sinal". A notificação de morte de ordem é obrigação do PONTO onde a ordem
+> morre, seja qual for a camada; se uma camada nova puder recusar envio, ela
+> herda a obrigação junto. Corolário de auditoria (7.1): ao corrigir uma
+> notificação faltante, varra TODOS os pontos que matam ordem, não só o que
+> apareceu — o padrão certo já existia no repo (4.25) e mesmo assim não foi
+> replicado para o segundo caminho.
+> **Pergunte à plataforma nova:** pergunta 116 (nova). (4.25, 7.1, 5.17)
+
+---
+
 ## Parte 5 — Dados, relógio e instrumento
 
 ### 5.1 Fuso errado desliga proteção em silêncio
@@ -4889,6 +5086,275 @@ coleta.
 >    coisa —, não a causa específica.
 >
 > **Pergunte à plataforma nova:** pergunta 111 da Parte 8. (5.26)
+
+### 5.27 O mapa de contrato de futuro nasce VAZIO quando o robô sobe antes da abertura — e vazio não é "nada a mapear" — CORRIGIDO 2026-09-21
+
+> **DESFECHO, 2026-09-21 — corrigido no mesmo dia, em DUAS camadas**, porque
+> a hora em que o dono clica em "Iniciar operação" não é controlável:
+>
+> 1. **`dashboard/live_control.start()`**: a condição de redetecção passou
+>    de `if config.mt5_symbol_map is None:` para
+>    `if not config.mt5_symbol_map:`. Um mapa `{}` é detecção que NÃO
+>    RESOLVEU, nunca "nada a mapear". Redetectar sobre `{}` custa uma
+>    consulta que para ação devolve `{}` de novo em milissegundos (a
+>    detecção só olha ticker terminado em `@`); deixar o vazio grudado
+>    custa um pregão. Testes:
+>    `test_start_com_mapa_de_futuro_VAZIO_REDETECTA_o_contrato` e
+>    `test_start_com_mapa_de_futuro_PREENCHIDO_nao_redetecta` em
+>    `tests/test_live_control.py`.
+> 2. **`IntradayLiveRuntime._check_simbolo_negociavel`** (novo portão de
+>    início de pregão, ao lado dos de relógio/AutoTrading/caixa): no
+>    primeiro passo do pregão — que por definição acontece com o mercado
+>    ABERTO, portanto com book — o robô pergunta se o símbolo de DESTINO
+>    aceita ordem (`MT5Broker.aceita_ordem`, que lê `trade_mode` do
+>    símbolo que `symbol_for` resolve). Se não aceita, ele REDETECTA o
+>    contrato e instala no broker em memória
+>    (`MT5Broker.adota_symbol_map`), sem reiniciar o processo — reiniciar
+>    recalibraria a sessão a frio, e um robô intradiário recalibrado no
+>    meio do pregão é outro robô (a "faixa de abertura" do `wdo_orb`
+>    viraria o horário do restart). Se ainda não aceita, grava IMPEDIMENTO
+>    e não opera. Só em execução real (`executor is not None`): sombra não
+>    manda ordem, então `trade_mode` do destino não muda nada para ela.
+>    Testes:
+>    `test_simbolo_continuo_sem_mapa_se_AUTOCORRIGE_no_primeiro_passo`,
+>    `test_simbolo_que_nao_negocia_e_nao_tem_conserto_vira_IMPEDIMENTO`,
+>    `test_simbolo_negociavel_nao_paga_deteccao_nenhuma`,
+>    `test_sombra_nao_e_barrada_por_simbolo_que_nao_negocia`.
+>
+> O invariante que sustenta as duas camadas: **detecção automática de
+> ambiente que só roda no momento de SUBIR o robô herda a hora em que
+> alguém clicou.** Se a detecção depende do mercado estar aberto, ela
+> precisa de uma segunda chance no primeiro instante em que o mercado está
+> aberto — e, falhando as duas, o robô declara que não pode operar em vez
+> de ficar verde.
+>
+> A camada (1) existe por causa de um TERCEIRO defeito, só visível ao ir
+> reiniciar o slot: a config salva em `db/live_process.json` guardava
+> `mt5_symbol_map: {}`, então reiniciar o slot reproduziria o bug de novo.
+> Aviso de método: um valor degradado que é PERSISTIDO deixa de ser um
+> acidente de um dia e passa a ser o default de todos os dias seguintes.
+
+2026-09-21, slot `dt-wdo_orb-wdo@-live`, dinheiro real, robô `wdo_orb`,
+capital R$375. O slot foi iniciado às 08:54 BRT, **6 minutos antes** da
+abertura do pregão (09:00). `dashboard/live_control.detect_futures_symbol_map`
+roda a cada "Iniciar operação" e devolve o ticker mapeado para ELE MESMO
+quando nenhum contrato candidato tem BOOK DE DOIS LADOS (`bid>0` e `ask>0`)
+— regra documentada em `MT5Broker.detect_futures_symbol_map`, criada de
+propósito para não escolher contrato morto. Às 08:54 nenhum contrato de WDO
+tinha book (mercado fechado): a detecção degradou para `WDO@ -> WDO@`, e o
+filtro `simbolo != broker.symbol_for(ticker)` removeu a entrada — o mapa
+salvo foi `{}`.
+
+`live_control.start()` só detecta quando `config.mt5_symbol_map is None`;
+`{}` não é `None`, e `if config.mt5_symbol_map:` é falso, então
+`--mt5-symbol-map` NÃO foi passado na linha de comando. Confirmado no argv
+do processo (pid 8724): `run_live.py ... --slot dt-wdo_orb-wdo@-live
+--execution-mode live ... loop --seconds 5`, sem a flag. O slot irmão
+`wdo_grid_reload_maker`, iniciado às 09:25 (mercado já aberto), recebeu
+`--mt5-symbol-map "{\"WDO@\": \"WDOV26\"}"` corretamente.
+
+Consequência medida no terminal: `mt5.symbol_info("WDO@").trade_mode == 0`
+(SYMBOL_TRADE_MODE_DISABLED), `bid=0.0`, `ask=0.0`; `WDOV26` tinha
+`trade_mode == 4` e book cheio (bid 5131,5 / ask 5132,0). `MT5IntradayExecution`
+passa `ticker=self.symbol` = `"WDO@"` para o broker, e
+`MT5Broker.symbol_for("WDO@")` sem mapa devolve `"WDO@"` — toda ordem real do
+dia seria recusada pelo servidor com retcode 10017 TRADE_DISABLED, o mesmo
+incidente de 2026-08-28 voltando por uma porta nova. Agravante:
+`position_state("WDO@")` e o `_ensure_protecao` também consultam `WDO@`,
+cegando a conferência de posição/proteção para qualquer posição que
+existisse no contrato real. Custo do dia: zero intents, zero orders no
+`db/live.sqlite` (conta 574) — o robô passou o pregão inteiro incapaz de
+executar uma única ordem. Em SOMBRA o defeito é invisível (não manda ordem),
+o que torna a armadilha pior: o cartão do painel fica verde.
+
+> **Regra (portável).** Detecção automática de contrato/símbolo tem de
+> rodar — ou ser reconferida — com o MERCADO ABERTO, e um mapa VAZIO num
+> robô de futuro é estado INVÁLIDO, não "nada a mapear". Um ticker
+> contínuo/sintético (`WDO@`, `WIN@`) sem entrada no mapa significa que a
+> ordem vai para um símbolo que a corretora não aceita. O invariante: antes
+> do primeiro envio real do pregão, o robô confirma que o símbolo de destino
+> aceita ordem (`trade_mode` habilitado e book de dois lados); se não
+> aceita, ele grava IMPEDIMENTO e não finge estar operando. Degradar em
+> silêncio para o sintoma (ordem recusada mais tarde) só é aceitável se
+> alguém for VER a recusa — e num dia sem sinal ninguém vê.
+> **Pergunte à plataforma nova:** pergunta 117 (nova). (5.4, 1.24, 3.18)
+
+---
+
+### 5.28 O vigia de cegueira criado depois do item 5.17 não pega o modo de falha em que o feed devolve lista VAZIA "com sucesso" — 36 minutos cego, zero linha no diário — CORRIGIDO 2026-09-21
+
+Mesmo pregão de 2026-09-21 dos itens 4.33 e 5.27. O feed de tick do `WDO@`
+parou de entregar negócio novo às 09:06:54 BRT e só voltou às ~09:43 —
+**36 minutos**, **437 passos `daytrade_espera` seguidos**, **três robôs de
+WDO@ travados na MESMA marca d'água**
+(`ultima_barra=2026-09-21 12:06:54.934+00:00`), e **ZERO linha em qualquer
+diário**. Um processo NOVO lendo o mesmo terminal no meio do apagão também
+recebia truncado (`WDO@` parava em 12:06 enquanto `WDOV26` entregava até
+12:43) — o defeito era do TERMINAL, não do processo: não havia
+autocorreção possível, só detecção.
+
+O vigia que já existia (`_vigia_leitura_do_feed`, criado depois do item
+5.17) não pega este modo de falha: ele olha `falha_de_leitura`, e a leitura
+"deu certo" o tempo todo — devolveu lista VAZIA. Lista vazia é o caso
+NORMAL de um papel sem negócio (está no próprio contrato de
+`closed_bars_since`), então o feed não tem como acusar por conta própria.
+**Quem pode distinguir "papel parado" de "terminal não entregando" é quem
+tem o RELÓGIO na mão** — e isso é o runtime, não o feed.
+
+**A correção** (`IntradayLiveRuntime._vigia_cegueira_do_feed`): mede tempo
+de PAREDE sem barra e, passado o limite, grava `warn` no diário + IMPEDIMENTO
+no painel; quando o dado volta, grava a linha de volta com quantos minutos
+ficou cego e o impedimento sai sozinho. Uma linha por TRANSIÇÃO, nunca uma
+por passo — a 5s por passo, os 36 minutos daquele dia virariam 437 linhas
+iguais e o diário ficaria ilegível justamente no pregão que mais precisava
+ser lido. A marca zero é a ABERTURA DA SESSÃO (`_start_session`), não a
+criação do objeto: o slot subiu às 08:54 e os 6 minutos de mercado fechado
+não podem contar como cegueira.
+
+O limite vem do FEED, não do runtime (`minutos_sem_barra_para_alarme`, na
+mesma forma de `nominal_delay_seconds`) — e é DIFERENTE por tipo de feed,
+decisão do dono, 2026-09-21:
+
+| tipo de feed | limite | por quê |
+|---|---|---|
+| tick (futuro líquido) | 5 min | `WDO@` mede mediana de ~336 negócios por MINUTO — cinco minutos secos não é mercado parado, é o terminal |
+| M1 (ação) | 30 min | `PMAM3` foi medida em ~18 barras num pregão INTEIRO; 5 minutos ali é terça-feira normal |
+
+A razão de não ser um número único é a lição: **um alarme que dispara em
+situação normal treina o dono a ignorá-lo, e isso é pior do que não ter
+alarme** — o mesmo corolário do item 5.17 ("vazio com erro OK NÃO pode
+virar alarme").
+
+Testes: `test_feed_de_TICK_sem_barra_por_minutos_vira_warn_e_impedimento`,
+`test_feed_cego_escreve_UMA_linha_e_outra_quando_volta`,
+`test_feed_M1_de_acao_iliquida_NAO_alarma_em_5_min`,
+`test_limite_de_cegueira_vem_do_FEED_nunca_do_runtime`,
+`test_robo_que_subiu_antes_da_abertura_nao_nasce_cego`.
+
+**O que o vigia NÃO faz, e precisa estar escrito:** ele avisa e impede, não
+conserta — o dado não está na nossa mão. Quem cuida de não operar contra
+preço morto quando o feed volta continua sendo
+`MAX_ATRASO_PARA_ORDEM_SEGUNDOS` (item 5.17); quem cuida de não virar o dia
+com posição aberta continua sendo `_aplicar_piso_de_relogio`. O que faltava
+era o dono SABER.
+
+> **Regra (portável).** Um detector de falha que só reage a "a leitura deu
+> erro" está cego para o modo de falha em que a plataforma devolve sucesso
+> vazio — e vazio-de-sucesso é, por construção, indistinguível de "não
+> aconteceu nada hoje". Quem decide se um vazio prolongado é normal ou é
+> apagão é quem conhece o RITMO esperado daquele instrumento, não o feed
+> (que só sabe se a chamada teve erro). O limite de alarme não pode ser uma
+> constante única do sistema: tem de vir do próprio feed/instrumento, e ser
+> medido contra o ritmo real de negociação — um limite calibrado para um
+> papel líquido dispara em falso em qualquer papel ilíquido, e a
+> consequência de um falso alarme é o dono aprender a ignorar o alarme
+> verdadeiro.
+> **Pergunte à plataforma nova:** pergunta 118 (nova). (5.17, 4.33, 5.27)
+
+---
+
+### 5.29 Restart no meio do pregão entregava OUTRO robô, porque o warm start nascia DESLIGADO — CORRIGIDO 2026-09-21
+
+Mesmo pregão de 2026-09-21 dos itens 4.33 e 5.27/5.28 — o quinto conserto do
+dia. O slot `dt-wdo_orb-wdo@-live` (dinheiro real) foi reiniciado às 11:19
+BRT, com o pregão em curso. O robô voltou a operar com `_open_ts` = a
+primeira barra que ele VIU, ou seja 11:19 — e a "faixa de abertura dos 15
+primeiros minutos do pregão", de onde o `WdoOrb` tira stop E alvo, passou a
+ser **11:19..11:34** em vez de **09:00..09:15**. Geometria que nenhum
+backtest descreve, operando dinheiro de verdade.
+
+**A causa: um default que nunca foi decisão sobre esses robôs.**
+`IntradayLiveRuntime._needs_warm_start` era:
+
+```
+corte = self._fixed_anchor_until
+if corte is None:
+    return False          # <- aqui
+return now < corte
+```
+
+O `return False` para `corte is None` (robô SEM conceito de âncora fixa) era
+o valor de queda de uma política escrita em 2026-08-21 para a `Gremah`, que
+era o único robô com âncora fixa na época. A política dela está certa e
+continua valendo (ligar warm start depois de `fixed_anchor_until` carregaria
+uma ordem fixa já obsoleta, só detectável dentro de `on_bar` — uma barra de
+defasagem amplificada pela dependência de caminho). Mas ela nunca disse nada
+sobre robôs sem âncora fixa — e todos eles herdaram "nunca faz warm start"
+por acidente de escrita: `wdo_orb`, `wdo_grid_reload_maker`,
+`wdo_grid_fade_off_t3`, `copa_win`, `win_retangulo`, `wdo_retangulo`,
+`wdo_evo`.
+
+**A correção:** o default foi INVERTIDO. Warm start passou a ser o padrão; a
+exceção é a janela de âncora fixa ainda vigente (a da `Gremah`, preservada e
+coberta por teste). Razão de fundo, que é o invariante do projeto: **no
+backtest a estratégia SEMPRE viu o pregão inteiro, da abertura até a barra
+corrente.** Não existe lá um robô que acorda às 11h sem saber o que
+aconteceu às 9h. Começar a frio no meio do pregão produz estado interno que
+nenhum backtest descreve — e para a família de robôs cuja geometria sai da
+ABERTURA do dia isso não é "menos calibrado", é OUTRA ESTRATÉGIA.
+
+**Provado no caso real, no mesmo pregão.** Depois da correção, o restart do
+mesmo slot registrou no diário: `warm start, 66700 barra(s), ordem em pe @
+5128.5000 (stop 5143.5000 / alvo 5106.0000)`, com `_open_ts` reconstruído em
+09:00:45 e faixa 5128,0..5149,0 (21 pontos = 42 ticks, teto do stop mordendo
+em 30). A ordem foi confirmada na corretora: ticket 5963781017, SELL LIMIT 1
+contrato @ 5128,50, SL 5143,50, sem TP nativo (o alvo vai como limite
+fatiada depois do fill, item 4.24). Antes da correção o mesmo restart dava
+faixa 11:19..11:34.
+
+**As duas objeções que pareciam impedir a correção, e por que não impedem**
+— esta é a parte que precisa sobreviver, porque as duas eram plausíveis e as
+duas estavam erradas:
+
+1. *"Warm start pode mandar ordem contra preço morto"* — NÃO pode. A
+   semente vai até `now` (`session_bars_until(session, now)`), então a
+   ordem que o warm start arma foi decidida na barra MAIS RECENTE. O replay
+   reconstrói ESTADO; a decisão é fresca. É por isso que o portão de barra
+   velha de `_on_limit_placed` (item 4.33, que este caminho não atravessa)
+   não faz falta ali. **Esta objeção foi levantada sem verificar o código, e
+   custou uma rodada inteira de hesitação.**
+2. *"O custo reabre o incidente do item 5.9"* (as 31 buscas de histórico
+   que derrubaram dois slots pelo watchdog de heartbeat) — NÃO reabre, e a
+   diferença é de duas ordens de grandeza. Medido contra o terminal real em
+   2026-09-21, pior caso do repo (feed de TICK do `WDO@`, pregão INTEIRO):
+   **6,9s** (18/09, 113.615 barras) a **14,4s** (17/09, 127.215 barras),
+   somando busca + replay, UMA vez por processo por pregão. O piso do
+   watchdog é **900s** (`live_control._HEARTBEAT_FLOOR_SECONDS`), e a
+   docstring desse piso já registra que o catch-up do próprio robô passa de
+   180s numa única chamada de `run_once`. 31 × ~14s = ~430s era o problema;
+   1 × 14s não é.
+
+O teste que guardava o item 5.9
+(`test_robo_sem_hooks_de_seed_sobrescritos_nao_busca_historico_nenhum`)
+afirmava "ZERO buscas" e passou a falhar. **A asserção estava medindo a
+coisa errada, e isso também é lição:** o invariante do 5.9 é "nenhuma busca
+para alimentar hook NO-OP" — e as 31 buscas dele eram todas de pregões
+ANTERIORES, alimentando `seed_volume_window`/`seed_daily_volatility`/
+`seed_typical_trade_size`. Essas continuam em zero. O teste foi reescrito
+para medir exatamente isso (nenhuma busca de pregão anterior) e travar a
+busca do pregão de HOJE em exatamente 1 — mais que 1 é regressão do 5.9,
+nenhuma é o robô perdendo a abertura.
+
+> **Regra (portável).** Reiniciar o processo não pode trocar a estratégia.
+> Se o estado interno do robô depende do começo da sessão, um processo que
+> sobe no meio dela tem de RECONSTRUIR a sessão desde a abertura, não
+> começar do zero — porque o backtest que validou o robô sempre viu o
+> pregão inteiro. E o invariante mais geral, que vale além deste caso: **um
+> default que nasceu como valor de queda de uma política escrita para OUTRO
+> caso não é uma decisão** — quando uma política nova cobre um subconjunto
+> (aqui: robôs COM âncora fixa), verifique explicitamente o que acontece com
+> o complemento, em vez de deixá-lo herdar o `else`.
+
+Testes novos que travam a regressão, em `tests/test_intraday_live_runtime.py`:
+`test_restart_no_meio_do_pregao_RECONSTROI_desde_a_abertura`,
+`test_robo_com_ancora_fixa_VENCIDA_continua_comecando_a_frio` (a exceção da
+Gremah, preservada), `test_robo_com_ancora_fixa_VIGENTE_faz_warm_start_como_sempre`
+e `test_partida_na_abertura_sem_barra_nenhuma_ainda_cai_no_frio` (a partida
+normal das 09:00, que continua caindo no caminho a frio porque a semente vem
+vazia). Suíte inteira depois do conserto: 2.215 testes, 1 skip (o skip é o
+de sempre, do pacote MetaTrader5 real instalado nesta máquina).
+
+> **Pergunte à plataforma nova:** pergunta 119 (nova). (3.14, 4.33, 5.9, 5.27)
 
 ---
 
@@ -7066,6 +7532,143 @@ tratado como resolvido.
 > piso) — esta é a quarta forma, e a única das quatro em que a medição
 > original estava certa quando foi feita.
 
+### 6.44 Um parâmetro pode mexer no resultado aparente sem tocar na variável que decide — e uma boa história causal em cima de dados parciais é o sintoma mais perigoso, não a defesa
+
+2026-09-19, varredura do freio de reancoragem (`reancora_min_segundos`) do
+`wdo_grid_reload_maker`, 8 valores (10s a 180s), cada célula sobre o IS
+congelado inteiro (72 pregões, ~4.200–5.000 operações por célula, 0/72
+pregões sem trade em todas — sem censura), motor de produção (`config_for`,
+fila calibrada 329/494 de `fidelidade.py`, capital real R$375 reposto por
+pregão):
+
+| freio | R$/op | win% | trades | ganho médio | perda média |
+|---|---|---|---|---|---|
+| 10s (produção) | −2,18 | 85,80% | 4.291 | — | — |
+| 20s | −1,23 | 86,70% | 4.548 | — | — |
+| 30s | −1,02 | 86,85% | 4.958 | +11,38 | −82,91 |
+| 45s | −1,08 | 86,74% | 4.887 | +11,49 | −83,32 |
+| 60s | −1,74 | 86,22% | 4.195 | +11,33 | −83,54 |
+| 90s | −0,94 | 86,95% | 4.775 | +11,37 | −82,98 |
+| 120s | −0,90 | 86,99% | 4.949 | +11,46 | −83,49 |
+| 180s | −1,18 | 86,47% | 4.805 | +11,69 | −83,49 |
+
+As duas últimas colunas são o achado. Em toda a grade o ganho médio ficou em
+[+11,33; +11,69] e a perda média em [−83,54; −82,91] — o payoff é INVARIANTE
+ao freio, e é o payoff que fixa o breakeven empírico em ~87,9% (fórmula do
+item 6.23). O freio só mexe na taxa de acerto, e mexe 0,77pp (86,22% a
+86,99%) contra um buraco de ~1,1pp entre win% e breakeven. O parâmetro não
+tem como fechar essa distância porque não toca na grandeza que a define.
+
+A conferência que separa curva de ruído: desvio por operação ≈
+√(w(1−w)(ganho+perda)²) ≈ R$31 com w≈0,87 e ganho+perda≈R$94; sobre ~4.800
+operações, o erro padrão do R$/op de UMA célula é ±R$0,44. A dispersão ENTRE
+as seis células de 30s a 180s tem desvio R$0,31 — MENOR que o ruído de uma
+célula sozinha. A grade inteira é uma reta plana com ruído desenhado em cima.
+
+O que isso custou nesta própria sessão: a varredura imprime uma célula por
+vez (o padrão correto do repo — resultado sai quando fica pronto), e a
+leitura em cima de dados parciais errou DUAS vezes antes de a grade fechar.
+Com 3 pontos (10s/20s/30s): "está saturando", extrapolando uma assíntota em
+−R$0,85/op. Com 5 pontos (até 60s): "é um U invertido com pico nítido em
+30s", atribuído a uma seleção adversa do maker — mecanismo plausível e
+inteiramente inventado — e quantificado como a produção jogando fora
+R$1,16/operação por estar em 10s em vez de 30s. O ponto de 90s (−R$0,94,
+melhor que o "pico" de 30s) derrubou as duas leituras, inclusive a que já
+tinha explicação mecânica pronta. Uma história causal boa sobre dados
+parciais é o sintoma mais perigoso de leitura prematura, não a defesa contra
+ela.
+
+> **Regra (portável).** Antes de ler uma varredura de parâmetro como curva,
+> faça duas perguntas, nesta ordem: **(1) o parâmetro consegue mexer na
+> variável que DECIDE?** Aqui a variável é o payoff (ganho médio e perda
+> média), que fixa o breakeven (6.23). Se essas colunas saem constantes na
+> grade inteira, o parâmetro não tem como virar o sinal do resultado, e
+> qualquer "melhora" que apareça é remanejamento de ruído — carregue ganho
+> médio e perda média em TODA tabela de varredura, não só líquido e win%.
+> **(2) A dispersão ENTRE células é maior que o erro amostral de UMA
+> célula?** Para resultado binário com payoff assimétrico, o erro padrão por
+> célula é √(w(1−w)(ganho+perda)²/n). Se o desvio entre as células for menor
+> que esse número, não há curva — há espalhamento, inclusive quando um pico
+> vem com explicação mecânica pronta. **Corolário operacional:** em
+> varredura que imprime em streaming (o padrão certo deste repo), não
+> declare forma nem mecanismo antes da última célula — streaming existe para
+> VER sem esperar o fim, não para CONCLUIR sem esperar o fim.
+
+Cruza com **4.32**: a cadência de reancoragem É um mecanismo real, capaz de
+zerar o preenchimento num pregão isolado (1.012 níveis armados, 0
+preenchimentos) — mas agregada em 72 pregões, entre 20s e 180s ela não move a
+variável que decide o resultado. Leia os dois juntos: não use este item para
+negar 4.32, nem 4.32 para prometer ganho de calibrar o freio. Cruza com
+**6.25** (eixo morto): lá o eixo não mexia em NADA; aqui o eixo mexe no
+resultado aparente sem mexer na variável que decide — é a mesma armadilha um
+degrau mais sutil. Cruza com **4.22** (escolher o parâmetro que "melhor
+encaixa" na janela já vista é ajuste, não calibração): o mesmo risco existiria
+aqui se a grade fosse lida célula a célula perseguindo o menor número, em vez
+de esperar a forma completa.
+
+---
+
+### 6.45 O arreio de treino evolutivo criava um robô novo por pregão, zerava o estado semeado, e 11 de 33 features viraram ZERO CONSTANTE em toda a busca — 12h de CPU descartadas
+
+2026-09-20, IA evolutiva do WDO@ (`wdo_evo`). O arreio de treino
+(`scripts/daytrade/evo/avaliacao.py`, função `avalia`) roda UM backtest por
+pregão, criando um robô NOVO a cada dia e entregando ao motor só as barras
+daquele dia. Em cadeia: `previous_daily_bars` do motor sai vazio →
+`strategy.seed_daily_volatility([])` deixa `range_diario_mediano = None` →
+`features._razao(x, None)` devolve `0.0` — comportamento CORRETO e documentado
+do módulo ("uma feature em 0 não empurra a decisão para lado nenhum"). Logo,
+toda feature normalizada pela escala diária vale ZERO CONSTANTE, em todo
+pregão, em toda geração.
+
+**O número.** 11 das 33 features do banco são zero constante no caminho real
+de avaliação (`larg_faixa`, `amplit_rel`, `dist_vwap`, `dist_abert`,
+`gap_abertura`, `em_retangulo`, `pos_retangulo`, `ret_1`, `ret_15`,
+`dist_max_sessao`, `dist_min_sessao` — verificado em 5 pregões,
+`range_diario_mediano=None` nos 5). A busca tinha 20 features úteis, não 33.
+Cada genoma tem 6 encaixes: apontar um para uma feature morta queima 1/6 da
+capacidade de representação. Rodada perdida: 10 espécies × 60 indivíduos × 65
+gerações, ~12h de CPU, mais ~4h de confirmação em tick descartadas. Duas
+espécies tinham a premissa INTEIRAMENTE oca — `retangulo` (2 de 2 features do
+núcleo mortas) e `vwap` (1 de 1 morta) — e o único finalista aprovado,
+`extremos`, tinha 2 dos 3 núcleos mortos.
+
+**A agravante.** No dia anterior (2026-09-19) foi corrigido um defeito da
+MESMA família: o núcleo da espécie garantia que a feature estivesse PRESENTE
+no genoma mas não que ela PESASSE — a correção impôs `PESO_MINIMO_NUCLEO =
+0.15`, comentário gravado: "restringir a FORMA sem restringir o EFEITO não
+restringe nada". Mas `peso 0,15 × feature 0,0 = 0,0`: verificou-se o peso e
+não se verificou se a feature carregava informação. A mesma vacuidade uma
+camada abaixo, encontrada só ao escrever a lição sobre a de cima.
+
+**O que não estava errado.** A bancada padrão
+(`scripts/daytrade/evo_wdo_bancada_2026_09_18.py`) carrega a janela INTEIRA
+num backtest só, então os dias anteriores acumulam e a escala existe. O furo é
+do arreio de TREINO, não do motor nem da bancada — um mesmo robô medido pelos
+dois caminhos dá números diferentes por este motivo.
+
+> **Regra (portável).** Uma feature que depende de estado semeado (escala,
+> volatilidade, histórico de sessões anteriores) tem de ser VERIFICADA como
+> viva no caminho de avaliação que a busca REALMENTE usa, não no caminho "de
+> referência" — meça a variância de cada feature dentro do arreio de
+> otimização e rejeite as constantes antes de gastar CPU. Default seguro para
+> dado ausente ("devolve 0 quando não sei") é correto para uma DECISÃO e é
+> veneno para uma BUSCA: ele transforma informação faltante em feature
+> silenciosamente inerte, e um otimizador não reclama — ele só usa o resto do
+> genoma. Degradação silenciosa seguríssima em produção vira falha invisível
+> em otimização. Corolário do par de erros (peso mínimo em 2026-09-19, feature
+> morta em 2026-09-20): ao corrigir uma vacuidade, siga a cadeia INTEIRA até o
+> valor final entregue à decisão — não pare no elo que você acabou de achar.
+
+> **Pergunte à plataforma nova:** quais features/indicadores dependem de
+> estado semeado de sessões anteriores, e o arreio de otimização usado nesta
+> plataforma entrega esse estado? Como isso é verificado — existe um teste que
+> falha se uma feature ficar constante? (pergunta 115)
+
+Cruza com **6.25** (eixo morto numa grade de parâmetro): aqui o "eixo morto"
+não é um parâmetro varrido, é uma FEATURE inteira do espaço de busca, e a
+causa não é o parâmetro não mexer em nada — é o dado de entrada já chegar
+zerado antes da busca começar.
+
 ---
 
 ## Parte 7 — Disciplina de trabalho
@@ -8124,6 +8727,71 @@ dinheiro ou meses.
      `live_control.start()`) recusavam pregão/subida de um robô em SOMBRA
      por falta de caixa — sem nunca proteger dinheiro nenhum, porque sombra
      nunca manda ordem para a corretora. (3.18)
+114. A cadência de reancoragem da minha estratégia — com que frequência ela
+     cancela e rearma um nível quando o preço não veio — foi medida contra o
+     TEMPO DE DRENAGEM da fila deste nível nesta plataforma, ou só contra o
+     preenchimento agregado do dia inteiro? A pergunta 90 cobre se a
+     plataforma preserva a posição na fila ao alterar o preço; esta cobre a
+     consequência de reancorar RÁPIDO DEMAIS mesmo quando a resposta à 90 é
+     "perde a fila sempre": aqui a mesma estratégia, no mesmo símbolo e no
+     mesmo pregão, armou 1.012 níveis novos e preencheu ZERO, contra 101
+     armados e 64 preenchidos de uma irmã mais lenta — a cadência, não o
+     mercado, decidiu a taxa de preenchimento, e "0 trades" sozinho não
+     distingue essa causa de ausência de sinal. (4.32, 90)
+115. Ao portar uma busca/otimização automática (evolutiva, grid ou outra) para
+     a plataforma nova, o arreio de TREINO entrega o mesmo estado semeado
+     (escala/volatilidade/histórico de sessões anteriores) que o motor de
+     referência entrega? Existe um teste que meça a variância de cada
+     feature/indicador DENTRO do arreio real e falhe se alguma ficar
+     constante? Aqui o arreio de treino avaliava um robô novo por pregão,
+     zerando o estado semeado, e 11 de 33 features viraram zero constante em
+     toda a busca sem que nada acusasse — 12h de CPU perdidas. (6.45)
+116. Quando a camada que ENVIA a ordem para a plataforma (não o motor de
+     simulação) decide recusar o envio — dado velho, cota de cadência
+     estourada, qualquer defesa nova adicionada depois do motor — essa
+     recusa chega de volta até quem decidiu o sinal, ou só limpa a ordem
+     vigiada por dentro? Aqui a defesa que o item 4.25 corrigiu cobria só o
+     caminho do MOTOR; a camada de envio (`live/`) ganhou o mesmo poder de
+     matar ordem meses depois e herdou o mesmo bug — 3 dos 7 pregões desde
+     11/09 tiveram o robô mudo pelo resto do dia, 2 deles com ZERO entradas,
+     achando que tinha ordem no livro. Regra de auditoria: toda vez que uma
+     camada nova ganha poder de recusar/cancelar, confira se ela também
+     ganhou o dever de notificar — não assuma que a correção anterior cobre
+     o caminho novo. (4.33, 4.25, 7.1)
+117. A detecção automática de qual contrato/símbolo negociar foi exercitada
+     com o MERCADO FECHADO, ou só depois da abertura? Um mapa de símbolo
+     VAZIO (nenhuma entrada) para um robô de futuro é tratado como "nada a
+     mapear" em algum ponto do código de subida (`if mapa:` é falso para
+     `{}` igual para `None`), ou como estado inválido que impede a primeira
+     ordem? Existe uma consulta que confirme, antes do primeiro envio real
+     do pregão, que o símbolo de destino aceita ordem (equivalente a
+     `trade_mode` habilitado) e tem book de dois lados? Aqui subir o robô 6
+     minutos antes da abertura fez a detecção degradar para "ticker mapeado
+     para ele mesmo", o filtro de mapa trivial removeu a única entrada, e o
+     robô operou o pregão inteiro contra um símbolo que a corretora recusa
+     — zero ordens enviadas, defeito invisível em sombra. (5.27, 5.4, 1.24)
+118. Na plataforma nova, como se distingue "o papel não negociou" de "a
+     plataforma parou de me entregar dado"? A API devolve alguma coisa
+     diferente nos dois casos, ou as duas situações chegam como lista
+     vazia — e, se chegam iguais, qual é o ritmo NORMAL de negócio de cada
+     instrumento, para o limite de alarme não ser arbitrário? Aqui o feed
+     do `WDO@` cegou 36 minutos devolvendo lista vazia "com sucesso", e o
+     vigia que só olhava erro de leitura não tinha como acusar — só um
+     limite calibrado contra o ritmo do instrumento (5 min em futuro
+     líquido, 30 min em ação ilíquida) distingue as duas situações. (5.28,
+     5.17)
+119. Na plataforma nova, o que acontece com o estado interno da estratégia
+     quando o processo reinicia no meio da sessão? Existe como reprocessar
+     a sessão desde a abertura, quanto custa fazer isso, e o robô
+     reconstruído fica idêntico ao que nunca caiu? Aqui um default herdado
+     por acidente ("robô sem âncora fixa nunca faz warm start", valor de
+     queda de uma política escrita só para OUTRO robô) fazia todo robô sem
+     esse conceito começar a frio no meio do pregão — um robô cuja
+     geometria sai da faixa de abertura virava, ao reiniciar às 11:19,
+     outra estratégia (faixa 11:19..11:34 em vez de 09:00..09:15). O
+     conserto reconstrói o estado desde a abertura em ~7 a ~14s de replay,
+     uma vez por processo — contra um piso de watchdog de 900s. (5.29,
+     3.14, 5.9)
 
 ---
 
@@ -8283,7 +8951,22 @@ anulando em silêncio, zero eventos FLATTEN em toda a história do diário
 verdes nunca acusaram — três camadas repetindo a mesma suposição errada
 (motor, runtime, supervisor), um teste que CONGELAVA o valor defeituoso
 havia meses, e nenhum teste morando na junta entre os dois módulos onde o
-bug de fato vivia (4.29). Mais o
+bug de fato vivia (4.29). Mais 2 itens em 2026-09-21, do primeiro pregão
+real do `wdo_orb` em produção: o slot subiu 6 minutos antes da abertura, a
+detecção automática de contrato degradou para "mapeado pra ele mesmo" por
+falta de book, e o mapa salvo ficou vazio — o robô operou o pregão inteiro
+contra um símbolo (`WDO@`) que a corretora recusa, zero ordens enviadas
+(5.27); e, no mesmo pregão, um congelamento de 36 minutos no feed de tick
+levou a estratégia a armar entrada sobre dado velho, `live/` recusou o envio
+corretamente mas não avisou a estratégia — a mesma família do item 4.25,
+agora no caminho da camada de execução em vez do motor, achado em 3 dos 7
+pregões de sombra desde 11/09 (4.33). Mais 1 item no mesmo 2026-09-21, o
+quinto conserto do dia: o warm start ao reiniciar no meio do pregão nascia
+DESLIGADO por default para todo robô sem âncora fixa — valor de queda de
+uma política escrita só para a `Gremah` — e um restart às 11:19 fez o
+`wdo_orb` tirar stop e alvo da faixa 11:19..11:34 em vez de 09:00..09:15,
+outra estratégia rodando dinheiro real; invertido o default, o mesmo
+restart reconstruiu o estado desde a abertura em segundos (5.29). Mais o
 registro acumulado do projeto. Quando um item aqui contradisser o código, o
 código ganha — e este
 arquivo está desatualizado.*

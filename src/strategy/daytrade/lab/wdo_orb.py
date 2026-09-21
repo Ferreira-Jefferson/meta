@@ -261,7 +261,23 @@ class WdoOrb(IntradayStrategy):
     #: candidata -- S10/T20 inverte de sinal entre as janelas -- mas
     #: "monotonicamente refutada" deixou de descrever os numeros.
     alvo_multiplo: float = 1.5
+    #: UNIDADE de uma entrada, nao o tamanho final: quantas dessas o caixa
+    #: sustenta e' decisao do SISTEMA (`quantity_e_unidade` abaixo), nao
+    #: deste arquivo. Continua 1 porque 1 contrato e' o tamanho de uma
+    #: entrada deste robo -- o que mudou em 2026-09-18 e' que o motor passa
+    #: a multiplicar isto pela escada de risco progressivo.
     quantity: int = 1
+    #: Ordem do dono, 2026-09-18: este robo segue a escada ESTRITAMENTE,
+    #: para cima e para baixo. Com caixa de R$1.200 ele opera 2 contratos, a
+    #: R$3.600 opera 3, e volta a 1 se o caixa cair abaixo de R$1.200 --
+    #: reavaliado a cada barra pelo motor. Ver
+    #: `strategy.daytrade.base.contracts_from_capital_escada`.
+    #:
+    #: Os dois contratos saem no MESMO stop e no MESMO alvo (decisao do
+    #: dono): a posicao e' uma so', e a saida ja' e' fatiada de 1 em 1
+    #: (`exit_split_unit=1`), entao cada contrato enfrenta a fila daquele
+    #: nivel separadamente -- que e' o que a corretora faz.
+    quantity_e_unidade: bool = True
 
     #: Fecha a posicao a MERCADO N minutos depois da entrada. E' o desenho
     #: ANTIGO -- deixado aqui so' para reproduzir a linha de base da tabela do

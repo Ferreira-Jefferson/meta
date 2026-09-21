@@ -171,6 +171,60 @@ class MT5Broker(Broker):
 
     # ---------- mapeamento de simbolo --------------------------------------
 
+    def aceita_ordem(self, ticker: str) -> Optional[bool]:
+        """O simbolo de DESTINO de `ticker` aceita ordem AGORA? `None` quando
+        nao foi possivel saber (terminal fechado, simbolo desconhecido).
+
+        Le `trade_mode` do simbolo que `symbol_for` resolve -- o MESMO
+        simbolo para o qual a ordem vai sair -- e nao o ticker interno. Um
+        futuro continuo (`WDO@`) tem `trade_mode` DESABILITADO enquanto a
+        cotacao dele chega normal, entao a leitura crua da cotacao nao
+        responde esta pergunta.
+
+        Existe por causa de 2026-09-21: o slot `dt-wdo_orb-wdo@-live` subiu
+        as 08:54 (6 min antes da abertura), quando NENHUM contrato de WDO
+        tinha book de dois lados. `detect_futures_symbol_map` degradou para
+        `WDO@ -> WDO@` (comportamento correto dela -- nunca escolher contrato
+        morto), o mapa salvo ficou `{}`, e o robo passou o pregao inteiro
+        incapaz de mandar uma ordem: `mt5.symbol_info("WDO@").trade_mode == 0`
+        (`SYMBOL_TRADE_MODE_DISABLED`), toda ordem recusada com retcode 10017
+        `TRADE_DISABLED`. Zero intents e zero orders no diario, cartao verde
+        no painel.
+
+        Deixar isso aparecer so' na PRIMEIRA ordem recusada nao serve: num
+        pregao em que o sinal nao vem, a primeira ordem nunca acontece e o
+        defeito passa em branco. Ver `IntradayLiveRuntime.
+        _check_simbolo_negociavel`, que e' quem pergunta."""
+        try:
+            import MetaTrader5 as mt5  # lazy: ver docstring do modulo
+        except Exception:
+            return None
+        try:
+            if not self.connect():
+                return None
+            info = mt5.symbol_info(self.symbol_for(ticker))
+            if info is None:
+                return None
+            disabled = getattr(mt5, "SYMBOL_TRADE_MODE_DISABLED", 0)
+            return getattr(info, "trade_mode", disabled) != disabled
+        except Exception:
+            return None
+
+    def adota_symbol_map(self, mapa: dict[str, str]) -> None:
+        """Instala/atualiza entradas de `symbol_map` num broker JA construido.
+
+        Serve a UM caso: o robo subiu com o mapa vazio (ver `aceita_ordem`) e
+        redetectou o contrato certo DEPOIS, com o mercado aberto. Sem isto a
+        autocorrecao exigiria reiniciar o processo -- e reiniciar um robo
+        intradiario no meio do pregao recalibra a sessao a frio, o que troca
+        o robo por outro (a "faixa de abertura" do `wdo_orb` passaria a ser o
+        horario do restart). Corrigir o destino da ordem sem reiniciar e' o
+        unico conserto que preserva o robo medido.
+
+        Nao apaga o que ja existia: mescla. Um mapa detectado parcialmente
+        nunca pode derrubar uma entrada boa que ja estava de pe."""
+        self._symbol_map.update(mapa)
+
     def symbol_for(self, ticker: str) -> str:
         """Ticker interno (`"WEGE3.SA"`) -> nome do simbolo no terminal MT5.
 

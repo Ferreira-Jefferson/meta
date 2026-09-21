@@ -140,6 +140,23 @@ class MT5TickFeed:
     #: (60s, o minuto que a barra precisa para existir). O atraso que sobra e'
     #: o passo do supervisor, que nao e' propriedade do feed.
     nominal_delay_seconds = 0.0
+    #: Quantos minutos de pregao SEM UM NEGOCIO este feed considera anormal
+    #: (ver `IntradayLiveRuntime._vigia_cegueira_do_feed`). APERTADO, ao
+    #: contrario do M1 (30 min): quem consome este feed sao os robos de
+    #: FUTURO (`WDO@`/`WIN@`), e a base mede mediana de ~336 negocios por
+    #: MINUTO no WDO@ -- cinco minutos inteiros sem um unico negocio nao e'
+    #: mercado parado, e' o terminal nao entregando.
+    #:
+    #: Medido no que isto existe para pegar (2026-09-21): o `WDO@` parou de
+    #: entregar tick novo as 09:06:54 e so' voltou as ~09:43. 36 minutos, 437
+    #: passos `daytrade_espera` seguidos, tres robos parados na MESMA marca
+    #: d'agua -- e ZERO linha no diario, porque `falha_de_leitura` ficou
+    #: `None` o tempo todo: a leitura "deu certo" devolvendo lista vazia, e o
+    #: vigia do item 5.17 so' olha FALHA de leitura. Lista vazia e' o caso
+    #: normal de um papel parado (ver `closed_bars_since`), entao o contrato
+    #: do feed nao pode acusar -- quem tem de acusar e' quem conhece o
+    #: RELOGIO, e e' o runtime.
+    minutos_sem_barra_para_alarme = 5.0
 
     def __init__(
         self,

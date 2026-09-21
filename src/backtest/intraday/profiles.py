@@ -631,6 +631,7 @@ def config_for(
     cash_brl: float | None = None,
     margin_per_contract_brl: float | None = None,
     enforce_capital_cap: bool | None = None,
+    escada_risco_progressivo: bool | None = None,
     margin_buffer: float = MARGIN_BUFFER_FUTUROS,
     target_slippage_ticks: float | None = None,
     limit_fill_at_bar_open: bool = False,
@@ -811,6 +812,14 @@ def config_for(
         target_slippage_ticks = (DESLIZE_ALVO_NATIVO_TICKS if target_fills_as_maker else 0.0)
     if enforce_capital_cap is None:
         enforce_capital_cap = profile.is_futures and profile.margin_per_contract_brl is not None
+    # Escada de risco progressivo (2026-09-18, ordem do dono): DEFAULT-ON
+    # onde ha' teto por capital, pelo mesmo motivo do deslize do alvo e da
+    # fila -- backtest, sombra e producao herdam juntos. Ela nunca afrouxa o
+    # teto por margem (compoe pelo MENOR em `_cap_capital_atual`), entao
+    # liga-la so' pode ENCOLHER exposicao. Ver
+    # `strategy.daytrade.base.contracts_from_capital_escada`.
+    if escada_risco_progressivo is None:
+        escada_risco_progressivo = enforce_capital_cap
     if enforce_capital_cap and (not profile.is_futures or profile.margin_per_contract_brl is None):
         raise ValueError(
             "config_for: enforce_capital_cap=True pedido, mas o perfil nao declara "
@@ -899,6 +908,7 @@ def config_for(
         max_open_contracts=teto,
         margin_per_contract_brl=(profile.margin_per_contract_brl if enforce_capital_cap else None),
         margin_buffer=margin_buffer,
+        escada_risco_progressivo=escada_risco_progressivo,
         limit_fill_at_bar_open=limit_fill_at_bar_open,
         anchor_exits_at_fill=anchor_exits_at_fill,
         queue_ahead_qty=queue_ahead_qty,

@@ -39,7 +39,7 @@ from journal import live_store as store
 from live import clock as live_clock
 from live import intraday_runtime as itr_mod
 from live.intraday_runtime import MAX_GAP_SECONDS, IntradayLiveRuntime
-from strategy.daytrade.base import (AdjustStop, Bar, Enter, EnterLimit,
+from strategy.daytrade.base import (AdjustStop, AdjustTarget, Bar, Enter, EnterLimit,
                                     IntradayStrategy)
 
 # O slot de day trade e' DINAMICO desde 2026-08-22: o id carrega robo+ativo
@@ -1667,7 +1667,9 @@ def test_robo_sem_hooks_de_seed_sobrescritos_nao_busca_historico_nenhum(tmp_path
     aproveitada. Contra o feed de TICK real (~14s/sessao, ~140.000
     "barras" degeneradas por sessao de WDO) isso sozinho e' o essencial dos
     ~430s que derrubaram os dois slots `wdo_grid_reload_maker` pelo
-    watchdog de heartbeat. DEPOIS: zero buscas."""
+    watchdog de heartbeat. DEPOIS: zero buscas de pregao ANTERIOR
+    (ver a nota na assercao sobre a busca do pregao de HOJE, que o warm
+    start faz de proposito desde 2026-09-21)."""
     from strategy.daytrade.lab.wdo_grid_reload_maker import WdoGridReloadMaker
 
     strat = WdoGridReloadMaker(tick_size=0.5, level_spacing_ticks=1, profit_ticks=1, stop_ticks=16)
@@ -1686,10 +1688,31 @@ def test_robo_sem_hooks_de_seed_sobrescritos_nao_busca_historico_nenhum(tmp_path
 
     rt.run_once(now=_agora("13:02:00"))
 
-    assert feed.pedidos_de_semente == [], (
-        "sem hook de seed sobrescrito e sem fixed_anchor_until, NENHUMA "
-        "busca de historico deveria acontecer ao feed -- eram 31 antes "
-        "desta correcao"
+    # O invariante e' "nenhuma busca para alimentar hook NO-OP", nao "nenhuma
+    # busca". Desde 2026-09-21 o warm start virou o default (ver
+    # `_needs_warm_start`) e faz UMA busca, do pregao de HOJE, de proposito:
+    # sem ela um restart no meio do pregao entrega um robo que nao viu a
+    # abertura. As 31 buscas do item 5.9 eram todas de pregoes ANTERIORES,
+    # alimentando `seed_volume_window`/`seed_daily_volatility`/
+    # `seed_typical_trade_size` -- que este robo nao sobrescreve. Essas
+    # continuam em ZERO, e e' isso que a assercao mede.
+    #
+    # Por que 1 nao reabre o incidente (medido 2026-09-21 contra o terminal
+    # real, feed de TICK do `WDO@`): pregao INTEIRO custa 6,9s (18/09,
+    # 113.615 barras) a 14,4s (17/09, 127.215 barras), uma vez por processo
+    # por pregao. O piso do watchdog e' 900s
+    # (`live_control._HEARTBEAT_FLOOR_SECONDS`), e a docstring dele registra
+    # que o catch-up do proprio robo ja passa de 180s numa unica chamada de
+    # `run_once`. 31 x 14s = ~430s era o problema; 1 x 14s nao e'.
+    anteriores = [p for p in feed.pedidos_de_semente if p[0] != SESSION]
+    assert anteriores == [], (
+        "sem hook de seed sobrescrito, NENHUMA busca de pregao ANTERIOR "
+        "deveria acontecer ao feed -- eram 31 antes desta correcao"
+    )
+    assert len(feed.pedidos_de_semente) == 1, (
+        "o warm start faz UMA busca (o pregao de hoje). Mais de uma e' "
+        "regressao do item 5.9; nenhuma e' o robo comecando a frio e "
+        "perdendo a abertura"
     )
 
 
@@ -6808,6 +6831,79 @@ def test_espelho_da_posicao_acompanha_bars_held_e_stop_da_maquina(tmp_path, preg
         "informacao errada sobre RISCO, nao so' cosmetica")
 
 
+def test_deslize_de_saida_compara_contra_o_alvo_VIGENTE_nao_o_declarado_na_entrada(
+    tmp_path, pregao_aberto,
+):
+    """Item 4.31 de LICOES_DE_PRODUCAO.md. `AdjustTarget` move o alvo da
+    posicao (ex.: `WdoOrb.saida_limite_minutos`, que troca o alvo pelo preco
+    corrente 60min depois da entrada) -- ate' 2026-09-19 `_on_closed`
+    comparava a saida contra `self._alvo_declarado`, gravado UMA VEZ na
+    abertura e NUNCA atualizado, disparando "DESLIZE DE SAIDA" fantasma em
+    toda posicao ajustada (5 das 6 operacoes do `wdo_orb` na semana de
+    2026-09-14..18, R$705,00 de deslize que nao existiu).
+
+    Cenario: entra a 10.00 com alvo 11.00, o robo BAIXA o alvo pra 10.20 no
+    meio do caminho, o mercado paga exatamente 10.20. O alarme tem de usar
+    10.20 (deslize zero) -- nao 11.00 (que pareceria um deslize de 0,80)."""
+    import json
+
+    script = {
+        0: [EnterLimit(side="long", limit_price=10.00, initial_stop=9.00,
+                       initial_target=11.00, quantity=1, exit_split_unit=1,
+                       exit_ttl_bars=1_000_000, reason="teste_alvo_ajustado")],
+        2: [AdjustTarget(new_target=10.20)],
+    }
+    rt, feed = _runtime_sombra_scripted(tmp_path, script)
+    rt.run_once(now=_agora("13:00:00"))            # sessao a frio, sem barra
+
+    feed._barras.append(_bar("13:01", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:01:00"))            # script[0]: arma a limite
+    feed._barras.append(_bar("13:02", 10.00, 10.00, 9.95, 10.00))
+    rt.run_once(now=_agora("13:02:00"))            # script[1]: toca 10.00, preenche
+    assert rt.machine.position is not None, "a posicao precisa ter aberto"
+    assert rt.machine.position.current_target == pytest.approx(11.00)
+
+    feed._barras.append(_bar("13:03", 10.00, 10.05, 10.00, 10.05))
+    rt.run_once(now=_agora("13:03:00"))            # script[2]: baixa o alvo pra 10.20
+    assert rt.machine.position.current_target == pytest.approx(10.20), (
+        "a maquina moveu o alvo -- premissa do cenario")
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        linha = conn.execute(
+            "SELECT metadata FROM live_positions WHERE account_id = ? AND ticker = ?",
+            (acc.id, SYMBOL)).fetchone()
+    assert json.loads(linha["metadata"])["target"] == pytest.approx(10.20), (
+        "o espelho tem de refletir o alvo VIGENTE assim que `AdjustTarget` mexe nele -- "
+        "e' o dado que `_on_closed` vai ler no fechamento")
+
+    # mercado paga exatamente o alvo NOVO (10.20) -- fecha por TARGET
+    feed._barras.append(_bar("13:04", 10.10, 10.20, 10.10, 10.20))
+    rt.run_once(now=_agora("13:04:00"))
+    assert rt.machine.position is None, "tem de ter fechado no alvo"
+
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        eventos = [(r["level"], r["message"], json.loads(r["payload"] or "{}")) for r in conn.execute(
+            "SELECT level, message, payload FROM live_events WHERE account_id = ? ORDER BY id",
+            (acc.id,))]
+
+    fechamentos = [(lvl, m, p) for lvl, m, p in eventos if "alvo_declarado" in p]
+    assert fechamentos, [m for _l, m, _p in eventos]
+    _, _, payload = fechamentos[-1]
+    assert payload["alvo_declarado"] == pytest.approx(10.20), (
+        "o diario tem de gravar o alvo VIGENTE no fechamento (10.20), nao o "
+        "declarado na entrada (11.00) -- ver item 4.31 de LICOES_DE_PRODUCAO.md")
+    assert not payload["deslize_vs_alvo_brl"], (
+        f"o mercado pagou exatamente o alvo vigente -- deslize tem de ser zero/None, "
+        f"veio {payload['deslize_vs_alvo_brl']!r}")
+
+    alarmes = [(lvl, m) for lvl, m, _p in eventos if m.startswith("DESLIZE DE SAIDA")]
+    assert not alarmes, (
+        f"alarme fantasma: comparou contra o alvo DECLARADO na entrada (11.00) em vez "
+        f"do VIGENTE (10.20) -- {alarmes}")
+
+
 # ---------- restart com fatia de saida orfa: o painel tem de SABER --------
 
 def _snapshot_com_fatia_de_saida_posicionada(rt) -> None:
@@ -7016,3 +7112,516 @@ def test_live_acha_a_posicao_no_corte_mandando_ordem_a_mercado(tmp_path, pregao_
     assert saida.side == OrderSide.SELL
     # o fechamento leva o ticket da posicao REAL, nunca uma ordem as cegas
     assert broker.close_tickets == [77]
+
+
+# ---------------------------------------------------------------------------
+# ORDEM MORTA EM `live/` TEM DE AVISAR A ESTRATEGIA (2026-09-21)
+# ---------------------------------------------------------------------------
+
+class _DaytradeQueContaAvisos(_ScriptedDaytrade):
+    """Igual a `_ScriptedDaytrade`, mas anota os avisos de ordem morta e
+    para de armar depois do primeiro arme -- e' o estado interno que TODA
+    estrategia real do repo mantem (`_armou_hoje` no `wdo_orb`,
+    `pending_side` no `wdo_grid_reload_maker`, `_barras_esperando` nos
+    retangulos), e e' exatamente ele que o silencio de `live/` travava."""
+
+    def __init__(self, symbol: str, script: dict[int, list]):
+        super().__init__(symbol, script)
+        self.avisos: list = []
+        self._armou = False
+
+    def on_bar(self, ts, bar, position, session_pnl_brl):
+        acoes = super().on_bar(ts, bar, position, session_pnl_brl)
+        if self._armou:
+            return []
+        if acoes:
+            self._armou = True
+        return acoes
+
+    def on_order_rejected(self, ts) -> None:
+        self.avisos.append(ts)
+        self._armou = False
+
+
+def test_barra_velha_AVISA_a_estrategia_que_a_ordem_dela_morreu(tmp_path, pregao_aberto):
+    """O defeito de 2026-09-21: `live/` recusava enviar a ordem (certo),
+    esquecia ela na maquina (certo) e NAO avisava a estrategia (errado).
+
+    O robo ficava acreditando ter ordem no livro e passava o resto do pregao
+    mudo -- `dt-wdo_orb-wdo@-live` fechou o pregao com ZERO entradas, 3a vez
+    em 7 pregoes. Nao avisar tambem e' decisao, e a regra 7 do `AGENTS.md`
+    diz de quem ela e': "interpretar o buraco e' da estrategia, nunca de
+    `live/`"."""
+    broker = _FakeMT5Broker()
+    arme = EnterLimit(side="long", limit_price=10.00, initial_stop=9.00,
+                      initial_target=11.00, quantity=1, reason="arme_velho")
+    rt, feed = _runtime_live_scripted(tmp_path, broker, {})
+    rt.strategy = _DaytradeQueContaAvisos(SYMBOL, {0: [arme]})
+    rt.machine.strategy = rt.strategy
+
+    rt.run_once(now=_agora("13:29:55"))          # abre a sessao a frio
+    feed._barras.append(_bar("13:00", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:30:00"))          # barra de 30 min atras
+
+    assert broker.pendentes_enviadas == [], "a barra velha nao podia virar ordem"
+    assert rt.machine.resting_limit is None
+    assert len(rt.strategy.avisos) == 1, (
+        "a estrategia nao foi avisada de que a ordem dela morreu -- ela segue "
+        "achando que tem ordem no livro e cala o resto do pregao"
+    )
+    assert rt.strategy._armou is False, "o robo continua travado apos o aviso"
+
+
+def test_robo_REARMA_no_mesmo_pregao_depois_da_recusa_por_barra_velha(tmp_path, pregao_aberto):
+    """A consequencia que importa: recusada a ordem do dado velho, o robo
+    volta a operar quando chega dado FRESCO -- no mesmo pregao, sem restart.
+
+    Antes deste conserto o pregao acabava aqui."""
+    broker = _FakeMT5Broker()
+    arme = EnterLimit(side="long", limit_price=10.00, initial_stop=9.00,
+                      initial_target=11.00, quantity=1, reason="arme")
+    rt, feed = _runtime_live_scripted(tmp_path, broker, {})
+    rt.strategy = _DaytradeQueContaAvisos(SYMBOL, {0: [arme], 1: [arme]})
+    rt.machine.strategy = rt.strategy
+
+    rt.run_once(now=_agora("13:29:55"))
+    feed._barras.append(_bar("13:00", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:30:00"))          # recusada: dado de 30 min
+    assert broker.pendentes_enviadas == []
+
+    feed._barras.append(_bar("13:30", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:30:05"))          # dado fresco
+
+    assert len(broker.pendentes_enviadas) == 1, (
+        "o robo nao rearmou com dado fresco: continua mudo pelo resto do "
+        "pregao, que e' o defeito que este teste existe para travar"
+    )
+
+
+def test_esquecer_a_ordem_SEMPRE_avisa_a_estrategia_seja_qual_for_o_caminho():
+    """A garantia ESTRUTURAL, e o motivo de o aviso morar na maquina em vez
+    de em cada chamador: `live/` tem CINCO caminhos que matam a ordem antes
+    do book (barra velha, cota de vazao, freio de cadencia, recusa da
+    corretora/margem, orfa resolvida como morta) e em 2026-09-21 os cinco
+    concordaram em nao avisar.
+
+    Com o aviso dentro de `discard_resting_limit` -- e `ts` obrigatorio --
+    um sexto caminho nao tem como esquecer: ou ele avisa, ou nao compila."""
+    import inspect
+
+    from backtest.intraday.machine import IntradaySessionMachine
+
+    assinatura = inspect.signature(IntradaySessionMachine.discard_resting_limit)
+    assert "ts" in assinatura.parameters, (
+        "`ts` deixou de ser obrigatorio: sem ele o aviso volta a ser opcional"
+    )
+    assert assinatura.parameters["ts"].default is inspect.Parameter.empty, (
+        "`ts` ganhou default -- um caminho novo passa a poder esquecer o aviso"
+    )
+    fonte = inspect.getsource(IntradaySessionMachine.discard_resting_limit)
+    assert "on_order_rejected" in fonte, (
+        "o aviso saiu de `discard_resting_limit`: os cinco caminhos de "
+        "`live/` voltam a calar o robo"
+    )
+
+
+# ---------------------------------------------------------------------------
+# SIMBOLO DE DESTINO QUE NAO ACEITA ORDEM (2026-09-21)
+# ---------------------------------------------------------------------------
+
+class _BrokerComContrato(_FakeMT5Broker):
+    """Corretora que distingue o ticker CONTINUO (`WDO@`, `trade_mode`
+    desabilitado) do CONTRATO com vencimento -- que e' a situacao real do
+    terminal, e a que o mapa de simbolo existe para resolver."""
+
+    def __init__(self, *, detecta: str | None = "WDOV26",
+                 recusados=(SYMBOL,)):
+        super().__init__()
+        self._mapa: dict[str, str] = {}
+        self._detecta = detecta
+        self.recusados = set(recusados)
+        self.deteccoes = 0
+
+    def symbol_for(self, ticker: str) -> str:
+        return self._mapa.get(ticker, ticker)
+
+    def aceita_ordem(self, ticker: str):
+        # so' o destino JA RESOLVIDO negocia; o ticker cru e' o continuo, que
+        # o terminal cadastra com `trade_mode` desabilitado (so' cotacao)
+        return self.symbol_for(ticker) not in self.recusados
+
+    def detect_futures_symbol_map(self, tickers, hoje=None):
+        self.deteccoes += 1
+        if self._detecta is None:
+            return {t: t for t in tickers}
+        return {t: self._detecta for t in tickers}
+
+    def adota_symbol_map(self, mapa: dict[str, str]) -> None:
+        self._mapa.update(mapa)
+
+
+def _runtime_com_broker(tmp_path, broker):
+    rt, feed = _runtime_live_scripted(tmp_path, broker, {})
+    return rt, feed
+
+
+def test_simbolo_continuo_sem_mapa_se_AUTOCORRIGE_no_primeiro_passo(tmp_path, pregao_aberto):
+    """O caso de 2026-09-21: o slot subiu 6 min antes da abertura, sem book
+    para detectar o contrato, e ficou com o mapa `{}` -- mandando ordem para
+    `WDO@`, que a corretora recusa (`trade_mode` desabilitado, retcode 10017).
+
+    O primeiro passo do pregao acontece com o mercado ABERTO, ou seja com
+    book: e' ali que a deteccao funciona. O robo tem de se corrigir sozinho,
+    SEM reiniciar -- reiniciar recalibra a sessao a frio e troca o robo por
+    outro."""
+    broker = _BrokerComContrato(detecta="WDOV26")
+    rt, _feed = _runtime_com_broker(tmp_path, broker)
+    assert broker.aceita_ordem(SYMBOL) is False, "estado inicial: sem mapa"
+
+    passos = rt.run_once(now=_agora("13:00:00"))
+
+    assert broker.deteccoes == 1, "nao tentou redetectar o contrato"
+    assert broker.symbol_for(SYMBOL) == "WDOV26", (
+        "o destino da ordem continua no simbolo que a corretora recusa"
+    )
+    assert not [p for p in passos if p.action == "daytrade_skip"], (
+        "autocorrigiu e ainda assim recusou o pregao"
+    )
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        eventos = [dict(r) for r in conn.execute(
+            "SELECT level, message FROM live_events WHERE account_id = ?", (acc.id,))]
+        assert "impedimento" not in (acc.policy_state or {})
+    corrigido = [e for e in eventos if "contrato corrigido sozinho" in e["message"]]
+    assert len(corrigido) == 1 and corrigido[0]["level"] == "warn", (
+        "a autocorrecao tem de aparecer no diario -- consertar em silencio "
+        "esconde que o slot subiu na hora errada"
+    )
+
+
+def test_simbolo_que_nao_negocia_e_nao_tem_conserto_vira_IMPEDIMENTO(tmp_path, pregao_aberto):
+    """Se nem a redeteccao resolve, o robo NAO pode ficar verde no painel
+    mandando ordem para um simbolo que a corretora recusa. Ele para e diz por
+    que -- que e' a diferenca entre o pregao de 2026-09-21 (silencio) e um
+    robo que reconhece nao poder operar."""
+    broker = _BrokerComContrato(detecta=None)   # deteccao devolve o proprio ticker
+    rt, _feed = _runtime_com_broker(tmp_path, broker)
+
+    passos = rt.run_once(now=_agora("13:00:00"))
+
+    skip = [p for p in passos if p.action == "daytrade_skip"]
+    assert skip and skip[0].detail["motivo"] == "simbolo nao negociavel"
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        eventos = [dict(r) for r in conn.execute(
+            "SELECT level, message FROM live_events WHERE account_id = ?", (acc.id,))]
+    assert (acc.policy_state or {}).get("impedimento"), (
+        "sem impedimento o painel segue verde -- era exatamente o sintoma"
+    )
+    erros = [e for e in eventos if e["level"] == "error" and "10017" in e["message"]]
+    assert len(erros) == 1, "o motivo tem de estar no diario, uma vez"
+
+
+def test_simbolo_negociavel_nao_paga_deteccao_nenhuma(tmp_path, pregao_aberto):
+    """O caminho normal (mapa certo, ou acao, que nem tem contrato) nao pode
+    pagar uma consulta ao terminal por pregao a mais do que pagava."""
+    broker = _BrokerComContrato(detecta="WDOV26")
+    broker.adota_symbol_map({SYMBOL: "WDOV26"})
+    rt, _feed = _runtime_com_broker(tmp_path, broker)
+
+    rt.run_once(now=_agora("13:00:00"))
+    rt.run_once(now=_agora("13:00:05"))
+
+    assert broker.deteccoes == 0, "redetectou contrato de um destino que ja negocia"
+
+
+def test_sombra_nao_e_barrada_por_simbolo_que_nao_negocia(tmp_path, pregao_aberto):
+    """Sombra nao manda ordem, entao `trade_mode` do destino nao muda nada
+    para ela -- mesma regra do portao de AutoTrading. Barrar a sombra aqui
+    faria o robo de medicao parar por um problema que so' existe na execucao
+    real."""
+    broker = _BrokerComContrato(detecta=None)
+    strat = _ScriptedDaytrade(SYMBOL, {})
+    rt = IntradayLiveRuntime(
+        slot=SLOT, strategy=strat, config=_config(),
+        bar_feed=_ScriptedBarFeed([], []), broker=broker,
+        db_path=tmp_path / "live_intraday.sqlite",
+        execution_mode="shadow", initial_capital=100.0,
+    )
+    rt.ensure_account()
+
+    passos = rt.run_once(now=_agora("13:00:00"))
+
+    assert not [p for p in passos
+                if p.detail.get("motivo") == "simbolo nao negociavel"]
+    assert broker.deteccoes == 0
+
+
+# ---------------------------------------------------------------------------
+# FEED CEGO: MINUTOS SEM BARRA VIRAM AVISO E IMPEDIMENTO (2026-09-21)
+# ---------------------------------------------------------------------------
+
+def _runtime_sombra_com_feed(tmp_path, feed, strategy=None):
+    """Sombra de proposito: o vigia de cegueira e' sobre DADO, nao sobre
+    execucao -- vale igual nos dois modos, e em sombra o teste nao precisa de
+    corretora falsa nenhuma."""
+    rt = IntradayLiveRuntime(
+        slot=SLOT, strategy=strategy or _ScriptedDaytrade(SYMBOL, {}),
+        config=_config(), bar_feed=feed, broker=_FakeMT5Broker(),
+        db_path=tmp_path / "live_intraday.sqlite",
+        execution_mode="shadow", initial_capital=100.0,
+    )
+    rt.ensure_account()
+    return rt
+
+
+def _eventos(rt):
+    with store.live_journal(rt.db_path) as conn:
+        acc = store.load_account(conn, SLOT.id)
+        return acc, [dict(r) for r in conn.execute(
+            "SELECT level, message, payload FROM live_events WHERE account_id = ?",
+            (acc.id,))]
+
+
+def test_feed_de_TICK_sem_barra_por_minutos_vira_warn_e_impedimento(tmp_path, pregao_aberto):
+    """O pregao de 2026-09-21: o `WDO@` parou de entregar tick as 09:06:54 e
+    voltou as ~09:43. 437 passos `daytrade_espera` seguidos, tres robos
+    travados na mesma marca d'agua, ZERO linha no diario -- porque
+    `falha_de_leitura` ficou `None` (a leitura "deu certo" devolvendo lista
+    vazia) e o vigia do item 5.17 so' olha FALHA de leitura.
+
+    Nao basta nao operar: o dono tem de SABER, na hora, que o robo esta cego."""
+    feed = _ScriptedBarFeed([], [])
+    feed.nominal_delay_seconds = 0.0
+    feed.minutos_sem_barra_para_alarme = 5.0
+    rt = _runtime_sombra_com_feed(tmp_path, feed)
+
+    rt.run_once(now=_agora("13:00:00"))          # abre a sessao: marca zero
+    rt.run_once(now=_agora("13:04:00"))          # 4 min: ainda dentro do limite
+    acc, eventos = _eventos(rt)
+    assert not [e for e in eventos if "sem uma barra" in e["message"]], (
+        "alarmou antes do limite do feed"
+    )
+    assert not (acc.policy_state or {}).get("impedimento")
+
+    passos = rt.run_once(now=_agora("13:06:00"))  # 6 min: passou de 5
+
+    acc, eventos = _eventos(rt)
+    avisos = [e for e in eventos if "sem uma barra" in e["message"]]
+    assert len(avisos) == 1 and avisos[0]["level"] == "warn"
+    assert '"minutos_sem_barra": 6.0' in avisos[0]["payload"]
+    assert (acc.policy_state or {}).get("impedimento"), (
+        "o cartao do painel seguiria verde -- era exatamente o sintoma de hoje"
+    )
+    espera = [p for p in passos if p.action == "daytrade_espera"][0]
+    assert "feed_cego" in espera.detail
+
+
+def test_feed_cego_escreve_UMA_linha_e_outra_quando_volta(tmp_path, pregao_aberto):
+    """Uma linha por TRANSICAO. A 5s por passo, os 36 min de 2026-09-21
+    virariam 437 linhas iguais e o diario ficaria ilegivel justamente no
+    pregao que mais precisava ser lido."""
+    feed = _ScriptedBarFeed([], [])
+    feed.nominal_delay_seconds = 0.0
+    feed.minutos_sem_barra_para_alarme = 5.0
+    rt = _runtime_sombra_com_feed(tmp_path, feed)
+
+    rt.run_once(now=_agora("13:00:00"))
+    for minuto in (6, 10, 20, 30):
+        rt.run_once(now=_agora(f"13:{minuto:02d}:00"))
+    acc, eventos = _eventos(rt)
+    assert len([e for e in eventos if "sem uma barra" in e["message"]]) == 1, (
+        "uma linha por PASSO -- o diario do dono fica ilegivel"
+    )
+
+    feed._barras.append(_bar("13:35", 10.00, 10.00, 10.00, 10.00))
+    rt.run_once(now=_agora("13:35:30"))
+
+    acc, eventos = _eventos(rt)
+    voltas = [e for e in eventos if "voltou a entregar" in e["message"]]
+    assert len(voltas) == 1 and voltas[0]["level"] == "info"
+    assert "36 min sem barra" in voltas[0]["message"]
+    assert not (acc.policy_state or {}).get("impedimento"), (
+        "o impedimento tem de sair do painel sozinho quando o dado volta"
+    )
+
+
+def test_feed_M1_de_acao_iliquida_NAO_alarma_em_5_min(tmp_path, pregao_aberto):
+    """Escolha do dono, 2026-09-21: limite por TIPO de feed. `PMAM3` foi
+    medida em ~18 barras num pregao INTEIRO -- 5 minutos sem negocio ali e'
+    terca-feira normal. Alarmar treinaria o dono a ignorar o aviso, que e'
+    pior do que nao avisar."""
+    feed = _ScriptedBarFeed([], [])
+    feed.nominal_delay_seconds = 60.0
+    feed.minutos_sem_barra_para_alarme = 30.0
+    rt = _runtime_sombra_com_feed(tmp_path, feed)
+
+    rt.run_once(now=_agora("13:00:00"))
+    rt.run_once(now=_agora("13:20:00"))          # 20 min, normal num iliquido
+
+    acc, eventos = _eventos(rt)
+    assert not [e for e in eventos if "sem uma barra" in e["message"]]
+    assert not (acc.policy_state or {}).get("impedimento")
+
+    rt.run_once(now=_agora("13:31:00"))          # 31 min: passou de 30
+    acc, eventos = _eventos(rt)
+    assert len([e for e in eventos if "sem uma barra" in e["message"]]) == 1
+
+
+def test_limite_de_cegueira_vem_do_FEED_nunca_do_runtime():
+    """O numero e' propriedade do FEED, como `nominal_delay_seconds` -- e os
+    dois feeds reais tem de declarar valores DIFERENTES, senao a decisao do
+    dono (limite por tipo) nao foi implementada."""
+    from live.bar_feed import MT5BarFeed
+    from live.tick_feed import MT5TickFeed
+
+    assert MT5TickFeed.minutos_sem_barra_para_alarme == 5.0
+    assert MT5BarFeed.minutos_sem_barra_para_alarme == 30.0
+    assert (MT5TickFeed.minutos_sem_barra_para_alarme
+            < MT5BarFeed.minutos_sem_barra_para_alarme), (
+        "tick e' o feed do futuro liquido (~336 negocios/min no WDO@): o "
+        "limite dele tem de ser o APERTADO dos dois"
+    )
+
+
+def test_robo_que_subiu_antes_da_abertura_nao_nasce_cego(tmp_path, pregao_aberto):
+    """O slot de 2026-09-21 subiu as 08:54, 6 min antes da abertura. Os 6
+    minutos de mercado FECHADO nao podem contar como cegueira -- a marca zero
+    e' a abertura da sessao (`_start_session`), nunca a criacao do objeto."""
+    feed = _ScriptedBarFeed([], [])
+    feed.nominal_delay_seconds = 0.0
+    feed.minutos_sem_barra_para_alarme = 5.0
+    rt = _runtime_sombra_com_feed(tmp_path, feed)
+    rt._ultima_barra_vista_em = _agora("12:54:00")   # objeto criado antes do sino
+
+    rt.run_once(now=_agora("13:00:00"))          # 1o passo do pregao
+
+    _acc, eventos = _eventos(rt)
+    assert not [e for e in eventos if "sem uma barra" in e["message"]], (
+        "contou o mercado fechado como cegueira do feed"
+    )
+
+
+# ---------------------------------------------------------------------------
+# RESTART NO MEIO DO PREGAO RECONSTROI A SESSAO (2026-09-21)
+# ---------------------------------------------------------------------------
+
+class _DaytradeQueLembraAPrimeiraBarra(_ScriptedDaytrade):
+    """Estrategia cuja geometria depende da ABERTURA do pregao -- e' a forma
+    de `WdoOrb` (faixa dos 15 primeiros minutos) e dos retangulos, e e' o
+    que o comeco a frio destruia num restart."""
+
+    def __init__(self, symbol: str):
+        super().__init__(symbol, {})
+        self.primeira_barra = None
+        self.barras_vistas = 0
+
+    def on_session_start(self, session_date) -> None:
+        self.primeira_barra = None
+        self.barras_vistas = 0
+
+    def on_bar(self, ts, bar, position, session_pnl_brl):
+        if self.primeira_barra is None:
+            self.primeira_barra = ts
+        self.barras_vistas += 1
+        return []
+
+
+def test_restart_no_meio_do_pregao_RECONSTROI_desde_a_abertura(tmp_path, pregao_aberto):
+    """O segundo defeito de 2026-09-21: `wdo_orb` reiniciado as 11:19 passava
+    a chamar 11:19..11:34 de "faixa de abertura" -- geometria que nenhum
+    backtest descreve, operando dinheiro real.
+
+    A causa era `_needs_warm_start` devolver `False` para todo robo SEM
+    `fixed_anchor_until`. Aquilo nunca foi decisao sobre esses robos: era o
+    valor de queda de uma politica escrita para a `Gremah` em 2026-08-21."""
+    strat = _DaytradeQueLembraAPrimeiraBarra(SYMBOL)
+    sessao = [_bar("13:00", 10.00, 10.00, 10.00, 10.00),
+              _bar("13:05", 10.10, 10.10, 10.10, 10.10),
+              _bar("13:10", 10.20, 10.20, 10.20, 10.20)]
+    feed = _ScriptedBarFeed([], sessao)      # 2a lista = `session_bars_until`
+    rt = IntradayLiveRuntime(
+        slot=SLOT, strategy=strat, config=_config(),
+        bar_feed=feed, broker=_FakeMT5Broker(),
+        db_path=tmp_path / "live_intraday.sqlite",
+        execution_mode="shadow", initial_capital=100.0,
+    )
+    rt.ensure_account()
+
+    rt.run_once(now=_agora("13:19:00"))      # processo NOVO, pregao em curso
+
+    assert strat.primeira_barra is not None, (
+        "o robo comecou a frio: nao viu uma barra do pregao que ja corria"
+    )
+    assert strat.primeira_barra == sessao[0].ts, (
+        f"a 1a barra vista foi {strat.primeira_barra} -- tinha de ser a da "
+        f"ABERTURA ({sessao[0].ts}), senao a geometria do robo e' outra"
+    )
+    assert strat.barras_vistas == 3
+
+
+def test_robo_com_ancora_fixa_VENCIDA_continua_comecando_a_frio(tmp_path, pregao_aberto):
+    """A excecao da `Gremah` (2026-08-21) nao foi removida: passada a janela
+    de ancora fixa, warm start carregaria uma ordem fixa JA obsoleta, e a
+    obsolescencia so' era detectavel dentro de `on_bar` -- uma barra de
+    defasagem que a dependencia de caminho amplifica. Comecar a frio ali e'
+    se comportar como ancora rolante pura, que e' o certo."""
+    strat = _DaytradeQueLembraAPrimeiraBarra(SYMBOL)
+    strat.fixed_anchor_until = time(12, 0)   # janela venceu as 09:00 BRT
+    feed = _ScriptedBarFeed([], [_bar("13:00", 10.00, 10.00, 10.00, 10.00)])
+    rt = IntradayLiveRuntime(
+        slot=SLOT, strategy=strat, config=_config(),
+        bar_feed=feed, broker=_FakeMT5Broker(),
+        db_path=tmp_path / "live_intraday.sqlite",
+        execution_mode="shadow", initial_capital=100.0,
+    )
+    rt.ensure_account()
+
+    passos = rt.run_once(now=_agora("13:19:00"))
+
+    sessao = [p for p in passos if p.action == "daytrade_sessao"][0]
+    assert sessao.detail["inicio"] == "cold", (
+        "a excecao da Gremah foi removida junto com o bug -- warm start "
+        "depois da janela carrega ordem fixa obsoleta"
+    )
+
+
+def test_robo_com_ancora_fixa_VIGENTE_faz_warm_start_como_sempre(tmp_path, pregao_aberto):
+    """O caminho que ja funcionava antes da inversao do default -- fica
+    travado para a mudanca de 2026-09-21 nao ter mexido nele sem querer."""
+    strat = _DaytradeQueLembraAPrimeiraBarra(SYMBOL)
+    strat.fixed_anchor_until = time(23, 0)   # janela ainda aberta
+    feed = _ScriptedBarFeed([], [_bar("13:00", 10.00, 10.00, 10.00, 10.00)])
+    rt = IntradayLiveRuntime(
+        slot=SLOT, strategy=strat, config=_config(),
+        bar_feed=feed, broker=_FakeMT5Broker(),
+        db_path=tmp_path / "live_intraday.sqlite",
+        execution_mode="shadow", initial_capital=100.0,
+    )
+    rt.ensure_account()
+
+    passos = rt.run_once(now=_agora("13:19:00"))
+
+    sessao = [p for p in passos if p.action == "daytrade_sessao"][0]
+    assert sessao.detail["inicio"] == "warm_start"
+
+
+def test_partida_na_abertura_sem_barra_nenhuma_ainda_cai_no_frio(tmp_path, pregao_aberto):
+    """As 09:00:00 em ponto nao ha semente, e o caminho a frio de sempre tem
+    de continuar valendo -- a inversao do default nao pode transformar a
+    partida normal da manha em erro."""
+    strat = _DaytradeQueLembraAPrimeiraBarra(SYMBOL)
+    feed = _ScriptedBarFeed([], [])          # nenhuma barra no pregao ainda
+    rt = IntradayLiveRuntime(
+        slot=SLOT, strategy=strat, config=_config(),
+        bar_feed=feed, broker=_FakeMT5Broker(),
+        db_path=tmp_path / "live_intraday.sqlite",
+        execution_mode="shadow", initial_capital=100.0,
+    )
+    rt.ensure_account()
+
+    passos = rt.run_once(now=_agora("13:00:00"))
+
+    sessao = [p for p in passos if p.action == "daytrade_sessao"][0]
+    assert sessao.detail["inicio"] == "cold"
+    assert sessao.detail["barras_semente"] == 0

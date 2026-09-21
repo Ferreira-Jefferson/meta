@@ -1182,7 +1182,27 @@ def start(config: ProcessConfig) -> dict:
         # de "clicar no botão". Só detecta quando o chamador não trouxe mapa
         # — o caminho do painel já traz, então nada muda para ele e a
         # consulta (lenta, vai ao terminal) não roda duas vezes.
-        if config.mt5_symbol_map is None:
+        #
+        # `not ...` e não `is None` (2026-09-21): um mapa VAZIO não é "nada a
+        # mapear", é uma detecção que NÃO RESOLVEU. `detect_futures_symbol_
+        # map` devolve `{}` quando nenhum contrato tinha book de dois lados —
+        # o que é o caso normal com o mercado FECHADO, e ela está certa em
+        # não escolher contrato morto. O slot `dt-wdo_orb-wdo@-live` subiu às
+        # 08:54, 6 min antes da abertura, gravou `{}` no estado, e `{}` não
+        # é `None`: o restart seguinte reusou o vazio sem nem tentar
+        # redetectar, e o robô passou o pregão inteiro mandando ordem para
+        # `WDO@` (`trade_mode` desabilitado). Zero ordens, cartão verde.
+        # Redetectar sobre `{}` custa uma consulta que para ação devolve `{}`
+        # de novo em milissegundos (`detect_futures_symbol_map` só olha
+        # ticker terminado em `@`); deixar o vazio grudado custa um pregão.
+        #
+        # Isto é a PRIMEIRA linha de defesa, e ela depende de o robô subir com
+        # o mercado aberto. A segunda, que não depende de nada disso, é
+        # `IntradayLiveRuntime._check_simbolo_negociavel`: no primeiro passo
+        # do pregão o robô confere se o destino aceita ordem e se autocorrige
+        # (ou grava IMPEDIMENTO). As duas existem porque a hora do clique não
+        # é controlável.
+        if not config.mt5_symbol_map:
             detectado = detect_futures_symbol_map(config.slot, config.strategy)
             if detectado:
                 config = replace(config, mt5_symbol_map=detectado)

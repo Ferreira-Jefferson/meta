@@ -63,6 +63,7 @@ from strategy.daytrade.base import (
     IntradayOpenPosition,
     IntradayStrategy,
     Side,
+    contracts_from_capital_escada,
     contracts_from_capital_operacional,
 )
 
@@ -439,6 +440,17 @@ class IntradayBacktestConfig:
     # numero "buffer puro" continuar identico ao que `contracts_from_capital`
     # sempre recebeu em qualquer outro lugar do repo.
     margin_buffer: float = MARGIN_BUFFER_FUTUROS
+    # Escada de RISCO PROGRESSIVO (2026-09-18, ordem do dono) -- ver
+    # `strategy.daytrade.base.contracts_from_capital_escada` para a regra e
+    # os percentuais. Ligada, ela compoe com o teto por margem pelo MENOR
+    # dos dois, e passa a ser tambem o MULTIPLICADOR da unidade pedida pelos
+    # robos com `quantity_e_unidade=True`.
+    #
+    # Como `margin_per_contract_brl`, so' faz efeito com margem conhecida, e
+    # `config_for` liga por padrao para todo perfil de FUTURO -- mesmo
+    # precedente do deslize do alvo nativo e da fila de `fidelidade.py`:
+    # backtest, sombra e producao herdam juntos, sem mudanca em `live/`.
+    escada_risco_progressivo: bool = False
 
 
 @dataclass
@@ -1163,10 +1175,26 @@ class IntradaySessionMachine:
         if cfg.margin_per_contract_brl is None:
             return None
         caixa_atual = cfg.initial_capital + self.realized_pnl
-        return contracts_from_capital_operacional(
+        teto = contracts_from_capital_operacional(
             caixa_atual, cfg.margin_per_contract_brl, cfg.margin_buffer,
             hard_cap=cfg.max_open_contracts,
         )
+        if not cfg.escada_risco_progressivo:
+            return teto
+        # A escada de risco progressivo entra pelo MENOR (ordem do dono,
+        # 2026-09-18): ela e' mais apertada que o teto por margem em todo
+        # degrau (2 contratos so' com R$1.200 contra os R$750 que a margem
+        # autorizaria), e nunca pode AFROUXAR o que a margem ja negou. O
+        # piso de sobrevivencia de `contracts_from_capital_operacional`
+        # continua valendo para o 1o contrato -- `max(1, ...)` nao entra
+        # aqui de proposito: quando a escada devolve 0 mas a margem crua
+        # sustenta 1, quem manda e' o teto, porque recusar o 1o contrato
+        # antes da corretora e' o bug que calou o robo em 2026-09-07.
+        escada = contracts_from_capital_escada(
+            caixa_atual, cfg.margin_per_contract_brl,
+            hard_cap=cfg.max_open_contracts,
+        )
+        return min(teto, escada) if escada >= 1 else min(teto, 1)
 
     def _cap_efetivo(self) -> int | None:
         """Teto REALMENTE em vigor agora -- o teto por CAPITAL quando
@@ -1178,6 +1206,57 @@ class IntradaySessionMachine:
         if self.config.margin_per_contract_brl is not None:
             return self._cap_capital_atual()
         return self.config.max_open_contracts
+
+    def _escala_unidade(self, action):
+        """Multiplica a UNIDADE pedida pela escada de risco progressivo --
+        so' para quem declarou `quantity_e_unidade=True`.
+
+        Ordem do dono, 2026-09-18: escalar contrato e' decisao de SISTEMA,
+        nao de robo. O robo diz o tamanho de UMA entrada; quantas dessas o
+        caixa sustenta e' conta do motor, e ela sobe e DESCE junto com o
+        caixa (o degrau e' reavaliado a cada barra, como todo o resto de
+        `_cap_capital_atual`). Um robo de `quantity` fixo -- `WdoOrb` pede 1
+        contrato desde sempre -- passa a operar 2 a partir de R$1.200 e
+        volta a 1 se o caixa cair, sem uma linha de mudanca nele.
+
+        No-op em tres casos, e cada um importa:
+          * `quantity_e_unidade=False` (o default): a acao passa intacta, e
+            a escada segue valendo so' como TETO via `_cap_efetivo`. E' o
+            que mantem `CopaWin`/`WdoGridReloadMaker`/`WinRetangulo`, que ja
+            calculam o proprio tamanho, no numero deles;
+          * escada desligada ou margem desconhecida (`_cap_capital_atual()`
+            devolve `None`): motor antigo, intacto;
+          * acao que nao e' entrada: nada a escalar.
+
+        NAO mexe em `exit_split_unit`: a saida continua fatiada de 1 em 1,
+        que e' o que faz cada contrato enfrentar a fila do nivel
+        separadamente (`fidelidade.py`, 494 na saida do WDO@). Multiplicar a
+        fatia junto faria o alvo pedir N contratos de uma vez no mesmo
+        nivel, que e' exatamente o preenchimento otimista que a calibracao
+        de fila veio corrigir.
+
+        Quem CAPA continua sendo `_aceita_dentro_do_teto`/`_cabe_no_teto` --
+        esta funcao so' PEDE; se a escada e o teto por margem discordarem,
+        o menor dos dois ja' e' o que `_cap_efetivo` devolve."""
+        if not isinstance(action, (Enter, EnterLimit)):
+            return action
+        if not getattr(self.strategy, "quantity_e_unidade", False):
+            return action
+        if not self.config.escada_risco_progressivo:
+            # Escada desligada: o motor antigo nao multiplicava nada, e
+            # multiplicar aqui pelo teto por MARGEM (que existe desde
+            # 2026-08-28 e e' bem mais frouxo) faria um robo de 1 contrato
+            # pedir 5 de uma vez sem ninguem ter pedido escala.
+            return action
+        n = self._cap_capital_atual()
+        if n is None or n <= 1:
+            return action
+        unidade = action.quantity or self.config.default_quantity
+        novos = {"quantity": unidade * n}
+        filhos = getattr(action, "split_quantities", None)
+        if filhos:
+            novos["split_quantities"] = tuple(q * n for q in filhos)
+        return replace(action, **novos)
 
     def _cabe_no_teto(self, quantity: int) -> bool:
         cap = self._cap_efetivo()
@@ -1815,6 +1894,7 @@ class IntradaySessionMachine:
         if not self.flattened:
             self.strategy.on_capital_update(cfg.initial_capital + self.realized_pnl)
             actions = self.strategy.on_bar(ts, bar, self.positions_view(), self.session_pnl)
+            actions = [self._escala_unidade(a) for a in actions]
             for action in actions:
                 if isinstance(action, AdjustStop):
                     # aplica a TODAS as posicoes abertas do lado -- nenhuma
@@ -1917,9 +1997,46 @@ class IntradaySessionMachine:
             return False
         return list(self._resting_children_qty) == nova.children(default_quantity)
 
-    def discard_resting_limit(self) -> None:
+    def discard_resting_limit(self, ts: pd.Timestamp) -> None:
         """Esquece a ordem-limite vigiada SEM emitir evento e SEM mandar
-        cancelamento nenhum -- ela nunca chegou a existir no book.
+        cancelamento nenhum -- ela nunca chegou a existir no book -- e AVISA
+        A ESTRATEGIA (`on_order_rejected`) de que a ordem dela morreu.
+
+        `ts` e' OBRIGATORIO de proposito, e o aviso mora AQUI e nao em cada
+        chamador: era o aviso que faltava, e ele faltava em TODOS os cinco
+        caminhos de `live/` ao mesmo tempo (2026-09-21). Quem escrever o
+        sexto caminho nao tem como esquecer -- sem `ts` o codigo nem importa,
+        e com `ts` o aviso sai junto. Enquanto o aviso era responsabilidade
+        do chamador, cinco chamadores concordaram em nao dar.
+
+        POR QUE AVISAR NAO E' `live/` DECIDINDO (regra 6 do `AGENTS.md`).
+        Esta funcao ja teve escrito, em `_recusa_por_margem`, que avisar
+        seria decisao de `live/` porque "recusa de corretora nao existe no
+        backtest". O raciocinio esta invertido, e a regra 7 do proprio
+        `AGENTS.md` diz como: o buraco e' REPORTADO a estrategia, que decide
+        se ainda deve algo -- "interpretar o buraco e' da estrategia, nunca
+        de `live/`". NAO avisar tambem e' uma decisao, tomada por omissao, e
+        e' a pior das duas: no backtest NAO EXISTE estado em que a
+        estrategia tenha armado uma ordem, a ordem tenha deixado de existir
+        e ninguem a avise -- ela sempre preenche, expira (`on_order_
+        expired`) ou e' recusada (`on_order_rejected`). O silencio produz um
+        robo que acredita ter ordem no livro e passa o resto do pregao mudo:
+        estado que o backtest nao sabe reproduzir, que e' exatamente o que a
+        regra 6 existe para impedir.
+
+        Medido em 2026-09-21, slot `dt-wdo_orb-wdo@-live`: a entrada do dia
+        foi recusada por barra velha (atraso 36 min), `_armou_hoje` ficou
+        `True` e o robo fechou o pregao com ZERO entradas. Terceira vez em
+        sete pregoes (14/09, 15/09, 21/09; 15/09 e 21/09 zeraram). Mesma
+        familia do item 4.25, um nivel acima: la' a limite morria por cinco
+        caminhos DENTRO do motor e o robo so' tratava um; aqui ela morre por
+        cinco caminhos DENTRO de `live/` e nenhum avisava.
+
+        `on_order_rejected` (e nao `on_order_expired`) porque nos cinco
+        caminhos a ordem foi RECUSADA antes de existir no book -- nenhum
+        deles e' prazo estourado. Os corpos do hook nas estrategias sao
+        reset de estado puro e idempotente, entao avisar duas vezes o mesmo
+        pregao nao tem efeito colateral.
 
         So' a operacao REAL usa, e sempre pelo MESMO motivo: a ordem que a
         maquina acabou de gravar em `resting_limit` NAO existe no book, e
@@ -1944,10 +2061,17 @@ class IntradaySessionMachine:
         `LimitCancelled` seria a ferramenta errada aqui: ele significa "uma
         ordem que ESTAVA no book saiu dele" e faz o chamador ao vivo mandar
         cancelamento para a corretora -- por uma ordem que ela recusou."""
+        tinha_ordem = self.resting_limit is not None
         self.resting_limit = None
         self._resting_children_qty = []
         self.resting_limit_bars_waited = 0
         self._queue_ahead_remaining = 0.0
+        # So' avisa se havia ordem para esquecer: chamada sobre `None` e'
+        # no-op (acontece no 2o arme do mesmo lote de barra velha, ver
+        # `_descarta_arme_de_barra_velha`), e avisar ali diria a estrategia
+        # que uma ordem que ela nao tem morreu.
+        if tinha_ordem:
+            self.strategy.on_order_rejected(ts)
 
     def force_flatten(self, ts: pd.Timestamp, price: float) -> list[MachineEvent]:
         """Achata a posicao (se houver) e cancela a ordem-limite vigiada, SEM

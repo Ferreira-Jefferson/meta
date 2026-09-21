@@ -109,6 +109,15 @@ class MT5BarFeed:
     #: minuto — nao e' latencia de rede, e' o formato do dado. O painel reporta
     #: este numero (`IntradayLiveRuntime.status`).
     nominal_delay_seconds = 60.0
+    #: Quantos minutos de pregao SEM UMA BARRA este feed considera anormal
+    #: (ver `IntradayLiveRuntime._vigia_cegueira_do_feed`). GENEROSO aqui de
+    #: proposito: uma barra M1 de ACAO so' existe quando houve negocio, e
+    #: papel iliquido passa minutos parado sem nada errado -- `PMAM3`, o robo
+    #: que consome este feed, foi medido em ~18 barras num pregao inteiro.
+    #: Alarmar rapido aqui treinaria o dono a ignorar o aviso, que e' pior do
+    #: que nao ter aviso. Escolha do dono, 2026-09-21: limite por TIPO de
+    #: feed, e nao um numero unico. Contraste com `MT5TickFeed`.
+    minutos_sem_barra_para_alarme = 30.0
 
     def __init__(
         self,

@@ -476,6 +476,31 @@ class IntradayStrategy(ABC):
     # devem compartilhar um jeito só de serem lidas.
     is_futuro: bool = False
 
+    # A quantidade que este robo pede numa entrada e' uma UNIDADE que o
+    # SISTEMA pode multiplicar pela escada de risco progressivo
+    # (`contracts_from_capital_escada`), ou um tamanho que o proprio robo ja
+    # calculou pelo caixa?
+    #
+    # Ordem do dono, 2026-09-18: "esse aumento nao deve ser algo do robo,
+    # deve ser algo do sistema -- qualquer robo sempre usa ele para decidir
+    # se aumenta contrato ou nao". A escada e' aplicada pelo motor
+    # (`IntradaySessionMachine`) e vale para TODOS: para quem tem `False`
+    # aqui ela e' so' TETO (nunca aumenta o que o robo pediu), e para quem
+    # tem `True` ela tambem MULTIPLICA a unidade pedida.
+    #
+    # O default e' `False` de proposito: os robos que ja calculam o proprio
+    # tamanho pelo caixa (`CopaWin`, `WdoGridReloadMaker`, `WinRetangulo`)
+    # continuam mandando no numero deles, e nenhum robo em producao muda de
+    # tamanho por causa deste campo nascer. Quem quer escalar declara, como o
+    # `WdoOrb` faz.
+    #
+    # Nao da' para o motor inferir isto sozinho: no ponto em que a acao
+    # chega, `EnterLimit(quantity=3)` de um robo que calculou 3 pelo caixa e
+    # `EnterLimit(quantity=3)` de um robo que sempre pede 3 sao o mesmo
+    # objeto. Inferir por nome de classe seria a divergencia de sempre (ver
+    # a nota de `feed_kind` acima).
+    quantity_e_unidade: bool = False
+
     def initialize(self, bars: pd.DataFrame) -> None:
         """Pre-calcula indicadores sobre TODO o historico do backtest.
         Chamado uma vez antes do loop de sessoes. Default vazio — robos sem
@@ -979,6 +1004,91 @@ def contracts_from_capital_operacional(
         cash_brl, margin_per_contract_brl, buffer=1.0, hard_cap=hard_cap,
     )
     return min(1, sobrevivencia)
+
+
+# ---------- escada de RISCO PROGRESSIVO (2026-09-18, ordem do dono) --------
+# Regra do dono para ESCALAR contrato, e ela e' de SISTEMA, nao de robo:
+# "qualquer robo sempre usa ela para decidir se aumenta contrato ou nao".
+#
+# O ponto de partida do raciocinio: o ideal de mercado e' uma entrada valer
+# ate 2% do caixa. Com o caixa real do dono isso e' inalcancavel -- a R$375
+# com 1 contrato de WDO@ a margem e' 40% do caixa (o risco, R$155,50 de stop
+# cheio, e' 41,5%). Em vez de fingir que o ideal esta disponivel, a escada
+# aceita que se comeca MUITO alavancado e exige que o risco relativo CAIA
+# pela metade a cada contrato novo, ate chegar perto do ideal:
+#
+#     contratos   margem agregada   risco/caixa alvo   caixa necessario
+#     1           R$150                       50%      R$300
+#     2           R$300                       25%      R$1.200
+#     3           R$450                     12,5%      R$3.600
+#     4           R$600                        6%      R$10.000
+#     5           R$750                        3%      R$25.000
+#
+# Duas propriedades que a tornam util, e que o teto por margem sozinho nao
+# tem: (1) o 2o contrato so' entra com R$1.200, nao com os R$750 que
+# `contracts_from_capital_operacional` autorizaria -- porque R$750 ABRE dois
+# contratos mas nao SOBREVIVE a eles (2 stops cheios seguidos custam R$622 e
+# derrubam o caixa para R$128, abaixo da margem crua); (2) ela DESCE junto
+# com o caixa, entao uma sequencia ruim reduz contrato antes de reduzir a
+# conta a zero.
+#
+# Os percentuais sao DECISAO do dono, nao medicao -- mesmo estatuto de
+# `MARGIN_BUFFER_FUTUROS` e `RESERVA_CAIXA_SEGURANCA`. O que esta medido e' o
+# que motivou a forma: com 1 contrato fixo a R$375 a probabilidade de travar
+# o caixa e' ~42% (10.000 embaralhamentos dos pregoes da base do `wdo_orb`),
+# e escalar contrato multiplica resultado E drawdown pelo mesmo fator.
+#
+# Acima do ultimo degrau a escada PARA de crescer: 5 contratos valem ate o
+# caixa comportar o regime maduro. `ESCADA_RISCO_MADURO` e' o percentual que
+# reabre o crescimento -- 0,5% do caixa, que para 5 contratos de WDO@ pede
+# R$150.000 e para 6 pede R$180.000. E' o mesmo numero que o dono citou, e
+# e' 4x mais rigido que os 2% classicos de proposito: o regime maduro nao
+# tem pressa, e quem chegou la nao precisa mais de alavancagem.
+#: risco/caixa alvo do N-esimo contrato -- a escada de partida, do 1o ao 5o.
+ESCADA_RISCO_CONTRATO = (0.50, 0.25, 0.125, 0.06, 0.03)
+#: percentual que governa do 6o contrato em diante (regime maduro)
+ESCADA_RISCO_MADURO = 0.005
+
+
+def contracts_from_capital_escada(
+    cash_brl: float,
+    margin_per_contract_brl: float,
+    hard_cap: int | None = None,
+    escada: tuple[float, ...] = ESCADA_RISCO_CONTRATO,
+    maduro: float = ESCADA_RISCO_MADURO,
+) -> int:
+    """Quantos contratos a escada de RISCO PROGRESSIVO autoriza com este
+    caixa -- ver a nota acima para a regra e de onde vem cada percentual.
+
+    O N-esimo contrato so' e' liberado quando a margem AGREGADA de N
+    contratos couber no percentual do N-esimo degrau:
+
+        N contratos exigem  `N x margem / percentual[N]`  de caixa
+
+    Devolve sempre >= 0, e >= 1 exige o primeiro degrau (R$300 no WDO@) --
+    esta funcao NAO tem piso de sobrevivencia, ao contrario de
+    `contracts_from_capital_operacional`: ela responde "quantos contratos o
+    caixa SUSTENTA com o risco relativo que o dono aceita", nao "quantos a
+    corretora deixa". Quem precisa dos dois criterios compoe pelo MENOR (e'
+    o que o motor faz em `_cap_capital_atual`).
+
+    `hard_cap` e' teto duro por cima de tudo, mesma semantica das outras
+    funcoes desta familia."""
+    if margin_per_contract_brl <= 0 or cash_brl <= 0:
+        return 0
+    n = 0
+    while True:
+        prox = n + 1
+        pct = escada[prox - 1] if prox <= len(escada) else maduro
+        if pct <= 0:
+            break
+        # tolerancia de ponto flutuante igual a de `contracts_from_capital`
+        if cash_brl + 1e-9 < prox * margin_per_contract_brl / pct:
+            break
+        n = prox
+        if hard_cap is not None and n >= hard_cap:
+            return hard_cap
+    return n if hard_cap is None else min(n, hard_cap)
 
 
 # ---------- teto por RISCO por trade (2026-08-29, item 3.9) ----------------

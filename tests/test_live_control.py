@@ -1290,3 +1290,53 @@ def test_piso_de_caixa_de_FUTURO_nunca_pergunta_preco_ao_terminal(monkeypatch):
     monkeypatch.setattr(live_control, "_cotacao_do_terminal", _explode)
 
     assert live_control._intraday_capital_minimo("wdo_grid_reload_maker", "WDO@") == 375.0
+
+
+def test_start_com_mapa_de_futuro_VAZIO_REDETECTA_o_contrato(isolated, monkeypatch):
+    """Mapa `{}` e' deteccao que NAO RESOLVEU, nunca "nada a mapear".
+
+    `detect_futures_symbol_map` devolve `{}` quando nenhum contrato tinha
+    book de dois lados -- o caso normal com o mercado FECHADO, e ela esta
+    CERTA em nao escolher contrato morto. Em 2026-09-21 o slot
+    `dt-wdo_orb-wdo@-live` subiu as 08:54, 6 min antes da abertura, gravou
+    `{}` no estado, e como `{}` nao e' `None` o `start()` reusou o vazio sem
+    redetectar: o robo passou o pregao inteiro mandando ordem para `WDO@`,
+    que a corretora recusa (`trade_mode` desabilitado, retcode 10017). Zero
+    ordens enviadas, cartao verde no painel."""
+    _seed_cash(isolated["db"], "swing", 1_000.0)
+    captured: list = []
+    monkeypatch.setattr(live_control.subprocess, "Popen",
+                        _fake_popen(poll_value=None, captured_argv=captured))
+    monkeypatch.setattr(live_control, "detect_futures_symbol_map",
+                        lambda slot, robo=None: {"WDO@": "WDOV26"})
+
+    live_control.start(_cfg(mt5_symbol_map={}))
+
+    argv = captured[0]
+    assert "--mt5-symbol-map" in argv, (
+        "o mapa vazio ficou grudado: o robo sobe sem contrato e toda ordem "
+        "real volta com TRADE_DISABLED"
+    )
+    assert json.loads(argv[argv.index("--mt5-symbol-map") + 1]) == {"WDO@": "WDOV26"}
+
+
+def test_start_com_mapa_de_futuro_PREENCHIDO_nao_redetecta(isolated, monkeypatch):
+    """O caminho do painel ja traz o mapa detectado -- redetectar ali seria
+    uma segunda consulta lenta ao terminal por clique, sem ganho."""
+    _seed_cash(isolated["db"], "swing", 1_000.0)
+    captured: list = []
+    deteccoes: list = []
+    monkeypatch.setattr(live_control.subprocess, "Popen",
+                        _fake_popen(poll_value=None, captured_argv=captured))
+
+    def _nunca(slot, robo=None):
+        deteccoes.append(slot)
+        return {"WDO@": "OUTRO"}
+
+    monkeypatch.setattr(live_control, "detect_futures_symbol_map", _nunca)
+
+    live_control.start(_cfg(mt5_symbol_map={"WDO@": "WDOV26"}))
+
+    assert deteccoes == [], "redetectou por cima de um mapa que o chamador trouxe"
+    argv = captured[0]
+    assert json.loads(argv[argv.index("--mt5-symbol-map") + 1]) == {"WDO@": "WDOV26"}

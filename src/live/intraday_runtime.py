@@ -670,6 +670,12 @@ class IntradayLiveRuntime:
         # restart ja' gritando por uma cegueira que pode nao existir mais.
         # Ver `_vigia_leitura_do_feed`.
         self._falhas_de_leitura_seguidas = 0
+        # Ver `_vigia_cegueira_do_feed`. Relogio de PAREDE da ultima vez que
+        # o feed entregou barra -- a marca zero e' `_start_session`, entao um
+        # processo novo nunca herda cegueira que nao viveu.
+        self._ultima_barra_vista_em: Optional[datetime] = None
+        self._cegueira_alarmada = False
+        self._cego_desde: Optional[datetime] = None
         self.broker = broker
         self.notifier = notifier if notifier is not None else NullNotifier()
         self.execution_mode = execution_mode
@@ -754,6 +760,11 @@ class IntradayLiveRuntime:
         # propria corretora (`_recusa_de_envio`).
         self._autotrading_ok_for: Optional[date] = None
         self._autotrading_alarmado = False
+        # Simbolo de DESTINO da ordem aceita ordem? (ver
+        # `_check_simbolo_negociavel`). Mesma forma do par acima, e pelo mesmo
+        # motivo: o custo de errar e' um pregao inteiro perdido no comeco.
+        self._simbolo_ok_for: Optional[date] = None
+        self._simbolo_alarmado = False
         # Ultimo resultado de `_ensure_protecao`, POR TICKET de posicao --
         # so' para nao repetir o alerta de "nao consegui proteger" a cada
         # passo enquanto a falha persiste (mesmo padrao de
@@ -817,12 +828,6 @@ class IntradayLiveRuntime:
         # linha `warn` por lote em `_journaliza_recusas_por_cota`).
         self._recusas_por_cota = 0
         self._pico_de_envios_no_lote = 0
-        # Alvo que a estrategia DECLAROU na entrada da posicao aberta agora.
-        # Guardado aqui porque `PositionClosed` so' carrega o `IntradayTrade`
-        # (preco de saida REAL) e o nivel pedido some junto com a posicao --
-        # sem ele nao da' pra' medir deslize de saida nenhum, que e' o item
-        # 4.8 e o que escondeu R$45,00 no pregao de 2026-09-08.
-        self._alvo_declarado: Optional[float] = None
         # Relogio de PAREDE da abertura -- ver `DURACAO_MINIMA_DE_TRADE_S`
         # para o que este numero mede de verdade (e o que ele NAO mede).
         self._abertura_wall: Optional[datetime] = None
@@ -1093,6 +1098,82 @@ class IntradayLiveRuntime:
                       f"feed voltou a ler o terminal ({self.strategy.symbol}) apos "
                       f"{self._falhas_de_leitura_seguidas} passo(s) de falha")
             self._falhas_de_leitura_seguidas = 0
+
+    def _vigia_cegueira_do_feed(self, conn, account: AccountState, session: date,
+                                now: datetime, houve_barra: bool) -> Optional[str]:
+        """Grava no diario quando o feed passa minutos DEMAIS sem entregar
+        barra, e quando volta. Devolve o motivo enquanto cego, `None` quando
+        tudo em ordem.
+
+        E' o irmao de `_vigia_leitura_do_feed`, para o modo de falha que ele
+        NAO pega -- e a prova de que nao pegava e' de 2026-09-21: o `WDO@`
+        parou de entregar tick as 09:06:54 e voltou as ~09:43, 36 minutos,
+        437 passos `daytrade_espera` seguidos, tres robos travados na MESMA
+        marca d'agua, e ZERO linha em lugar nenhum. `falha_de_leitura` ficou
+        `None` o tempo todo, porque a leitura de fato "deu certo": devolveu
+        lista vazia. Lista vazia e' o caso NORMAL de um papel sem negocio
+        (contrato de `closed_bars_since`), entao o feed nao tem como
+        distinguir -- quem distingue e' quem tem o RELOGIO na mao.
+
+        O LIMITE VEM DO FEED, nao daqui (`minutos_sem_barra_para_alarme`:
+        5 min no tick, 30 min no M1). Decisao do dono, 2026-09-21: limite por
+        TIPO de feed em vez de um numero unico, porque os dois casos nao se
+        parecem. No `WDO@` a base mede ~336 negocios por MINUTO -- 5 minutos
+        secos e' o terminal, nao o mercado. Numa acao iliquida (`PMAM3`, ~18
+        barras no pregao INTEIRO) 5 minutos e' terca-feira normal, e alarmar
+        ali treinaria o dono a ignorar o aviso, que e' pior que nao avisar.
+
+        Mede tempo de PAREDE sem barra, nao o carimbo da ultima barra: o que
+        se quer saber e' "faz quanto tempo que eu nao vejo nada", e a marca
+        zero e' `_start_session` (reposta tambem num restart no meio do
+        pregao, que e' o certo -- processo novo nao herda cegueira que nao
+        viveu).
+
+        Uma linha por TRANSICAO, nunca uma por passo: a 5s por passo, os 36
+        minutos daquele dia virariam 437 linhas iguais e o diario ficaria
+        ilegivel justamente no pregao que mais precisava ser lido. Mesma
+        disciplina de `_vigia_leitura_do_feed` e de
+        `_journaliza_armes_de_barra_velha`.
+
+        Isto AVISA e IMPEDE, mas nao conserta: o dado nao esta' na nossa mao.
+        Quem cuida de nao operar contra preco morto quando o feed volta
+        continua sendo `MAX_ATRASO_PARA_ORDEM_SEGUNDOS`, e quem cuida de nao
+        virar o dia com posicao aberta continua sendo
+        `_aplicar_piso_de_relogio`. O que faltava era o dono SABER."""
+        if houve_barra:
+            self._ultima_barra_vista_em = now
+            if self._cegueira_alarmada:
+                parado = (now - self._cego_desde).total_seconds() / 60.0
+                self._log(conn, account.id, "info",
+                          f"feed voltou a entregar {self.strategy.symbol} apos "
+                          f"{parado:.0f} min sem barra nenhuma",
+                          {"pregao": session.isoformat(),
+                           "minutos_cego": round(parado, 1)})
+                self._cegueira_alarmada = False
+                self._cego_desde = None
+            return None
+        if self._ultima_barra_vista_em is None:
+            return None
+        limite = getattr(self.bar_feed, "minutos_sem_barra_para_alarme", None)
+        if not limite:
+            return None
+        parado = (now - self._ultima_barra_vista_em).total_seconds() / 60.0
+        if parado < float(limite):
+            return None
+        motivo = (f"feed sem uma barra de {self.strategy.symbol} ha "
+                  f"{parado:.0f} min (limite {float(limite):.0f} min deste "
+                  "feed) -- o terminal nao esta entregando negocio novo. O "
+                  "robo nao decide nada sem dado: nao entra, e o que estiver "
+                  "aberto segue protegido na corretora.")
+        if not self._cegueira_alarmada:
+            self._cegueira_alarmada = True
+            self._cego_desde = self._ultima_barra_vista_em
+            self._log(conn, account.id, "warn", motivo,
+                      {"pregao": session.isoformat(),
+                       "minutos_sem_barra": round(parado, 1),
+                       "limite_minutos": float(limite),
+                       "feed": getattr(self.bar_feed, "name", "?")})
+        return motivo
 
     def _aplicar_piso_de_relogio(self, conn, account: AccountState, session: date,
                                  now: datetime) -> Optional[StepReport]:
@@ -1416,6 +1497,21 @@ class IntradayLiveRuntime:
         duravel, e comitar aqui nao protege efeito real nenhum (nao ha
         nenhum -- e' UPDATE de espelho).
 
+        `metadata["target"]` (2026-09-19, item 4.31 de LICOES_DE_PRODUCAO.md)
+        entrou na MESMA sincronizacao pelo motivo gemeo do stop:
+        `AdjustTarget` move `pos.current_target` na maquina (ex.: `WdoOrb.
+        saida_limite_minutos`, que troca o alvo pelo preco corrente 60min
+        depois da entrada) e nada em `live/` acompanhava -- o alarme
+        "DESLIZE DE SAIDA" (`_on_closed`) comparava a saida contra o alvo
+        DECLARADO NA ENTRADA para sempre, disparando falso positivo em toda
+        posicao que teve o alvo ajustado no meio do caminho (5 das 6
+        operacoes do `wdo_orb` na semana de 2026-09-14..18, R$705,00 de
+        "deslize" fantasma contra um liquido real de +R$377,00). Guardar o
+        alvo vigente aqui, e nao num campo a parte lido so' na entrada
+        (como era `self._alvo_declarado` ate' esta correcao), e' o que faz
+        `_on_closed` comparar contra o nivel que valia DE VERDADE no
+        fechamento.
+
         No-op quando nao ha posicao na maquina, quando o espelho ainda nao
         existe (a posicao abriu e fechou dentro do mesmo lote), e quando
         nada mudou."""
@@ -1425,11 +1521,14 @@ class IntradayLiveRuntime:
         espelho = account.positions.get(self.strategy.symbol)
         if espelho is None:
             return
+        alvo_espelho = espelho.metadata.get("target")
         if (espelho.bars_held == pos_maquina.bars_held
-                and espelho.current_stop == pos_maquina.current_stop):
+                and espelho.current_stop == pos_maquina.current_stop
+                and alvo_espelho == pos_maquina.current_target):
             return
         espelho.bars_held = pos_maquina.bars_held
         espelho.current_stop = pos_maquina.current_stop
+        espelho.metadata["target"] = pos_maquina.current_target
         store.upsert_position(conn, account.id, espelho)
 
     @staticmethod
@@ -1487,18 +1586,60 @@ class IntradayLiveRuntime:
         return valor if isinstance(valor, time) else None
 
     def _needs_warm_start(self, now: datetime) -> bool:
-        """So faz warm start se ainda SOBRA janela de ancora fixa.
+        """Warm start e' o DEFAULT. A unica excecao e' a janela de ancora
+        fixa ja vencida.
 
-        Esta e' a politica de despacho decidida em 2026-08-21 (ver
-        `pmam3_daytrade_champion` na memoria do projeto): ligar depois de
-        `fixed_anchor_until` e fazer warm start carregava uma ordem fixa ja
-        obsoleta, e a obsolescencia so era detectavel DENTRO de `on_bar` —
-        uma barra inteira de defasagem, que a dependencia de caminho
-        amplificava. Nao fazer warm start nesse caso faz o robo se comportar
-        como ancora rolante pura desde agora, que e' exatamente o certo."""
+        POR QUE O DEFAULT E' SIM (invertido em 2026-09-21). No backtest a
+        estrategia SEMPRE viu o pregao inteiro, da abertura ate a barra
+        corrente -- nao existe la' um robo que acorda as 11h sem saber o que
+        aconteceu as 9h. Comecar a frio no meio do pregao produz um robo cujo
+        estado interno nenhum backtest descreve, e para uma familia inteira
+        de robos isso nao e' "menos calibrado", e' OUTRA ESTRATEGIA:
+
+          * `WdoOrb` tira stop e alvo da FAIXA DOS 15 PRIMEIROS MINUTOS do
+            pregao, e `_open_ts` e' a primeira barra que ele VE. Reiniciado
+            as 11:19, a "faixa de abertura" dele virava 11:19..11:34 --
+            medido de verdade em 2026-09-21, quando o warm start reconstroi
+            `_open_ts=09:00:45` e faixa 5128,0..5149,0, e o frio dava outra
+            coisa qualquer;
+          * os retangulos (`WinRetangulo`/`WdoRetangulo`) montam a figura
+            desde o comeco do dia, mesma familia de dependencia.
+
+        Ate' aqui `corte is None` (robo SEM conceito de ancora fixa) caia em
+        `False`, ou seja "nunca faz warm start". Isso nunca foi uma decisao
+        sobre esses robos: era o valor de queda de uma politica escrita em
+        2026-08-21 para a `Gremah`, o unico robo que tinha ancora fixa. A
+        politica dela continua valendo e continua aqui -- ligar depois de
+        `fixed_anchor_until` e fazer warm start carregava uma ordem fixa ja'
+        obsoleta, e a obsolescencia so' era detectavel DENTRO de `on_bar`
+        (uma barra de defasagem, amplificada pela dependencia de caminho);
+        para ela, nao fazer warm start e' se comportar como ancora rolante
+        pura desde agora, que e' o certo.
+
+        POR QUE ISTO NAO MANDA ORDEM CONTRA PRECO MORTO -- a duvida obvia, e
+        a resposta esta em `_start_session`: a semente vai ate' `now`
+        (`session_bars_until(session, now)`), entao a ordem que o warm start
+        arma foi decidida na barra MAIS RECENTE, nao numa de duas horas
+        atras. O replay reconstroi ESTADO; a decisao e' fresca. (E' por isso
+        que o portao de barra velha de `_on_limit_placed`, que este caminho
+        nao atravessa, nao faz falta aqui.)
+
+        CUSTO, medido em 2026-09-21 contra o terminal real, no pior caso do
+        repo (feed de TICK do `WDO@`, pregao ja' com 2h20 de vida): 1,8s
+        para buscar 64.869 barras degeneradas + 0,3s para reproduzi-las na
+        estrategia = **2,1s**, uma vez por processo por pregao. Nao e' o caso
+        do item 5.9 (aquilo eram 31 buscas por PASSO alimentando hooks
+        vazios).
+
+        Efeito colateral aceito de propósito: a partida normal da manha
+        tambem passa por aqui. As 09:00:00 a semente vem vazia e
+        `_start_session` cai no caminho a frio de sempre; num passo que caia
+        alguns segundos depois da abertura, a semente tem esses segundos e o
+        robo os CONSOME em vez de descarta-los (o caminho a frio descarta de
+        proposito). Mais fiel, nao menos."""
         corte = self._fixed_anchor_until
         if corte is None:
-            return False
+            return True
         return now.astimezone(timezone.utc).time() < corte
 
     def _consome(self, nome_do_hook: str) -> bool:
@@ -1911,6 +2052,13 @@ class IntradayLiveRuntime:
             self.machine.session_pnl = pnl_antes
             self.machine.flattened = flat_antes
         self._calibrated_for = session
+        # Marca zero do vigia de cegueira (`_vigia_cegueira_do_feed`): o
+        # relogio comeca a contar da ABERTURA DA SESSAO, nunca da criacao do
+        # objeto. Um robo que subiu as 08:54 nao esta cego das 08:54 as
+        # 09:00 -- o mercado e' que estava fechado.
+        self._ultima_barra_vista_em = now
+        self._cegueira_alarmada = False
+        self._cego_desde = None
         return StepReport("daytrade_sessao", session,
                           detail={"inicio": modo, "barras_semente": semente,
                                   "restaurada": restaurada})
@@ -1988,6 +2136,16 @@ class IntradayLiveRuntime:
                                    detail={"motivo": "autotrading desligado",
                                            "alarme": alarme_auto})]
 
+            alarme_simbolo = self._check_simbolo_negociavel(conn, account, hoje)
+            if alarme_simbolo is not None:
+                self._gravar_impedimento(
+                    conn, account,
+                    "símbolo de destino não aceita ordem — confira o contrato no MT5",
+                    hoje)
+                return [StepReport("daytrade_skip", hoje, phase=fase,
+                                   detail={"motivo": "simbolo nao negociavel",
+                                           "alarme": alarme_simbolo})]
+
             if self._calibrated_for != hoje:
                 try:
                     self._restore(account, hoje)
@@ -2064,6 +2222,13 @@ class IntradayLiveRuntime:
 
             barras = self.bar_feed.closed_bars_since(self._snapshot.last_bar_ts)
             self._vigia_leitura_do_feed(conn, account)
+            # Cegueira do feed (2026-09-21): roda nos DOIS ramos -- e' ele
+            # que detecta a volta, e sem a volta o impedimento nunca sairia
+            # do painel. Grava o impedimento DEPOIS de `_aplicar_piso_de_
+            # relogio` no ramo sem barra, porque achatar a posicao vale mesmo
+            # com o feed cego (foi a lacuna de 2026-09-14).
+            cego = self._vigia_cegueira_do_feed(conn, account, hoje, now,
+                                                houve_barra=bool(barras))
             if not barras:
                 # PISO DE RELOGIO DE PAREDE (2026-09-15): sem barra nenhuma
                 # este passo, o caminho por BARRA (`on_closed_bar`, bloco
@@ -2077,9 +2242,14 @@ class IntradayLiveRuntime:
                 passo_piso = self._aplicar_piso_de_relogio(conn, account, hoje, now)
                 if passo_piso is not None:
                     passos.append(passo_piso)
+                if cego is not None:
+                    self._gravar_impedimento(
+                        conn, account, "feed sem barra nova — terminal MT5", hoje)
                 self._persist(conn, account)
-                return passos + [StepReport("daytrade_espera", hoje, phase=fase,
-                                            detail={"ultima_barra": str(self._snapshot.last_bar_ts)})]
+                return passos + [StepReport(
+                    "daytrade_espera", hoje, phase=fase,
+                    detail={"ultima_barra": str(self._snapshot.last_bar_ts),
+                            **({"feed_cego": cego} if cego is not None else {})})]
 
             # Caixa suficiente para o lote de hoje? So aqui, e nao antes, porque
             # o minimo depende do PRECO e a primeira barra fechada e' a primeira
@@ -2230,6 +2400,99 @@ class IntradayLiveRuntime:
             self._autotrading_alarmado = True
             self._log(conn, account.id, "error", f"nao vou operar: {alarme}",
                       {"pregao": session.isoformat()})
+        return alarme
+
+    def _check_simbolo_negociavel(
+        self, conn, account: AccountState, session: date
+    ) -> Optional[str]:
+        """O simbolo para onde a ordem vai sair aceita ordem? Tenta se
+        AUTOCORRIGIR antes de recusar o pregao.
+
+        O defeito que isto fecha (2026-09-21, slot `dt-wdo_orb-wdo@-live`,
+        dinheiro real): o slot subiu as 08:54, 6 minutos antes da abertura,
+        quando nenhum contrato de WDO tinha book de dois lados.
+        `detect_futures_symbol_map` degradou para `WDO@ -> WDO@` (o que ela
+        deve fazer -- nunca escolher contrato morto), `live_control` filtrou
+        a entrada por ser igual ao default e o mapa salvo ficou `{}`. `{}` e'
+        falsy, entao `--mt5-symbol-map` nem foi passado, e o robo passou o
+        pregao inteiro mandando ordem para `WDO@`, que tem `trade_mode`
+        DESABILITADO. Zero ordens, cartao verde no painel. E' o incidente de
+        2026-08-28 voltando por uma porta nova.
+
+        A DETECCAO estava certa e o BUG era de MOMENTO: ela roda no clique de
+        "Iniciar operacao", que nao tem nenhuma garantia de acontecer com o
+        mercado aberto. Por isso a correcao mora aqui, no primeiro passo do
+        PREGAO -- onde o book existe por definicao -- e nao em quem sobe o
+        processo.
+
+        Ordem das tentativas, da mais barata para a mais cara:
+
+        1. o destino atual aceita ordem? segue o pregao, nada a fazer;
+        2. nao aceita: redetecta o contrato corrente e INSTALA no broker
+           (`adota_symbol_map`), sem reiniciar o processo. Reiniciar
+           recalibraria a sessao a frio, e um robo intradiario recalibrado no
+           meio do pregao e' outro robo (a "faixa de abertura" do `wdo_orb`
+           viraria o horario do restart);
+        3. ainda nao aceita: IMPEDIMENTO. O robo nao finge operar.
+
+        So' checa ate' passar UMA vez no pregao, e so' em execucao REAL
+        (`self.executor is None` em sombra: sombra nao manda ordem, entao o
+        `trade_mode` do destino nao muda nada para ela). Enquanto barrado
+        continua tentando a cada passo, de proposito -- mesmo espirito do
+        `_check_autotrading`: a rolagem de contrato ou o cadastro do simbolo
+        pode se resolver no meio do pregao, e ai a operacao volta sozinha.
+
+        "Nao deu para saber" (`None`) nao vira alarme, pela mesma razao do
+        `_check_autotrading`: quem nao le o terminal ja falha no dado e na
+        ordem, com erro proprio e mais especifico."""
+        if self.executor is None or self._simbolo_ok_for == session:
+            return None
+        aceita = getattr(self.broker, "aceita_ordem", None)
+        if aceita is None:
+            return None
+        ticker = self.strategy.symbol
+        resposta = aceita(ticker)
+        if resposta is None:
+            return None
+        if resposta:
+            self._simbolo_ok_for = session
+            return None
+
+        # (2) AUTOCORRECAO: redetecta com o mercado aberto e instala.
+        destino_velho = self.broker.symbol_for(ticker)
+        detectar = getattr(self.broker, "detect_futures_symbol_map", None)
+        adotar = getattr(self.broker, "adota_symbol_map", None)
+        if detectar is not None and adotar is not None:
+            mapa = detectar([ticker]) or {}
+            novo = mapa.get(ticker)
+            if novo and novo != destino_velho:
+                adotar({ticker: novo})
+                if aceita(ticker):
+                    self._simbolo_ok_for = session
+                    self._simbolo_alarmado = False
+                    self._log(conn, account.id, "warn",
+                              f"contrato corrigido sozinho: {ticker} ia mandar "
+                              f"ordem para {destino_velho} (que a corretora "
+                              f"recusa) e passou a mandar para {novo}. Causa "
+                              "provavel: o robo subiu antes da abertura, sem "
+                              "book para detectar o contrato.",
+                              {"pregao": session.isoformat(), "ticker": ticker,
+                               "destino_antigo": destino_velho,
+                               "destino_novo": novo})
+                    return None
+
+        # (3) nao deu: nao vou fingir que opero.
+        alarme = (f"o simbolo de destino de {ticker} e' "
+                  f"{self.broker.symbol_for(ticker)}, e a corretora NAO aceita "
+                  "ordem nele (trade_mode desabilitado -- toda ordem voltaria "
+                  "com retcode 10017 TRADE_DISABLED). Num futuro continuo isso "
+                  "quer dizer que falta o mapa de contrato. Reinicie o slot com "
+                  "o mercado ABERTO para redetectar o vencimento.")
+        if not self._simbolo_alarmado:
+            self._simbolo_alarmado = True
+            self._log(conn, account.id, "error", f"nao vou operar: {alarme}",
+                      {"pregao": session.isoformat(), "ticker": ticker,
+                       "destino": self.broker.symbol_for(ticker)})
         return alarme
 
     def _check_capital(
@@ -3749,7 +4012,7 @@ class IntradayLiveRuntime:
             # chamada de `on_closed_bar` que vem depois) resolve sozinho.
             return
         order = self.machine.resting_limit
-        self.machine.discard_resting_limit()
+        self.machine.discard_resting_limit(bar.ts)
         self._snapshot.pending_entry_refs = []
         self._volume_no_nivel = 0.0
         if resultado["outcome"] == "dead":
@@ -4312,7 +4575,25 @@ class IntradayLiveRuntime:
                     conn, account,
                     self.executor.cancel_stale_refs(
                         self._snapshot.pending_entry_refs, ts=evento.ts))
-        self.machine.discard_resting_limit()
+        self.machine.discard_resting_limit(evento.ts)
+
+    def _ts_do_arme(self) -> pd.Timestamp:
+        """O `ts` da barra que armou a ordem que esta sendo esquecida.
+
+        Existe para os dois caminhos de recusa que nao tem evento em maos
+        (`_recusa_por_cota_de_envio` e `_recusa_de_envio`) poderem cumprir o
+        contrato de `machine.discard_resting_limit(ts)`. E' a marca d'agua do
+        ultimo lote consumido, que e' exatamente a barra sobre a qual a
+        estrategia decidiu armar -- nao o relogio de parede de agora, que
+        pode estar dezenas de minutos adiante num lote atrasado.
+
+        Nunca `None` na pratica: `_start_session` carimba `last_bar_ts` (da
+        semente, no warm start, ou da ultima barra ja fechada, a frio) antes
+        de qualquer arme existir. O `or` cobre so' o caso teorico, e nem
+        chega a importar -- sem ordem vigiada `discard_resting_limit` nao
+        avisa ninguem."""
+        return (self._snapshot.last_bar_ts
+                or pd.Timestamp(datetime.now(timezone.utc)))
 
     def _recusa_por_cota_de_envio(self, excesso: ExcessoDeCadencia) -> None:
         """A COTA DE VAZAO recusou este envio: nada vai ao book, e o robo
@@ -4343,7 +4624,7 @@ class IntradayLiveRuntime:
         self._recusas_por_cota += 1
         self._pico_de_envios_no_lote = max(self._pico_de_envios_no_lote,
                                            excesso.envios)
-        self.machine.discard_resting_limit()
+        self.machine.discard_resting_limit(self._ts_do_arme())
 
     def _on_limit_placed(self, conn, account: AccountState, evento: LimitPlaced,
                          *, barra_velha: bool = False) -> None:
@@ -4545,7 +4826,7 @@ class IntradayLiveRuntime:
                        "numero_ordem": numero,
                        "tentativas_60s": excesso.tentativas,
                        "envios_60s": excesso.envios})
-            self.machine.discard_resting_limit()
+            self.machine.discard_resting_limit(evento.ts)
             return
         if excesso is not None:
             # VAZAO. Recusa SO' esta ordem e segue -- o robo continua vivo.
@@ -4625,18 +4906,24 @@ class IntradayLiveRuntime:
         (cancela as fatias ja enviadas antes de levantar), entao esquecer a
         ordem e' a leitura HONESTA do estado, nao um chute otimista.
 
-        O robo nao e' avisado da recusa, e isso e' deliberado (regra 6 do
-        AGENTS.md): re-armar agora seria uma decisao que `live/` estaria
-        tomando sozinha, e que nenhum backtest reproduz (recusa de corretora
-        nao existe la'). Ele re-arma pelo proprio criterio -- e a proxima
-        `EnterLimit` vira rodada NOVA no diario (`replaced is None`, porque a
-        maquina nao vigia mais nada), nao uma "substituicao" de uma ordem que
-        nunca existiu."""
+        O robo E' avisado da recusa, via `machine.discard_resting_limit`
+        (que chama `on_order_rejected`). Ate' 2026-09-21 NAO era, e o
+        argumento escrito aqui era que avisar seria decisao de `live/`
+        (regra 6 do `AGENTS.md`), porque "recusa de corretora nao existe no
+        backtest". O argumento esta invertido: a regra 7 do mesmo arquivo
+        manda REPORTAR o buraco a estrategia e diz que "interpretar o buraco
+        e' da estrategia, nunca de `live/`". Nao avisar era `live/` decidindo
+        por omissao -- e decidindo o pior: o robo seguia acreditando ter
+        ordem no livro. Ver a docstring de `discard_resting_limit` para o
+        numero que isso custou. Ele re-arma pelo proprio criterio -- e a
+        proxima `EnterLimit` vira rodada NOVA no diario (`replaced is None`,
+        porque a maquina nao vigia mais nada), nao uma "substituicao" de uma
+        ordem que nunca existiu."""
         # `numero is None`: a ordem foi plantada pelo warm start direto em
         # `resting_limit` e nunca passou por `_on_limit_placed`, entao nunca
         # ganhou numero de rodada (mesmo caso descrito la').
         rotulo = f"#{numero:02d}" if numero else "warm start"
-        self.machine.discard_resting_limit()
+        self.machine.discard_resting_limit(self._ts_do_arme())
         # `place_limit` tenta desfazer as fatias ja enviadas antes de levantar,
         # mas o cancelamento tambem pode nao ser confirmado -- esses tickets
         # vem em `erro.orphan_refs` e NAO podem ser esquecidos aqui.
@@ -4853,10 +5140,11 @@ class IntradayLiveRuntime:
         else:
             account.cash -= custo
 
-        # O nivel PEDIDO, para `_on_closed` poder comparar com o EXECUTADO
-        # (item 4.8: 8 de 8 alvos nativos sairam pior que o nivel em
-        # 2026-09-08, e nada media isso).
-        self._alvo_declarado = evento.target
+        # O nivel PEDIDO fica em `pos.metadata["target"]` (setado acima na
+        # construcao do `LivePosition`) -- `_on_closed` le' o VIGENTE dali
+        # (sincronizado por `_sincroniza_espelho_da_posicao` a cada
+        # `AdjustTarget`), nao um valor congelado na entrada. Ver o item 4.31
+        # de LICOES_DE_PRODUCAO.md.
         self._abertura_wall = datetime.now(timezone.utc)
 
         numero = self._numero_ordem_atual()
@@ -5076,8 +5364,18 @@ class IntradayLiveRuntime:
         # para os numeros de 2026-09-08 que justificaram plumbar isto.
         duracao_corretora_ms = (
             None if self.executor is None else self.executor.vida_da_posicao_ms())
-        alvo = self._alvo_declarado
-        self._alvo_declarado = None
+        # O alvo VIGENTE no fechamento -- NAO o declarado na entrada (item
+        # 4.31, 2026-09-19). `pos_fechada.metadata["target"]` e' sincronizado
+        # a cada lote de barras por `_sincroniza_espelho_da_posicao` a partir
+        # de `pos_maquina.current_target`, que `AdjustTarget` move (ex.:
+        # `WdoOrb.saida_limite_minutos` troca o alvo pelo preco corrente 60min
+        # depois da entrada). Ate' esta correcao o alarme comparava contra
+        # `self._alvo_declarado`, gravado UMA VEZ na abertura e nunca
+        # atualizado -- 5 das 6 operacoes do `wdo_orb` na semana de
+        # 2026-09-14..18 tiveram o alvo ajustado pelo relogio e todas
+        # dispararam "DESLIZE DE SAIDA" fantasma (R$705,00 somados contra um
+        # liquido real de +R$377,00).
+        alvo = None if pos_fechada is None else pos_fechada.metadata.get("target")
         deslize = None
         # SO' faz sentido contra uma saida por ALVO (2026-09-09). Ate' aqui a
         # conta rodava para QUALQUER motivo de saida, e como o campo se chama
@@ -5185,7 +5483,10 @@ class IntradayLiveRuntime:
             max_price_seen=(existente.max_price_seen if existente is not None else pos_total.entry_price),
             min_price_seen=(existente.min_price_seen if existente is not None else pos_total.entry_price),
             bars_held=pos_total.bars_held,
-            metadata=(dict(existente.metadata) if existente is not None else {"side": pos_total.side}),
+            metadata={
+                **(dict(existente.metadata) if existente is not None else {"side": pos_total.side}),
+                "target": pos_total.current_target,
+            },
         )
         store.upsert_position(conn, account.id, pos)
         account.positions[pos.ticker] = pos
