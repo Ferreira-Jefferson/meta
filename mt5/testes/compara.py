@@ -109,7 +109,9 @@ def deals(p):
                     "preco": _num(l[idx["preco"]]) or 0.0,
                     "coment": l[idx["coment"]] if "coment" in idx else "",
                 })
-            return out
+            # O relatorio lista por ticket, nao por hora: no Maestro o stop (S) nasce antes
+            # da entrada (E) e aparece primeiro. Ordena por hora para reconstruir a posicao.
+            return sorted(out, key=lambda d: d["hora"])
     raise ValueError(f"tabela de deals nao encontrada em {p.name}")
 
 
