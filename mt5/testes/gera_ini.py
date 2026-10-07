@@ -9,6 +9,7 @@ sem atraso, deposito R$1.000:
 
 Uso: python gera_ini.py   (escreve em mt5/testes/ini/)
 """
+import re
 from pathlib import Path
 
 AQUI = Path(__file__).resolve().parent
@@ -43,11 +44,34 @@ ShutdownTerminal=1
 """
 
 
-def _ativos(ligados):
+MT5 = AQUI.parent
+
+
+def _padroes(fontes):
+    """Todos os inputs com o valor PADRAO do codigo. Sem isto o Testador usa o ultimo
+    .set salvo do EA (MQL5/Profiles/Tester/<EA>.set), nao o padrao: em 2026-10-07 o
+    avulso WinRetanguloEma34 rodou com MinutoZerar=50 (valor antigo) em vez de 0."""
+    linhas = []
+    for f in fontes:
+        txt = (MT5 / f).read_text(encoding="utf-8", errors="ignore")
+        for tipo, nome, valor in re.findall(r"^\s*input\s+(\w+)\s+(\w+)\s*=\s*([^;]+);", txt, re.M):
+            valor = valor.strip()
+            if tipo == "string":
+                linhas.append(f"{nome}={valor.strip(chr(34))}")
+            else:
+                linhas.append(f"{nome}={valor}||{valor}||0||{valor}||N")
+    return linhas
+
+
+def _entradas(fontes, ligados=None):
+    """[TesterInputs] com os padroes do codigo; `ligados` liga/desliga os Ativo_* do Maestro."""
     linhas = ["[TesterInputs]"]
-    for sigla in ROBOS:
-        v = "true" if sigla in ligados else "false"
-        linhas.append(f"Ativo_{sigla}={v}||false||0||true||N")
+    for l in _padroes(fontes):
+        nome = l.split("=", 1)[0]
+        if ligados is not None and nome.startswith("Ativo_"):
+            v = "true" if nome[len("Ativo_"):] in ligados else "false"
+            l = f"{nome}={v}||false||0||true||N"
+        linhas.append(l)
     return "\n".join(linhas) + "\n"
 
 
@@ -55,10 +79,10 @@ def main():
     SAIDA.mkdir(exist_ok=True)
     testes = {}
     for sigla in ROBOS:
-        testes[f"M_{sigla}"] = BASE.format(expert="WinMaestro", nome=f"M_{sigla}") + _ativos({sigla})
-    testes["M_TODOS"] = BASE.format(expert="WinMaestro", nome="M_TODOS") + _ativos(set(ROBOS))
+        testes[f"M_{sigla}"] = BASE.format(expert="WinMaestro", nome=f"M_{sigla}") + _entradas(["WinMaestro/Inputs.mqh"], {sigla})
+    testes["M_TODOS"] = BASE.format(expert="WinMaestro", nome="M_TODOS") + _entradas(["WinMaestro/Inputs.mqh"], set(ROBOS))
     for sigla, ea in ROBOS.items():
-        testes[f"A_{sigla}"] = BASE.format(expert=ea, nome=f"A_{sigla}")
+        testes[f"A_{sigla}"] = BASE.format(expert=ea, nome=f"A_{sigla}") + _entradas([f"{ea}.mq5"])
     for nome, txt in testes.items():
         # O terminal grava os .ini dele em UTF-16 LE com BOM; lemos e escrevemos igual.
         with open(SAIDA / f"{nome}.ini", "w", encoding="utf-16", newline="\r\n") as f:
