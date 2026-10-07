@@ -18,12 +18,12 @@ Para cada robô, rode **dois** testes no mesmo período:
 
 | # | EA | Inputs |
 |---|---|---|
-| a | WinMaestro | só `Ativo_GapBarra1 = true` (os outros 4 false) |
-| b | WinMaestro | só `Ativo_CincoMedias = true` |
-| c | WinMaestro | só `Ativo_DeslocamentoMatinal = true` |
-| d | WinMaestro | só `Ativo_RetanguloEma34 = true` |
-| e | WinMaestro | só `Ativo_Win_c1 = true` |
-| f | WinMaestro | os 5 `true` |
+| a | WinMaestro | só `Ativo_GB = true` (os outros 4 false) |
+| b | WinMaestro | só `Ativo_CM = true` |
+| c | WinMaestro | só `Ativo_DM = true` |
+| d | WinMaestro | só `Ativo_RE = true` |
+| e | WinMaestro | só `Ativo_C1 = true` |
+| f | WinMaestro | os 5 `Ativo_*` = true |
 
 E os avulsos correspondentes (WinGapBarra1, WinCincoMedias, WinDeslocamentoMatinal, WinRetanguloEma34, Win_c1) com os padrões, mesmo período — se ainda não estiverem no histórico do Testador.
 
