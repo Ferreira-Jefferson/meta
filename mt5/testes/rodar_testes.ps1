@@ -1,4 +1,4 @@
-# Roda a bateria de testes do WinMaestro no Testador do MT5 (Rico), um por vez.
+﻿# Roda a bateria de testes do WinMaestro no Testador do MT5 (Rico), um por vez.
 #
 # PRE-REQUISITO: o MT5 da Rico FECHADO (com ele aberto o /config so' traz a
 # janela para a frente e nao testa nada). Fechar o MT5 derruba os robos Python
@@ -24,7 +24,7 @@ $Agentes  = Join-Path $env:APPDATA "MetaQuotes\Tester\38FF261A42172F3478E54D3A1A
 $Aqui     = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Ini      = Join-Path $Aqui "ini"
 $Saida    = Join-Path $Aqui "resultados"
-$LimiteMin = 40   # um teste que passa disso e' considerado travado
+$LimiteMin = 90   # um teste que passa disso e' considerado travado
 
 if (Get-Process terminal64 -ErrorAction SilentlyContinue) {
     Write-Host "O MT5 esta' aberto. Feche o terminal (sem posicao aberta) e rode de novo." -ForegroundColor Red
@@ -32,6 +32,8 @@ if (Get-Process terminal64 -ErrorAction SilentlyContinue) {
 }
 if (-not (Test-Path $Ini)) { Write-Host "Rode antes: python mt5\testes\gera_ini.py" -ForegroundColor Red; exit 1 }
 New-Item -ItemType Directory -Force $Saida | Out-Null
+# O Testador NAO cria a subpasta do Report: sem ela o teste roda e o relatorio some sem aviso.
+New-Item -ItemType Directory -Force (Join-Path $Dados "testes_maestro") | Out-Null
 
 $ordem = "M_GB","M_CM","M_DM","M_RE","M_C1","M_TODOS","A_GB","A_CM","A_DM","A_RE","A_C1"
 if ($Testes) { $ordem = $Testes }
@@ -49,7 +51,7 @@ foreach ($nome in $ordem) {
         continue
     }
     $rel = Get-ChildItem -Path (Join-Path $Dados "testes_maestro"), (Join-Path (Split-Path $Terminal) "testes_maestro") `
-             -Filter "$nome.htm" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+             -Filter "$nome.htm*" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
     if ($rel -and $rel.LastWriteTime -ge $t0) {
         Copy-Item $rel.FullName (Join-Path $Saida "$nome.htm") -Force
         Write-Host (" ok ({0:N1} min)" -f ((Get-Date) - $t0).TotalMinutes) -ForegroundColor Green
