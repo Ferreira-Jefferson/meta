@@ -77,3 +77,5 @@ data/*
 *.log
 *.err
 *.bak
+scripts/daytrade/comparativo_win_2026/comparativo_win_2026.html
+scripts/daytrade/comparativo_win_2026/comparativo_win_2026.json
