@@ -15,7 +15,7 @@
 # Os relatorios e o log do agente sao copiados para mt5\testes\resultados\.
 # No fim o MT5 e' aberto de novo, sem config.
 
-param([string[]]$Testes)
+param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Testes)
 
 $ErrorActionPreference = "Stop"
 $Terminal = "C:\Program Files\Rico - MetaTrader 5\terminal64.exe"
