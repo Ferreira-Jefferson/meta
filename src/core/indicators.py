@@ -13,6 +13,28 @@ def sma(series: pd.Series, window: int) -> pd.Series:
     return series.rolling(window=window, min_periods=window).mean()
 
 
+def ema(series: pd.Series, span: int) -> pd.Series:
+    return series.ewm(span=span, adjust=False, min_periods=span).mean()
+
+
+def smma(series: pd.Series, window: int) -> pd.Series:
+    """Smoothed / Wilder moving average — mesma fórmula recursiva já usada
+    dentro de `ifr`/`atr`, exposta aqui como MM genérica reaproveitável."""
+    return series.ewm(alpha=1.0 / window, adjust=False, min_periods=window).mean()
+
+
+def lwma(series: pd.Series, window: int) -> pd.Series:
+    """Linear Weighted Moving Average — peso cresce linearmente do mais
+    antigo (1) ao mais recente (`window`) dentro da janela."""
+    weights = np.arange(1, window + 1, dtype=float)
+    weights_sum = weights.sum()
+
+    def _weighted(values: np.ndarray) -> float:
+        return float(np.dot(values, weights) / weights_sum)
+
+    return series.rolling(window=window, min_periods=window).apply(_weighted, raw=True)
+
+
 def ifr(close: pd.Series, window: int = 14) -> pd.Series:
     """Índice de Força Relativa (RSI) — método Wilder."""
     delta = close.diff()

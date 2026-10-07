@@ -973,6 +973,59 @@ diário afirma o contrário do extrato, sempre para o lado bonito.
 > autoinfligido.
 > **Pergunte à plataforma nova:** perguntas 71 a 75 da Parte 8.
 
+### 1.26 Cinco robôs independentes no mesmo instrumento numa conta NETTING se bloqueiam: o backtest de cada um sozinho não descreve a conta — +R$14.079 isolados viraram +R$5.131 juntos
+
+Medido em 2026-10-06 (medição de método; ainda não custou dinheiro real, mas
+invalida uma suposição de operação). Cinco EAs do WIN — `WinGapBarra1`,
+`WinCincoMedias`, `WinDeslocamentoMatinal`, `WinRetanguloEma34`, `Win_c1` —, cada
+um com o seu `magic`, ligados juntos numa conta NETTING (uma posição líquida por
+símbolo). Cada EA pula a entrada se já existe posição no símbolo, e vários fecham
+com `PositionClose(_Symbol)`, que em netting fecha a posição de **TODOS**. Um
+robô, portanto, é bloqueado pela posição de outro e, quando fecha, zera a do outro.
+
+Replay de 2026 (R$1.000 por ano, custo R$2/op): cada robô sozinho somaria
+**+R$14.079**; juntos, com o bloqueio, **+R$5.131**. **154 de 361 entradas
+(42,7%) foram bloqueadas, e as bloqueadas somavam +R$9.006.** Em 2022-2025 o
+bloqueio custou menos (somas de 16.944 contra 19.466 isolados), mas em 2025 foi
+3.123 contra 5.208. O backtest de cada robô sozinho é verdadeiro e não descreve
+a conta onde eles vão rodar juntos.
+
+**Regras de convivência com 1 contrato — nenhuma resolveu.** Testadas em
+2022-2025 (`scripts/daytrade/comparativo_win_2026/combinacoes/z9_netting/`, t0 a
+t6, `resultado.md` de cada): preempção, mesmo lado mantém / lado oposto inverte,
+consenso de 2 ou mais, conflito zera, prioridade fixa. **Nenhuma bateu o
+bloqueio.** A única que preserva o resultado é um EA "maestro" com uma **posição
+virtual (ficha) por robô**, enviando as ordens com o `magic` de cada robô: a
+posição líquida é a soma das fichas (até 4 contratos simultâneos medidos), e o
+resultado bate com a soma isolada em todos os anos.
+
+**O que a revisão adversarial da especificação do maestro
+(`mt5/WinMaestro_ESPECIFICACAO.md`) achou — riscos próprios de netting
+multi-robô:**
+
+1. **SL/TP da posição líquida não serve a nenhum robô** — vale para a SOMA.
+2. **`PositionGet*` (preço, hora, comentário, magic) são da líquida**, não do
+   robô: o preço de abertura é uma média, o magic é o do último que mexeu.
+3. **O stop de um robô pode AUMENTAR a líquida** (um robô comprado fechando
+   dentro de uma líquida vendida vira abertura para a corretora) — e pode ser
+   recusado por margem exatamente quando era a saída (ecoa o 1.1).
+4. **Ordens pendentes de robôs diferentes podem se cruzar** (autonegociação).
+5. **Stop e alvo independentes, sem OCO no servidor, podem executar os dois**
+   com o EA fora do ar — em netting o segundo inverte (a mesma mecânica do 1.23).
+6. **`DEAL_ENTRY` e `DEAL_PROFIT` são da líquida**: o resultado "do robô" não
+   sai direto do extrato.
+
+> **A regra (portável).** Vários robôs no mesmo instrumento numa conta de
+> posição líquida: **a posição de cada robô é contabilidade do SISTEMA, nunca da
+> corretora.** Toda leitura, fechamento ou stop "por posição do símbolo" age
+> sobre a SOMA. Ou **um único processo** mantém uma ficha por robô —
+> reconstruível do histórico de negócios pelo identificador do robô — e envia as
+> ordens com esse identificador; ou **cada robô tem conta própria**. Robôs
+> independentes que se bloqueiam por "já há posição" **não descrevem nenhum
+> backtest isolado**: medir cada um sozinho e somar é uma medição de uma conta
+> que não existe.
+> **Pergunte à plataforma nova:** perguntas 140 a 145 da Parte 8.
+
 ---
 
 ## Parte 2 — Estado, reinício e duplicidade
@@ -5358,6 +5411,126 @@ de sempre, do pacote MetaTrader5 real instalado nesta máquina).
 
 ---
 
+### 5.30 Leilão de abertura publica cotação INDICATIVA que o backtest trata como preço real — inflou a largura de um retângulo em até 17.335 pontos e quase zerou um EA portado para MQL5
+
+2026-10-05, porte do `win_retangulo` + EMA34 para MQL5
+(`mt5/WinRetanguloEma34.mq5`), testado no Testador de Estratégias (WINV26,
+modelagem "cada tick é baseado em um tick real", jan-ago/2026). A curva de
+patrimônio subiu a um pico de ~R$36.000 e caiu quase a zero sem nenhuma
+negociação correspondente na lista de deals do teste — as 238 negociações
+reais do teste tinham preços sãos, entre 168.200 e 190.915 pontos.
+Investigado puxando ticks reais direto da corretora via API Python do MT5
+(`MetaTrader5.copy_ticks_range`), não só os avisos do log do Testador:
+confirmado que o **leilão de ABERTURA da B3, entre 08:55 e 09:01 BRT,
+publica cotações INDICATIVAS (não negociáveis)** que oscilam violentamente
+antes da abertura de verdade — medido num único pregão (2026-08-12): bid
+variando de 171.305 a 188.640 e ask de 154.345 a 172.180, uma oscilação de
+até **17.335 pontos**, tudo dentro da janela de 6 minutos antes da
+abertura. Uma vela M1 construída com essas cotações entra na janela de
+detecção de um retângulo (que calcula topo/piso por quantis de máxima/
+mínima) e infla a LARGURA calculada em dezenas de milhares de pontos — como
+o stop e o alvo desse robô são frações dessa largura, a posição fica sem
+gerenciamento de risco nenhum, só acompanhando o preço real por semanas.
+Dois outros EAs testados na mesma sessão (`Win.ex5`, `Win_c1.ex5`, que não
+calculam largura/amplitude a partir de extremos de uma janela) não
+mostraram esse sintoma.
+
+> **A regra (portável).** Qualquer estratégia que calcule uma distância
+> (largura de canal, amplitude, faixa, ATR simplificado) a partir de
+> máximas/mínimas de velas de 1 minuto precisa excluir explicitamente a
+> janela do leilão de abertura (e, por simetria, a de fechamento/leilão de
+> encerramento) do cálculo — ou aplicar um teto de sanidade na própria
+> vela (faixa máxima plausível; aqui 2.000 pontos) antes de deixá-la
+> entrar em qualquer cálculo de amplitude. Cotação PUBLICADA não é o mesmo
+> que cotação NEGOCIÁVEL: um leilão por chamada pode publicar lances e
+> ofertas muito distantes do preço de equilíbrio até o encontro final, e
+> um backtest/EA que trata toda cotação como preço de mercado real herda
+> esse ruído como se fosse volatilidade genuína. A correção aplicada foi
+> dupla: um horário de início configurável (pula 08:55-09:01) e um teto
+> de sanidade (`RangeMaximoBarraPontos`, default 2000 pontos) que descarta
+> qualquer vela, a qualquer hora, com faixa maior que isso.
+
+> **Pergunte à plataforma nova:** pergunta 128 (nova). (5.2, 5.7, 6.47)
+
+Cruza com **5.2** (horário de sessão por instrumento), **5.7** (preço de
+futuro em pontos, não em reais) e **6.47** (dado real revela artefato que
+a base agregada não contém) — mesma família: dado PUBLICADO não é o mesmo
+que dado NEGOCIÁVEL, e só a checagem contra o book/tick real expõe a
+diferença.
+
+### 5.31 Uma grandeza ancorada no calendário, em futuro com vencimento, tem de dizer EM QUAL CONTRATO é medida — a abertura do mês do contrato de trás marcou "mês de baixa" numa alta de 6%: −R$545 no testador contra +R$1.466 na simulação
+
+Medido em 2026-10-06 no EA novo `mt5/WinCincoMedias.mq5` (WIN, Testador de Estratégias do MT5, WINV26 M5, 12/08 a 01/10/2026, capital R$ 1.000). A estratégia tem um filtro de lado pela **abertura do mês**: preço acima da abertura do mês, só compra; abaixo, só venda. A simulação Python media o mês em séries segmentadas por contrato, **começando na rolagem** — o mês só contava a partir do dia em que o contrato virou o principal. O EA v1.00 usou a abertura do mês do **próprio contrato do gráfico** (a barra mensal do WINV26), que em agosto/2026 começava em 03/08 — quando o WINV26 ainda era o contrato de trás, pouco negociado (volume ~1000× menor) e com preço **2 a 3 mil pontos acima** do mercado da época.
+
+Resultado: o filtro marcou "mês de baixa" de 12/08 a 08/09, durante uma alta de 6%. O robô só vendeu e depois ficou parado. No testador: **−R$ 545** (41 trades, 26,8% de acerto), contra **+R$ 1.466** que a simulação mostrava para o mesmo período.
+
+O que impediu a leitura errada ("a estratégia não funciona") foi reproduzir o EA em Python **com o histórico inteiro do contrato**: bateu **39 de 41 trades** (−R$ 641,50). O EA estava fiel ao código; o que divergia era a **definição do dado**. Corrigido na v1.01: âncora = `max(início do mês, dia seguinte ao vencimento do contrato anterior)`; esperado **+R$ 1.547 / 80 trades** em 13/08–01/10.
+
+> **A regra.** Toda grandeza "ancorada no calendário" (abertura do mês/semana, VWAP ancorada, máxima/mínima do mês...) em futuro com vencimento precisa declarar **EM QUAL CONTRATO** ela é medida, e o robô e o backtest têm de usar a mesma definição. Medir no histórico do contrato antes de ele virar o principal mistura o preço de um mercado ilíquido com o mercado real.
+>
+> E quando backtest e robô divergem, **primeiro reproduza o robô no backtest com os mesmos dados, trade a trade**: isso separa "bug no robô" de "dado definido diferente" — aqui, 39 de 41 trades batendo provou que não havia bug de código algum.
+>
+> **Pergunte à plataforma nova:** pergunta 130 (nova) — como a plataforma expõe a data de rolagem / qual é o contrato principal em cada dia, e se as barras de período longo (mensal/semanal) do contrato incluem o período em que ele não era o principal. (5.26, 6.46)
+
+Cruza com **5.26** (contínuo re-encadeado: a mesma raiz — a definição de "qual contrato" muda o número), **6.46** (contrato de pouco volume quase virou produção) e **6.54** (concordância trade a trade com a referência é o que separa defeito de execução/dado de defeito de estratégia).
+
+### 5.32 Nome de símbolo não é definição de dado: a série "sem ajuste" só era crua no contrato VIGENTE — os contratos anteriores vinham ajustados, e a conferência de 100% de igualdade foi feita justamente no único trecho em que ela passaria
+
+Medido em 2026-10-06, ao simular o WIN de jan–set/2026. Baixei do MT5 (Rico) o símbolo `WIN@`, tratei como "série contínua SEM ajuste = preço real negociado do contrato principal de cada dia" e conferi **100% de igualdade minuto a minuto** com o WINV26 — mas só no trecho de 13/08 em diante, o contrato vigente. Depois, ao ler negócios do Testador em 2025 com preços como 146.576 (fora da grade de 5 pontos do WIN), medi a fração de fechamentos múltiplos de 5 por mês: **~20% em jan–jul/2026, 73% em ago/2026, 100% em set–out/2026**. Ou seja: o `WIN@` só é cru no contrato VIGENTE; os anteriores vêm AJUSTADOS pela plataforma. O Testador já avisava — "Qualidade do histórico 0%" no `WIN@`.
+
+Efeito: todos os resultados de jan–jul/2026 e de 2025 carregam erro de escala de alguns % nos pontos (o sinal se preserva), e a frase "preço real" dita ao dono estava errada para esses meses. O erro de método é o desenho da conferência: ela foi feita **só no trecho em que passaria por construção** (a série coincide com o contrato vigente), então não provava nada sobre o passado.
+
+> **A regra.** Nome de símbolo não é definição de dado. Antes de chamar uma série de "sem ajuste" ou "preço real", verifique em **TODA a janela usada**, não só no trecho recente: (a) preços na grade de tick do contrato real, mês a mês; (b) igualdade contra o contrato real em mais de um contrato, inclusive os antigos. Uma conferência feita só no período em que a série coincide por construção com o contrato vigente não prova nada sobre o passado.
+>
+> **Pergunte à plataforma nova:** pergunta 131 (nova) — a série contínua que a plataforma oferece é crua ou ajustada nos contratos passados (e por diferença ou proporção)? A "sem ajuste" continua sem ajuste para trás, ou só no contrato vigente? (5.26, 5.31)
+
+Cruza com **5.26** (contínuo re-encadeado) e **5.31** (a mesma raiz: a definição de "qual contrato" e de qual ajuste muda o número), e com **6.54** (concordância com a referência só vale se a conferência puder falhar).
+
+### 5.33 O cache de ticks do Testador era uma CÓPIA incompleta do histórico: sem o preço do último negócio, o stop nativo da B3 não disparava — compras acertando 12,9% contra vendas 64,1%, e seis vendas que nunca tiveram stop somaram −R$1.854
+
+Medido em 2026-10-06 com o EA `WinRetanguloEma34` (retângulo + EMA34 no WIN, capital de teste R$1.000) no Testador de Estratégias do MT5 (WINV26, M1, 13/08 a 30/09/2026, "cada tick baseado em tick real"): **−R$275**, com compras acertando **12,9%** (62 trades) e vendas **64,1%** (64 trades). O backtest Python da mesma lógica dava compra e venda empatadas em ~38%. Lógica igual, assimetria impossível: o defeito estava no dado.
+
+Causa, medida no log do Testador: o cache de ticks **do próprio Testador** para WINV26 estava incompleto — agosto com 64,5 MB contra 79,8 MB do mesmo arquivo no terminal (setembro, 107,6 contra 110,4 MB). **235 das 357 ordens** foram enviadas quando o tick do Testador não tinha o preço do **último negócio** (o log mostra só "(compra / venda)" em vez de "(compra / venda / último)"); em 13/08 o "último" ficou travado em 170.430 o dia inteiro, 350 pontos abaixo do bid/ask reais. Os ticks da corretora puxados direto pela API estavam sãos, com o último colado no bid/ask.
+
+Em instrumento de bolsa o stop nativo dispara pelo **último negócio**, não pelo bid/ask. Com o último ausente ou travado abaixo do preço: **42 compras** levaram stop no MESMO segundo da entrada (o bid estava acima do stop); e **6 vendas NUNCA** tiveram o stop disparado — o preço andou de 900 a 2.980 pontos contra (stop de ~200) e elas só fecharam na zeragem das 17:50, somando **−R$1.854** (inclui uma perda única de −R$596 e outra de −R$487). O defeito de dado criou uma assimetria compra×venda artificial e perdas impossíveis para a geometria. O relatório do Testador mostrava "qualidade do histórico 100%" — e não avisou de nada.
+
+Correção aplicada: a pasta de ticks do Testador (`...\Tester\<id>\bases\Rico-PRD\ticks\WINV26`) foi renomeada para `WINV26_incompleto_20261006`, para o Testador recopiar do terminal no próximo teste.
+
+> **A regra (portável).** Um resultado de testador só vale depois de conferir que o dado de preço que **DISPARA** as ordens (em bolsa: o último negócio) está presente e coerente com bid/ask em todo o período testado. Sintomas que denunciam o defeito: stop que dispara no mesmo segundo da entrada; perda muito maior que o stop; assimetria grande entre compra e venda que o backtest não tem. E o cache do testador é uma **CÓPIA** do histórico: pode estar incompleta mesmo com o terminal são, e "qualidade do histórico 100%" no relatório não garante isso.
+
+> **Pergunte à plataforma nova:** pergunta 132 (nova). (5.30, 5.32, 6.54)
+
+Cruza com **6.54** (mesmo sintoma: `last` zerado e stop nativo disparando no segundo da entrada), **5.30** (dado publicado não é dado negociável) e **5.32** (nome ou relatório de qualidade não é definição de dado: confira em toda a janela).
+
+### 5.34 Barra e tick do MESMO símbolo contínuo vieram em escalas de preço diferentes: o M1 do `WIN@` era ajustado por diferença e os ticks eram crus — ~6.900 pontos de distância num único minuto, e um CSV batizado de "sem ajuste" que herdava o ajuste
+
+Medido em 2026-10-06, ao montar o comparativo dos EAs no WIN de 2026 (sinal na barra, execução e conferência em tick e em contrato real). No MT5 da Rico, o símbolo contínuo `WIN@` entrega barras M1 **AJUSTADAS por diferença**: ~80% dos preços ficam fora da grade de 5 pontos antes da última rolagem, e em 10/06/2026 09:02 a M1 do `WIN@` abre em **176.154** enquanto o negócio real foi a **169.265** — ~6.900 pontos de diferença. Já os **ticks** do mesmo `WIN@` vêm **crus**. Barra e tick do mesmo símbolo descrevem preços diferentes. O `WIN$N` é cru nos dois (barra e tick batem em 169.265).
+
+O arquivo `data/wdo-mt5/WIN@_M1_202601020900_202610051831.csv`, que a memória do projeto descrevia como "sem ajuste", herda o ajuste: **9.502 de 11.837 barras de janeiro** fora da grade (set/out: 0). Dois fatos de contorno limitam o que dá para conferir: os ticks de WIN só existem na corretora a partir de **2026-02-20**, e só com `last` (bid=ask=0) — então, antes dessa data, não há como validar a barra contra tick.
+
+Custo: qualquer simulação que gere sinal na M1 do `WIN@` e execute ou compare em tick, ou em contrato real, mistura duas escalas de preço; stops e alvos em pontos absolutos ficam errados em até milhares de pontos. Foi pego antes de custar dinheiro, mas teria invalidado o comparativo inteiro — e é o terceiro ângulo da mesma família do 5.26 (re-encadeamento) e do 5.32 (o nome do símbolo não diz se é ajustado), agora entre dois produtos de dado do MESMO símbolo.
+
+> **A regra (portável).** Antes de usar uma série contínua, confirme que barras e ticks do MESMO símbolo estão na mesma escala: (a) preços na grade de tick do instrumento, mês a mês, para a barra E para o tick; (b) um ponto de checagem barra×tick (o mesmo minuto, os dois produtos, comparando o preço de abertura). O nome do símbolo não diz se é ajustado, e dois produtos do mesmo símbolo não herdam a mesma definição.
+>
+> **Pergunte à plataforma nova:** pergunta 134 (nova) — a série contínua do futuro é ajustada? Barras e ticks do MESMO símbolo usam o mesmo ajuste? Qual símbolo dá o preço cru do contrato principal? (5.26, 5.32)
+
+Cruza com **5.26** (contínuo re-encadeado), **5.32** (nome de símbolo não é definição de dado) e **6.54** (concordância com a referência só vale se a conferência puder falhar).
+
+### 5.35 A última barra M1 do dia contém o leilão de fechamento (e a primeira, o de abertura): o "preço de saída" de 127 de 127 dias do WIN era o preço do call — |média| de 86 pontos contra o último negócio contínuo, e três mecanismos diferentes empurravam as zeragens para lá
+
+Medido em 2026-10-06, auditando as bases M1 do WIN usadas em todos os estudos (`WIN$N`, `WIN@`, `WIN@D`, `WIN_A_`; abr–out/2026, 127 pregões). A última barra do dia (18:24, ou 17:54 quando o pregão acabava 17:55) **contém o call de fechamento**, um leilão que começa 18:25 e cruza ~18:31: o close dela é o preço do call em **127 de 127 dias** e o último negócio contínuo em só **3**. O volume dela é ~23 mil contra ~1,5–3 mil das barras normais do fim do dia; a 1ª barra contém o leilão de abertura (volume ~89 mil contra ~24 mil). Nenhum dos dois leilões é negociável como o contínuo. A diferença call − último negócio contínuo é ~0 em média (+5,6 pts) — por isso ninguém viu —, mas tem **|média| de 86 pontos (~R$17 por contrato)**, p90 de 176 e máximo de 480.
+
+Como isso entrou nas medições, por três caminhos independentes: (a) o motor intradiário compara o corte de zeragem com o relógio cru do dado, e o perfil `WIN@` tinha o corte em UTC (21:20) aplicado a uma base em BRT: o corte nunca chegava e a zeragem caía no fallback "última barra do dia" — o call; (b) "zera ≥18:20" em tempo gráfico ≥5 min nunca dispara, porque a última barra M5/M30 começa antes e contém o call; (c) zeragem em hora fixa numa sessão curta (dias de pregão até 17:55) leva a posição ao leilão do dia seguinte.
+
+Auditoria dos estudos: **6 classe A, 21 B, 8 C**. `copa_win` antes de 14/09: zeragem no call em 33–56% dos trades, líquido muda entre −1,4% e +10%. Continuidade diária: 100% das saídas no call. Lib Cinco Médias M30: 11–20% dos trades saem no call e levam a maior parte do P&L — o 2022–24 da v2.02 cai de +1.405 para ~+750. Gap contra D−1: −7,8pp → −5,2pp sem os leilões. Nenhum veredito reproduzido inverteu, mas os números absolutos mudaram. Fonte: `scripts/daytrade/win_fases_correlacao_2026_10_06/auditoria_leiloes/AUDITORIA.md`.
+
+> **A regra (portável).** Uma barra OHLCV não sabe em que fase do pregão está. Antes de usar qualquer base intradiária, **marque as fases de negociação** (leilão de abertura, contínuo, leilão de fechamento) pela grade oficial do mercado **vigente NA DATA**, e meça saída, sinal e volume só com negócios do contínuo. Toda zeragem "no fim do dia" é um horário **relativo ao fim real do contínuo daquele dia**, comparado **no mesmo fuso do dado** — nunca "a última barra".
+>
+> **Pergunte à plataforma nova:** perguntas 135 a 138 (novas). (5.2, 5.30, 5.34)
+
+Cruza com **5.30** (o leilão de abertura publica cotação indicativa: lá o dano foi amplitude inflada, aqui é preço de saída e volume), **5.2** (horário de sessão por instrumento) e **5.34** (nome de dado não diz o que ele contém) — mesma família: a barra agrega fases que o negócio não trata como iguais.
+---
+
 ## Parte 6 — Método: os erros que custam meses, não reais
 
 Estes não quebram a conta no mesmo dia. Eles fazem você acreditar em algo por
@@ -7671,6 +7844,477 @@ zerado antes da busca começar.
 
 ---
 
+### 6.46 Um IS/OOS de dois meses num único contrato quase virou produção — o mês de "confirmação" era o 2º melhor de 60, e o contrato tinha 300× menos volume que o principal
+
+2026-09-29, robô discricionário `wdo_ribbon_mm34` (WDO M1, ribbon de 4 médias
+móveis de 34 períodos). Uma configuração ("onda ≤ 3 entradas/dia, range do
+dia < 65 pontos, alvo = 25× a largura do ribbon") foi encontrada por
+otimização real no MT5 e dada como "confirmada fora da amostra" comparando
+agosto/2026 (+79,5 pts) contra setembro/2026 (+133,5 pts) no contrato
+WDOV26. Rodando a MESMA classe — mesmo motor de simulação, aferido
+operação-a-operação contra o Testador real — sobre a base contínua ajustada
+por diferença de 5 anos (`WDO@D`, 698 mil barras M1), dividida em duas
+metades:
+
+**O número.** 3.372 operações, **−1.940,5 pontos**, **−0,575 ± 0,264
+pt/operação**, win 26,2% contra breakeven empírico de 30,8%, **5 de 6 anos
+calendário negativos**, **16 de 60 meses positivos**. Com o custo médio do
+Testador (~0,33pt/operação) o resultado vai a ~−0,9pt/operação — ~−R$30 mil
+em 5 anos a 1 contrato (1pt = R$10). Nenhum prejuízo real ocorreu (o robô
+está em laboratório, nunca foi a produção) — o custo aqui é 100% de MÉTODO:
+uma configuração quase foi promovida com base numa validação inválida.
+
+**A causa raiz, em duas partes independentes.** (a) Setembro/2026 — o mês
+usado para calibrar/confirmar — é o **2º melhor mês entre os 60 meses** da
+base de 5 anos: a "confirmação fora da amostra" comparou contra um mês de
+sorte, não contra o mês típico. (b) O contrato WDOV26 usado na janela de
+"confirmação" de agosto negociava **~300 vezes menos volume** que o
+contrato principal daquele mês — só ganhou liquidez perto do fim da janela
+testada. As duas falhas se somam: a janela era curta E o contrato dentro
+dela não representava o mercado real na maior parte do tempo.
+
+> **A regra (portável).** Um IS/OOS de 1-2 meses num único contrato
+> específico de futuro NUNCA valida sozinho a geometria de um robô
+> intradiário. São necessárias DUAS confirmações independentes: (a) o
+> resultado se sustenta numa série contínua/ajustada de longo prazo (anos,
+> não meses), dividida em pelo menos duas metades temporais; e (b) o
+> contrato específico usado em qualquer janela curta de validação tinha
+> liquidez real (volume comparável ao contrato principal da época) durante
+> TODO o período testado, não um contrato ainda em transição de rolagem.
+> Sem as duas, uma "confirmação fora da amostra" pode estar confirmando
+> contra um mês de sorte medido num mercado que não existia de verdade.
+
+> **Pergunte à plataforma nova:** a plataforma oferece uma série
+> contínua/ajustada de longo prazo (anos) pro instrumento, e como se
+> confirma que um contrato específico usado numa janela curta de validação
+> tinha volume/liquidez real (comparável ao contrato principal) durante todo
+> o período testado, e não um contrato ainda em transição de rolagem?
+> (pergunta 120, item 6.46)
+
+Cruza com **6.15** (janela censurada perto do piso de capital não é
+resultado — e IS/OOS vira sorteio) e com **6.6** (olhar o out-of-sample uma
+vez já queima o recurso): aqui o sorteio não veio da censura por capital,
+veio da janela em si ser curta demais e o instrumento por trás dela não ser
+o mesmo mercado o tempo todo.
+
+### 6.47 Stop curto medido em barras M1 com caminho de 2 pontos por vela deu "pista viva"; refeito nos ticks reais, 6 de 8 células congeladas viraram negativas
+
+2026-10-04, estudo de pernadas do WIN (só dados de 2026). As simulações de
+stop curto/técnico supunham um caminho intra-vela de 2 pontos por vela M1:
+vela de alta vai da mínima à máxima, vela de baixa da máxima à mínima (confere
+com os ticks em 86-88% das velas). Com esse caminho, geometrias de stop técnico
+de 5-10 velas M1 com alvo de 5 a 7,5x o stop deram positivo na descoberta
+(+117 a +242 pts/op), e uma delas ficou positiva nas três janelas — era a
+"única pista viva" do estudo.
+
+**O número.** Refeitas com ticks reais (mar-jun/2026, 83 pregões, os mesmos
+dias), **6 de 8 células congeladas viraram negativas**: de +30/+160 para
+-7/-67 pts/op. O stop técnico de 5 velas em T=750 foi de **+45 para -136
+pts/op**; uma célula foi a **0% de acerto (n=9)**. Em escala pequena (recuos
+< ~100 pts) o caminho de 2 pontos também gera ~5x mais (ou, conforme a escala,
+metade dos) eventos de recuo que os ticks, e distorce métricas como "supera de
+primeira" (0,43-0,46 no M1 contra 0,54-0,59 nos ticks). Para recuos >= 100 pts
+M1 e ticks concordam. Nenhum prejuízo real: o custo foi de método — uma pista
+quase virou próxima rodada de pesquisa (e candidata) sobre um artefato de
+resolução.
+
+**A regra (portável).** Resultado de stop curto — da ordem do range de 1-5
+velas da base — medido em barras não é evidência até ser refeito no caminho
+real (ticks) nos MESMOS dias; se divergirem, vale o tick. A suposição de
+caminho intra-barra é uma premissa de execução tão decisiva quanto fila e
+deslize, e deve ser declarada na linha do resultado. A resolução da base tem
+de ser bem menor que o stop: quando o stop cabe em poucas velas, quem decide
+se ele foi tocado antes do alvo é a ordem dos extremos DENTRO da vela, e é
+exatamente isso que a barra não contém.
+
+**Detalhe técnico.** O M1 contínuo do WIN é ajustado por diferença (`WIN@D`) e
+os ticks são do contrato cru; alinhar por deslocamento diário, senão a
+comparação mede o ajuste e não o caminho.
+
+> **Pergunte à plataforma nova:** o histórico de ticks (negócios) está
+> disponível para o período do backtest, com timestamp e preço por negócio, e
+> alinhável à série de barras usada (atenção a séries ajustadas por diferença
+> contra contrato cru)? (pergunta 121, item 6.47)
+
+Cruza com **4.21/4.22** (premissa de fila declarada na linha), **6.22** (nulo
+geométrico) e **6.46** (janela curta e série ajustada): mesma família de
+"premissa de execução implícita decide o veredito".
+
+### 6.48 Zero trades em toda a base não era "hipótese sem gatilho" — era ordem de operações dentro do `on_bar`: o estado recalculado apagava, na MESMA chamada, a precondição que tinha acabado de criar
+
+No estudo de EA de day trade do WIN
+(`scripts/daytrade/win_pernadas_exploracao/ea_busca_lucro/`), uma
+`IntradayStrategy` combinava estado recalculado TODA barra (alinhamento de
+EMAs M15/H1, armar ordem quando as condições batem) com uma ordem-limite
+pendente controlada por prazo (`ttl_bars`). O `on_bar` atualizava esse
+estado PRIMEIRO — o que podia armar uma nova ordem e, dentro do mesmo
+passo, zerar o contador de espera que sinalizava "ordem pendente" — e SÓ
+DEPOIS checava se já havia ordem pendente para decidir se emitia a ação.
+Rodando na mesma chamada, essa checagem enxergava o contador que a própria
+atualização de estado tinha acabado de zerar, e por isso descartava a ação
+que tinha acabado de ser criada.
+
+**O número.** A estratégia emitiu **ZERO ordens em toda a base testada**
+(dois ciclos de teste, ~128 pregões, jan-jun e um rascunho de jul-ago/2026),
+apesar de a condição de gatilho (rompimento de EMA9 no M15 com H1 alinhado)
+ter ocorrido **383 vezes em 122 pregões** quando medida isoladamente, fora
+do caminho de emissão. O silêncio total foi inicialmente atribuído — no
+primeiro ciclo de teste — a uma causa real mas SECUNDÁRIA (um filtro de
+horário rodando numa janela errada); o bug de ordem de operações só foi
+achado ao auditar o código num segundo ciclo, depois de um ciclo inteiro de
+medição gasto em cima do resultado errado.
+
+> **A regra (portável, qualquer linguagem/plataforma).** Quando a lógica de
+> uma estratégia bar-a-bar combina (a) estado recalculado a cada barra —
+> indicadores, alinhamento, contadores de espera/armação — com (b) uma ação
+> condicionada a "não há ordem pendente", a checagem de "ordem pendente" tem
+> que ler o estado como ele estava no INÍCIO da barra, antes de qualquer
+> atualização feita na MESMA chamada. Senão uma ordem armada nesta barra
+> pode apagar a própria precondição que a criou, e a estratégia passa a não
+> emitir NENHUMA ordem, de forma silenciosa e indistinguível de "a hipótese
+> não tem gatilho" — o backtest roda limpo, sem exceção nenhuma, sempre
+> devolvendo zero trades. Não é erro de lógica de sinal, é erro de ORDEM DE
+> OPERAÇÕES dentro do handler de barra. **Corolário de verificação:** ao
+> aceitar "zero trades" como resultado de uma hipótese, conte também as
+> ocorrências BRUTAS do gatilho (sem o filtro de ordem pendente) e desconfie
+> se a razão ordens-emitidas/ocorrências-brutas for anormalmente baixa ou
+> zero — isso aponta para bug de implementação antes de apontar para
+> "hipótese sem sinal".
+
+> **Pergunte à plataforma nova:** o framework de backtest/execução da
+> plataforma nova tem alguma forma de auditar/assegurar que uma estratégia
+> bar-a-bar não está "silenciosamente nunca agindo" — por exemplo, contando
+> ocorrências brutas da condição de gatilho versus ordens de fato emitidas,
+> e alertando se a razão cair muito abaixo do esperado — antes de aceitar
+> "zero trades" como veredito de uma hipótese? (pergunta 122, item 6.48)
+
+Cruza com **6.25** (confirme que cada eixo de uma grade mexeu em alguma
+coisa antes de ler o veredito) e com **7.1** (ao corrigir um bug, varra
+todas as instâncias do padrão — aqui o padrão é "estado mutável lido depois
+de atualizado na mesma passada").
+
+### 6.49 Mais operações não é mais amostra: um gatilho que reentra 24 vezes no MESMO pregão multiplicou o contador sem multiplicar a independência
+
+Na mesma busca de EA de day trade do WIN
+(`scripts/daytrade/win_pernadas_exploracao/ea_busca_lucro/`, Geração 5), um
+candidato com gatilho de "regime de alta amplitude por bloco de 15min"
+disparou **667 operações em 95 dos 122 pregões** do período de
+desenvolvimento — quase 5× mais operações que um candidato anterior da
+mesma busca (127 operações). Isso foi lido, de início, como "amostra maior,
+logo mais robusto". Medir a concentração (líquido dos 3 melhores pregões ÷
+líquido total) desfez a leitura: o número deu **59% — IDÊNTICO ao do
+candidato de amostra 5× menor**, não melhor. Auditando por pregão em vez de
+só no agregado, a causa apareceu: o mesmo pregão em tendência forte gerava
+DEZENAS de disparos do mesmo gatilho NAQUELE MESMO dia (máximo observado:
+**24 operações num único pregão**, 2026-03-03) — a estratégia reentrava
+repetidamente dentro dos dias já favoráveis, em vez de espalhar o sinal
+para dias novos e independentes. O contador de "trades" tinha subido 5×; o
+número de PREGÕES DISTINTOS que carregavam o resultado, não.
+
+> **A regra (portável, qualquer linguagem/plataforma).** Contagem de
+> operações não é o mesmo que contagem de amostra INDEPENDENTE. Antes de
+> tratar "mais trades" como evidência de que um sinal é mais robusto ou
+> menos frágil, meça também quantos PREGÕES (sessões) DISTINTOS carregam o
+> resultado, e a fração do líquido concentrada nos top-N pregões — uma
+> estratégia que reentra várias vezes dentro do MESMO pregão já favorável
+> pode multiplicar o contador de operações sem acrescentar nenhuma
+> observação nova e independente, e a concentração não vai melhorar só
+> porque a frequência melhorou. Os dois eixos (frequência de operações e
+> número de sessões independentes) precisam ser reportados separadamente
+> sempre que "mais amostra" for usado como argumento de robustez.
+
+> **Pergunte à plataforma nova:** o relatório de backtest da plataforma
+> nova distingue contagem de OPERAÇÕES de contagem de SESSÕES/PREGÕES
+> distintos, e sinaliza quando uma fração alta das operações se concentra
+> dentro de poucas sessões (reentradas no mesmo dia já favorável), antes de
+> aceitar "amostra grande" como evidência de robustez? (pergunta 123, item
+> 6.49)
+
+Cruza com **6.25** (confirme que cada eixo de uma grade mexeu em alguma
+coisa antes de ler o veredito): um contador que sobe sozinho, sem o eixo de
+independência ao lado, é o mesmo tipo de ilusão.
+
+### 6.50 Filtro exclusivo muda qual EVENTO a estratégia encontra, não só qual sinal ela aceita — e isso fabrica gradiente onde não há nenhum
+
+Numa busca de EA de day trade do WIN (`scripts/daytrade/win_pernadas_exploracao/ea_busca_lucro/`,
+Geração 11), testou-se se a FORÇA de um gatilho de rompimento (magnitude do
+rompimento além do nível, relativa ao tamanho da faixa) predizia a qualidade
+do trade seguinte. Método inicial: rodar 3 simulações SEPARADAS e
+EXCLUSIVAS — uma operando só sinais "fracos", outra só "médios", outra só
+"fortes" — cada uma com o filtro ativo o pregão inteiro. O resultado pareceu
+confirmar a hipótese: um gradiente limpo, win% e líquido crescendo do balde
+fraco pro forte (**37,2% × 23,3% × 15,4%** de win rate). Mas o gradiente era
+um ARTEFATO. Numa estratégia que REARMA — tenta de novo no mesmo pregão
+depois que uma ordem expira ou é rejeitada — um filtro exclusivo que
+descarta a primeira borda "fraca" do dia não elimina um trade: ele faz a
+estratégia esperar a PRÓXIMA borda, que pode cair num horário e contexto de
+mercado inteiramente diferente. Os três baldes não estavam comparando
+"sinal fraco vs. forte no MESMO evento" — estavam comparando "qual edge
+numerado do dia cada filtro deixou passar", uma variável confundida com
+hora do dia e regime. A correção — estratificar PÓS-HOC os mesmos 121
+trades de UMA ÚNICA rodada sem filtro, pela força de CADA trade real já
+ocorrido — mostrou que a força não prediz nada: win% praticamente idêntico
+nos três tercis (**37,5% / 37,5% / 36,6%**), correlação força×resultado
+≈ zero (**−0,02 a −0,03**). O gradiente do método exclusivo tinha sumido
+por inteiro.
+
+> **A regra (portável, qualquer linguagem/plataforma).** Para testar se uma
+> métrica candidata de "força/qualidade do sinal" prediz o resultado de um
+> trade, numa estratégia que pode REARMAR (tentar de novo no mesmo pregão
+> depois de um sinal rejeitado/expirado), nunca compare simulações rodadas
+> com filtros EXCLUSIVOS diferentes (uma só aceitando sinais fracos, outra
+> só fortes) — a rejeição de um sinal muda qual EVENTO SEGUINTE a estratégia
+> vai encontrar, confundindo "força do sinal escolhido" com "qual outro
+> sinal sobrou no lugar dele" (horário, contexto de mercado diferente). O
+> teste correto é ESTRATIFICAÇÃO PÓS-HOC: rodar UMA ÚNICA simulação sem
+> filtro nenhum, registrar a métrica candidata em cada trade real que
+> ocorreu, e só DEPOIS separar os trades já ocorridos em grupos por essa
+> métrica — isso preserva "mesmo conjunto de eventos, agrupado de formas
+> diferentes" em vez de "conjuntos de eventos diferentes por construção".
+
+> **Pergunte à plataforma nova:** o framework de backtest da plataforma
+> nova oferece uma forma padrão de estratificação PÓS-HOC de trades já
+> simulados por uma métrica candidata (sem precisar rodar uma simulação
+> nova por grupo), para evitar o viés de comparar filtros exclusivos numa
+> estratégia que rearma dentro da mesma sessão? (pergunta 124, item 6.50)
+
+Cruza com **6.49** (contagem de operações não é contagem de amostra
+independente) e com a família de itens sobre nulo/controle que atravessa a
+janela cega (**6.42**): em ambos, o desenho do teste — não o dado — é quem
+fabrica o efeito que parecia estar ali.
+
+### 6.51 Critério de censura herdado de outra geração mediu o modo de falha ERRADO: seletividade por desenho foi lida como morte por capital
+
+Numa busca de EA de day trade do WIN (Geração 12,
+`scripts/daytrade/win_pernadas_exploracao/ea_busca_lucro/g12_and_orb_cross/`),
+testou-se combinar dois sinais independentes via AND — rompimento ORB
+confirmado pelo estado anômalo WIN×WDO. O critério de "censura" dessa linha
+de busca (criado na Geração 8, `g08_is_busca.py`) reprova automaticamente
+qualquer célula com `sem_trade >= 50% dos pregões` OU `equity_min < margem
+crua`. A regra foi desenhada para o modo de falha real da G07 — o robô
+ficava sem caixa cedo na janela e o motor recusava em silêncio todas as
+tentativas seguintes. Herdada sem revisão para a G12, a MESMA regra reprovou
+TODAS as células "boas" (geometria vencedora herdada, stop_max=160pts/
+alvo=3x, nas 4 janelas causais k_minutos∈{0,5,15,30}): `sem_trade` ficou em
+110/122 (90,2%), 97/122 (79,5%), 91/122 (74,6%) e 90/122 (73,8%) dos
+pregões — todas muito acima do limiar de 50% — enquanto `equity_min` foi
+R$101,00, R$170,00, R$122,50 e R$122,50, **sempre acima** da margem crua de
+R$100, com **zero** ordens recusadas por capital nas quatro janelas. O
+mecanismo que a regra foi desenhada para detectar nunca aconteceu; a
+reprovação veio inteiramente do outro ramo do OU — fração de dias sem
+trade — que mede a coisa errada para um filtro AND que é seletivo por
+desenho, não por falta de caixa.
+
+> **A regra (portável, qualquer linguagem/plataforma).** Um critério de
+> "censura" que combina, com OU, (a) o caixa ter cruzado uma barreira real
+> E (b) uma fração mínima de dias/períodos com atividade, está testando
+> DOIS modos de falha DIFERENTES com o MESMO limiar — e um filtro de
+> confirmação AND entre sinais independentes (ou qualquer desenho
+> deliberadamente seletivo) vai disparar o ramo (b) sempre, não importa a
+> qualidade do resultado, porque baixa frequência é o PONTO do desenho, não
+> um sintoma de morte. Antes de aplicar um critério de censura herdado de
+> uma geração/estratégia anterior a uma estratégia com mecanismo de seleção
+> estruturalmente diferente (mais sinais exigidos em AND, filtro mais
+> restrito), separe os dois ramos e confirme qual deles de fato disparou:
+> se foi só a fração de dias sem trade, E o caixa nunca encostou na
+> barreira real, E nenhuma ordem foi recusada por capital, a célula não
+> está censurada por falta de caixa — está apenas sendo avaliada com
+> amostra pequena, e o gate correto para amostra pequena é a SIGNIFICÂNCIA
+> ESTATÍSTICA do resultado (o IC95 do win% ultrapassar o breakeven
+> empírico, não uma contagem mínima de dias operados).
+
+> **Pergunte à plataforma nova:** o critério de "censura"/invalidação de
+> uma célula de backtest da plataforma nova distingue explicitamente morte
+> por falta de capital (caixa cruzou a barreira, ordens recusadas) de
+> seletividade intencional de um filtro combinado (frequência baixa por
+> desenho, ex. AND de sinais independentes), ou aplica o mesmo limiar fixo
+> de "fração mínima de dias com atividade" às duas situações? (pergunta
+> 125, item 6.51)
+
+Cruza com **6.25** (confirme que cada eixo de uma grade mexeu em alguma
+coisa antes de ler o veredito) e **6.49** (contagem de operações não é
+contagem de amostra independente): nos três casos, um limiar ou contador
+pensado para UM desenho de estratégia produz leitura errada quando
+aplicado sem revisão a um desenho diferente.
+
+### 6.52 Concentração medida só no período de desenvolvimento subestima a concentração fora da amostra — confirmado em TRÊS famílias de sinal sem relação entre si
+
+Numa busca de EA de day trade do WIN
+(`scripts/daytrade/win_pernadas_exploracao/ea_busca_lucro/`, Gerações 4, 17,
+20 e 21), três famílias de sinal estruturalmente diferentes — confluência
+cruzada WIN×WDO (estado anômalo de correlação), rompimento de abertura (ORB
+momentum) e lateralização (retângulo, estilo `WinRetangulo`) — foram
+medidas pela métrica de concentração (fração do líquido total vinda dos 3 e
+dos 5 melhores pregões). Nas três, a concentração no período de
+desenvolvimento (IS, jan-jun/2026) era moderada a boa: retângulo 41%/64%
+top3/top5; cruzado, na melhor variante, 38,5%/58,4% top3/top5. Nas três, a
+concentração **piorou de forma sistemática e grande** ao passar para o
+período de validação (OOS-1, jul-ago/2026, nunca visto antes pela busca):
+cruzado 56%→383% (G17) e depois 38,5%→467% (G20, variante diferente);
+retângulo 41%→97,2% top3 e 64%→133,4% top5 (G21). Em nenhum caso geometria,
+capital (testado de R$250 a R$1.000) ou sizing explicavam a piora — ela
+apareceu em três mecanismos de geração de sinal sem relação entre si
+(correlação entre dois instrumentos, rompimento de faixa, forma geométrica
+de preço).
+
+> **A regra (portável, qualquer linguagem/plataforma).** Quando uma
+> estratégia tem frequência moderada a baixa (poucas dezenas a poucas
+> centenas de operações por semestre), a concentração (fração do líquido
+> vinda dos top-N pregões) medida SÓ no período de desenvolvimento não é
+> uma boa estimativa pontual da concentração que a estratégia terá num
+> período novo — ela tende a estar OTIMISTA (mais baixa que a real), e esse
+> viés apareceu de forma consistente em três mecanismos de geração de sinal
+> sem relação entre si. Trate a concentração do IS como um PISO plausível,
+> não uma previsão — ao decidir se uma estratégia está robusta o bastante
+> para ir a produção, exija folga bem maior na concentração do IS do que
+> pareceria necessário (ex.: se o IS já mostra 40%, espere que o real possa
+> chegar a 100% ou mais), e prefira olhar o gate do OOS real antes de
+> confiar no número do IS como projeção de fragilidade.
+
+> **Pergunte à plataforma nova:** o framework de validação da plataforma
+> nova reporta a concentração (top-N pregões / líquido total) tanto no
+> período de desenvolvimento quanto no de validação cega, lado a lado, e
+> alerta quando a segunda for sistematicamente pior que a primeira — em vez
+> de tratar o número do desenvolvimento como estimativa confiável da
+> robustez real? (pergunta 126, item 6.52)
+
+Cruza com **6.15** (janela censurada perto do piso de capital faz IS/OOS
+virar sorteio) e com a auditoria original de overfitting (1 trade = 53,7%
+do lucro): nos três, uma leitura de robustez feita só com o número do
+desenvolvimento escondia uma fragilidade que só aparece fora da amostra.
+
+### 6.53 Concentração medida no IS subestima a concentração fora da amostra — confirmado em QUATRO famílias de sinal independentes, incluindo um filtro desenhado especificamente para corrigi-la
+
+O item 6.52 registrou o padrão em três famílias de sinal (G4/G17, G20,
+G21) na mesma busca de EA de day trade do WIN
+(`scripts/daytrade/win_pernadas_exploracao/ea_busca_lucro/`, ver
+`ORQUESTRACAO.md`). Uma quarta tentativa (Geração 22) foi desenhada
+**especificamente para corrigir** o modo de falha das gerações anteriores
+— e reproduziu o mesmo padrão, de forma mais forte:
+
+| geração / família de sinal | top3%/top5% no IS | top3%/top5% no OOS-1 |
+|---|---|---|
+| G4 (confirmação cruzada WIN×WDO) | 59% / — | 240% / — |
+| G20 (cruzado, quantil mais baixo) | 38,5% / 58,4% | 467% / 696% |
+| G21 (retângulo/lateralização) | 41% / 64% | 97,2% / 133,4% |
+| G22 (retângulo + filtro de regime diário) | 32% / 50% (a MELHOR de toda a busca) | 607% / 816% (a PIOR de toda a busca) |
+
+A G22 é o caso mais informativo porque o filtro não era um palpite: um
+proxy diário causal (`amplitude_ontem`, a amplitude high-low do pregão
+ANTERIOR do WIN@) separou "dias bons" de "dias ruins" no IS de forma
+estatisticamente real — teste de permutação sobre a série diária de
+líquido (não sobre trade), monotônico nos 3 tercis, sem reversão,
+**p=0,0040**, a maior significância já medida em qualquer estratificação
+desta busca inteira. Não era ruído. Mesmo assim, excluir o terço "ruim" do
+IS e aplicar o MESMO limiar absoluto (congelado, sem reajuste nenhum) ao
+OOS-1 **piorou** a concentração em vez de melhorar — de 97,2%/133,4%
+top3/top5 que a estratégia-base já tinha SEM filtro no mesmo OOS-1, para
+607%/816% COM o filtro — e derrubou o líquido do mesmo OOS-1 de 44
+pregões de **R$650,00 (sem filtro) para R$89,50 (com filtro)**. O proxy
+que previa regime favorável no IS perdeu ou inverteu o poder preditivo na
+janela seguinte.
+
+> **A regra (portável, qualquer linguagem/plataforma).** Quando o MESMO
+> modo de falha (concentração temporal do líquido em poucos pregões)
+> reaparece em múltiplas famílias de sinal estruturalmente diferentes —
+> incluindo uma tentativa de correção desenhada especificamente para ele,
+> construída sobre um efeito estatisticamente real no desenvolvimento — o
+> diagnóstico correto deixa de ser "este parâmetro está errado" e passa a
+> ser "a métrica de concentração medida só no desenvolvimento não é
+> preditiva de estabilidade fora da amostra". Significância real no IS
+> (um p baixo, um efeito monotônico, sem reversão) não é garantia de que o
+> mesmo efeito sobreviva na janela seguinte quando o único insumo é
+> preço/volume do próprio instrumento — o histórico acumulado (4 de 4
+> tentativas, sempre piorando, nunca melhorando) é a evidência de que essa
+> transferência tende a falhar. Antes de aceitar concentração saudável no
+> IS — com ou sem filtro — como evidência de robustez, confirme que ela se
+> mantém, não necessariamente idêntica mas na mesma ordem de grandeza, em
+> pelo menos uma janela nunca vista.
+
+> **Pergunte à plataforma nova:** existe, na plataforma nova, uma forma
+> padrão de medir se uma métrica de concentração/robustez é ESTÁVEL entre
+> janelas (não apenas "boa" numa única janela) antes de promover um
+> candidato — por exemplo exigindo a métrica dentro de uma faixa aceitável
+> em pelo menos 2 janelas fora da amostra, em vez de confiar no número de
+> uma única janela de desenvolvimento? (pergunta 127, item 6.53)
+
+Cruza com **6.49**, **6.50**, **6.51** e **6.52** (mesma família: o
+desenho do teste, não o dado, fabrica ou esconde o efeito) — aqui o
+desenho que falhou era, ele próprio, uma tentativa de correção, o que
+descarta a leitura de que bastaria "desenhar melhor o filtro" para
+resolver o problema.
+
+### 6.54 Sinais idênticos, saídas diferentes: o testador novo deu −R$ 1.043 contra −R$ 64 do motor — o defeito era de execução, e o campo de preço que disparava o stop vinha ZERADO em quase todo tick
+
+Medido em 2026-10-06 no EA `mt5/WinDeslocamentoMatinal.mq5`, rodado no Strategy Tester do MT5 da Rico (WINV26, 12/08/2026 a 01/10/2026, "cada tick baseado em tick real"). **12 operações, com sinais idênticos aos do motor Python** — a estratégia estava certa; só a saída divergia. Três versões do EA, três resultados:
+
+| versão | como o stop era controlado | resultado | motor Python |
+|---|---|---|---|
+| v1.0 | SL nativo anexado à ordem-limite de entrada | **−R$ 1.043** | −R$ 64 |
+| v1.20 | stop no EA, lendo `SYMBOL_LAST` | **−R$ 535** | −R$ 64 |
+| v1.21 | `last` com fallback para bid (compra) / ask (venda); SL ao servidor só FORA do testador | **−R$ 78** | −R$ 64 |
+
+**v1.0.** O SL das COMPRAS disparou no mesmo segundo da entrada (**5 de 5**, saída no próprio preço de entrada) e o das VENDAS **nunca** disparou: em 24/08 a posição saiu no fim do dia com −R$ 528 onde o stop teria dado ~−R$ 312. Dois comportamentos opostos do mesmo stop nativo, ambos errados, ambos longe do que a corretora real faria.
+
+**v1.20.** Para fugir do SL nativo, o stop passou a ser controlado no EA pelo `SYMBOL_LAST`. No testador o `last` vem **0 na maioria dos ticks** (registrado no Diário: `last=0`), então a condição do stop nunca era verdadeira: o stop nunca disparou, −R$ 535. A causa só apareceu porque o valor lido foi escrito no log.
+
+**v1.21.** Fallback para bid (compra) / ask (venda) quando `last` é 0, e SL enviado ao servidor só fora do testador: −R$ 78, alinhado ao motor (−R$ 64). Os R$ 14 restantes não foram explicados e ficam como diferença conhecida.
+
+O que torna o caso perigoso é que −R$ 1.043 parecia um veredito sobre a estratégia. Só a comparação operação a operação com o motor — sinais iguais, saídas diferentes — mostrou que a estratégia não tinha nada a ver com o número.
+
+> **A regra.** Antes de ler o resultado de um testador ou plataforma nova, confira OPERAÇÃO A OPERAÇÃO contra a referência (o motor próprio): sinais iguais e saídas diferentes significam defeito de execução, não da estratégia. E nunca confie que o campo de preço que dispara o stop (último negócio, bid, ask) existe em todo tick do histórico simulado: registre no log o valor que o stop está lendo.
+>
+> **Pergunte à plataforma nova:** No simulador/testador da plataforma, quais campos de preço vêm preenchidos em cada tick do histórico (last, bid, ask) e qual deles dispara o stop nativo? O SL anexado a uma ordem pendente é avaliado do mesmo jeito que o SL de uma posição? (pergunta 129, item 6.54)
+
+Cruza com **1.2** (o stop nativo anexado à ordem é o desenho correto na corretora real — o que falhou foi o simulador avaliá-lo), **4.20** a **4.22** (o mesmo erro de modelo do outro lado: o motor próprio dando o que a plataforma não dá) e **6.18** (concordância com o motor é o que separa hipótese de previsão).
+
+---
+
+### 6.55 Um EA com o tamanho do tick digitado na mão rodou num instrumento de grade diferente: a corretora recusou as ordens, o que sobrou deu +R$1.042, e a recusa foi lida como edge
+
+Medido em 2026-10-06 no EA `mt5/WdoRetangulo.mq5`, escrito para o WDO (tick 0,5) com o tamanho do tick **digitado**: `input TickSizeWdo = 0.5`, piso de largura de 4,4 ticks e `NormalizeDouble` com `_Digits`. Rodado no Testador sobre o WINV26 (tick de 5 pontos), gerou preços de entrada, stop e alvo inteiros fora da grade, e a corretora recusou toda ordem cujo preço não fosse múltiplo de 5 (retcodes `10015` *invalid price* e `10016` *invalid stops*). O que não foi recusado virou trade: **+R$1.042, 22 trades em 36 pregões (12/08 a 01/10/2026)** — e foi lido como edge.
+
+| leitura | resultado |
+|---|---|
+| Testador, EA com defeito (ordens recusadas filtrando) | **+R$1.042** · 22 trades · 36 pregões |
+| Réplica com o tick correto, agosto | **−R$1.451 a −R$1.728** |
+| Holdout jan–jul/2026, versão com defeito | **−R$689** |
+| Holdout, melhor regra derivada do "acidente" (fade contra a abertura às 11:00) | **−R$4.264** — percentil **13,6** de um sorteio de lado |
+| Candidatos que passaram o percentil 95 | **0** |
+
+A recusa aleatória funcionava como um filtro de horário que ninguém desenhou: só entravam as ordens cujo preço, por sorte, caía numa grade válida. O lucro era propriedade desse filtro acidental, não do sinal. Custo: **uma rodada de pesquisa inteira (~1.200 células em 3 agentes)** gasta para refutar um resultado gerado por ordens que a corretora nunca aceitou.
+
+> **A regra.** Um EA nunca digita tick, dígitos ou valor do ponto: lê do símbolo em tempo de execução (tamanho do tick, dígitos, volume mínimo) e arredonda todo preço — entrada, stop e alvo — na grade do símbolo. E, antes de ler o resultado de qualquer teste, **conte as ordens recusadas pela corretora ou pelo testador**: recusa > 0 torna a linha censurada. Ela mede o filtro acidental, não a estratégia.
+>
+> **Pergunte à plataforma nova:** Na plataforma nova, como obtenho o tamanho do tick e a grade de preço válida do instrumento em tempo de execução, e onde o simulador/teste reporta as ordens recusadas por preço inválido? (pergunta 133, item 6.55)
+
+Cruza com **5.33** (o simulador devolvendo ordem sem o campo que o stop lê — outro caso de número lido sem conferir o que o gerou), **6.51** (censura medida pelo critério errado). O tick é propriedade do INSTRUMENTO, não do robô.
+
+### 6.56 O motor em barras só avaliava stop e alvo a partir da barra SEGUINTE ao preenchimento: 13,9% dos trades tinham um stop estourado dentro da barra do fill, e o pior trade perdeu 3,9× o stop nominal
+
+Medido em 2026-10-06 no estudo de gap do WIN (`scripts/daytrade/win_gap_estrategia_2026_10_06/rodada2_2026_10_06/RESULTADO.md`). O motor intradiário em barras (`src/backtest/intraday/machine.py`) só avalia stop e alvo **a partir da barra depois do preenchimento da entrada**. Quando a ordem-limite de entrada enche numa barra e o nível do stop é cruzado DENTRO dessa mesma barra, o backtest ignora o cruzamento e deixa a posição correr até a barra seguinte, onde a saída acontece num preço muito pior que o stop. Em 60 células de saída, 3.283 trades, WIN M5, 2 contratos:
+
+| medida | resultado |
+|---|---|
+| trades com stop atingido DENTRO da barra do fill, ignorado pelo motor | **457 (13,9%)** |
+| trades com alvo atingido DENTRO da barra do fill, ignorado pelo motor | **111 (3,4%)** |
+| pior trade, stop de 350 pontos, motor em barras | **−1.210 a −1.360 pontos (3,5× a 3,9× o stop)** |
+| pior trade, mesma regra, simulador em ticks | **−355 pontos (1,01× o stop)** |
+| rodada 1, 1 contrato: pior trade contra stop nominal de R$70 | **−R$242,50** |
+| soma das 60 células | **R$323.440 (barras) → R$304.863 (ticks)** |
+
+O erro tem duas direções, e a de perda é a que esconde risco: o relatório mostrava um robô cujo pior trade era mais de 3× o stop que ele jurava ter — e, na outra ponta, 111 alvos que o motor não viu. A soma encolheu **R$18.577 (5,7%)** quando a barra do fill passou a ser resolvida em ticks.
+
+**Segunda discrepância, da mesma família.** Com `exit_ttl_bars=10**9` (a saída sem prazo de produção) o motor **arma** a fatia do alvo no primeiro toque do nível e só a preenche numa barra POSTERIOR. Isso difere de uma ordem-limite que já estava parada no livro desde o preenchimento da entrada, que pode encher dentro da própria barra do fill. Na mesma célula: **+R$4.067 no motor contra +R$2.676 no simulador em ticks.** É o mesmo defeito visto do lado do alvo: o motor trata "a barra do fill" como se nada pudesse acontecer nela.
+
+> **A regra.** Um backtest em resolução de barra tem de **decidir o que acontece dentro da barra do preenchimento, depois do fill** — deixar isso sem avaliação não é neutro: esconde perdas maiores que o stop e relata um risco que a estratégia nunca teve. Duas saídas honestas: (1) resolver a barra do fill com dado mais fino (ticks); ou (2) adotar a premissa conservadora — **se o nível do stop está dentro da faixa restante da barra do fill, assuma que o stop foi atingido.** E **reporte sempre o pior trade em múltiplos do stop nominal**: valor bem acima de 1× é o sintoma, e é barato de checar.
+>
+> **Pergunte à plataforma nova:** Como a plataforma nova trata stop/alvo atingidos na mesma barra/tick em que a entrada preencheu? O backtest dela avalia a saída dentro da barra do fill? (pergunta 139, item 6.56)
+
+Cruza com **6.47** (stop curto medido em M1 com caminho de 2 pontos por vela: mesma família de erro, resolução de barra escondendo o que acontece dentro dela), **6.54** (campo de preço que dispara o stop) e **4.8** (o alvo que o simulador dá de graça). A premissa embutida em "decido na barra" precisa ser lida contra o pior trade, não contra a média.
+
+---
+
 ## Parte 7 — Disciplina de trabalho
 
 ### 7.1 Ao corrigir um bug, varra todas as instâncias do padrão
@@ -8792,6 +9436,177 @@ dinheiro ou meses.
      conserto reconstrói o estado desde a abertura em ~7 a ~14s de replay,
      uma vez por processo — contra um piso de watchdog de 900s. (5.29,
      3.14, 5.9)
+120. A plataforma nova oferece uma série contínua/ajustada de longo prazo
+     (anos) pro instrumento? E como se confirma que um contrato específico
+     usado numa janela curta de validação (IS/OOS de 1-2 meses) tinha
+     volume/liquidez real — comparável ao contrato principal da época —
+     durante TODO o período testado, e não um contrato ainda em transição de
+     rolagem? Aqui uma configuração quase foi promovida comparando um mês
+     que era o 2º melhor entre 60 (sorte) contra um contrato que negociava
+     ~300× menos volume que o principal durante boa parte da janela — as
+     duas confirmações (série longa dividida em metades + liquidez do
+     contrato da janela curta) são exigidas juntas, nenhuma sozinha basta.
+     (6.46)
+
+121. O histórico de ticks (negócios) está disponível para o período do
+     backtest, com timestamp e preço por negócio, e alinhável à série de
+     barras usada (atenção a séries ajustadas por diferença contra contrato
+     cru, que exigem deslocamento diário)? Sem ele não há como refazer no
+     caminho real um resultado de stop curto (da ordem do range de 1-5
+     velas): aqui o caminho de 2 pontos por vela M1 deu +117 a +242 pts/op e
+     uma "pista viva" em 3 janelas; nos ticks reais (83 pregões, mesmos
+     dias) 6 de 8 células congeladas viraram negativas, uma com 0% de
+     acerto (n=9). A premissa de caminho intra-barra vai declarada na linha
+     do resultado. (6.47)
+122. O framework de backtest/execução da plataforma nova tem alguma forma
+     de auditar/assegurar que uma estratégia bar-a-bar não está
+     "silenciosamente nunca agindo" — por exemplo, contando ocorrências
+     BRUTAS da condição de gatilho versus ordens de fato emitidas, e
+     alertando se a razão cair muito abaixo do esperado — antes de aceitar
+     "zero trades" como veredito de uma hipótese? Aqui uma estratégia que
+     combinava estado recalculado a cada barra com uma checagem de "ordem
+     pendente" lida DEPOIS da atualização do mesmo estado, na mesma
+     chamada, emitiu ZERO ordens em ~128 pregões apesar de o gatilho ter
+     ocorrido 383 vezes em 122 pregões medido isoladamente — bug de ORDEM
+     DE OPERAÇÕES dentro do handler de barra, não de lógica de sinal.
+     (6.48)
+123. O relatório de backtest da plataforma nova distingue contagem de
+     OPERAÇÕES de contagem de SESSÕES/PREGÕES distintos, e sinaliza quando
+     uma fração alta das operações se concentra dentro de poucas sessões
+     (reentradas no mesmo dia já favorável), antes de aceitar "amostra
+     grande" como evidência de robustez? Aqui um candidato com 667
+     operações (5× mais que outro candidato da mesma busca) tinha a MESMA
+     concentração nos top-3 pregões (59%) do candidato 5× menor — o
+     contador de trades tinha subido, o número de pregões independentes
+     que carregavam o resultado, não; o gatilho chegou a reentrar 24 vezes
+     num único pregão. (6.49)
+124. O framework de backtest/execução da plataforma nova oferece uma forma
+     padrão de estratificação PÓS-HOC de trades já simulados por uma
+     métrica candidata (sem precisar rodar uma simulação nova por grupo),
+     para evitar o viés de comparar filtros exclusivos numa estratégia que
+     rearma dentro da mesma sessão? Aqui, comparar 3 simulações exclusivas
+     por força de gatilho (fraco/médio/forte) deu um gradiente limpo de
+     win% (37,2%/23,3%/15,4%) que sumiu por inteiro (37,5%/37,5%/36,6%,
+     correlação ≈ 0) ao reavaliar os MESMOS 121 trades de uma única rodada
+     sem filtro, estratificados depois pela força de cada trade real. (6.50)
+125. O critério de "censura"/invalidação de uma célula de backtest da
+     plataforma nova distingue explicitamente morte por falta de capital
+     (caixa cruzou a barreira, ordens recusadas) de seletividade
+     intencional de um filtro combinado (frequência baixa por desenho, ex.
+     AND de sinais independentes), ou aplica o mesmo limiar fixo de
+     "fração mínima de dias com atividade" às duas situações? Aqui um
+     filtro AND (ORB + estado anômalo WIN×WDO) foi reprovado nas 4 janelas
+     testadas por `sem_trade` entre 73,8% e 90,2% dos pregões, com
+     `equity_min` SEMPRE acima da margem crua e ZERO ordens recusadas por
+     capital — a regra herdada de outra geração mediu seletividade por
+     desenho como se fosse morte por caixa. (6.51)
+126. O framework de validação da plataforma nova reporta a concentração
+     (top-N pregões / líquido total) tanto no período de desenvolvimento
+     quanto no de validação cega, lado a lado, e alerta quando a segunda
+     for sistematicamente pior que a primeira — em vez de tratar o número
+     do desenvolvimento como estimativa confiável da robustez real? Em
+     três famílias de sinal sem relação entre si (confluência cruzada
+     WIN×WDO, rompimento ORB, lateralização em retângulo) a concentração
+     do IS (ex.: 41%/64% top3/top5) subestimou de forma sistemática e
+     grande a do OOS (ex.: 97,2%/133,4%). (6.52)
+127. Existe, na plataforma nova, uma forma padrão de medir se uma métrica
+     de concentração/robustez é ESTÁVEL entre janelas (não apenas "boa"
+     numa única janela) antes de promover um candidato — por exemplo
+     exigindo a métrica dentro de uma faixa aceitável em pelo menos 2
+     janelas fora da amostra? Aqui uma quarta família de sinal (G22,
+     filtro de regime diário com p=0,0040 no IS, o mais significativo da
+     busca) foi desenhada especificamente para corrigir o padrão de 6.52
+     e o piorou — de 97,2%/133,4% (sem filtro) para 607%/816% (com
+     filtro) no MESMO OOS-1, líquido caindo de R$ 650,00 para R$ 89,50.
+     (6.53)
+128. Esta plataforma marca de alguma forma (flag, campo ou API separada)
+     quais cotações vêm de um LEILÃO (abertura/fechamento/circuit breaker)
+     e quais vêm de negociação contínua — ou só dá para inferir pela
+     janela de horário, como foi feito aqui? Sem essa marca, qualquer
+     cálculo de amplitude/largura a partir de máximas e mínimas de vela de
+     1 minuto (canal, retângulo, ATR simplificado) pode inflar dezenas de
+     milhares de pontos com cotação INDICATIVA e não-negociável publicada
+     no leilão, derrubando o patrimônio simulado sem nenhuma negociação
+     real correspondente — medido na B3 (WINV26, 2026-08-12): oscilação
+     de até 17.335 pontos em 6 minutos antes da abertura. Dois consertos
+     mínimos: excluir a janela do leilão do cálculo, e aplicar um teto de
+     sanidade por vela (aqui 2.000 pontos) antes de qualquer amplitude
+     entrar na estratégia. (5.30)
+129. No simulador/testador da plataforma, quais campos de preço vêm preenchidos em cada tick do histórico (last, bid, ask) e qual deles dispara o stop nativo? O SL anexado a uma ordem pendente é avaliado do mesmo jeito que o SL de uma posição? Aqui o SL nativo anexado a uma ordem-limite disparou no segundo da entrada em 5 de 5 compras e nunca nas vendas, e o `last` vinha 0 na maioria dos ticks — o EA passou de −R$ 1.043 para −R$ 78 (motor: −R$ 64) só ao tratar o campo de preço e a origem do stop. (6.54)
+130. No contrato de futuro com vencimento da plataforma nova, como se obtém a data de rolagem (qual é o contrato PRINCIPAL em cada dia)? As barras de período longo (mensal/semanal) do contrato individual incluem o período em que ele ainda não era o principal — e, se incluem, o preço delas é de um mercado ilíquido e distante do real? Toda grandeza ancorada no calendário (abertura do mês/semana, VWAP ancorada, máxima do mês) do robô e do backtest usa a MESMA definição de contrato? Aqui a abertura do mês do WINV26 começava em 03/08, com o contrato ainda de trás (volume ~1000× menor, preço 2–3 mil pontos acima do mercado): o filtro leu "mês de baixa" de 12/08 a 08/09 durante uma alta de 6% e o EA, fiel ao código, só vendeu. (5.31)
+131. A série contínua que a plataforma oferece é crua ou ajustada nos contratos passados — e, se ajustada, por diferença ou por proporção? A série "sem ajuste" continua sem ajuste para trás, ou só no contrato vigente? Aqui o `WIN@` do MT5 bateu 100% minuto a minuto com o WINV26, mas só de 13/08 em diante: a fração de fechamentos na grade de 5 pontos foi ~20% em jan–jul/2026, 73% em ago e 100% em set–out, e o Testador marcava "Qualidade do histórico 0%" — resultados de 2025 e jan–jul/2026 têm erro de escala de alguns % nos pontos. Confira em toda a janela, mês a mês, a grade de tick e a igualdade contra mais de um contrato real. (5.32)
+132. Na plataforma nova, qual preço dispara o stop de um instrumento de
+     bolsa, no simulador e no real (último negócio, bid ou ask)? E o
+     simulador guarda uma cópia própria do histórico de ticks — como
+     conferir que ela está completa (tamanho do arquivo, contagem de
+     negócios por dia, campo de último preenchido e coerente com bid/ask)
+     antes de confiar num resultado? Aqui o cache do Testador do MT5 tinha
+     64,5 MB em agosto contra 79,8 MB no terminal; 235 de 357 ordens saíram
+     sem o último negócio, 42 compras tomaram stop no segundo da entrada e
+     6 vendas nunca tiveram stop (−R$1.854), com o relatório marcando
+     "qualidade do histórico 100%". (5.33)
+133. Na plataforma nova, como obtenho o tamanho do tick e a grade de preço
+     válida do instrumento em tempo de execução, e onde o simulador/teste
+     reporta as ordens recusadas por preço inválido? Aqui o EA do WDO com o
+     tick 0,5 digitado rodou no WIN (tick 5): a corretora recusou toda
+     ordem fora da grade (retcodes 10015/10016), o que sobrou deu +R$1.042
+     em 22 trades e foi lido como edge; com o tick certo o mesmo robô deu
+     −R$1.451 a −R$1.728 e nenhum candidato passou o percentil 95. (6.55)
+134. A série contínua do futuro na plataforma nova é ajustada (por diferença
+     ou por proporção) ou crua? Barras e ticks do MESMO símbolo usam o mesmo
+     ajuste — e qual símbolo dá o preço cru do contrato principal? Aqui o
+     `WIN@` do MT5 entregava barras M1 ajustadas por diferença (~80% dos
+     preços fora da grade de 5 pontos antes da última rolagem; em 10/06/2026
+     09:02 a barra abria 176.154 contra 169.265 do negócio real, ~6.900
+     pontos) e ticks crus, e o CSV batizado "sem ajuste" herdava o ajuste
+     (9.502 de 11.837 barras de janeiro fora da grade); o `WIN$N` era cru
+     nos dois. Confirme a grade de tick e um ponto de checagem barra×tick
+     antes de misturar sinal em barra com execução em tick. (5.34)
+135. A base histórica da plataforma nova separa os leilões (abertura e
+     fechamento) em barras próprias, mistura com a 1ª/última barra do dia,
+     ou os omite? Aqui o close da última barra M1 do WIN era o preço do call
+     em 127 de 127 dias (e o último negócio contínuo em 3), com volume ~23
+     mil contra ~1,5–3 mil das barras vizinhas. (5.35)
+136. Em que fuso vêm os horários da base e do perfil do instrumento, e o
+     motor compara o corte de zeragem no MESMO fuso do dado? Aqui o corte
+     estava em UTC (21:20) sobre dado em BRT, nunca chegava, e a zeragem
+     caía na última barra do dia — o call. (5.35)
+137. A plataforma/testador preenche ordens durante os leilões? A que preço, e
+     como o testador trata uma ordem a mercado enviada na janela do call?
+     (5.35, 5.30)
+138. Qual é a grade oficial de fases do pregão e como ela muda ao longo do
+     ano — inclusive com o horário de verão de outros países, que desloca o
+     fim do contínuo de instrumentos atrelados a eles? Em tempo gráfico ≥5
+     min, uma regra "zera às HH:MM" ainda dispara antes do call, ou a barra
+     que a contém já o inclui? (5.35)
+139. Como a plataforma nova trata stop/alvo atingidos na mesma barra/tick em
+     que a entrada preencheu? O backtest dela avalia a saída dentro da barra
+     do fill? Aqui o motor em barras só avaliava a partir da barra seguinte:
+     457 de 3.283 trades (13,9%) tinham o stop estourado dentro da barra do
+     fill, o pior trade com stop de 350 pontos perdeu −1.210 a −1.360 (3,5×
+     a 3,9× o stop) contra −355 (1,01×) em ticks, e a soma das 60 células
+     caiu de R$323.440 para R$304.863. (6.56)
+140. A conta é netting ou hedging POR INSTRUMENTO? Se for netting e mais de um
+     robô operar o mesmo instrumento, quem mantém a posição de cada um — a
+     plataforma ou o meu sistema? Aqui cinco EAs com `magic` próprio se
+     bloqueavam por "já há posição" (154 de 361 entradas, +R$9.006 bloqueados) e
+     `PositionClose(_Symbol)` fechava a posição de todos: +R$14.079 isolados
+     viraram +R$5.131 juntos. (1.26, 1.4)
+141. O negócio (deal) carrega o identificador da ordem/robô (`magic`) também
+     quando vem de uma ordem stop/limite PENDENTE que disparou, e não só de
+     ordem a mercado? Sem isso não dá para reconstruir a ficha de cada robô do
+     histórico. (1.26)
+142. Existe OCO (uma-cancela-a-outra) nativo no SERVIDOR entre stop e alvo?
+     Sem ele, stop e alvo independentes podem executar os dois com o robô fora
+     do ar — em netting o segundo inverte a posição. (1.26, 1.23)
+143. Uma ordem stop pendente fica viva no servidor da corretora com o terminal
+     desligado, ou morre junto com a sessão? (1.26, 1.2)
+144. Existe prevenção de autonegociação (self-trade) entre ordens pendentes da
+     mesma conta e, se existir, qual lado ela cancela — a nova ou a antiga? (1.26)
+145. Um stop que AUMENTA a posição líquida (o robô A fecha dentro de uma líquida
+     do robô B no sentido contrário) passa por checagem de margem como abertura
+     e pode ser recusado? O comentário da ordem sobrevive até o negócio — dá
+     para marcar de qual robô veio sem depender do `magic`? (1.26, 1.1)
 
 ---
 

@@ -30,6 +30,14 @@ SCHEMA_PATH = ROOT / "src" / "journal" / "schema.sql"
 # existia em `DB_PATH` para cá, sem apagar o original).
 LIVE_DB_PATH = ROOT / "db" / "live.sqlite"
 
+# Banco da arbitragem social (`social_arbitrage/`) — registro DISCRICIONÁRIO
+# de tese, escrito por um humano em ritmo de dias/semanas. Arquivo PRÓPRIO
+# pelo mesmo motivo de `LIVE_DB_PATH`: não tem por que competir por lock com
+# o diário sistemático nem com a operação ao vivo, e os dois domínios (tese
+# discricionária x robô sistemático) nem compartilham schema.
+SOCIAL_ARBITRAGE_DB_PATH = ROOT / "db" / "social_arbitrage.sqlite"
+SOCIAL_ARBITRAGE_SCHEMA_PATH = ROOT / "src" / "social_arbitrage" / "schema.sql"
+
 
 WATCHLIST: tuple[str, ...] = (
     # Top-7 selecionados por forward selection greedy (2026-08-15) maximizando

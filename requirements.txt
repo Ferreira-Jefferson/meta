@@ -10,4 +10,7 @@ pytest>=8.0.0
 pytest-xdist>=3.8.0  # `-n auto` em pyproject.toml: a suite roda em paralelo, nao serial
 playwright>=1.44.0
 httpx>=0.27.0  # so para teste: starlette.testclient.TestClient exige isto
+requests>=2.31.0  # ja era usado (jev_noticias, social_arbitrage/deteccao_reddit) sem estar pinado aqui
+python-dotenv>=1.0.0  # le .env (chaves de API) -- ja usado por jev_noticias_wdo
+pytrends>=4.9.2  # Google Trends nao tem API oficial; pytrends e' o cliente nao-oficial padrao do ecossistema Python para isto, puro-Python (so' requests+pandas por baixo) -- ver social_arbitrage/deteccao_trends.py
 

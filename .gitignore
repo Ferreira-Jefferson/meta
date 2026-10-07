@@ -52,3 +52,28 @@ db/backups/
 # numero em LICOES_DE_PRODUCAO.md, memoria do projeto ou mensagem de commit.
 # Deixar solto faz o `git status` esconder arquivo de verdade no meio do lixo.
 scratch/
+# Chaves de API (OPENROUTER etc.) -- lidas por python-dotenv, nunca versionadas.
+.env
+# Estado de RUNTIME desta maquina (pids/slots dos robos ao vivo). Muda a cada
+# subida de robo e nao descreve nada que outra maquina precise.
+db/live_process.json
+# Dados locais: exportacoes do MT5, caches de tick/volume e bases derivadas.
+# Pesados (dezenas de GB) e regeneraveis da fonte; so' a grade horaria oficial
+# da B3 e' referencia escrita a mao e fica versionada.
+data/*
+!data/b3_grade_horaria_win.csv
+# Copias locais das paginas publicadas como Artifact (a fonte e' a URL).
+.claude/artifacts/
+# Saida de estudo: intermediarios binarios, logs e copias de seguranca. O que
+# vale de um estudo e' o script, o relatorio .md e as tabelas pequenas.
+*.pkl
+*.npz
+*.npy
+*.parquet
+*.feather
+*.csv.gz
+*.tsv
+*.jsonl
+*.log
+*.err
+*.bak

@@ -41,6 +41,10 @@ They are deliberately kept apart: `IntradayStrategy` does not inherit from `Stra
 
 The same live process (`scripts/run_live.py --slot swing|daytrade`) dispatches to the right runtime.
 
+## A terceira via: arbitragem social (`social_arbitrage/`) — discricionária, fora de `strategy/`
+
+Desde 2026-09-27 há um terceiro caminho, deliberadamente **fora** dos dois acima: teses discricionárias a partir de assimetria de informação real (não de OHLCV), inspiradas em Chris Camilo (observação de consumo antes do mercado notar) e Larry Williams (smart money via COT, calendário, confluência de sinais — não os indicadores dele). Vive em `src/social_arbitrage/`, **irmã** de `strategy/`/`journal/`/`backtest/`, nunca dentro de `strategy/`: a regra 2 do `AGENTS.md` (sinal puro OHLCV→decisão, portável para MQL5) não se aplica aqui de propósito — o insumo é observação de campo/menção social ou posicionamento externo, o dimensionamento é Kelly fracionário + teto de pior-caso (não a fórmula de risco do motor), e não há stop por padrão. Banco próprio (`db/social_arbitrage.sqlite`), CLI em `scripts/social_arbitrage_cli.py`. Hoje é só registro/apoio a decisão — **não manda ordem**; ver o faseamento completo e o porquê de cada fase estar ou não pronta na docstring de `src/social_arbitrage/__init__.py`.
+
 ## Layer boundaries (from AGENTS.md — non-negotiable)
 
 ```
@@ -310,6 +314,14 @@ Na hora de portar a estratégia, o que viaja são essas cinco perguntas, não os
 
 Mesmo espírito para **sweeps de parâmetro**: `ProcessPoolExecutor` com `submit`/`as_completed` (nunca `pool.map`, que trava resultado pronto atrás de unidade lenta), `redirect_stdout` por unidade, `flush=True` em todo print, cada unidade imprime a linha DELA assim que termina — resumo ordenado vem depois. Ver `scripts/daytrade/gremah_defesa_corte_sweep_2026_09_03.py` e `scripts/daytrade/sweep_copa.py`.
 
+## Base histórica do WDO — 5 anos, M1, `WDO@D`
+
+`C:\Users\Jeffe\Documents\study\meta\data\wdo-mt5\WDO@D_M1_202109290900_202609291020.csv` — 2021-09-29 a 2026-09-29, M1, ~698 mil barras, TSV com cabeçalho `<DATE> <TIME> <OPEN> <HIGH> <LOW> <CLOSE> <TICKVOL> <VOL> <SPREAD>` (exportado do MT5). Use esta base para qualquer backtest de robô WDO que precise de mais de 2 meses de histórico — ela substitui puxar contrato único fresco do MT5 (que tem o problema de liquidez/rolagem já documentado abaixo) ou a série `data/raw_intraday/WDO_A_.parquet` (que está em UTC, não BRT, e teve saltos de dado achados perto do meio-dia em alguns pregões).
+
+**Por que `@D` (ajuste por diferença) e não `@` (sem ajuste) ou `@N` (proporcional) — decisão do dono, 2026-09-29:** o ajuste por diferença preserva a distância em PONTOS entre os preços através das trocas de contrato, que é exatamente o que importa pro stop e pro trailing de um robô medido em pontos (como o `wdo_ribbon_mm34`). A série sem ajuste (`WDO@`) tem degraus artificiais no dia da virada de contrato — um salto de preço que não é movimento de mercado nenhum, e que já causou saltos de 14-34 pontos irreais no meio de um pregão numa investigação anterior (`WDO_A_.parquet`, mesma raiz do problema). A série com ajuste proporcional (`WDO@N`) mantém a distância percentual, não a distância em pontos — distorce levemente o tamanho de cada movimento, o que atrapalha qualquer lógica calibrada em pontos absolutos (stop, alvo, filtros de range).
+
+**Cuidado ao ler com `MetaTrader5.copy_rates_range` para `WDO@D` (achado 2026-09-29):** pedir uma janela de tempo ESTREITA (poucas horas) às vezes devolve barras de um horário completamente diferente do pedido — comportamento inconsistente da API pra este símbolo específico. Correção que funcionou: buscar o DIA INTEIRO (`copy_rates_range` com range de 24h) e filtrar depois com `.loc[]` no DataFrame, nunca confiar num range estreito direto da API pra este símbolo.
+
 ## Front-end: HTMX + Terminal Editorial
 
 FastAPI + Jinja2 templates in `src/dashboard/templates/` (partials in `partials/`) + HTMX for partial swaps + Plotly.js. **No SPA framework.** All templates inherit from `base.html`. Colors from `static/css/tokens.css` — never hardcode. Fonts: JetBrains Mono (data/numbers), Instrument Serif (headlines). When creating/editing a template, invoke the `frontend-design` skill.
@@ -320,7 +332,6 @@ FastAPI + Jinja2 templates in `src/dashboard/templates/` (partials in `partials/
 - No TA-Lib (C dependency, painful on Windows) — indicators live in `core/indicators.py` as pure `(pd.Series, ...) -> pd.Series` functions.
 - Live ops require Windows because `MetaTrader5` Python only talks to a locally-running MT5 terminal via Windows IPC — see `DEPLOY.md`.
 - `dev.bat` explicitly cleans up port 8000 in a loop because uvicorn `--reload`'s master + spawned child both bind the socket.
-- **Saldo do MT5 (Rico) não é confiável como fonte de capital.** `MT5Broker.account_risk_state()`/`cash_balance()` chamam `mt5.account_info()` direto no terminal, mas a Rico confirmou que esse saldo não é sincronizado com o saldo real da corretora — pode aparecer um número muito menor (ou maior) que o dinheiro de verdade na conta, sem que nada esteja errado. Por isso o sizing e o gate de capital usam o valor **digitado pelo dono no painel** (`available_cash` / `capital` do slot em `db/live_process.json`), nunca o número que vem do MT5 — sincronizar é manual, 1x/dia quando o dono decide. Não trate `equity`/`balance`/`margin_free` baixos vindos do MT5 como sinal de conta zerada ou de motivo para o robô não entrar.
 
 ## What NOT to do (from AGENTS.md)
 
