@@ -79,3 +79,4 @@ data/*
 *.bak
 scripts/daytrade/comparativo_win_2026/comparativo_win_2026.html
 scripts/daytrade/comparativo_win_2026/comparativo_win_2026.json
+mt5/testes/resultados/
