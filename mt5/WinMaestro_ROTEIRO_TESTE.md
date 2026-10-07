@@ -1,17 +1,6 @@
 # WinMaestro — roteiro de teste
 
-Ordem: 1 → 2 → 3. Cada passo só depois do anterior OK. Depois de cada passo, avise: o resultado é lido direto da pasta do MT5 (Diário/logs do Testador), não precisa copiar nada.
-
-## 1. Testes unitários (EA de teste, ~1 min)
-
-1. No MT5, abra um **segundo gráfico do WINV26** (qualquer tempo). Nenhum outro robô nele.
-2. Arraste **WinMaestro_Teste** para esse gráfico → OK (permitir negociação algorítmica).
-3. Ele roda os testes na hora e escreve no Diário (aba Experts) `PASSOU`/`FALHOU` por teste e um total no fim.
-4. Pode remover o EA do gráfico depois.
-
-Ele usa uma corretora simulada: **não envia nenhuma ordem real**. Não coloque no mesmo gráfico do maestro (substituiria o maestro).
-
-Esperado: **137 verificações, todas `PASSOU`** (v2.02). Qualquer `FALHOU` → corrijo antes do passo 2.
+Ordem: 2 → 3 (o passo 1, testes unitários, foi removido em 2026-10-07). Cada passo só depois do anterior OK. Depois de cada passo, avise: o resultado é lido direto da pasta do MT5 (Diário/logs do Testador), não precisa copiar nada.
 
 ## 2. Equivalência no Testador (cada robô sozinho)
 

@@ -32,7 +32,6 @@ A lógica de sinal de cada robô é a do EA avulso. Cada robô **declara o que q
 ## Arquivos
 
 - `mt5/WinMaestro.mq5` e a pasta `mt5/WinMaestro/` (núcleo: `Tipos`, `Snapshot`, `Mapa`, `Estado`, `Decide`, `Envia`, `Partida`; apoio: `Corretora`, `Memoria`, `Log`, `Grade`, `Inputs`; um `.mqh` por robô).
-- `mt5/WinMaestro_Teste.mq5` + `WinMaestro/CorretoraFalsa.mqh`: testes unitários com corretora falsa. Não vão para o EA de produção.
 - Desenho: `WinMaestro_ARQUITETURA_v2.md`. Regras de negócio: `WinMaestro_ESPECIFICACAO.md`. Notas: `WinMaestro_implementacao_notas.md`.
 - A v1.03 está guardada em `mt5/WinMaestro_v1.03_historico/`.
 
@@ -120,16 +119,4 @@ Diferenças pequenas em relação aos EAs avulsos, mantidas de propósito (detal
 
 ## Testes unitários
 
-`WinMaestro_Teste.mq5` roda 137 verificações com a corretora falsa: cada linha da tabela de decisão, a intenção efetiva, o casamento das ordens, a confiança, o corte da conta (inclusive a ordem dos passos), a trava, a memória, o ambiente, os 14 cenários do desenho, um teste por achado das revisões de código 1 e 2 e os adaptadores dos 5 robôs. A corretora falsa executa ordens pelo preço, aceita e rejeita depois, cancela e modifica com atraso e entrega as transações ao `OnTradeTransaction` do maestro, quando o teste pede.
-
-**A suíte ainda não foi rodada** (a implementação não podia abrir o terminal). Rode-a antes da conta demo: ela imprime `PASSOU`/`FALHOU` por caso e o placar; uma falha é defeito do EA ou do teste, e as duas coisas pedem conserto antes de operar.
-
-**Rode o EA de teste num gráfico SEPARADO**, de preferência um segundo gráfico do WIN com cotação (os testes de entrada do C1 e de stop atravessado do DM leem a cotação do gráfico, e o de zeragem do DM lê a sessão do símbolo).
-
-Passo a passo:
-1. Abra um segundo gráfico do contrato vigente (ex.: WINV26). Não use o gráfico do WinMaestro.
-2. Arraste `WinMaestro_Teste` para ele (não precisa de "Permitir Algo Trading": o teste não manda ordem).
-3. Veja a aba **Experts** (ou o Diário): uma linha `PASSOU`/`FALHOU` por verificação e, no fim, `WinMaestro_Teste v2.02: N PASSOU, M FALHOU`, com a lista das que falharam. O EA sai sozinho.
-4. Com `Teste_Verboso = true` o log do maestro aparece junto, para investigar uma falha. Um gráfico só aceita um EA: anexar o teste no gráfico do WinMaestro tira o maestro do gráfico, e ele para de gerir as posições.
-
-O EA de teste não tem caminho para a corretora real (a classe que manda ordens nem é compilada nele). Ele imprime `PASSOU`/`FALHOU` por caso e o placar no Diário e sai sozinho. Grava só em `MQL5\Files\WinMaestro_unit\` e em variáveis globais com o prefixo `WinMaestroTeste`, que ele apaga. O input `Teste_Verboso` imprime o log do maestro durante os testes.
+Removidos a pedido do dono em 2026-10-07 (`WinMaestro_Teste.mq5` + `WinMaestro/CorretoraFalsa.mqh`, 137 verificações com corretora falsa, nunca rodadas). Recuperar com `git show 257b1e4:mt5/WinMaestro_Teste.mq5` e `git show 257b1e4:mt5/WinMaestro/CorretoraFalsa.mqh`. O `#ifndef WINMAESTRO_TESTE` em `Corretora.mqh` ficou e não muda nada no EA de produção.
