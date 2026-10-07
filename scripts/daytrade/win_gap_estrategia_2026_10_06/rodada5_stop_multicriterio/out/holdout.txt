@@ -1,0 +1,5 @@
+HOLDOUT {'n': 23, 'liq': np.float64(1370.0), 'win': np.float64(65.217), 'wins': 15, 'payoff': np.float64(1.152), 'ganhos': np.float64(2551.0), 'perdas': np.float64(1181.0), 'pf': np.float64(2.16), 'dd': 617.0, 'ddp': 20.656, 'rf': np.float64(2.22), 'smin': 999.0, 'quebrou': False, 'data_quebra': None, 'seqperd': 2, 'pior_mes': np.float64(-418.0), 'mes_pos': np.float64(66.667), 'n_mes': 3}
+diag {'dias': 56, 'sem_barra1': 0, 'sem_anterior': 0, 'vencimento': 2, 'gap_pequeno': 1, 'sem_sinal': 30, 'sinais': 23, 'nao_encheu': 0, 'stop': 2, 'flatten': 21, 'sem_tick_flatten': 0}
+R$/trade holdout 59.57 selecao 29.65 -> razao 2.009
+dias de sinal com algum fill possivel 23 obs liq 1370.0 nulo media -162.9 sd 957.5 p(>=obs) 0.05491 draws 200000
+sd por operacao 201.9 n 23 efeito minimo detectavel (80% poder, alfa 5% unilateral) R$/op 104.7 total 2408

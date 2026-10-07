@@ -1,0 +1,5 @@
+{"congelado_em": "fim da descoberta jan-jun/2026, antes de qualquer calculo jul-ago",
+ "criterio": "|z_shift|>=2 em B250, |z_shuf|>=1.5, n>=60, mesmo sinal nas duas metades (jan-mar, abr-jun)",
+ "configs": [["pctPC_0.5",100,300],["vwap",200,300],["touch",200,600],["poc",100,300]],
+ "metrica_primaria": "B250 = P(repique de 250 antes de continuar 250 em 60 min)",
+ "aceita_se": "mesmo sinal e |z_shift| >= 1.5 em jul-ago"}

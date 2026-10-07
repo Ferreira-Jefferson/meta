@@ -1,0 +1,19 @@
+config_for R$1.000: max_open_contracts=5 margem=100.0 escada=True session_end=18:20:00
+
+[V2 r150 | S350] ordens=63 | motor: 48 trades, liquido=9114.50 | sim_barra: 48 trades, liquido=9114.50 | IGUAIS=True | contratos por trade motor [1, 2, 3, 4], sim [1, 2, 3, 4]
+   barra x tick (q=2): trades=48, saida dentro da barra do fill (so' o tick enxerga)=9, restantes iguais em entrada/motivo/barra de saida=39/39; divergencias: []
+
+[V2 r150 | S700 T700] ordens=63 | motor: 48 trades, liquido=2676.00 | sim_barra: 48 trades, liquido=2676.00 | IGUAIS=True | contratos por trade motor [1, 2, 3], sim [1, 2, 3]
+   barra x tick (q=2): trades=48, saida dentro da barra do fill (so' o tick enxerga)=7, restantes iguais em entrada/motivo/barra de saida=41/41; divergencias: []
+
+[V1 r150 | S.3atr T.6atr] ordens=116 | motor: 94 trades, liquido=12548.50 | sim_barra: 94 trades, liquido=12548.50 | IGUAIS=True | contratos por trade motor [2, 3, 4], sim [2, 3, 4]
+   barra x tick (q=2): trades=94, saida dentro da barra do fill (so' o tick enxerga)=3, restantes iguais em entrada/motivo/barra de saida=91/91; divergencias: []
+
+[V3 r150 | Sbar1 T2R] ordens=45 | motor: 31 trades, liquido=-116.50 | sim_barra: 31 trades, liquido=-116.50 | IGUAIS=True | contratos por trade motor [1, 2, 3], sim [1, 2, 3]
+   barra x tick (q=2): trades=31, saida dentro da barra do fill (so' o tick enxerga)=12, restantes iguais em entrada/motivo/barra de saida=19/19; divergencias: []
+
+[V2 r150 | S700 Tgap] ordens=37 | motor: 28 trades, liquido=-354.00 | sim_barra: 28 trades, liquido=-354.00 | IGUAIS=True | contratos por trade motor [1, 2], sim [1, 2]
+   barra x tick (q=2): trades=28, saida dentro da barra do fill (so' o tick enxerga)=7, restantes iguais em entrada/motivo/barra de saida=21/21; divergencias: []
+
+[V2 r150 | S1R1 T2R1] ordens=63 | motor: 48 trades, liquido=11940.00 | sim_barra: 48 trades, liquido=11940.00 | IGUAIS=True | contratos por trade motor [1, 2, 3, 4], sim [1, 2, 3, 4]
+   barra x tick (q=2): trades=48, saida dentro da barra do fill (so' o tick enxerga)=2, restantes iguais em entrada/motivo/barra de saida=46/46; divergencias: []

@@ -1,0 +1,69 @@
+{
+ "criterio": "favor/cons, n>=150, ordenado por esperanca na DESCOBERTA (jan-jun); lo>0 se >=8 celulas, senao top 8",
+ "celulas": [
+  {
+   "scale": "conc5",
+   "mode": "favor",
+   "filt": "vela",
+   "X": "300",
+   "stop": 150,
+   "alvo": 1000
+  },
+  {
+   "scale": "conc5",
+   "mode": "favor",
+   "filt": "vela",
+   "X": "150",
+   "stop": 150,
+   "alvo": 1000
+  },
+  {
+   "scale": "conc3",
+   "mode": "favor",
+   "filt": "vela",
+   "X": "150",
+   "stop": 150,
+   "alvo": 1000
+  },
+  {
+   "scale": "conc3",
+   "mode": "favor",
+   "filt": "todos",
+   "X": "150",
+   "stop": 200,
+   "alvo": 1000
+  },
+  {
+   "scale": "conc5",
+   "mode": "favor",
+   "filt": "vela",
+   "X": "150",
+   "stop": 150,
+   "alvo": 750
+  },
+  {
+   "scale": "conc5",
+   "mode": "favor",
+   "filt": "vela",
+   "X": "300",
+   "stop": 150,
+   "alvo": 750
+  },
+  {
+   "scale": "conc5",
+   "mode": "favor",
+   "filt": "todos",
+   "X": "150",
+   "stop": 200,
+   "alvo": 1000
+  },
+  {
+   "scale": "d_seq",
+   "mode": "favor",
+   "filt": "todos",
+   "X": "150",
+   "stop": 100,
+   "alvo": 1000
+  }
+ ]
+}

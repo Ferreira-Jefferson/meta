@@ -1,0 +1,16 @@
+celula: V2 r0, stop 1200, sem alvo; config_for R$1.000: max_open_contracts=5, session_end_time=18:20:00
+dias excluidos (sem operar na classe): ['2026-04-15', '2026-05-06', '2026-06-17', '2026-07-31', '2026-08-10', '2026-08-12', '2026-09-24']
+
+simulador a tick, modo A: 62 trades, liquido R$15,103.50
+simulador em modo barra (semantica do motor), modo A: 63 trades, liquido R$17,446.50
+
+(A) motor + classe, M5 BRUTO (gap das barras, flatten 18:15): 63 trades, liquido R$17,783.50; sinais da classe 63
+gap calculado das barras brutas == gap do CSV de fases em 120/120 dias; diferentes: []
+dias com trade: motor 63, simulador 62; so' no motor ['2026-09-11']; so' no simulador []
+trades em comum: 62; mesmo lado 62; mesma entrada 62; mesma quantidade 59
+P&L por contrato (motor - simulador a tick): mediana 0.0, media -1.1, min -49.0, max 60.0
+motivos de saida motor: {'signal': 39, 'stop': 24} | simulador: {'flatten': 38, 'stop': 24}
+trades com stop na barra do fill no simulador a tick (o motor nao ve): 1
+
+(B) motor + classe, M5 sem leilao + gap externo, flatten do motor: 63 trades, liquido R$17,446.50
+(B) x simulador em modo barra: IGUAIS = True (63 x 63 trades)

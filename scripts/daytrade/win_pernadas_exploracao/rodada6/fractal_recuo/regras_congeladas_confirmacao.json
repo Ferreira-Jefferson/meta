@@ -1,0 +1,8 @@
+{
+ "congelado_em": "2026-10-04, apos ler a descoberta jan-jun e ANTES de abrir jul-ago",
+ "R1": "SE forma a (G>F+10, repique>=50%, fundo mais alto) nas escalas 250/30, 500/65, 750/95 ENTAO P(sup) > ruina E > embaralhado (descoberta: +4,5/+3,9/+4,0pp vs ruina; ~+0,5/+1,7/+1,0 z vs emb). Papel: ACEITA/ALVO+",
+ "R2": "SE forma a2 (fundo mais alto, repique<50%) na escala 500/125 ENTAO P(sup) < ruina (descoberta -8,2pp, z -2,6 vs emb). Papel: REJEITA",
+ "R3": "SE limite em F, stop F-k (k=100,200), alvo E, escalas 500/125 e 500/65, ENTAO pts/op > embaralhado e z>2 (descoberta z 2,3/2,0 e 2,6/1,2). Papel: STOP+/ALVO+",
+ "R4": "SE qualquer celula de geometria (6 escalas x 6 k) tiver pts/op>0 com IC95 de dias acima de 0, aceita. Descoberta: 0/36",
+ "R5": "excesso (stop aguenta) real = embaralhado: P(exc<=100) ~ 62-78% conforme escala; nao ha forma que o reduza"
+}

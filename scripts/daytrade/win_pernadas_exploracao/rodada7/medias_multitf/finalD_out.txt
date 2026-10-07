@@ -1,0 +1,110 @@
+regra   janela     filtro   grupo   n  acerto    be    esp
+   R1     desc       hora  11-13h  37   0.270 0.236   25.7
+   R1     desc       hora    <11h  28   0.321 0.177  132.8
+   R1     desc       hora    >13h  52   0.269 0.216   35.7
+   R1     desc        v2x sem v2x 103   0.262 0.224   25.3
+   R1     desc        v2x     v2x  14   0.429 0.192  280.1
+   R1     desc pernada750 a favor  40   0.275 0.210   42.2
+   R1     desc pernada750  contra  77   0.286 0.208   62.8
+   R1 conf+set       hora  11-13h  15   0.000 1.000 -136.0
+   R1 conf+set       hora    <11h  23   0.174 0.171    2.8
+   R1 conf+set       hora    >13h  36   0.111 0.102    9.4
+   R1 conf+set        v2x sem v2x  64   0.109 0.133  -23.2
+   R1 conf+set        v2x     v2x  10   0.100 0.113  -15.5
+   R1 conf+set pernada750 a favor  25   0.120 0.105   15.0
+   R1 conf+set pernada750  contra  49   0.102 0.142  -41.1
+   R2     desc       hora  11-13h  29   0.276 0.258   12.1
+   R2     desc       hora    <11h  19   0.263 0.200   48.3
+   R2     desc       hora    >13h  43   0.349 0.206   95.0
+   R2     desc        v2x sem v2x  79   0.291 0.227   40.5
+   R2     desc        v2x     v2x  12   0.417 0.232  179.7
+   R2     desc pernada750 a favor  26   0.346 0.275   35.9
+   R2     desc pernada750  contra  65   0.292 0.204   68.0
+   R2 conf+set       hora  11-13h  17   0.000 1.000 -117.6
+   R2 conf+set       hora    <11h  17   0.235 0.130  112.1
+   R2 conf+set       hora    >13h  29   0.172 0.153   13.3
+   R2 conf+set        v2x sem v2x  52   0.135 0.135   -0.4
+   R2 conf+set        v2x     v2x  11   0.182 0.152   28.5
+   R2 conf+set pernada750 a favor  20   0.150 0.152   -1.8
+   R2 conf+set pernada750  contra  43   0.140 0.131    7.7
+   R3     desc       hora  11-13h  36   0.306 0.246   39.8
+   R3     desc       hora    <11h  24   0.292 0.167  120.3
+   R3     desc       hora    >13h  48   0.271 0.200   45.3
+   R3     desc        v2x sem v2x  94   0.266 0.222   27.4
+   R3     desc        v2x     v2x  14   0.429 0.192  280.1
+   R3     desc pernada750 a favor  36   0.278 0.245   16.8
+   R3     desc pernada750  contra  72   0.292 0.192   81.8
+   R3 conf+set       hora  11-13h  15   0.000 1.000 -126.3
+   R3 conf+set       hora    <11h  23   0.217 0.136   78.0
+   R3 conf+set       hora    >13h  32   0.094 0.091    3.3
+   R3 conf+set        v2x sem v2x  59   0.102 0.110   -8.3
+   R3 conf+set        v2x     v2x  11   0.182 0.133   44.8
+   R3 conf+set pernada750 a favor  23   0.087 0.088   -1.1
+   R3 conf+set pernada750  contra  47   0.128 0.127    0.7
+   R6     desc       hora  11-13h  57   0.175 0.140   37.6
+   R6     desc       hora    <11h  53   0.283 0.147  143.8
+   R6     desc       hora    >13h  93   0.237 0.231    3.2
+   R6     desc        v2x sem v2x 179   0.229 0.168   49.4
+   R6     desc        v2x     v2x  24   0.250 0.192   51.1
+   R6     desc pernada750 a favor  84   0.250 0.152   85.0
+   R6     desc pernada750  contra 118   0.220 0.188   25.5
+   R6     desc pernada750     sem   1   0.000 1.000  -92.0
+   R6 conf+set       hora  11-13h  32   0.094 0.218  -73.2
+   R6 conf+set       hora    <11h  50   0.180 0.209  -22.7
+   R6 conf+set       hora    >13h  47   0.149 0.185  -20.0
+   R6 conf+set        v2x sem v2x 106   0.132 0.204  -47.2
+   R6 conf+set        v2x     v2x  23   0.217 0.179   25.6
+   R6 conf+set pernada750 a favor  55   0.127 0.180  -35.3
+   R6 conf+set pernada750  contra  74   0.162 0.213  -33.5
+   R7     desc       hora  11-13h  28   0.179 0.176    3.2
+   R7     desc       hora    <11h  29   0.172 0.156   19.2
+   R7     desc       hora    >13h  47   0.191 0.219  -16.6
+   R7     desc        v2x sem v2x  91   0.132 0.191  -48.3
+   R7     desc        v2x     v2x  13   0.538 0.206  328.0
+   R7     desc pernada750 a favor  33   0.212 0.198    8.8
+   R7     desc pernada750  contra  71   0.169 0.175   -5.9
+   R7 conf+set       hora  11-13h  20   0.200 0.161   37.2
+   R7 conf+set       hora    <11h  17   0.176 0.090  135.1
+   R7 conf+set       hora    >13h  25   0.280 0.268    5.8
+   R7 conf+set        v2x sem v2x  54   0.241 0.159   69.9
+   R7 conf+set        v2x     v2x   8   0.125 0.237  -73.9
+   R7 conf+set pernada750 a favor  24   0.292 0.187   62.4
+   R7 conf+set pernada750  contra  38   0.184 0.143   44.4
+  R10     desc       hora  11-13h  52   0.154 0.162   -6.6
+  R10     desc       hora    <11h  37   0.135 0.192  -47.7
+  R10     desc       hora    >13h  67   0.179 0.195   -9.1
+  R10     desc        v2x sem v2x 140   0.171 0.181   -6.5
+  R10     desc        v2x     v2x  16   0.062 0.167 -113.2
+  R10     desc pernada750 a favor  42   0.167 0.261  -43.1
+  R10     desc pernada750  contra 112   0.161 0.169   -6.5
+  R10     desc pernada750     sem   2   0.000 1.000  -89.5
+  R10 conf+set       hora  11-13h  30   0.200 0.240  -25.2
+  R10 conf+set       hora    <11h  21   0.286 0.222   52.8
+  R10 conf+set       hora    >13h  29   0.172 0.189   -8.2
+  R10 conf+set        v2x sem v2x  64   0.219 0.209    6.5
+  R10 conf+set        v2x     v2x  16   0.188 0.223  -18.9
+  R10 conf+set pernada750 a favor  20   0.200 0.166   24.2
+  R10 conf+set pernada750  contra  60   0.217 0.226   -6.2
+
+RUINA/MAO R$250
+regra   janela   n  esp_pts  esp_R  S_med  perda_R  p_encolhido  mao  ruina_215ops  seq_perdas
+   R1     desc 117     55.8  11.16    152     31.5        0.248    1         0.493          10
+   R1 conf+set  74    -22.1  -4.43    134     26.5        0.121    0         1.000          17
+   R2     desc  91     58.8  11.76    142     30.6        0.263    1         0.399           8
+   R2 conf+set  63      4.7   0.93    115     23.3        0.139    1         0.837          16
+   R3     desc 108     60.1  12.03    142     29.5        0.247    1         0.434           9
+   R3 conf+set  70      0.1   0.01    114     22.6        0.114    1         0.876          12
+   R4     desc 121     34.5   6.90    141     29.8        0.242    1         0.573          10
+   R4 conf+set  77     -2.0  -0.40    113     23.2        0.144    0         1.000          17
+   R5     desc 168     43.8   8.76    143     28.7        0.212    1         0.590          17
+   R5 conf+set  97    -74.2 -14.83    136     28.2        0.161    0         1.000          22
+   R6     desc 203     49.6   9.92    140     28.1        0.212    1         0.556          29
+   R6 conf+set 129    -34.2  -6.85    126     26.3        0.170    0         1.000          17
+   R7     desc 104     -1.3  -0.26    163     31.7        0.183    0         1.000          11
+   R7 conf+set  62     51.4  10.28    141     28.0        0.188    1         0.555          13
+   R8     desc 100     45.6   9.12    149     31.0        0.248    1         0.521           9
+   R8 conf+set  68    -21.3  -4.27    136     27.6        0.147    0         1.000          18
+   R9     desc  97     38.2   7.63    253     47.7        0.230    1         0.775          14
+   R9 conf+set  42    -82.7 -16.54    284     52.9        0.283    0         1.000           9
+  R10     desc 156    -17.4  -3.48    125     26.2        0.170    0         1.000          19
+  R10 conf+set  80      1.4   0.29    127     27.4        0.211    1         0.831          14

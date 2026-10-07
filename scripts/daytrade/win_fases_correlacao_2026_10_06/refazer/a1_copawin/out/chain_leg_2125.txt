@@ -1,0 +1,17 @@
+[14:18:08] copawin_piso_sobrevivencia_2026_08_29
+[14:20:23] fim copawin_piso_sobrevivencia_2026_08_29 rc=0
+[14:20:23] copawin_dimensionamento_por_risco_2026_08_29
+[14:22:43] fim copawin_dimensionamento_por_risco_2026_08_29 rc=0
+[14:22:43] copawin_recomendacao_final_2026_09_11
+[14:36:52] fim copawin_recomendacao_final_2026_09_11 rc=0
+[14:36:52] copawin_candidato_a76_validacao_2026_09_11
+[14:39:47] fim copawin_candidato_a76_validacao_2026_09_11 rc=0
+[14:39:47] wdo_win_padrao_dia_horario_2026_09_04
+[14:40:14] fim wdo_win_padrao_dia_horario_2026_09_04 rc=0
+[14:40:14] wdo_win_filtro_dia_horario_impacto_2026_09_04
+[14:43:26] fim wdo_win_filtro_dia_horario_impacto_2026_09_04 rc=0
+[14:43:26] copawin_grade_constancia_2026_09_11
+[14:52:20] fim copawin_grade_constancia_2026_09_11 rc=0
+[14:52:20] copawin_finalistas_robustez_2026_09_11
+[15:18:29] fim copawin_finalistas_robustez_2026_09_11 rc=0
+[15:18:29] copawin_robustez_por_data_de_inicio_2026_09_11

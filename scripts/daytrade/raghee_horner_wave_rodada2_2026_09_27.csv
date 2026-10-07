@@ -1,0 +1,73 @@
+instrumento,familia,params,horizonte,n,alinhado_medio_brl,p2s_perm
+WDO@,K_periodo_alternativo,span=100,16,965,25.87517098445609,0.0117
+WIN@,J_rejection_candle,pavio>=40%,16,885,18.031186440677967,0.0132
+WIN@,J_rejection_candle,pavio>=60%,16,433,23.42032332563511,0.0241
+WDO@,H_mtf_diario_gatilho_m15,bias=diario(D-1) gatilho=m15,8,1588,-11.589471032745623,0.0527
+WIN@,J_rejection_candle,pavio>=40%,8,1212,8.17805280528053,0.0806
+WIN@,J_rejection_candle,pavio>=40%,4,1395,5.089749103942653,0.0922
+WIN@,J_rejection_candle,pavio>=60%,8,593,10.984148397976393,0.1089
+WIN@,L_banda_keltner,mult=1.0xATR15,16,2061,7.703444929645803,0.1115
+WDO@,H_mtf_diario_gatilho_m15,bias=diario(D-1) gatilho=m15,32,441,-33.54931972789125,0.1248
+WIN@,I_squat_candle_continuacao,range<=50%med20 vol<=med20,4,1250,-3.65728,0.1334
+WDO@,K_periodo_alternativo,span=50,16,1323,13.031753590324941,0.1339
+WDO@,I_squat_candle_continuacao,range<=50%med20 vol<=med20,4,1633,4.230061236987081,0.1445
+WIN@,G_wave_diaria,span=34d thr=0.25xATR,5,131,-108.44122137404582,0.1638
+WIN@,I_squat_candle_continuacao,range<=50%med20 vol<=med20,8,1109,-4.937060414788098,0.1749
+WIN@,L_banda_keltner,mult=1.5xATR15,16,2334,5.87814910025707,0.1833
+WDO@,J_rejection_candle,pavio>=40%,16,899,12.86698553948811,0.2009
+WIN@,G_wave_diaria,span=21d thr=0.5xATR,10,211,-117.47582938388626,0.2142
+WDO@,K_periodo_alternativo,span=100,8,1245,8.673285140562399,0.22
+WDO@,K_periodo_alternativo,span=13,16,2198,8.059303912647811,0.223
+WDO@,H_mtf_diario_gatilho_m15,bias=diario(D-1) gatilho=m15,16,1226,-11.086508972267678,0.2363
+WIN@,H_mtf_diario_gatilho_m15,bias=diario(D-1) gatilho=m15,16,1201,7.4647793505412166,0.2508
+WDO@,G_wave_diaria,span=34d thr=0.5xATR,3,184,-74.3471195652176,0.2557
+WIN@,H_mtf_diario_gatilho_m15,bias=diario(D-1) gatilho=m15,8,1607,4.6479153702551335,0.2723
+WDO@,K_periodo_alternativo,span=20,16,1823,8.287361492046058,0.2841
+WIN@,K_periodo_alternativo,span=100,8,1149,5.762750217580503,0.2949
+WIN@,G_wave_diaria,span=34d thr=0.25xATR,10,131,-124.31603053435117,0.3051
+WIN@,H_mtf_diario_gatilho_m15,bias=diario(D-1) gatilho=m15,32,433,15.223094688221707,0.3165
+WIN@,G_wave_diaria,span=34d thr=0.5xATR,5,181,-67.55027624309393,0.3211
+WDO@,L_banda_keltner,mult=1.5xATR15,16,2417,6.262834091849328,0.3399
+WDO@,L_banda_keltner,mult=1.5xATR15,8,3319,3.766486893642627,0.3512
+WIN@,G_wave_diaria,span=21d thr=0.5xATR,3,211,-42.49478672985783,0.3568
+WIN@,G_wave_diaria,span=21d thr=0.5xATR,5,211,-55.91658767772511,0.3691
+WIN@,G_wave_diaria,span=21d thr=0.25xATR,5,176,-54.94886363636363,0.4255
+WIN@,G_wave_diaria,span=21d thr=0.25xATR,10,176,-79.90909090909092,0.4285
+WDO@,G_wave_diaria,span=34d thr=0.5xATR,5,183,-70.72912568305975,0.4314
+WDO@,G_wave_diaria,span=21d thr=0.25xATR,3,181,-48.98734806629866,0.47
+WIN@,G_wave_diaria,span=34d thr=0.25xATR,3,131,-41.184732824427456,0.4909
+WDO@,K_periodo_alternativo,span=20,8,2505,3.0437485029940547,0.5169
+WIN@,K_periodo_alternativo,span=20,16,1808,3.4439159292035395,0.5188
+WIN@,L_banda_keltner,mult=1.5xATR15,8,3249,1.7321021852877805,0.5291
+WIN@,L_banda_keltner,mult=1.0xATR15,8,2855,1.813870402802101,0.551
+WDO@,I_squat_candle_continuacao,range<=50%med20 vol<=med20,8,1281,2.6033567525370005,0.578
+WDO@,J_rejection_candle,pavio>=40%,4,1369,-2.5270051132214633,0.5829
+WIN@,G_wave_diaria,span=34d thr=0.5xATR,10,181,-56.68618784530386,0.5843
+WIN@,G_wave_diaria,span=34d thr=0.5xATR,3,181,28.37348066298343,0.5972
+WIN@,K_periodo_alternativo,span=100,16,894,4.146756152125283,0.6105
+WDO@,J_rejection_candle,pavio>=60%,8,600,-4.327816666666589,0.6267
+WIN@,G_wave_diaria,span=21d thr=0.25xATR,3,176,-24.097727272727276,0.6313
+WDO@,G_wave_diaria,span=21d thr=0.25xATR,5,180,-38.82894444444446,0.6549
+WIN@,K_periodo_alternativo,span=20,8,2512,-1.4217356687898084,0.6581
+WIN@,K_periodo_alternativo,span=50,8,1707,1.824135910954892,0.6615
+WDO@,G_wave_diaria,span=34d thr=0.25xATR,10,143,48.548531468531486,0.682
+WDO@,G_wave_diaria,span=21d thr=0.5xATR,3,225,-23.838800000000102,0.6893
+WDO@,J_rejection_candle,pavio>=60%,16,435,5.490988505747088,0.6925
+WDO@,L_banda_keltner,mult=1.0xATR15,8,2889,-1.357255105572774,0.7532
+WIN@,K_periodo_alternativo,span=50,16,1269,-1.8945626477541377,0.7688
+WDO@,G_wave_diaria,span=21d thr=0.5xATR,10,224,30.627991071428614,0.7715
+WDO@,G_wave_diaria,span=34d thr=0.25xATR,5,143,-26.503006993006576,0.7757
+WDO@,J_rejection_candle,pavio>=60%,4,665,-1.7832330827068494,0.7775
+WIN@,I_squat_candle_continuacao,range<=50%med20 vol<=med20,16,733,-1.6788540245566166,0.7893
+WDO@,G_wave_diaria,span=21d thr=0.5xATR,5,224,21.515401785714314,0.7966
+WDO@,I_squat_candle_continuacao,range<=50%med20 vol<=med20,16,789,2.087148288973481,0.8123
+WIN@,K_periodo_alternativo,span=13,8,3029,-0.6585011554968636,0.8259
+WDO@,K_periodo_alternativo,span=13,8,3043,0.8211238908971632,0.8381
+WDO@,G_wave_diaria,span=21d thr=0.25xATR,10,180,21.380722222222083,0.8473
+WIN@,K_periodo_alternativo,span=13,16,2166,0.7274238227146812,0.8773
+WIN@,J_rejection_candle,pavio>=60%,4,688,-0.3415697674418598,0.9353
+WDO@,K_periodo_alternativo,span=50,8,1719,-0.38357184409548717,0.9442
+WDO@,L_banda_keltner,mult=1.0xATR15,16,2136,0.23103932584283884,0.9731
+WDO@,J_rejection_candle,pavio>=40%,8,1217,0.2246261298274407,0.9731
+WDO@,G_wave_diaria,span=34d thr=0.25xATR,3,144,-0.5055555555554747,0.9941
+WDO@,G_wave_diaria,span=34d thr=0.5xATR,10,182,-0.3034065934069196,0.998

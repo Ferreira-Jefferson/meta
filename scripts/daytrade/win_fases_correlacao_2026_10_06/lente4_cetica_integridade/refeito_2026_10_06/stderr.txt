@@ -1,0 +1,4 @@
+C:\Users\Jeffe\Documents\study\meta\.venv\Lib\site-packages\numpy\lib\_function_base_impl.py:2895: RuntimeWarning: invalid value encountered in subtract
+  X -= avg[:, None]
+C:\Users\Jeffe\Documents\study\meta\.venv\Lib\site-packages\numpy\lib\_function_base_impl.py:2900: RuntimeWarning: invalid value encountered in dot
+  c = dot(X, X_T.conj())

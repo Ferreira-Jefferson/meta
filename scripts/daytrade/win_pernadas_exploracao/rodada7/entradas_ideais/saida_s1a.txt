@@ -1,0 +1,283 @@
+geometria ref {'N': 5, 'piso': 1.0, 'K': 5, 'm': 150, 'S': 15} n 2241 base a favor 13.83% base contra 12.32%
+     variante       familia        grupo  auc_favor  auc_contra  auc_mes_med  auc_mes_dp  meses_mesmo_sinal dir_ou_so_anda
+  ctrl_ruido1   ctrl_ruido1     controle      0.506       0.535        0.507       0.031                  4    ANDA(ambos)
+  ctrl_ruido2   ctrl_ruido2     controle      0.524       0.533        0.525       0.029                  5    ANDA(ambos)
+      gap_atr       dia_gap          dia      0.503       0.514        0.486       0.046                  3    ANDA(ambos)
+      gap_abs    dia_gapabs          dia      0.519       0.495        0.525       0.063                  3        DIRECAO
+         rdia      dia_rdia          dia      0.527       0.470        0.526       0.054                  3        DIRECAO
+          seg       dia_seg          dia      0.486       0.509        0.483       0.042                  3        DIRECAO
+          sex       dia_sex          dia      0.471       0.503        0.476       0.023                  5        DIRECAO
+        E_age     est_E_age    estrutura      0.466       0.488        0.465       0.064                  3    ANDA(ambos)
+        depth     est_depth    estrutura      0.491       0.556        0.490       0.062                  4        DIRECAO
+         dext      est_dext  esticamento      0.499       0.546        0.487       0.061                  4        DIRECAO
+        dvwap     est_dvwap  esticamento      0.491       0.440        0.497       0.044                  3    ANDA(ambos)
+estic_1.0_200  est_esticado  esticamento      0.510       0.504        0.517       0.043                  4    ANDA(ambos)
+estic_1.0_300  est_esticado  esticamento      0.497       0.498        0.501       0.032                  3    ANDA(ambos)
+estic_1.0_400  est_esticado  esticamento      0.498       0.494        0.503       0.028                  3    ANDA(ambos)
+estic_1.5_200  est_esticado  esticamento      0.510       0.500        0.517       0.043                  4    ANDA(ambos)
+estic_1.5_300  est_esticado  esticamento      0.498       0.497        0.503       0.032                  3    ANDA(ambos)
+estic_1.5_400  est_esticado  esticamento      0.499       0.490        0.503       0.026                  3    ANDA(ambos)
+estic_2.0_200  est_esticado  esticamento      0.508       0.501        0.514       0.036                  4    ANDA(ambos)
+estic_2.0_300  est_esticado  esticamento      0.499       0.498        0.502       0.025                  3    ANDA(ambos)
+estic_2.0_400  est_esticado  esticamento      0.498       0.492        0.501       0.020                  3    ANDA(ambos)
+    fundo_dif est_fundo_dif    estrutura      0.532       0.505        0.539       0.076                  4    ANDA(ambos)
+          leg       est_leg    estrutura      0.516       0.423        0.510       0.056                  4        DIRECAO
+      leg_age   est_leg_age    estrutura      0.453       0.457        0.459       0.050                  5    ANDA(ambos)
+        n_piv     est_n_piv    estrutura      0.497       0.548        0.481       0.060                  4        DIRECAO
+        ordem     est_ordem    estrutura      0.510       0.433        0.507       0.046                  3        DIRECAO
+      pos_dia       est_pos  esticamento      0.512       0.449        0.523       0.060                  4        DIRECAO
+       raso_a      est_raso    estrutura      0.531       0.492        0.531       0.082                  4        DIRECAO
+       raso_b      est_raso    estrutura      0.524       0.511        0.524       0.038                  5    ANDA(ambos)
+       raso_c      est_raso    estrutura      0.511       0.507        0.509       0.034                  4    ANDA(ambos)
+       raso_d      est_raso    estrutura      0.505       0.514        0.504       0.071                  4    ANDA(ambos)
+        recuo     est_recuo    estrutura      0.495       0.502        0.488       0.049                  3        DIRECAO
+       sub_15       est_sub  esticamento      0.511       0.484        0.507       0.036                  4        DIRECAO
+       sub_30       est_sub  esticamento      0.511       0.484        0.514       0.051                  3        DIRECAO
+       sub_60       est_sub  esticamento      0.538       0.502        0.536       0.078                  3    ANDA(ambos)
+     dcorpo_5  fluxo_dcorpo        fluxo      0.500       0.532        0.502       0.055                  2    ANDA(ambos)
+    dcorpo_10  fluxo_dcorpo        fluxo      0.499       0.487        0.496       0.044                  3    ANDA(ambos)
+    dcorpo_30  fluxo_dcorpo        fluxo      0.521       0.475        0.527       0.055                  5        DIRECAO
+        tvr_5     fluxo_tvr        fluxo      0.493       0.485        0.493       0.057                  3    ANDA(ambos)
+       tvr_10     fluxo_tvr        fluxo      0.512       0.484        0.512       0.054                  4        DIRECAO
+       tvr_30     fluxo_tvr        fluxo      0.530       0.490        0.541       0.054                  5        DIRECAO
+  emaal_H1_s1     med_al_H1       medias      0.500       0.493        0.495       0.074                  4        DIRECAO
+  emaal_H1_s2     med_al_H1       medias      0.502       0.489        0.499       0.064                  4        DIRECAO
+  emaal_H1_s3     med_al_H1       medias      0.502       0.493        0.495       0.073                  4        DIRECAO
+  emaal_H1_s4     med_al_H1       medias      0.504       0.491        0.496       0.073                  4        DIRECAO
+ emaal_M15_s1    med_al_M15       medias      0.497       0.467        0.498       0.030                  4    ANDA(ambos)
+ emaal_M15_s2    med_al_M15       medias      0.496       0.466        0.496       0.029                  4    ANDA(ambos)
+ emaal_M15_s3    med_al_M15       medias      0.499       0.468        0.501       0.024                  3    ANDA(ambos)
+ emaal_M15_s4    med_al_M15       medias      0.495       0.470        0.494       0.026                  4    ANDA(ambos)
+  emaal_M5_s1     med_al_M5       medias      0.503       0.454        0.508       0.036                  4        DIRECAO
+  emaal_M5_s2     med_al_M5       medias      0.505       0.454        0.509       0.041                  3        DIRECAO
+  emaal_M5_s3     med_al_M5       medias      0.495       0.462        0.499       0.026                  2    ANDA(ambos)
+  emaal_M5_s4     med_al_M5       medias      0.497       0.468        0.502       0.028                  2    ANDA(ambos)
+  emadi_H1_s1     med_di_H1       medias      0.498       0.457        0.497       0.033                  4    ANDA(ambos)
+  emadi_H1_s2     med_di_H1       medias      0.498       0.457        0.497       0.032                  4    ANDA(ambos)
+  emadi_H1_s3     med_di_H1       medias      0.496       0.461        0.494       0.032                  4    ANDA(ambos)
+  emadi_H1_s4     med_di_H1       medias      0.497       0.460        0.495       0.032                  4    ANDA(ambos)
+ emadi_M15_s1    med_di_M15       medias      0.512       0.442        0.517       0.050                  4        DIRECAO
+ emadi_M15_s2    med_di_M15       medias      0.513       0.441        0.519       0.051                  4        DIRECAO
+ emadi_M15_s3    med_di_M15       medias      0.505       0.445        0.506       0.040                  4        DIRECAO
+ emadi_M15_s4    med_di_M15       medias      0.507       0.444        0.511       0.045                  4        DIRECAO
+  emadi_M5_s1     med_di_M5       medias      0.527       0.444        0.533       0.074                  3        DIRECAO
+  emadi_M5_s2     med_di_M5       medias      0.528       0.445        0.534       0.075                  3        DIRECAO
+  emadi_M5_s3     med_di_M5       medias      0.524       0.440        0.531       0.067                  4        DIRECAO
+  emadi_M5_s4     med_di_M5       medias      0.526       0.440        0.533       0.070                  4        DIRECAO
+      saldo_5   micro_saldo        micro      0.480       0.526        0.480       0.055                  3        DIRECAO
+     saldo_10   micro_saldo        micro      0.489       0.480        0.486       0.028                  5    ANDA(ambos)
+     saldo_15   micro_saldo        micro      0.490       0.482        0.487       0.030                  5    ANDA(ambos)
+     saldo_20   micro_saldo        micro      0.488       0.480        0.490       0.049                  4    ANDA(ambos)
+      hora_aj  relogio_hora      relogio      0.461       0.482        0.458       0.081                  3    ANDA(ambos)
+        m0030 relogio_m0030      relogio      0.506       0.481        0.504       0.014                  4        DIRECAO
+        manha relogio_manha      relogio      0.514       0.516        0.515       0.048                  3    ANDA(ambos)
+        tarde relogio_tarde      relogio      0.475       0.497        0.472       0.061                  4    ANDA(ambos)
+    vol30_300    vol_30_300 volatilidade      0.530       0.493        0.523       0.072                  4        DIRECAO
+     caixa_10     vol_caixa volatilidade      0.528       0.522        0.516       0.040                  4    ANDA(ambos)
+     caixa_20     vol_caixa volatilidade      0.549       0.514        0.541       0.044                  5    ANDA(ambos)
+     caixa_30     vol_caixa volatilidade      0.536       0.508        0.532       0.063                  5    ANDA(ambos)
+     caixa_60     vol_caixa volatilidade      0.547       0.507        0.534       0.076                  4    ANDA(ambos)
+       onda_5      vol_onda volatilidade      0.490       0.455        0.486       0.061                  4    ANDA(ambos)
+      onda_10      vol_onda volatilidade      0.511       0.453        0.512       0.051                  4        DIRECAO
+      onda_15      vol_onda volatilidade      0.524       0.461        0.527       0.054                  4        DIRECAO
+      onda_30      vol_onda volatilidade      0.523       0.470        0.527       0.050                  4        DIRECAO
+      onda_60      vol_onda volatilidade      0.535       0.470        0.538       0.034                  5        DIRECAO
+        rh_M5        vol_rh volatilidade      0.520       0.460        0.521       0.033                  4        DIRECAO
+       rh_M15        vol_rh volatilidade      0.536       0.483        0.535       0.038                  5        DIRECAO
+       vela_5      vol_vela volatilidade      0.489       0.481        0.485       0.054                  4    ANDA(ambos)
+      vela_10      vol_vela volatilidade      0.500       0.478        0.502       0.036                  3    ANDA(ambos)
+      vela_20      vol_vela volatilidade      0.517       0.479        0.525       0.036                  5        DIRECAO
+      vela_30      vol_vela volatilidade      0.523       0.471        0.531       0.025                  5        DIRECAO
+
+== quintis (acerto a favor, geometria ref, jan-jun; IC95 por bootstrap de dias; base 13.83%) ==
+caixa_20 Q1:9.0% [5.9;13.3] n=424 | Q2:13.8% [10.9;17.6] n=464 | Q3:15.5% [12.0;19.5] n=439 | Q4:15.4% [11.8;19.3] n=456 | Q5:15.3% [12.5;18.8] n=457
+caixa_60 Q1:8.7% [5.3;12.9] n=438 | Q2:13.2% [10.1;17.0] n=454 | Q3:16.7% [13.2;20.7] n=449 | Q4:16.1% [11.9;20.4] n=447 | Q5:14.4% [11.2;17.9] n=452
+leg_age Q1:15.1% [12.3;17.7] n=445 | Q2:15.7% [12.6;19.8] n=445 | Q3:14.7% [10.7;18.9] n=450 | Q4:15.3% [11.3;19.4] n=452 | Q5:8.5% [5.1;12.2] n=449
+hora_aj Q1:16.2% [12.4;20.7] n=419 | Q2:13.1% [10.4;16.3] n=464 | Q3:15.5% [11.7;19.7] n=400 | Q4:15.4% [11.5;19.8] n=487 | Q5:9.3% [6.3;12.4] n=471
+sub_60 Q1:11.1% [7.4;15.0] n=397 | Q2:11.1% [8.3;14.5] n=397 | Q3:14.4% [10.7;18.4] n=396 | Q4:16.1% [12.6;20.1] n=397 | Q5:14.1% [10.0;17.8] n=397
+caixa_30 Q1:7.6% [4.4;11.8] n=434 | Q2:16.8% [12.7;21.2] n=457 | Q3:16.0% [12.6;20.1] n=450 | Q4:13.6% [10.3;17.4] n=450 | Q5:14.9% [11.3;18.5] n=449
+rh_M15 Q1:10.9% [7.9;15.2] n=448 | Q2:13.2% [9.6;17.1] n=448 | Q3:14.7% [11.5;17.9] n=448 | Q4:15.6% [11.0;20.0] n=448 | Q5:14.7% [10.8;18.2] n=449
+onda_60 Q1:9.8% [6.6;13.8] n=448 | Q2:15.8% [11.7;19.7] n=448 | Q3:12.1% [8.8;15.7] n=448 | Q4:17.0% [13.2;20.8] n=448 | Q5:14.5% [10.8;18.6] n=448
+E_age Q1:14.9% [10.9;18.6] n=368 | Q2:16.3% [12.9;20.4] n=484 | Q3:13.1% [9.8;16.4] n=480 | Q4:14.7% [11.2;17.9] n=456 | Q5:10.2% [7.0;14.5] n=453
+fundo_dif Q1:10.3% [6.6;15.1] n=407 | Q2:15.7% [12.2;20.0] n=407 | Q3:14.5% [10.5;19.1] n=407 | Q4:16.2% [11.6;20.4] n=407 | Q5:15.2% [11.3;19.0] n=408
+raso_a =0.0:12.7% [10.6;15.0] n=1421 | =1.0:15.9% [12.7;19.3] n=820
+vol30_300 Q1:13.2% [9.4;17.7] n=448 | Q2:12.3% [9.1;16.1] n=448 | Q3:12.9% [9.0;17.4] n=448 | Q4:14.3% [10.8;17.9] n=448 | Q5:16.5% [12.8;20.6] n=449
+tvr_30 Q1:11.8% [8.3;15.7] n=448 | Q2:13.4% [9.5;16.8] n=448 | Q3:14.1% [10.7;17.7] n=448 | Q4:14.5% [11.1;18.5] n=448 | Q5:15.4% [12.0;18.9] n=448
+sex =0.0:14.7% [12.7;16.9] n=1790 | =1.0:10.4% [6.5;14.3] n=451
+
+== sensibilidade a limiares (acerto condicional - base, por mes: n de meses com lift>0), a favor ==
+vela M1 >= 1.5x (max 5 velas)              n=  916 acerto  13.9% [11.5;16.6] lift  +0.0pp meses+ 2/6
+vela M1 >= 2.0x (max 5 velas)              n=  372 acerto  11.8% [9.0;14.4] lift  -2.0pp meses+ 1/6
+vela M1 >= 2.5x (max 5 velas)              n=  174 acerto   9.2% [5.8;12.9] lift  -4.6pp meses+ 0/6
+vela M1 >= 3.0x (max 5 velas)              n=  101 acerto   8.9% [4.2;13.9] lift  -4.9pp meses+ 0/5
+vela M1 >= 1.5x (max 10 velas)             n= 1298 acerto  14.0% [11.9;16.6] lift  +0.2pp meses+ 3/6
+vela M1 >= 2.0x (max 10 velas)             n=  578 acerto  12.8% [9.8;16.3] lift  -1.0pp meses+ 4/6
+vela M1 >= 2.5x (max 10 velas)             n=  277 acerto  10.8% [7.1;14.3] lift  -3.0pp meses+ 1/6
+vela M1 >= 3.0x (max 10 velas)             n=  144 acerto  10.4% [6.2;16.1] lift  -3.4pp meses+ 2/6
+vela M1 >= 1.5x (max 20 velas)             n= 1673 acerto  15.4% [13.2;17.7] lift  +1.5pp meses+ 6/6
+vela M1 >= 2.0x (max 20 velas)             n=  852 acerto  12.6% [9.9;15.4] lift  -1.3pp meses+ 0/6
+vela M1 >= 2.5x (max 20 velas)             n=  427 acerto  11.0% [8.1;14.0] lift  -2.8pp meses+ 0/6
+vela M1 >= 3.0x (max 20 velas)             n=  227 acerto  11.5% [7.5;15.0] lift  -2.4pp meses+ 1/6
+vela M1 >= 1.5x (max 30 velas)             n= 1842 acerto  15.1% [13.0;17.3] lift  +1.3pp meses+ 6/6
+vela M1 >= 2.0x (max 30 velas)             n= 1044 acerto  13.8% [11.2;16.5] lift  -0.0pp meses+ 3/6
+vela M1 >= 2.5x (max 30 velas)             n=  540 acerto  13.3% [10.2;16.3] lift  -0.5pp meses+ 2/6
+vela M1 >= 3.0x (max 30 velas)             n=  300 acerto  13.0% [9.7;15.9] lift  -0.8pp meses+ 2/6
+caixa <= 100 pts em 10 min                 n=8 (pouco)
+caixa <= 150 pts em 10 min                 n=  124 acerto   8.9% [3.5;16.4] lift  -5.0pp meses+ 1/4
+caixa <= 200 pts em 10 min                 n=  330 acerto  10.6% [6.6;15.2] lift  -3.2pp meses+ 3/5
+caixa <= 300 pts em 10 min                 n=  876 acerto  12.4% [9.7;15.8] lift  -1.4pp meses+ 2/6
+caixa <= 100 pts em 20 min                 n=1 (pouco)
+caixa <= 150 pts em 20 min                 n=22 (pouco)
+caixa <= 200 pts em 20 min                 n=   84 acerto   8.3% [1.2;19.7] lift  -5.5pp meses+ 0/3
+caixa <= 300 pts em 20 min                 n=  371 acerto   8.1% [4.4;12.5] lift  -5.7pp meses+ 0/5
+caixa <= 100 pts em 30 min                 n=0 (pouco)
+caixa <= 150 pts em 30 min                 n=6 (pouco)
+caixa <= 200 pts em 30 min                 n=30 (pouco)
+caixa <= 300 pts em 30 min                 n=  192 acerto   5.2% [0.7;11.2] lift  -8.6pp meses+ 1/5
+caixa <= 100 pts em 60 min                 n=0 (pouco)
+caixa <= 150 pts em 60 min                 n=0 (pouco)
+caixa <= 200 pts em 60 min                 n=2 (pouco)
+caixa <= 300 pts em 60 min                 n=35 (pouco)
+saldo 5 velas >= q80                       n=  879 acerto  12.9% [10.6;15.4] lift  -1.0pp meses+ 2/6
+saldo 5 velas >= q90                       n=  225 acerto  12.0% [7.7;15.8] lift  -1.8pp meses+ 2/6
+saldo 5 velas <= q20                       n=  534 acerto  14.0% [10.8;18.1] lift  +0.2pp meses+ 3/6
+saldo 10 velas >= q80                      n=  612 acerto  12.3% [9.3;15.2] lift  -1.6pp meses+ 2/6
+saldo 10 velas >= q90                      n=  236 acerto  13.1% [7.6;18.5] lift  -0.7pp meses+ 2/6
+saldo 10 velas <= q20                      n=  846 acerto  14.4% [11.3;17.1] lift  +0.6pp meses+ 4/6
+saldo 15 velas >= q80                      n=  534 acerto  14.0% [10.7;17.4] lift  +0.2pp meses+ 3/6
+saldo 15 velas >= q90                      n=  284 acerto  12.7% [8.6;16.6] lift  -1.2pp meses+ 2/6
+saldo 15 velas <= q20                      n=  544 acerto  14.3% [11.2;18.1] lift  +0.5pp meses+ 5/6
+saldo 20 velas >= q80                      n=  455 acerto  12.1% [9.1;15.4] lift  -1.7pp meses+ 1/6
+saldo 20 velas >= q90                      n=  273 acerto  12.1% [8.4;15.9] lift  -1.7pp meses+ 1/6
+saldo 20 velas <= q20                      n=  528 acerto  14.0% [10.5;17.6] lift  +0.2pp meses+ 4/6
+raso_a                                     n=  820 acerto  15.9% [12.7;19.3] lift  +2.0pp meses+ 4/6
+raso_b                                     n=  733 acerto  15.6% [12.5;18.8] lift  +1.7pp meses+ 5/6
+raso_c                                     n=  673 acerto  14.7% [11.7;18.3] lift  +0.9pp meses+ 4/6
+raso_d                                     n=  639 acerto  14.2% [11.3;18.1] lift  +0.4pp meses+ 4/6
+esticado continua (dVWAP>1.0ATR, sub30>=200) n=  301 acerto  15.6% [11.3;20.3] lift  +1.8pp meses+ 4/6
+esticado continua (dVWAP>1.0ATR, sub30>=300) n=  244 acerto  13.1% [8.3;18.3] lift  -0.7pp meses+ 3/6
+esticado continua (dVWAP>1.0ATR, sub30>=400) n=  197 acerto  13.2% [8.5;18.5] lift  -0.6pp meses+ 3/6
+esticado continua (dVWAP>1.5ATR, sub30>=200) n=  250 acerto  16.0% [10.8;21.4] lift  +2.2pp meses+ 4/6
+esticado continua (dVWAP>1.5ATR, sub30>=300) n=  201 acerto  13.4% [8.2;19.2] lift  -0.4pp meses+ 3/6
+esticado continua (dVWAP>1.5ATR, sub30>=400) n=  162 acerto  13.6% [7.6;19.5] lift  -0.3pp meses+ 3/6
+esticado continua (dVWAP>2.0ATR, sub30>=200) n=  208 acerto  15.9% [10.6;21.7] lift  +2.0pp meses+ 4/6
+esticado continua (dVWAP>2.0ATR, sub30>=300) n=  164 acerto  13.4% [7.3;18.8] lift  -0.4pp meses+ 3/6
+esticado continua (dVWAP>2.0ATR, sub30>=400) n=  130 acerto  13.1% [7.0;18.8] lift  -0.8pp meses+ 3/6
+onda 5 min >= q80                          n=  448 acerto  12.3% [8.3;16.0] lift  -1.6pp meses+ 2/6
+onda 5 min <= q20                          n=  448 acerto  13.8% [10.0;18.4] lift  +0.0pp meses+ 3/6
+onda 10 min >= q80                         n=  448 acerto  12.7% [9.7;15.8] lift  -1.1pp meses+ 2/6
+onda 10 min <= q20                         n=  448 acerto  12.9% [9.5;17.2] lift  -0.9pp meses+ 2/6
+onda 15 min >= q80                         n=  448 acerto  13.6% [10.0;17.3] lift  -0.2pp meses+ 3/6
+onda 15 min <= q20                         n=  448 acerto  12.5% [9.1;16.6] lift  -1.3pp meses+ 1/6
+onda 30 min >= q80                         n=  448 acerto  13.8% [10.7;16.9] lift  +0.0pp meses+ 2/6
+onda 30 min <= q20                         n=  448 acerto  11.2% [7.6;14.8] lift  -2.7pp meses+ 1/6
+onda 60 min >= q80                         n=  448 acerto  14.5% [10.8;18.6] lift  +0.7pp meses+ 2/6
+onda 60 min <= q20                         n=  448 acerto   9.8% [6.6;13.8] lift  -4.0pp meses+ 0/6
+manha (<11h aj.)                           n=  638 acerto  15.0% [11.9;18.7] lift  +1.2pp meses+ 3/6
+tarde (>=13h aj.)                          n=  958 acerto  12.4% [9.8;15.1] lift  -1.4pp meses+ 2/6
+meio (11-13h aj.)                          n=  645 acerto  14.7% [11.6;18.2] lift  +0.9pp meses+ 4/6
+EMA M5 s1 alinhadas a favor (al=1)         n= 1260 acerto  14.0% [11.6;16.9] lift  +0.1pp meses+ 3/6
+EMA M5 s1 alinhadas contra (al=-1)         n=  466 acerto  13.7% [10.0;18.2] lift  -0.1pp meses+ 3/6
+EMA M5 s2 alinhadas a favor (al=1)         n= 1257 acerto  14.0% [11.6;16.7] lift  +0.2pp meses+ 3/6
+EMA M5 s2 alinhadas contra (al=-1)         n=  453 acerto  13.5% [9.7;17.3] lift  -0.4pp meses+ 3/6
+EMA M5 s3 alinhadas a favor (al=1)         n= 1221 acerto  13.7% [11.5;16.4] lift  -0.2pp meses+ 4/6
+EMA M5 s3 alinhadas contra (al=-1)         n=  527 acerto  14.4% [10.4;18.8] lift  +0.6pp meses+ 3/6
+EMA M5 s4 alinhadas a favor (al=1)         n= 1195 acerto  13.9% [11.7;16.5] lift  +0.1pp meses+ 4/6
+EMA M5 s4 alinhadas contra (al=-1)         n=  518 acerto  14.7% [10.7;18.2] lift  +0.8pp meses+ 3/6
+EMA M15 s1 alinhadas a favor (al=1)        n= 1048 acerto  13.8% [10.7;16.8] lift  +0.0pp meses+ 4/6
+EMA M15 s1 alinhadas contra (al=-1)        n=  740 acerto  14.2% [11.1;17.6] lift  +0.4pp meses+ 4/6
+EMA M15 s2 alinhadas a favor (al=1)        n= 1043 acerto  13.7% [10.6;16.6] lift  -0.1pp meses+ 3/6
+EMA M15 s2 alinhadas contra (al=-1)        n=  711 acerto  14.2% [10.6;17.7] lift  +0.4pp meses+ 4/6
+EMA M15 s3 alinhadas a favor (al=1)        n= 1007 acerto  13.9% [10.8;16.9] lift  +0.1pp meses+ 4/6
+EMA M15 s3 alinhadas contra (al=-1)        n=  742 acerto  14.0% [10.9;17.6] lift  +0.2pp meses+ 3/6
+EMA M15 s4 alinhadas a favor (al=1)        n=  984 acerto  13.5% [10.5;16.4] lift  -0.3pp meses+ 3/6
+EMA M15 s4 alinhadas contra (al=-1)        n=  734 acerto  14.0% [11.0;17.5] lift  +0.2pp meses+ 3/6
+EMA H1 s1 alinhadas a favor (al=1)         n=  933 acerto  14.4% [11.5;17.4] lift  +0.5pp meses+ 4/6
+EMA H1 s1 alinhadas contra (al=-1)         n=  800 acerto  14.5% [11.5;17.3] lift  +0.7pp meses+ 3/6
+EMA H1 s2 alinhadas a favor (al=1)         n=  933 acerto  14.5% [11.1;18.2] lift  +0.6pp meses+ 4/6
+EMA H1 s2 alinhadas contra (al=-1)         n=  791 acerto  14.4% [11.5;17.3] lift  +0.6pp meses+ 3/6
+EMA H1 s3 alinhadas a favor (al=1)         n=  994 acerto  14.0% [11.0;16.9] lift  +0.2pp meses+ 4/6
+EMA H1 s3 alinhadas contra (al=-1)         n=  836 acerto  13.8% [10.9;17.3] lift  -0.1pp meses+ 2/6
+EMA H1 s4 alinhadas a favor (al=1)         n=  976 acerto  14.2% [11.2;17.2] lift  +0.4pp meses+ 4/6
+EMA H1 s4 alinhadas contra (al=-1)         n=  829 acerto  13.9% [11.0;17.3] lift  +0.0pp meses+ 2/6
+
+== variantes escolhidas por familia (plato, jan-jun) ==
+relogio_hora       -> hora_aj
+relogio_manha      -> manha
+relogio_tarde      -> tarde
+relogio_m0030      -> m0030
+vol_rh             -> rh_M5
+vol_30_300         -> vol30_300
+vol_onda           -> onda_60
+vol_vela           -> vela_30
+vol_caixa          -> caixa_30
+est_recuo          -> recuo
+est_leg            -> leg
+est_leg_age        -> leg_age
+est_E_age          -> E_age
+est_ordem          -> ordem
+est_fundo_dif      -> fundo_dif
+est_n_piv          -> n_piv
+est_depth          -> depth
+est_raso           -> raso_a
+est_dvwap          -> dvwap
+est_sub            -> sub_60
+est_dext           -> dext
+est_pos            -> pos_dia
+est_esticado       -> estic_1.0_200
+micro_saldo        -> saldo_5
+fluxo_dcorpo       -> dcorpo_30
+fluxo_tvr          -> tvr_30
+med_al_M5          -> emaal_M5_s1
+med_di_M5          -> emadi_M5_s1
+med_al_M15         -> emaal_M15_s4
+med_di_M15         -> emadi_M15_s1
+med_al_H1          -> emaal_H1_s4
+med_di_H1          -> emadi_H1_s4
+dia_gap            -> gap_atr
+dia_gapabs         -> gap_abs
+dia_rdia           -> rdia
+dia_seg            -> seg
+dia_sex            -> sex
+ctrl_ruido1        -> ctrl_ruido1
+ctrl_ruido2        -> ctrl_ruido2
+
+== pares redundantes (|rho spearman| >= 0,6) entre as variantes escolhidas ==
+dvwap            pos_dia          +0.89
+dext             pos_dia          -0.87
+emaal_M15_s4     emadi_H1_s4      +0.87
+hora_aj          tarde            +0.86
+emaal_M5_s1      emadi_M15_s1     +0.81
+leg              ordem            +0.79
+hora_aj          manha            -0.78
+hora_aj          vol30_300        -0.78
+emadi_M5_s1      emadi_M15_s1     +0.77
+sub_60           emadi_M5_s1      +0.77
+vol30_300        caixa_30         +0.75
+tarde            vol30_300        -0.74
+rh_M5            onda_60          +0.73
+caixa_30         leg_age          -0.73
+emadi_M15_s1     emadi_H1_s4      +0.73
+caixa_30         E_age            -0.73
+recuo            depth            +0.72
+E_age            fundo_dif        -0.72
+pos_dia          emadi_M15_s1     +0.71
+vela_30          tvr_30           +0.71
+vol30_300        leg_age          -0.69
+dvwap            dext             -0.69
+emaal_H1_s4      emadi_H1_s4      +0.68
+dvwap            emadi_M15_s1     +0.66
+manha            vol30_300        +0.66
+rh_M5            tvr_30           +0.66
+hora_aj          leg_age          +0.65
+leg              depth            -0.65
+leg_age          E_age            +0.64
+leg_age          ordem            +0.63
+depth            emadi_M5_s1      -0.62
+emaal_M15_s4     emadi_M15_s1     +0.62
+pos_dia          emadi_M5_s1      +0.61
+onda_60          tvr_30           +0.60
+dext             emadi_M15_s1     -0.60
+caixa_30         tvr_30           +0.60
+
+num variantes na biblioteca: 88 familias: 39

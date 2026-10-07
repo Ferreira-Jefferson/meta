@@ -1,0 +1,21 @@
+﻿data;motivo;tratamento
+2026-04-15;"rolagem_contrato J26->M26 (vencimento); degrau ~+4.2k pts (estimado vs IBOV; contrato expirado nao disponivel no MT5; gap bruto 4415)";"excluir_de_variaveis_com_gap_e_pre_preco_D; pregao D intra-contrato ok"
+2026-06-17;"rolagem_contrato M26->Q26 (vencimento); degrau +3495 pts medido (WINV26-WIN$N: -7302 -> -3807); gap bruto 3350 => gap real ~ -145";"excluir_de_variaveis_com_gap_e_pre_preco_D; pregao D intra-contrato ok"
+2026-08-12;"rolagem_contrato Q26->V26 (vencimento); degrau +3465 pts medido (WIN$N == WINV26 exato a partir deste dia); gap bruto 3960 => gap real ~ +495";"excluir_de_variaveis_com_gap_e_pre_preco_D; pregao D intra-contrato ok"
+2026-07-31;"abertura atrasada REAL (1o negocio 12:34; indice a vista so abre 12:45; WINV26/WINZ26/WIN@/MT5 concordam); pregao parcial 351 min, volume 8.8M";"excluir_do_pregao_e_das_fases; nao e erro de dado"
+2026-08-03;delta% contra 31/07 (dia parcial) inflado: dV% +66%, dN% +55% (maior |z| do pregao);excluir_dos_delta%_de_volume/negocios/vn
+2026-09-24;"LACUNA DE TICKS na fonte CORRIGIDA em 2026-10-06: ticks do MT5 so comecam 09:14:00.161; CSV agora tem fonte=ticks+M1: leilao de abertura lido da 1a barra M1 (09:02; preco 186575, gap = -105 vs call 23/09; volume do leilao 53.915 ESTIMADO; negocios do leilao desconhecidos = 0), pregao ate 09:14 e volume/max/min completados pelo M1 (volume +937.380, total 19,50 mi); negocios do pregao NAO completados (subestimados)";"manter fora de tudo que use pre_negocios/vol por negocio/delta de negocios; pre_preco e pre_volume agora existem mas sao estimados: as lentes ORIGINAIS continuam excluindo o dia (mesmo metodo); sensibilidade com o dia incluso nas amostras 'completa/todos'"
+2026-09-25;"delta% contra 24/09: volume de 24/09 corrigido (19,50 mi, era 18,57 mi); negocios de 24/09 seguem subestimados";"delta% de volume ok; delta% de negocios/vn ainda excluir"
+2026-05-06;"lacuna de ticks 09:16-09:22 (7 min) CORRIGIDA em 2026-10-06 (fonte=ticks+M1): volume +371.437 (18,63 mi), maxima/minima completadas pelo M1; negocios NAO completados (subestimados)";"volume/amplitude/max/min ok; negocios e vol por negocio ainda subestimados neste dia (sensibilidade sem o dia)"
+2026-05-07;"delta% contra 06/05: volume de 06/05 corrigido; negocios ainda subestimados";"delta% de volume ok; delta% de negocios/vn tratar"
+2026-08-10;"lacuna de ticks 10:00-10:08 (8-9 min) CORRIGIDA em 2026-10-06 (fonte=ticks+M1): volume +405.264 (15,18 mi), maxima/minima completadas pelo M1; negocios NAO completados (subestimados)";"volume/amplitude/max/min ok; negocios e vol por negocio ainda subestimados neste dia (sensibilidade sem o dia)"
+2026-08-11;"delta% contra 10/08: volume de 10/08 corrigido; negocios ainda subestimados";"delta% de volume ok; delta% de negocios/vn tratar"
+2026-10-05;"gap REAL +17775 pts (+9,2%); NAO e rolagem (WIN$N==WINV26; WINZ26 tambem +8%; IBOV fecha +7,9% 192115->207277; 1o turno eleicao 04/10); leilao so cruza 09:04:16; ponto de altissima alavancagem (sd do gap 1889 -> 1043 sem ele)";"manter mas SEMPRE reportar com e sem; usar Spearman"
+2026-04-08;"gap REAL +4875 pts (+2,6%): fechamento WIN-vs-IBOV bate (+3620 vs +3942); nao e rolagem";"manter; outlier real, reportar com e sem"
+2026-04-22;1o pregao apos feriado Tiradentes (21/04): gap cobre 2 noites;tratar: gap em dia pos-feriado nao e comparavel a gap de 1 noite
+2026-05-04;1o pregao apos feriado 01/05 + fim de semana (gap de 3 noites);tratar: idem
+2026-06-05;1o pregao apos Corpus Christi (04/06);tratar: idem
+2026-09-08;"1o pregao apos 07/09 + fim de semana (gap de 3 noites; gap +2880, nao e rolagem)";tratar: idem
+2026-04-06;"1a linha: sem dia anterior (gap/delta% = NaN); dia anterior real 02/04 (03/04 sexta santa)";n efetivo de pares = 126
+2026-09-28;"pregao_hora_inicio 09:03:40 vs leilao 09:02:40 (1 min de diferenca; definicao de inicio do pregao)";"baixo risco; conferir se alguma lente usa hora de inicio"
+2026-04-10;"maxima do pregao no M1 e 415 pts acima da derivada dos ticks (volume bate); origem nao resolvida";"baixo risco; afeta amplitude deste dia"

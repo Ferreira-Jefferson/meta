@@ -1,0 +1,370 @@
+## A. TAXA-BASE  P(750 | recuou X do extremo)  [IC95 bootstrap por dia]
+TF | X | n | chegaram | taxa | IC95
+M5 | 150 | 2184 | 157 | 7.2% | 6.1%-8.3%
+M5 | 250 | 1486 | 157 | 10.6% | 8.9%-12.2%
+M5 | 375 | 861 | 157 | 18.2% | 15.6%-20.8%
+M5 | 500 | 482 | 157 | 32.6% | 28.6%-36.6%
+M15 | 150 | 958 | 208 | 21.7% | 19.0%-24.5%
+M15 | 250 | 783 | 208 | 26.6% | 23.8%-29.3%
+M15 | 375 | 567 | 208 | 36.7% | 33.7%-40.0%
+M15 | 500 | 409 | 208 | 50.9% | 46.3%-55.3%
+
+## B. M5 X=250  n=1486 sucessos=157 dias=21
+Spearman entre sinais: hora~r -0.78 | hora~leg -0.37 | r~leg 0.46
+h_bin: <10: 21% (n=261) ; 10-11: 19% (n=318) ; 11-13: 6% (n=425) ; >=13: 3% (n=482)
+r_bin: <0.9: 5% (n=531) ; 0.9-1.2: 7% (n=242) ; >=1.2: 16% (n=713)
+rh_bin: <0.9: 11% (n=455) ; 0.9-1.2: 9% (n=647) ; >=1.2: 12% (n=384)
+l_bin: <300: 9% (n=677) ; 300-750: 11% (n=682) ; 750-1500: 18% (n=118) ; >=1500: 44% (n=9)
+Celulas hora<11 / r bruto>=1.2 / leg>=750 : taxa (n)
+  early=1 vol=1 legbig=1 : 24% (n=91)
+  early=1 vol=1 legbig=0 : 16% (n=452)
+  early=1 vol=0 legbig=1 : 0% (n=1)
+  early=1 vol=0 legbig=0 : 57% (n=35)
+  early=0 vol=1 legbig=1 : 12% (n=17)
+  early=0 vol=1 legbig=0 : 9% (n=153)
+  early=0 vol=0 legbig=1 : 6% (n=18)
+  early=0 vol=0 legbig=0 : 3% (n=719)
+  efeito hora<11: marginal +15% -> dentro dos estratos dos outros dois +17%
+  efeito r bruto>=1.2: marginal +10% -> dentro dos estratos dos outros dois -3%
+  efeito leg>=750: marginal +10% -> dentro dos estratos dos outros dois +6%
+Celulas hora<11 / rh (sem relogio)>=1.2 / leg>=750 : taxa (n)
+  early=1 vol=1 legbig=1 : 28% (n=29)
+  early=1 vol=1 legbig=0 : 24% (n=101)
+  early=1 vol=0 legbig=1 : 22% (n=63)
+  early=1 vol=0 legbig=0 : 18% (n=386)
+  early=0 vol=1 legbig=1 : 9% (n=23)
+  early=0 vol=1 legbig=0 : 6% (n=231)
+  early=0 vol=0 legbig=1 : 8% (n=12)
+  early=0 vol=0 legbig=0 : 4% (n=641)
+  efeito hora<11: marginal +15% -> dentro dos estratos dos outros dois +15%
+  efeito rh (sem relogio)>=1.2: marginal +3% -> dentro dos estratos dos outros dois +3%
+  efeito leg>=750: marginal +10% -> dentro dos estratos dos outros dois +4%
+Logistica leave-one-day-out (AUC, logloss; base logloss 0.337):
+  hora           AUC 0.735  logloss 0.305
+  vol(r)         AUC 0.660  logloss 0.323
+  rh             AUC 0.501  logloss 0.338
+  leg            AUC 0.445  logloss 0.339
+  hora+vol       AUC 0.728  logloss 0.306
+  hora+rh        AUC 0.738  logloss 0.304
+  hora+leg       AUC 0.722  logloss 0.304
+  vol+leg        AUC 0.678  logloss 0.321
+  rh+leg         AUC 0.485  logloss 0.339
+  hora+vol+leg   AUC 0.719  logloss 0.306
+  hora+rh+leg    AUC 0.733  logloss 0.302
+  hora+vol+rh+leg AUC 0.731  logloss 0.301
+  coef padronizados (hora, log r, log rh, log leg): [-1.52 -0.29  0.38 -0.17]
+
+## B. M5 X=375  n=861 sucessos=157 dias=21
+Spearman entre sinais: hora~r -0.73 | hora~leg -0.26 | r~leg 0.39
+h_bin: <10: 31% (n=181) ; 10-11: 24% (n=245) ; 11-13: 11% (n=249) ; >=13: 8% (n=186)
+r_bin: <0.9: 13% (n=219) ; 0.9-1.2: 14% (n=137) ; >=1.2: 22% (n=505)
+rh_bin: <0.9: 20% (n=256) ; 0.9-1.2: 16% (n=370) ; >=1.2: 20% (n=235)
+l_bin: <300: 18% (n=324) ; 300-750: 17% (n=441) ; 750-1500: 24% (n=88) ; >=1500: 50% (n=8)
+Celulas hora<11 / r bruto>=1.2 / leg>=750 : taxa (n)
+  early=1 vol=1 legbig=1 : 30% (n=74)
+  early=1 vol=1 legbig=0 : 23% (n=319)
+  early=1 vol=0 legbig=1 : 0% (n=1)
+  early=1 vol=0 legbig=0 : 62% (n=32)
+  early=0 vol=1 legbig=1 : 18% (n=11)
+  early=0 vol=1 legbig=0 : 14% (n=101)
+  early=0 vol=0 legbig=1 : 10% (n=10)
+  early=0 vol=0 legbig=0 : 8% (n=313)
+  efeito hora<11: marginal +17% -> dentro dos estratos dos outros dois +20%
+  efeito r bruto>=1.2: marginal +9% -> dentro dos estratos dos outros dois -6%
+  efeito leg>=750: marginal +9% -> dentro dos estratos dos outros dois +6%
+Celulas hora<11 / rh (sem relogio)>=1.2 / leg>=750 : taxa (n)
+  early=1 vol=1 legbig=1 : 36% (n=22)
+  early=1 vol=1 legbig=0 : 30% (n=80)
+  early=1 vol=0 legbig=1 : 26% (n=53)
+  early=1 vol=0 legbig=0 : 25% (n=271)
+  early=0 vol=1 legbig=1 : 12% (n=16)
+  early=0 vol=1 legbig=0 : 11% (n=117)
+  early=0 vol=0 legbig=1 : 20% (n=5)
+  early=0 vol=0 legbig=0 : 9% (n=297)
+  efeito hora<11: marginal +17% -> dentro dos estratos dos outros dois +17%
+  efeito rh (sem relogio)>=1.2: marginal +2% -> dentro dos estratos dos outros dois +4%
+  efeito leg>=750: marginal +9% -> dentro dos estratos dos outros dois +3%
+Logistica leave-one-day-out (AUC, logloss; base logloss 0.475):
+  hora           AUC 0.679  logloss 0.449
+  vol(r)         AUC 0.592  logloss 0.468
+  rh             AUC 0.472  logloss 0.477
+  leg            AUC 0.470  logloss 0.476
+  hora+vol       AUC 0.670  logloss 0.451
+  hora+rh        AUC 0.683  logloss 0.447
+  hora+leg       AUC 0.660  logloss 0.446
+  vol+leg        AUC 0.625  logloss 0.463
+  rh+leg         AUC 0.478  logloss 0.477
+  hora+vol+leg   AUC 0.657  logloss 0.448
+  hora+rh+leg    AUC 0.676  logloss 0.443
+  hora+vol+rh+leg AUC 0.674  logloss 0.443
+  coef padronizados (hora, log r, log rh, log leg): [-1.07 -0.24  0.34 -0.21]
+
+## B. M15 X=250  n=783 sucessos=208 dias=21
+Spearman entre sinais: hora~r -0.61 | hora~leg -0.37 | r~leg 0.50
+h_bin: <10: 50% (n=110) ; 10-11: 55% (n=119) ; 11-13: 29% (n=205) ; >=13: 8% (n=349)
+r_bin: <0.9: 15% (n=304) ; 0.9-1.2: 18% (n=180) ; >=1.2: 43% (n=299)
+rh_bin: <0.9: 22% (n=254) ; 0.9-1.2: 28% (n=331) ; >=1.2: 29% (n=198)
+l_bin: <300: 19% (n=225) ; 300-750: 23% (n=368) ; 750-1500: 42% (n=168) ; >=1500: 55% (n=22)
+Celulas hora<11 / r bruto>=1.2 / leg>=750 : taxa (n)
+  early=1 vol=1 legbig=1 : 53% (n=74)
+  early=1 vol=1 legbig=0 : 49% (n=77)
+  early=1 vol=0 legbig=1 : 48% (n=29)
+  early=1 vol=0 legbig=0 : 59% (n=49)
+  early=0 vol=1 legbig=1 : 36% (n=55)
+  early=0 vol=1 legbig=0 : 34% (n=93)
+  early=0 vol=0 legbig=1 : 28% (n=32)
+  early=0 vol=0 legbig=0 : 7% (n=374)
+  efeito hora<11: marginal +37% -> dentro dos estratos dos outros dois +28%
+  efeito r bruto>=1.2: marginal +27% -> dentro dos estratos dos outros dois +14%
+  efeito leg>=750: marginal +22% -> dentro dos estratos dos outros dois +5%
+Celulas hora<11 / rh (sem relogio)>=1.2 / leg>=750 : taxa (n)
+  early=1 vol=1 legbig=1 : 52% (n=25)
+  early=1 vol=1 legbig=0 : 79% (n=19)
+  early=1 vol=0 legbig=1 : 51% (n=78)
+  early=1 vol=0 legbig=0 : 49% (n=107)
+  early=0 vol=1 legbig=1 : 24% (n=37)
+  early=0 vol=1 legbig=0 : 17% (n=117)
+  early=0 vol=0 legbig=1 : 40% (n=50)
+  early=0 vol=0 legbig=0 : 11% (n=350)
+  efeito hora<11: marginal +37% -> dentro dos estratos dos outros dois +34%
+  efeito rh (sem relogio)>=1.2: marginal +3% -> dentro dos estratos dos outros dois +5%
+  efeito leg>=750: marginal +22% -> dentro dos estratos dos outros dois +10%
+Logistica leave-one-day-out (AUC, logloss; base logloss 0.579):
+  hora           AUC 0.778  logloss 0.480
+  vol(r)         AUC 0.686  logloss 0.543
+  rh             AUC 0.483  logloss 0.581
+  leg            AUC 0.602  logloss 0.575
+  hora+vol       AUC 0.773  logloss 0.479
+  hora+rh        AUC 0.783  logloss 0.476
+  hora+leg       AUC 0.777  logloss 0.480
+  vol+leg        AUC 0.678  logloss 0.543
+  rh+leg         AUC 0.588  logloss 0.577
+  hora+vol+leg   AUC 0.777  logloss 0.479
+  hora+rh+leg    AUC 0.782  logloss 0.476
+  hora+vol+rh+leg AUC 0.781  logloss 0.477
+  coef padronizados (hora, log r, log rh, log leg): [-1.29  0.06  0.22 -0.09]
+
+## B. M15 X=375  n=567 sucessos=208 dias=21
+Spearman entre sinais: hora~r -0.48 | hora~leg -0.27 | r~leg 0.45
+h_bin: <10: 57% (n=97) ; 10-11: 62% (n=105) ; 11-13: 36% (n=163) ; >=13: 14% (n=202)
+r_bin: <0.9: 26% (n=182) ; 0.9-1.2: 23% (n=135) ; >=1.2: 52% (n=250)
+rh_bin: <0.9: 31% (n=183) ; 0.9-1.2: 39% (n=241) ; >=1.2: 39% (n=143)
+l_bin: <300: 29% (n=144) ; 300-750: 32% (n=265) ; 750-1500: 50% (n=139) ; >=1500: 63% (n=19)
+Celulas hora<11 / r bruto>=1.2 / leg>=750 : taxa (n)
+  early=1 vol=1 legbig=1 : 62% (n=63)
+  early=1 vol=1 legbig=0 : 58% (n=66)
+  early=1 vol=0 legbig=1 : 54% (n=26)
+  early=1 vol=0 legbig=0 : 62% (n=47)
+  early=0 vol=1 legbig=1 : 45% (n=44)
+  early=0 vol=1 legbig=0 : 42% (n=77)
+  early=0 vol=0 legbig=1 : 36% (n=25)
+  early=0 vol=0 legbig=0 : 12% (n=219)
+  efeito hora<11: marginal +35% -> dentro dos estratos dos outros dois +28%
+  efeito r bruto>=1.2: marginal +27% -> dentro dos estratos dos outros dois +16%
+  efeito leg>=750: marginal +21% -> dentro dos estratos dos outros dois +7%
+Celulas hora<11 / rh (sem relogio)>=1.2 / leg>=750 : taxa (n)
+  early=1 vol=1 legbig=1 : 62% (n=21)
+  early=1 vol=1 legbig=0 : 79% (n=19)
+  early=1 vol=0 legbig=1 : 59% (n=68)
+  early=1 vol=0 legbig=0 : 55% (n=94)
+  early=0 vol=1 legbig=1 : 29% (n=31)
+  early=0 vol=1 legbig=0 : 26% (n=72)
+  early=0 vol=0 legbig=1 : 53% (n=38)
+  early=0 vol=0 legbig=0 : 18% (n=224)
+  efeito hora<11: marginal +35% -> dentro dos estratos dos outros dois +32%
+  efeito rh (sem relogio)>=1.2: marginal +3% -> dentro dos estratos dos outros dois +5%
+  efeito leg>=750: marginal +21% -> dentro dos estratos dos outros dois +11%
+Logistica leave-one-day-out (AUC, logloss; base logloss 0.657):
+  hora           AUC 0.738  logloss 0.574
+  vol(r)         AUC 0.649  logloss 0.634
+  rh             AUC 0.471  logloss 0.660
+  leg            AUC 0.577  logloss 0.656
+  hora+vol       AUC 0.731  logloss 0.573
+  hora+rh        AUC 0.742  logloss 0.571
+  hora+leg       AUC 0.737  logloss 0.574
+  vol+leg        AUC 0.637  logloss 0.635
+  rh+leg         AUC 0.557  logloss 0.658
+  hora+vol+leg   AUC 0.731  logloss 0.575
+  hora+rh+leg    AUC 0.741  logloss 0.571
+  hora+vol+rh+leg AUC 0.739  logloss 0.573
+  coef padronizados (hora, log r, log rh, log leg): [-1.05  0.01  0.2  -0.01]
+
+## C. CHAVE (X=250). tempo ligado = fracao dos minutos de pregao; captura = fracao dos eventos que viram pernada com chave ON
+
+### M5: eventos=1486 pernadas=157 taxa-base=10.6%
+| chave | tempo ligado | pernadas capturadas | lift (captura/tempo) | P(pernada) ON | P(pernada) OFF |
+|---|---|---|---|---|---|
+| hora<9.5 | 5% | 29% | 5.83 | 32% (n=142) | 8% (n=1344) |
+| hora<10 | 10% | 36% | 3.48 | 21% (n=261) | 8% (n=1225) |
+| hora<10.5 | 16% | 53% | 3.39 | 20% (n=421) | 7% (n=1065) |
+| hora<11 | 21% | 73% | 3.50 | 20% (n=579) | 5% (n=907) |
+| hora<12 | 32% | 86% | 2.72 | 16% (n=832) | 3% (n=654) |
+| hora<13 | 42% | 90% | 2.14 | 14% (n=1004) | 3% (n=482) |
+| hora<14 | 53% | 93% | 1.76 | 13% (n=1133) | 3% (n=353) |
+| hora<15 | 64% | 96% | 1.51 | 12% (n=1245) | 2% (n=241) |
+| r>=0.8 | 53% | 89% | 1.67 | 13% (n=1042) | 4% (n=444) |
+| r>=1.0 | 35% | 79% | 2.23 | 14% (n=857) | 5% (n=629) |
+| r>=1.2 | 27% | 71% | 2.64 | 16% (n=713) | 6% (n=773) |
+| r>=1.4 | 21% | 61% | 2.93 | 17% (n=563) | 7% (n=923) |
+| r>=1.6 | 16% | 48% | 3.01 | 17% (n=434) | 8% (n=1052) |
+| r>=2.0 | 8% | 24% | 3.11 | 17% (n=222) | 9% (n=1264) |
+| rh>=0.9 (sem relogio) | 65% | 68% | 1.04 | 10% (n=1031) | 11% (n=455) |
+| rh>=1.0 (sem relogio) | 48% | 52% | 1.08 | 11% (n=768) | 11% (n=718) |
+| rh>=1.1 (sem relogio) | 33% | 44% | 1.34 | 13% (n=538) | 9% (n=948) |
+| rh>=1.2 (sem relogio) | 22% | 31% | 1.36 | 12% (n=384) | 10% (n=1102) |
+| rh>=1.4 (sem relogio) | 10% | 15% | 1.55 | 14% (n=167) | 10% (n=1319) |
+| rh>=1.6 (sem relogio) | 5% | 9% | 1.96 | 16% (n=85) | 10% (n=1401) |
+OR (hora<H ou r>=R) -- grade completa; fronteira = maior captura para cada tempo ligado
+| OR hora<9.5 | r>=1.0 | 36% | 88% | 2.47 | 16% (n=872) | 3% (n=614) |
+| OR hora<9.5 | r>=1.2 | 27% | 82% | 3.01 | 18% (n=731) | 4% (n=755) |
+| OR hora<9.5 | r>=1.4 | 21% | 73% | 3.48 | 20% (n=587) | 5% (n=899) |
+| OR hora<9.5 | r>=1.6 | 17% | 63% | 3.82 | 21% (n=466) | 6% (n=1020) |
+| OR hora<9.5 | r>=2.0 | 9% | 44% | 4.80 | 25% (n=273) | 7% (n=1213) |
+| OR hora<9.5 | r>=3.0 | 5% | 31% | 6.04 | 32% (n=148) | 8% (n=1338) |
+| OR hora<10 | r>=1.0 | 36% | 88% | 2.46 | 16% (n=874) | 3% (n=612) |
+| OR hora<10 | r>=1.2 | 27% | 82% | 2.97 | 17% (n=736) | 4% (n=750) |
+| OR hora<10 | r>=1.4 | 22% | 73% | 3.29 | 19% (n=607) | 5% (n=879) |
+| OR hora<10 | r>=1.6 | 18% | 64% | 3.45 | 20% (n=501) | 6% (n=985) |
+| OR hora<10 | r>=2.0 | 13% | 47% | 3.62 | 21% (n=349) | 7% (n=1137) |
+| OR hora<10 | r>=3.0 | 10% | 36% | 3.53 | 22% (n=262) | 8% (n=1224) |
+| OR hora<10.5 | r>=1.0 | 36% | 88% | 2.46 | 16% (n=874) | 3% (n=612) |
+| OR hora<10.5 | r>=1.2 | 28% | 83% | 2.99 | 17% (n=749) | 4% (n=737) |
+| OR hora<10.5 | r>=1.4 | 23% | 77% | 3.29 | 19% (n=643) | 4% (n=843) |
+| OR hora<10.5 | r>=1.6 | 21% | 70% | 3.39 | 19% (n=569) | 5% (n=917) |
+| OR hora<10.5 | r>=2.0 | 17% | 61% | 3.56 | 20% (n=472) | 6% (n=1014) |
+| OR hora<10.5 | r>=3.0 | 16% | 54% | 3.43 | 20% (n=422) | 7% (n=1064) |
+| OR hora<11 | r>=1.0 | 36% | 88% | 2.46 | 16% (n=874) | 3% (n=612) |
+| OR hora<11 | r>=1.2 | 28% | 83% | 2.99 | 17% (n=749) | 4% (n=737) |
+| OR hora<11 | r>=1.4 | 24% | 78% | 3.32 | 19% (n=649) | 4% (n=837) |
+| OR hora<11 | r>=1.6 | 22% | 75% | 3.40 | 19% (n=606) | 5% (n=880) |
+| OR hora<11 | r>=2.0 | 21% | 73% | 3.50 | 20% (n=579) | 5% (n=907) |
+| OR hora<11 | r>=3.0 | 21% | 73% | 3.50 | 20% (n=579) | 5% (n=907) |
+| OR hora<12 | r>=1.0 | 38% | 89% | 2.33 | 15% (n=917) | 3% (n=569) |
+| OR hora<12 | r>=1.2 | 33% | 89% | 2.65 | 16% (n=863) | 3% (n=623) |
+| OR hora<12 | r>=1.4 | 32% | 88% | 2.73 | 16% (n=846) | 3% (n=640) |
+| OR hora<12 | r>=1.6 | 32% | 86% | 2.70 | 16% (n=839) | 3% (n=647) |
+| OR hora<12 | r>=2.0 | 32% | 86% | 2.72 | 16% (n=832) | 3% (n=654) |
+| OR hora<12 | r>=3.0 | 32% | 86% | 2.72 | 16% (n=832) | 3% (n=654) |
+| OR hora<13 | r>=1.0 | 48% | 92% | 1.94 | 14% (n=1062) | 3% (n=424) |
+| OR hora<13 | r>=1.2 | 44% | 92% | 2.11 | 14% (n=1025) | 3% (n=461) |
+| OR hora<13 | r>=1.4 | 43% | 92% | 2.16 | 14% (n=1017) | 3% (n=469) |
+| OR hora<13 | r>=1.6 | 43% | 90% | 2.13 | 14% (n=1011) | 3% (n=475) |
+| OR hora<13 | r>=2.0 | 42% | 90% | 2.14 | 14% (n=1004) | 3% (n=482) |
+| OR hora<13 | r>=3.0 | 42% | 90% | 2.14 | 14% (n=1004) | 3% (n=482) |
+| OR hora<9.5 | rh>=1.0 | 50% | 69% | 1.37 | 13% (n=843) | 7% (n=643) |
+| OR hora<9.5 | rh>=1.2 | 27% | 55% | 2.04 | 17% (n=510) | 7% (n=976) |
+| OR hora<9.5 | rh>=1.4 | 15% | 41% | 2.82 | 21% (n=305) | 8% (n=1181) |
+| OR hora<10 | rh>=1.0 | 54% | 73% | 1.35 | 13% (n=908) | 7% (n=578) |
+| OR hora<10 | rh>=1.2 | 31% | 58% | 1.87 | 15% (n=598) | 7% (n=888) |
+| OR hora<10 | rh>=1.4 | 19% | 46% | 2.35 | 18% (n=407) | 8% (n=1079) |
+| OR hora<10.5 | rh>=1.0 | 57% | 80% | 1.42 | 13% (n=995) | 6% (n=491) |
+| OR hora<10.5 | rh>=1.2 | 35% | 70% | 1.99 | 15% (n=719) | 6% (n=767) |
+| OR hora<10.5 | rh>=1.4 | 24% | 61% | 2.51 | 17% (n=554) | 7% (n=932) |
+| OR hora<11 | rh>=1.0 | 60% | 89% | 1.49 | 13% (n=1080) | 4% (n=406) |
+| OR hora<11 | rh>=1.2 | 39% | 83% | 2.13 | 16% (n=833) | 4% (n=653) |
+| OR hora<11 | rh>=1.4 | 29% | 76% | 2.63 | 17% (n=689) | 5% (n=797) |
+| OR hora<12 | rh>=1.0 | 65% | 95% | 1.46 | 12% (n=1200) | 3% (n=286) |
+| OR hora<12 | rh>=1.2 | 48% | 93% | 1.94 | 14% (n=1039) | 2% (n=447) |
+| OR hora<12 | rh>=1.4 | 39% | 89% | 2.27 | 15% (n=932) | 3% (n=554) |
+| OR hora<13 | rh>=1.0 | 70% | 97% | 1.39 | 12% (n=1273) | 2% (n=213) |
+| OR hora<13 | rh>=1.2 | 56% | 96% | 1.71 | 13% (n=1163) | 2% (n=323) |
+| OR hora<13 | rh>=1.4 | 49% | 93% | 1.89 | 13% (n=1090) | 3% (n=396) |
+| AND hora<11 & r>=1.0 | 21% | 64% | 3.13 | 18% (n=562) | 6% (n=924) |
+| AND hora<11 & r>=1.2 | 20% | 61% | 3.05 | 17% (n=543) | 7% (n=943) |
+| AND hora<11 & r>=1.4 | 18% | 55% | 3.09 | 18% (n=493) | 7% (n=993) |
+| AND hora<13 & r>=1.0 | 30% | 77% | 2.56 | 15% (n=799) | 5% (n=687) |
+| AND hora<13 & r>=1.2 | 25% | 69% | 2.71 | 16% (n=692) | 6% (n=794) |
+| AND hora<13 & r>=1.4 | 20% | 59% | 2.92 | 17% (n=550) | 7% (n=936) |
+| AND hora<15 & r>=1.0 | 31% | 77% | 2.51 | 15% (n=812) | 5% (n=674) |
+| AND hora<15 & r>=1.2 | 25% | 69% | 2.70 | 16% (n=693) | 6% (n=793) |
+| AND hora<15 & r>=1.4 | 20% | 59% | 2.92 | 17% (n=550) | 7% (n=936) |
+
+### M15: eventos=783 pernadas=208 taxa-base=26.6%
+| chave | tempo ligado | pernadas capturadas | lift (captura/tempo) | P(pernada) ON | P(pernada) OFF |
+|---|---|---|---|---|---|
+| hora<9.5 | 5% | 17% | 3.42 | 65% (n=54) | 24% (n=729) |
+| hora<10 | 10% | 26% | 2.58 | 50% (n=110) | 23% (n=673) |
+| hora<10.5 | 16% | 43% | 2.75 | 53% (n=169) | 19% (n=614) |
+| hora<11 | 21% | 58% | 2.76 | 52% (n=229) | 16% (n=554) |
+| hora<12 | 32% | 77% | 2.45 | 48% (n=338) | 11% (n=445) |
+| hora<13 | 42% | 87% | 2.05 | 41% (n=434) | 8% (n=349) |
+| hora<14 | 53% | 90% | 1.70 | 36% (n=513) | 8% (n=270) |
+| hora<15 | 64% | 95% | 1.49 | 34% (n=588) | 6% (n=195) |
+| r>=0.8 | 60% | 85% | 1.43 | 32% (n=549) | 13% (n=234) |
+| r>=1.0 | 41% | 73% | 1.77 | 36% (n=415) | 15% (n=368) |
+| r>=1.2 | 28% | 62% | 2.19 | 43% (n=299) | 16% (n=484) |
+| r>=1.4 | 19% | 46% | 2.47 | 49% (n=197) | 19% (n=586) |
+| r>=1.6 | 10% | 25% | 2.46 | 46% (n=112) | 23% (n=671) |
+| r>=2.0 | 3% | 7% | 2.84 | 58% (n=26) | 25% (n=757) |
+| rh>=0.9 (sem relogio) | 66% | 73% | 1.10 | 29% (n=529) | 22% (n=254) |
+| rh>=1.0 (sem relogio) | 49% | 57% | 1.16 | 30% (n=399) | 23% (n=384) |
+| rh>=1.1 (sem relogio) | 34% | 39% | 1.15 | 29% (n=284) | 25% (n=499) |
+| rh>=1.2 (sem relogio) | 23% | 27% | 1.19 | 29% (n=198) | 26% (n=585) |
+| rh>=1.4 (sem relogio) | 9% | 12% | 1.25 | 28% (n=86) | 26% (n=697) |
+| rh>=1.6 (sem relogio) | 3% | 2% | 0.69 | 15% (n=26) | 27% (n=757) |
+OR (hora<H ou r>=R) -- grade completa; fronteira = maior captura para cada tempo ligado
+| OR hora<9.5 | r>=1.0 | 45% | 87% | 1.96 | 40% (n=453) | 8% (n=330) |
+| OR hora<9.5 | r>=1.2 | 33% | 78% | 2.38 | 47% (n=348) | 11% (n=435) |
+| OR hora<9.5 | r>=1.4 | 23% | 62% | 2.67 | 52% (n=249) | 15% (n=534) |
+| OR hora<9.5 | r>=1.6 | 15% | 42% | 2.78 | 52% (n=166) | 20% (n=617) |
+| OR hora<9.5 | r>=2.0 | 7% | 24% | 3.22 | 62% (n=80) | 22% (n=703) |
+| OR hora<9.5 | r>=3.0 | 5% | 17% | 3.42 | 65% (n=54) | 24% (n=729) |
+| OR hora<10 | r>=1.0 | 45% | 88% | 1.95 | 40% (n=457) | 8% (n=326) |
+| OR hora<10 | r>=1.2 | 35% | 80% | 2.32 | 46% (n=367) | 10% (n=416) |
+| OR hora<10 | r>=1.4 | 27% | 68% | 2.55 | 50% (n=286) | 13% (n=497) |
+| OR hora<10 | r>=1.6 | 20% | 50% | 2.51 | 48% (n=215) | 18% (n=568) |
+| OR hora<10 | r>=2.0 | 13% | 33% | 2.62 | 51% (n=135) | 21% (n=648) |
+| OR hora<10 | r>=3.0 | 10% | 26% | 2.58 | 50% (n=110) | 23% (n=673) |
+| OR hora<10.5 | r>=1.0 | 45% | 88% | 1.95 | 40% (n=457) | 8% (n=326) |
+| OR hora<10.5 | r>=1.2 | 35% | 81% | 2.32 | 45% (n=372) | 9% (n=411) |
+| OR hora<10.5 | r>=1.4 | 28% | 71% | 2.57 | 50% (n=295) | 12% (n=488) |
+| OR hora<10.5 | r>=1.6 | 22% | 58% | 2.59 | 49% (n=245) | 16% (n=538) |
+| OR hora<10.5 | r>=2.0 | 18% | 49% | 2.74 | 53% (n=190) | 18% (n=593) |
+| OR hora<10.5 | r>=3.0 | 16% | 43% | 2.75 | 53% (n=169) | 19% (n=614) |
+| OR hora<11 | r>=1.0 | 45% | 88% | 1.95 | 40% (n=457) | 8% (n=326) |
+| OR hora<11 | r>=1.2 | 35% | 83% | 2.34 | 46% (n=377) | 9% (n=406) |
+| OR hora<11 | r>=1.4 | 29% | 75% | 2.57 | 50% (n=317) | 11% (n=466) |
+| OR hora<11 | r>=1.6 | 26% | 66% | 2.58 | 49% (n=280) | 14% (n=503) |
+| OR hora<11 | r>=2.0 | 22% | 61% | 2.73 | 52% (n=244) | 15% (n=539) |
+| OR hora<11 | r>=3.0 | 21% | 58% | 2.76 | 52% (n=229) | 16% (n=554) |
+| OR hora<12 | r>=1.0 | 45% | 88% | 1.93 | 40% (n=460) | 8% (n=323) |
+| OR hora<12 | r>=1.2 | 37% | 83% | 2.25 | 44% (n=390) | 9% (n=393) |
+| OR hora<12 | r>=1.4 | 34% | 79% | 2.36 | 46% (n=355) | 10% (n=428) |
+| OR hora<12 | r>=1.6 | 32% | 77% | 2.40 | 47% (n=346) | 11% (n=437) |
+| OR hora<12 | r>=2.0 | 32% | 77% | 2.45 | 48% (n=338) | 11% (n=445) |
+| OR hora<12 | r>=3.0 | 32% | 77% | 2.45 | 48% (n=338) | 11% (n=445) |
+| OR hora<13 | r>=1.0 | 49% | 90% | 1.84 | 38% (n=493) | 7% (n=290) |
+| OR hora<13 | r>=1.2 | 44% | 88% | 2.00 | 41% (n=450) | 8% (n=333) |
+| OR hora<13 | r>=1.4 | 43% | 87% | 2.02 | 41% (n=440) | 8% (n=343) |
+| OR hora<13 | r>=1.6 | 42% | 87% | 2.04 | 41% (n=437) | 8% (n=346) |
+| OR hora<13 | r>=2.0 | 42% | 87% | 2.05 | 41% (n=434) | 8% (n=349) |
+| OR hora<13 | r>=3.0 | 42% | 87% | 2.05 | 41% (n=434) | 8% (n=349) |
+| OR hora<9.5 | rh>=1.0 | 52% | 66% | 1.28 | 32% (n=431) | 20% (n=352) |
+| OR hora<9.5 | rh>=1.2 | 27% | 41% | 1.52 | 35% (n=240) | 23% (n=543) |
+| OR hora<9.5 | rh>=1.4 | 14% | 28% | 2.00 | 42% (n=138) | 23% (n=645) |
+| OR hora<10 | rh>=1.0 | 54% | 69% | 1.27 | 31% (n=459) | 20% (n=324) |
+| OR hora<10 | rh>=1.2 | 31% | 48% | 1.54 | 35% (n=287) | 22% (n=496) |
+| OR hora<10 | rh>=1.4 | 19% | 37% | 1.92 | 40% (n=191) | 22% (n=592) |
+| OR hora<10.5 | rh>=1.0 | 57% | 77% | 1.35 | 33% (n=489) | 16% (n=294) |
+| OR hora<10.5 | rh>=1.2 | 36% | 62% | 1.72 | 38% (n=337) | 18% (n=446) |
+| OR hora<10.5 | rh>=1.4 | 24% | 52% | 2.15 | 44% (n=246) | 19% (n=537) |
+| OR hora<11 | rh>=1.0 | 60% | 84% | 1.39 | 33% (n=521) | 13% (n=262) |
+| OR hora<11 | rh>=1.2 | 40% | 72% | 1.80 | 39% (n=383) | 15% (n=400) |
+| OR hora<11 | rh>=1.4 | 29% | 64% | 2.24 | 45% (n=300) | 15% (n=483) |
+| OR hora<12 | rh>=1.0 | 66% | 93% | 1.41 | 33% (n=578) | 7% (n=205) |
+| OR hora<12 | rh>=1.2 | 48% | 86% | 1.80 | 38% (n=466) | 9% (n=317) |
+| OR hora<12 | rh>=1.4 | 38% | 81% | 2.14 | 43% (n=394) | 10% (n=389) |
+| OR hora<13 | rh>=1.0 | 71% | 96% | 1.36 | 32% (n=621) | 5% (n=162) |
+| OR hora<13 | rh>=1.2 | 55% | 91% | 1.65 | 36% (n=535) | 7% (n=248) |
+| OR hora<13 | rh>=1.4 | 48% | 89% | 1.85 | 38% (n=485) | 8% (n=298) |
+| AND hora<11 & r>=1.0 | 17% | 43% | 2.53 | 48% (n=187) | 20% (n=596) |
+| AND hora<11 & r>=1.2 | 14% | 37% | 2.67 | 51% (n=151) | 21% (n=632) |
+| AND hora<11 & r>=1.4 | 10% | 28% | 2.80 | 54% (n=109) | 22% (n=674) |
+| AND hora<13 & r>=1.0 | 34% | 69% | 2.02 | 40% (n=356) | 15% (n=427) |
+| AND hora<13 & r>=1.2 | 27% | 61% | 2.28 | 45% (n=283) | 16% (n=500) |
+| AND hora<13 & r>=1.4 | 18% | 46% | 2.55 | 50% (n=191) | 19% (n=592) |
+| AND hora<15 & r>=1.0 | 39% | 72% | 1.84 | 38% (n=396) | 15% (n=387) |
+| AND hora<15 & r>=1.2 | 28% | 62% | 2.22 | 44% (n=292) | 16% (n=491) |
+| AND hora<15 & r>=1.4 | 18% | 46% | 2.53 | 49% (n=194) | 19% (n=589) |
+
+NCOMP (celulas/modelos/chaves avaliados, sem contar bootstrap): 294

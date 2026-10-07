@@ -1,0 +1,15 @@
+H1 | share novas max/min em 9-12h | WIN real 0.6069 nulo 0.6080 z -0.1 n 3706 | anos certos 3/5 | WDO real 0.6119 nulo 0.6060 z 0.6 | a=False b=False c=False
+==> H1: NAO VALIDADO
+H2 | P(0 cruzamentos) | WIN real 0.2620 nulo 0.2294 z 1.8 n 1233 | anos certos 4/5 | WDO real 0.2119 nulo 0.2136 z -0.1 | a=False b=True c=False
+==> H2: NAO VALIDADO
+H3 | t=10:00|X=0.3|P(nao cruzar ate o fim) | WIN real 0.6816 nulo 0.6425 z 0.9 n 223 | anos certos 4/5 | WDO real 0.6960 nulo 0.6698 z 0.6 | a=False b=True c=False
+H3 | t=10:30|X=0.3|P(nao cruzar ate o fim) | WIN real 0.7799 nulo 0.7185 z 1.9 n 268 | anos certos 5/5 | WDO real 0.8008 nulo 0.7343 z 2.0 | a=False b=True c=False
+H3 | t=11:00|X=0.3|P(nao cruzar ate o fim) | WIN real 0.8475 nulo 0.7988 z 1.7 n 282 | anos certos 4/5 | WDO real 0.8326 nulo 0.7850 z 1.3 | a=False b=True c=False
+H3 | t=9:30|X=0.3|P(nao cruzar ate o fim) | WIN real 0.6292 nulo 0.5951 z 0.7 n 178 | anos certos 3/3 | WDO real 0.6125 nulo 0.5818 z 0.6 | a=False b=True c=False
+==> H3: NAO VALIDADO
+H4 | t=10:00|P(fecha mesmo lado da abertura) | WIN real 0.7473 nulo 0.7306 z 0.3 n 281 | anos certos 3/5 | WDO real 0.7965 nulo 0.8018 z -0.1 | a=False b=False c=False
+==> H4: NAO VALIDADO
+H5 | K=0.1|k=1|P(voltar ao outro lado) | WIN real 0.6916 nulo 0.7072 z -1.6 n 3677 | anos certos 2/5 | WDO real 0.7044 nulo 0.7175 z -1.5 | a=False b=False c=False
+H5 | K=0.1|k=2|P(voltar ao outro lado) | WIN real 0.4964 nulo 0.5307 z -2.3 n 2079 | anos certos 3/5 | WDO real 0.5269 nulo 0.5446 z -1.2 | a=False b=False c=False
+H5 | K=0.1|k=3|P(voltar ao outro lado) | WIN real 0.3748 nulo 0.4142 z -2.2 n 1518 | anos certos 4/5 | WDO real 0.4075 nulo 0.4281 z -1.1 | a=False b=True c=False
+==> H5: NAO VALIDADO

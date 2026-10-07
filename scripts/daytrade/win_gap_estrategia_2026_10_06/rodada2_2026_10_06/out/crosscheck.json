@@ -1,0 +1,92 @@
+[
+ {
+  "cel": "V2 r150 | S350",
+  "igual": true,
+  "n_motor": 48,
+  "n_sim": 48,
+  "liq_motor": 9114.5,
+  "liq_sim": 9114.5,
+  "barra_x_tick": {
+   "trades": 48,
+   "sai_na_barra_fill": 9,
+   "restantes_iguais": 39,
+   "restantes": 39,
+   "divergencias": []
+  }
+ },
+ {
+  "cel": "V2 r150 | S700 T700",
+  "igual": true,
+  "n_motor": 48,
+  "n_sim": 48,
+  "liq_motor": 2676.0,
+  "liq_sim": 2676.0,
+  "barra_x_tick": {
+   "trades": 48,
+   "sai_na_barra_fill": 7,
+   "restantes_iguais": 41,
+   "restantes": 41,
+   "divergencias": []
+  }
+ },
+ {
+  "cel": "V1 r150 | S.3atr T.6atr",
+  "igual": true,
+  "n_motor": 94,
+  "n_sim": 94,
+  "liq_motor": 12548.5,
+  "liq_sim": 12548.5,
+  "barra_x_tick": {
+   "trades": 94,
+   "sai_na_barra_fill": 3,
+   "restantes_iguais": 91,
+   "restantes": 91,
+   "divergencias": []
+  }
+ },
+ {
+  "cel": "V3 r150 | Sbar1 T2R",
+  "igual": true,
+  "n_motor": 31,
+  "n_sim": 31,
+  "liq_motor": -116.5,
+  "liq_sim": -116.5,
+  "barra_x_tick": {
+   "trades": 31,
+   "sai_na_barra_fill": 12,
+   "restantes_iguais": 19,
+   "restantes": 19,
+   "divergencias": []
+  }
+ },
+ {
+  "cel": "V2 r150 | S700 Tgap",
+  "igual": true,
+  "n_motor": 28,
+  "n_sim": 28,
+  "liq_motor": -354.0,
+  "liq_sim": -354.0,
+  "barra_x_tick": {
+   "trades": 28,
+   "sai_na_barra_fill": 7,
+   "restantes_iguais": 21,
+   "restantes": 21,
+   "divergencias": []
+  }
+ },
+ {
+  "cel": "V2 r150 | S1R1 T2R1",
+  "igual": true,
+  "n_motor": 48,
+  "n_sim": 48,
+  "liq_motor": 11940.0,
+  "liq_sim": 11940.0,
+  "barra_x_tick": {
+   "trades": 48,
+   "sai_na_barra_fill": 2,
+   "restantes_iguais": 46,
+   "restantes": 46,
+   "divergencias": []
+  }
+ }
+]

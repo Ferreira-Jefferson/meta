@@ -1,0 +1,37 @@
+
+## P(recuo supera | confirmado) por tercil ATR
+             n   real  formula   nulo     sd  nd    n_nulo      z  ic_lo  ic_hi
+vol                                                                            
+v1:baixa   958  0.814      0.8  0.811  0.009  40   922.250  0.361  0.786  0.845
+v2:media  1190  0.769      0.8  0.768  0.008  40  1151.775  0.113  0.746  0.791
+v3:alta   1866  0.781      0.8  0.774  0.009  40  1869.625  0.786  0.766  0.801
+
+## P(supera de primeira) por tercil ATR
+             n   real  formula   nulo     sd  nd    n_nulo      z  ic_lo  ic_hi
+vol                                                                            
+v1:baixa   656  0.479    0.539  0.482  0.020  40   650.975 -0.177  0.435  0.515
+v2:media   825  0.455    0.520  0.449  0.017  40   806.400  0.321  0.420  0.488
+v3:alta   1247  0.446    0.497  0.439  0.014  40  1247.175  0.487  0.417  0.470
+
+## P(alvo 5R antes do stop) por tercil ATR
+             n   real  formula   nulo     sd  nd    n_nulo      z  ic_lo  ic_hi
+vol                                                                            
+v1:baixa  1167  0.172    0.167  0.161  0.010  40  1186.425  1.155  0.146  0.200
+v2:media  1521  0.133    0.167  0.122  0.007  40  1513.225  1.637  0.106  0.163
+v3:alta   2333  0.147    0.167  0.147  0.007  40  2336.950  0.062  0.130  0.168
+
+## alcance por ATR
+             n   real   nulo     sd  nd    n_nulo      z
+vol                                                     
+v1:baixa   754  0.714  0.711  0.065  40   714.825  0.045
+v2:media  1061  0.575  0.562  0.030  40  1010.250  0.450
+v3:alta   1723  0.695  0.676  0.038  40  1735.900  0.505
+
+## raw x chain
+            real  chain(40)  sd_chain  raw(10)  sd_raw
+P(S|conf)  0.786      0.781     0.005    0.464   0.004
+P(1a)      0.456      0.452     0.009    0.392   0.005
+P(r2<r1)   0.501      0.497     0.024    0.441   0.014
+P(3R)      0.225      0.220     0.008    0.197   0.004
+P(5R)      0.141      0.138     0.008    0.062   0.001
+P(10R)     0.063      0.063     0.004    0.019   0.002

@@ -1,0 +1,595 @@
+split;grupo;alvo;n;media;mediana;amostra
+|gap| pts;alto;var;63;-252,22222222222223;-225,0;completa
+|gap| pts;baixo;var;62;-166,4516129032258;-272,5;completa
+|gap| pts;dif(alto-baixo);var;125;-85,77060931899643;0,8174365126974605;completa
+|gap| pts;alto;absvar;63;1284,126984126984;1125,0;completa
+|gap| pts;baixo;absvar;62;1777,9032258064517;1302,5;completa
+|gap| pts;dif(alto-baixo);absvar;125;-493,7762416794676;0,03119376124775045;completa
+|gap| pts;alto;amp;63;2917,3809523809523;2730,0;completa
+|gap| pts;baixo;amp;62;3217,6612903225805;2870,0;completa
+|gap| pts;dif(alto-baixo);amp;125;-300,2803379416282;0,11557688462307539;completa
+|gap| pts;alto;pr_vol;63;17081592,61904762;16921638,0;completa
+|gap| pts;baixo;pr_vol;62;17223777,822580647;17033741,5;completa
+|gap| pts;dif(alto-baixo);pr_vol;125;-142185,20353302732;0,6904619076184763;completa
+|gap| pts;alto;pr_neg;63;1788621,761904762;1820073,0;completa
+|gap| pts;baixo;pr_neg;62;1742909,3709677418;1802417,0;completa
+|gap| pts;dif(alto-baixo);pr_neg;125;45712,39093702007;0,4149170165966807;completa
+|gap| pts;alto;m5_1;63;-111,66666666666667;-165,0;completa
+|gap| pts;baixo;m5_1;62;-17,580645161290324;-70,0;completa
+|gap| pts;dif(alto-baixo);m5_1;125;-94,08602150537635;0,41091781643671266;completa
+|gap| pts;alto;m5_6;63;-202,06349206349208;-285,0;completa
+|gap| pts;baixo;m5_6;62;23,70967741935484;-100,0;completa
+|gap| pts;dif(alto-baixo);m5_6;125;-225,77316948284692;0,1897620475904819;completa
+|gap| pts;alto;gap_fechou;63;0,6031746031746031;1,0;completa
+|gap| pts;baixo;gap_fechou;61;0,8360655737704918;1,0;completa
+|gap| pts;dif(alto-baixo);gap_fechou;124;-0,2328909705958887;0,004999000199960008;completa
+|gap| pts;alto;gap_min_fecha;38;88,94736842105263;30,0;completa
+|gap| pts;baixo;gap_min_fecha;51;7,8431372549019605;0,0;completa
+|gap| pts;dif(alto-baixo);gap_min_fecha;89;81,10423116615067;0,0001999600079984003;completa
+|gap| pts;alto;extremo_1h;63;0,5714285714285714;1,0;completa
+|gap| pts;baixo;extremo_1h;62;0,7580645161290323;1,0;completa
+|gap| pts;dif(alto-baixo);extremo_1h;125;-0,18663594470046085;0,03719256148770246;completa
+|gap| pts;alto;gap_dir_x_var;63;-481,58730158730157;-590,0;completa
+|gap| pts;baixo;gap_dir_x_var;62;-383,5483870967742;-85,0;completa
+|gap| pts;dif(alto-baixo);gap_dir_x_var;125;-98,03891449052736;0,7926414717056589;completa
+|gap|/amp20;alto;var;58;-173,79310344827587;-285,0;completa
+|gap|/amp20;baixo;var;58;-325,6034482758621;-272,5;completa
+|gap|/amp20;dif(alto-baixo);var;116;151,81034482758622;0,68126374725055;completa
+|gap|/amp20;alto;absvar;58;1371,2068965517242;1140,0;completa
+|gap|/amp20;baixo;absvar;58;1678,8793103448277;1232,5;completa
+|gap|/amp20;dif(alto-baixo);absvar;116;-307,6724137931035;0,21475704859028194;completa
+|gap|/amp20;alto;amp;58;2967,7586206896553;2757,5;completa
+|gap|/amp20;baixo;amp;58;3188,793103448276;2870,0;completa
+|gap|/amp20;dif(alto-baixo);amp;116;-221,03448275862047;0,28834233153369326;completa
+|gap|/amp20;alto;pr_vol;58;17016902,827586208;16912939,0;completa
+|gap|/amp20;baixo;pr_vol;58;17159559,344827585;16940698,0;completa
+|gap|/amp20;dif(alto-baixo);pr_vol;116;-142656,51724137738;0,6908618276344731;completa
+|gap|/amp20;alto;pr_neg;58;1749885,5862068965;1780902,5;completa
+|gap|/amp20;baixo;pr_neg;58;1720866,5689655172;1780118,0;completa
+|gap|/amp20;dif(alto-baixo);pr_neg;116;29019,017241379246;0,6060787842431514;completa
+|gap|/amp20;alto;m5_1;58;-100,0;-150,0;completa
+|gap|/amp20;baixo;m5_1;58;-53,62068965517241;-102,5;completa
+|gap|/amp20;dif(alto-baixo);m5_1;116;-46,37931034482759;0,6960607878424315;completa
+|gap|/amp20;alto;m5_6;58;-164,56896551724137;-307,5;completa
+|gap|/amp20;baixo;m5_6;58;-17,5;-157,5;completa
+|gap|/amp20;dif(alto-baixo);m5_6;116;-147,06896551724137;0,42071585682863427;completa
+|gap|/amp20;alto;gap_fechou;58;0,6379310344827587;1,0;completa
+|gap|/amp20;baixo;gap_fechou;57;0,8245614035087719;1,0;completa
+|gap|/amp20;dif(alto-baixo);gap_fechou;115;-0,18663036902601327;0,03439312137572485;completa
+|gap|/amp20;alto;gap_min_fecha;37;86,21621621621621;5,0;completa
+|gap|/amp20;baixo;gap_min_fecha;47;7,23404255319149;0,0;completa
+|gap|/amp20;dif(alto-baixo);gap_min_fecha;84;78,98217366302472;0,0001999600079984003;completa
+|gap|/amp20;alto;extremo_1h;58;0,6206896551724138;1,0;completa
+|gap|/amp20;baixo;extremo_1h;58;0,7241379310344828;1,0;completa
+|gap|/amp20;dif(alto-baixo);extremo_1h;116;-0,10344827586206895;0,3111377724455109;completa
+|gap|/amp20;alto;gap_dir_x_var;58;-466,37931034482756;-532,5;completa
+|gap|/amp20;baixo;gap_dir_x_var;58;-221,4655172413793;-57,5;completa
+|gap|/amp20;dif(alto-baixo);gap_dir_x_var;116;-244,91379310344826;0,5124975004999001;completa
+vol leilao;alto;var;63;-175,15873015873015;-330,0;completa
+vol leilao;baixo;var;63;-246,11111111111111;-70,0;completa
+vol leilao;dif(alto-baixo);var;126;70,95238095238096;0,8464307138572286;completa
+vol leilao;alto;absvar;63;1469,7619047619048;980,0;completa
+vol leilao;baixo;absvar;63;1569,2857142857142;1305,0;completa
+vol leilao;dif(alto-baixo);absvar;126;-99,5238095238094;0,6710657868426315;completa
+vol leilao;alto;amp;63;3082,1428571428573;2795,0;completa
+vol leilao;baixo;amp;63;3027,8571428571427;2910,0;completa
+vol leilao;dif(alto-baixo);amp;126;54,285714285714675;0,7810437912417516;completa
+vol leilao;alto;pr_vol;63;17243829,746031746;16863456,0;completa
+vol leilao;baixo;pr_vol;63;17036739,222222224;17022166,0;completa
+vol leilao;dif(alto-baixo);pr_vol;126;207090,5238095224;0,5494901019796041;completa
+vol leilao;alto;pr_neg;63;1697244,142857143;1708260,0;completa
+vol leilao;baixo;pr_neg;63;1840739,4126984128;1886469,0;completa
+vol leilao;dif(alto-baixo);pr_neg;126;-143495,26984126982;0,006798640271945611;completa
+vol leilao;alto;m5_1;63;-6,031746031746032;-30,0;completa
+vol leilao;baixo;m5_1;63;-120,55555555555556;-160,0;completa
+vol leilao;dif(alto-baixo);m5_1;126;114,52380952380952;0,3191361727654469;completa
+vol leilao;alto;m5_6;63;-26,349206349206348;-65,0;completa
+vol leilao;baixo;m5_6;63;-145,0793650793651;-255,0;completa
+vol leilao;dif(alto-baixo);m5_6;126;118,73015873015873;0,49870025994801037;completa
+vol leilao;alto;gap_fechou;62;0,7580645161290323;1,0;completa
+vol leilao;baixo;gap_fechou;62;0,6774193548387096;1,0;completa
+vol leilao;dif(alto-baixo);gap_fechou;124;0,08064516129032262;0,42191561687662466;completa
+vol leilao;alto;gap_min_fecha;47;47,4468085106383;5,0;completa
+vol leilao;baixo;gap_min_fecha;42;36,904761904761905;0,0;completa
+vol leilao;dif(alto-baixo);gap_min_fecha;89;10,542046605876394;0,589882023595281;completa
+vol leilao;alto;extremo_1h;63;0,6984126984126984;1,0;completa
+vol leilao;baixo;extremo_1h;63;0,6190476190476191;1,0;completa
+vol leilao;dif(alto-baixo);extremo_1h;126;0,0793650793650793;0,4563087382523495;completa
+vol leilao;alto;gap_dir_x_var;62;-333,46774193548384;-337,5;completa
+vol leilao;baixo;gap_dir_x_var;63;-530,8730158730159;-560,0;completa
+vol leilao;dif(alto-baixo);gap_dir_x_var;125;197,40527393753206;0,5818836232753449;completa
+vol leilao/mediana20;alto;var;58;-377,58620689655174;-492,5;completa
+vol leilao/mediana20;baixo;var;58;-121,8103448275862;50,0;completa
+vol leilao/mediana20;dif(alto-baixo);var;116;-255,77586206896552;0,48570285942811436;completa
+vol leilao/mediana20;alto;absvar;58;1425,5172413793102;1050,0;completa
+vol leilao/mediana20;baixo;absvar;58;1624,5689655172414;1300,0;completa
+vol leilao/mediana20;dif(alto-baixo);absvar;116;-199,05172413793116;0,41451709658068386;completa
+vol leilao/mediana20;alto;amp;58;2969,7413793103447;2740,0;completa
+vol leilao/mediana20;baixo;amp;58;3186,810344827586;3027,5;completa
+vol leilao/mediana20;dif(alto-baixo);amp;116;-217,0689655172414;0,27474505098980206;completa
+vol leilao/mediana20;alto;pr_vol;58;17256917,29310345;17008297,5;completa
+vol leilao/mediana20;baixo;pr_vol;58;16919544,879310343;16862387,0;completa
+vol leilao/mediana20;dif(alto-baixo);pr_vol;116;337372,41379310563;0,35012997400519896;completa
+vol leilao/mediana20;alto;pr_neg;58;1721641,9827586208;1775275,5;completa
+vol leilao/mediana20;baixo;pr_neg;58;1749110,1724137932;1793404,0;completa
+vol leilao/mediana20;dif(alto-baixo);pr_neg;116;-27468,189655172406;0,6262747450509898;completa
+vol leilao/mediana20;alto;m5_1;58;-41,12068965517241;-40,0;completa
+vol leilao/mediana20;baixo;m5_1;58;-112,5;-147,5;completa
+vol leilao/mediana20;dif(alto-baixo);m5_1;116;71,37931034482759;0,5686862627474505;completa
+vol leilao/mediana20;alto;m5_6;58;-99,39655172413794;-147,5;completa
+vol leilao/mediana20;baixo;m5_6;58;-82,67241379310344;-325,0;completa
+vol leilao/mediana20;dif(alto-baixo);m5_6;116;-16,72413793103449;0,9262147570485902;completa
+vol leilao/mediana20;alto;gap_fechou;58;0,7413793103448276;1,0;completa
+vol leilao/mediana20;baixo;gap_fechou;57;0,7192982456140351;1,0;completa
+vol leilao/mediana20;dif(alto-baixo);gap_fechou;115;0,02208106473079252;0,8320335932813437;completa
+vol leilao/mediana20;alto;gap_min_fecha;43;50,23255813953488;5,0;completa
+vol leilao/mediana20;baixo;gap_min_fecha;41;33,41463414634146;0,0;completa
+vol leilao/mediana20;dif(alto-baixo);gap_min_fecha;84;16,817923993193418;0,41211757648470304;completa
+vol leilao/mediana20;alto;extremo_1h;58;0,6551724137931034;1,0;completa
+vol leilao/mediana20;baixo;extremo_1h;58;0,6896551724137931;1,0;completa
+vol leilao/mediana20;dif(alto-baixo);extremo_1h;116;-0,034482758620689724;0,846630673865227;completa
+vol leilao/mediana20;alto;gap_dir_x_var;58;-418,7931034482759;-337,5;completa
+vol leilao/mediana20;baixo;gap_dir_x_var;58;-269,05172413793105;-397,5;completa
+vol leilao/mediana20;dif(alto-baixo);gap_dir_x_var;116;-149,74137931034483;0,6862627474505099;completa
+neg leilao;alto;var;65;-492,0769230769231;-565,0;completa
+neg leilao;baixo;var;60;117,83333333333333;-72,5;completa
+neg leilao;dif(alto-baixo);var;125;-609,9102564102565;0,08138372325534893;completa
+neg leilao;alto;absvar;65;1375,3076923076924;1155,0;completa
+neg leilao;baixo;absvar;60;1674,0;1177,5;completa
+neg leilao;dif(alto-baixo);absvar;125;-298,6923076923076;0,20275944811037794;completa
+neg leilao;alto;amp;65;2978,0;2695,0;completa
+neg leilao;baixo;amp;60;3142,1666666666665;3027,5;completa
+neg leilao;dif(alto-baixo);amp;125;-164,16666666666652;0,3993201359728054;completa
+neg leilao;alto;pr_vol;65;17418486,123076923;17210865,0;completa
+neg leilao;baixo;pr_vol;60;16799489,25;16523579,0;completa
+neg leilao;dif(alto-baixo);pr_vol;125;618996,8730769232;0,07018596280743851;completa
+neg leilao;alto;pr_neg;65;1894237,0923076924;1883699,0;completa
+neg leilao;baixo;pr_neg;60;1633844,6;1572041,0;completa
+neg leilao;dif(alto-baixo);pr_neg;125;260392,4923076923;0,0001999600079984003;completa
+neg leilao;alto;m5_1;65;-103,3076923076923;-170,0;completa
+neg leilao;baixo;m5_1;60;-16,0;7,5;completa
+neg leilao;dif(alto-baixo);m5_1;125;-87,3076923076923;0,4549090181963607;completa
+neg leilao;alto;m5_6;65;-175,07692307692307;-230,0;completa
+neg leilao;baixo;m5_6;60;2,0833333333333335;-217,5;completa
+neg leilao;dif(alto-baixo);m5_6;125;-177,1602564102564;0,3141371725654869;completa
+neg leilao;alto;gap_fechou;64;0,6875;1,0;completa
+neg leilao;baixo;gap_fechou;59;0,7457627118644068;1,0;completa
+neg leilao;dif(alto-baixo);gap_fechou;123;-0,05826271186440679;0,5540891821635673;completa
+neg leilao;alto;gap_min_fecha;44;44,54545454545455;0,0;completa
+neg leilao;baixo;gap_min_fecha;44;41,36363636363637;0,0;completa
+neg leilao;dif(alto-baixo);gap_min_fecha;88;3,18181818181818;0,872625474905019;completa
+neg leilao;alto;extremo_1h;65;0,6153846153846154;1,0;completa
+neg leilao;baixo;extremo_1h;60;0,7166666666666667;1,0;completa
+neg leilao;dif(alto-baixo);extremo_1h;125;-0,10128205128205126;0,26514697060587883;completa
+neg leilao;alto;gap_dir_x_var;64;-439,765625;-512,5;completa
+neg leilao;baixo;gap_dir_x_var;60;-460,0;-445,0;completa
+neg leilao;dif(alto-baixo);gap_dir_x_var;124;20,234375;0,9540091981603679;completa
+vol/negocio;alto;var;63;51,19047619047619;-75,0;completa
+vol/negocio;baixo;var;62;-453,8709677419355;-657,5;completa
+vol/negocio;dif(alto-baixo);var;125;505,0614439324117;0,15776844631073786;completa
+vol/negocio;alto;absvar;63;1476,7460317460318;1095,0;completa
+vol/negocio;baixo;absvar;62;1561,2903225806451;1297,5;completa
+vol/negocio;dif(alto-baixo);absvar;125;-84,54429083461332;0,7236552689462108;completa
+vol/negocio;alto;amp;63;3101,2698412698414;2950,0;completa
+vol/negocio;baixo;amp;62;3011,6129032258063;2685,0;completa
+vol/negocio;dif(alto-baixo);amp;125;89,65693804403509;0,6466706658668266;completa
+vol/negocio;alto;pr_vol;63;16792158,333333332;16668714,0;completa
+vol/negocio;baixo;pr_vol;62;17455886,741935484;17444353,5;completa
+vol/negocio;dif(alto-baixo);pr_vol;125;-663728,408602152;0,05298940211957608;completa
+vol/negocio;alto;pr_neg;63;1604297,0634920634;1595782,0;completa
+vol/negocio;baixo;pr_neg;62;1936860,8387096773;1923199,0;completa
+vol/negocio;dif(alto-baixo);pr_neg;125;-332563,7752176139;0,0001999600079984003;completa
+vol/negocio;alto;m5_1;63;-11,825396825396826;15,0;completa
+vol/negocio;baixo;m5_1;62;-111,7741935483871;-152,5;completa
+vol/negocio;dif(alto-baixo);m5_1;125;99,94879672299028;0,3863227354529094;completa
+vol/negocio;alto;m5_6;63;-18,015873015873016;-255,0;completa
+vol/negocio;baixo;m5_6;62;-163,2258064516129;-207,5;completa
+vol/negocio;dif(alto-baixo);m5_6;125;145,20993343573988;0,40111977604479104;completa
+vol/negocio;alto;gap_fechou;63;0,7619047619047619;1,0;completa
+vol/negocio;baixo;gap_fechou;60;0,6666666666666666;1,0;completa
+vol/negocio;dif(alto-baixo);gap_fechou;123;0,09523809523809523;0,32373525294941013;completa
+vol/negocio;alto;gap_min_fecha;48;52,1875;0,0;completa
+vol/negocio;baixo;gap_min_fecha;40;31,875;0,0;completa
+vol/negocio;dif(alto-baixo);gap_min_fecha;88;20,3125;0,30553889222155567;completa
+vol/negocio;alto;extremo_1h;63;0,7301587301587301;1,0;completa
+vol/negocio;baixo;extremo_1h;62;0,5967741935483871;1,0;completa
+vol/negocio;dif(alto-baixo);extremo_1h;125;0,133384536610343;0,1267746450709858;completa
+vol/negocio;alto;gap_dir_x_var;63;-471,3492063492063;-450,0;completa
+vol/negocio;baixo;gap_dir_x_var;61;-427,04918032786884;-710,0;completa
+vol/negocio;dif(alto-baixo);gap_dir_x_var;124;-44,30002602133749;0,902619476104779;completa
+hora cruz (s apos 09:00) >= mediana;alto;var;63;-447,14285714285717;-605,0;completa
+hora cruz (s apos 09:00) >= mediana;baixo;var;63;25,873015873015873;95,0;completa
+hora cruz (s apos 09:00) >= mediana;dif(alto-baixo);var;126;-473,015873015873;0,1811637672465507;completa
+hora cruz (s apos 09:00) >= mediana;alto;absvar;63;1428,2539682539682;1100,0;completa
+hora cruz (s apos 09:00) >= mediana;baixo;absvar;63;1610,7936507936508;1305,0;completa
+hora cruz (s apos 09:00) >= mediana;dif(alto-baixo);absvar;126;-182,53968253968264;0,4419116176764647;completa
+hora cruz (s apos 09:00) >= mediana;alto;amp;63;2957,6190476190477;2675,0;completa
+hora cruz (s apos 09:00) >= mediana;baixo;amp;63;3152,3809523809523;3005,0;completa
+hora cruz (s apos 09:00) >= mediana;dif(alto-baixo);amp;126;-194,7619047619046;0,3033393321335733;completa
+hora cruz (s apos 09:00) >= mediana;alto;pr_vol;63;17141032,888888888;16863456,0;completa
+hora cruz (s apos 09:00) >= mediana;baixo;pr_vol;63;17139536,07936508;16971278,0;completa
+hora cruz (s apos 09:00) >= mediana;dif(alto-baixo);pr_vol;126;1496,8095238097012;0,9962007598480304;completa
+hora cruz (s apos 09:00) >= mediana;alto;pr_neg;63;1774500,365079365;1820073,0;completa
+hora cruz (s apos 09:00) >= mediana;baixo;pr_neg;63;1763483,1904761905;1802348,0;completa
+hora cruz (s apos 09:00) >= mediana;dif(alto-baixo);pr_neg;126;11017,17460317444;0,8522295540891822;completa
+hora cruz (s apos 09:00) >= mediana;alto;m5_1;63;-75,31746031746032;-135,0;completa
+hora cruz (s apos 09:00) >= mediana;baixo;m5_1;63;-51,26984126984127;-20,0;completa
+hora cruz (s apos 09:00) >= mediana;dif(alto-baixo);m5_1;126;-24,047619047619044;0,8392321535692862;completa
+hora cruz (s apos 09:00) >= mediana;alto;m5_6;63;-208,8095238095238;-285,0;completa
+hora cruz (s apos 09:00) >= mediana;baixo;m5_6;63;37,38095238095238;-175,0;completa
+hora cruz (s apos 09:00) >= mediana;dif(alto-baixo);m5_6;126;-246,19047619047618;0,15336932613477305;completa
+hora cruz (s apos 09:00) >= mediana;alto;gap_fechou;62;0,6935483870967742;1,0;completa
+hora cruz (s apos 09:00) >= mediana;baixo;gap_fechou;62;0,7419354838709677;1,0;completa
+hora cruz (s apos 09:00) >= mediana;dif(alto-baixo);gap_fechou;124;-0,048387096774193505;0,6826634673065387;completa
+hora cruz (s apos 09:00) >= mediana;alto;gap_min_fecha;43;34,18604651162791;0,0;completa
+hora cruz (s apos 09:00) >= mediana;baixo;gap_min_fecha;46;50,21739130434783;0,0;completa
+hora cruz (s apos 09:00) >= mediana;dif(alto-baixo);gap_min_fecha;89;-16,03134479271992;0,40731853629274145;completa
+hora cruz (s apos 09:00) >= mediana;alto;extremo_1h;63;0,6507936507936508;1,0;completa
+hora cruz (s apos 09:00) >= mediana;baixo;extremo_1h;63;0,6666666666666666;1,0;completa
+hora cruz (s apos 09:00) >= mediana;dif(alto-baixo);extremo_1h;126;-0,015873015873015817;1,0;completa
+hora cruz (s apos 09:00) >= mediana;alto;gap_dir_x_var;62;-815,6451612903226;-715,0;completa
+hora cruz (s apos 09:00) >= mediana;baixo;gap_dir_x_var;63;-56,34920634920635;-345,0;completa
+hora cruz (s apos 09:00) >= mediana;dif(alto-baixo);gap_dir_x_var;125;-759,2959549411162;0,026994601079784044;completa
+atraso >=90s;alto;var;85;-424,47058823529414;-565,0;completa
+atraso >=90s;baixo;var;41;232,6829268292683;470,0;completa
+atraso >=90s;dif(alto-baixo);var;126;-657,1535150645625;0,09018196360727855;completa
+atraso >=90s;alto;absvar;85;1482,9411764705883;1110,0;completa
+atraso >=90s;baixo;absvar;41;1595,3658536585365;1305,0;completa
+atraso >=90s;dif(alto-baixo);absvar;126;-112,42467718794819;0,6630673865226955;completa
+atraso >=90s;alto;amp;85;3036,1176470588234;2780,0;completa
+atraso >=90s;baixo;amp;41;3094,1463414634145;3050,0;completa
+atraso >=90s;dif(alto-baixo);amp;126;-58,02869440459108;0,7806438712257548;completa
+atraso >=90s;alto;pr_vol;85;17241424,647058822;16971278,0;completa
+atraso >=90s;baixo;pr_vol;41;16930603,658536587;16921638,0;completa
+atraso >=90s;dif(alto-baixo);pr_vol;126;310820,9885222353;0,3997200559888022;completa
+atraso >=90s;alto;pr_neg;85;1750976,5647058825;1775776,0;completa
+atraso >=90s;baixo;pr_neg;41;1806340,3902439023;1857829,0;completa
+atraso >=90s;dif(alto-baixo);pr_neg;126;-55363,82553801988;0,33833233353329334;completa
+atraso >=90s;alto;m5_1;85;-81,70588235294117;-135,0;completa
+atraso >=90s;baixo;m5_1;41;-25,121951219512194;15,0;completa
+atraso >=90s;dif(alto-baixo);m5_1;126;-56,583931133428976;0,6436712657468506;completa
+atraso >=90s;alto;m5_6;85;-143,47058823529412;-230,0;completa
+atraso >=90s;baixo;m5_6;41;34,02439024390244;-180,0;completa
+atraso >=90s;dif(alto-baixo);m5_6;126;-177,49497847919656;0,33673265346930614;completa
+atraso >=90s;alto;gap_fechou;84;0,7261904761904762;1,0;completa
+atraso >=90s;baixo;gap_fechou;40;0,7;1,0;completa
+atraso >=90s;dif(alto-baixo);gap_fechou;124;0,02619047619047621;0,8234353129374126;completa
+atraso >=90s;alto;gap_min_fecha;61;45,32786885245902;0,0;completa
+atraso >=90s;baixo;gap_min_fecha;28;36,25;0,0;completa
+atraso >=90s;dif(alto-baixo);gap_min_fecha;89;9,07786885245902;0,6686662667466506;completa
+atraso >=90s;alto;extremo_1h;85;0,6470588235294118;1,0;completa
+atraso >=90s;baixo;extremo_1h;41;0,6829268292682927;1,0;completa
+atraso >=90s;dif(alto-baixo);extremo_1h;126;-0,03586800573888094;0,8446310737852429;completa
+atraso >=90s;alto;gap_dir_x_var;84;-465,4761904761905;-450,0;completa
+atraso >=90s;baixo;gap_dir_x_var;41;-366,3414634146341;-470,0;completa
+atraso >=90s;dif(alto-baixo);gap_dir_x_var;125;-99,13472706155636;0,7918416316736653;completa
+gap>=0 (alto) vs <0;alto;var;69;-567,1014492753624;-760,0;completa
+gap>=0 (alto) vs <0;baixo;var;56;230,71428571428572;165,0;completa
+gap>=0 (alto) vs <0;dif(alto-baixo);var;125;-797,815734989648;0,02539492101579684;completa
+gap>=0 (alto) vs <0;alto;absvar;69;1511,4492753623188;1295,0;completa
+gap>=0 (alto) vs <0;baixo;absvar;56;1550,7142857142858;1117,5;completa
+gap>=0 (alto) vs <0;dif(alto-baixo);absvar;125;-39,26501035196702;0,8762247550489902;completa
+gap>=0 (alto) vs <0;alto;amp;69;3049,2028985507245;2730,0;completa
+gap>=0 (alto) vs <0;baixo;amp;56;3087,410714285714;2947,5;completa
+gap>=0 (alto) vs <0;dif(alto-baixo);amp;125;-38,20781573498971;0,8488302339532093;completa
+gap>=0 (alto) vs <0;alto;pr_vol;69;16954461,188405797;16855121,0;completa
+gap>=0 (alto) vs <0;baixo;pr_vol;56;17395656,035714287;17326751,0;completa
+gap>=0 (alto) vs <0;dif(alto-baixo);pr_vol;125;-441194,8473084904;0,21055788842231554;completa
+gap>=0 (alto) vs <0;alto;pr_neg;69;1755907,072463768;1778654,0;completa
+gap>=0 (alto) vs <0;baixo;pr_neg;56;1778320,7857142857;1817812,0;completa
+gap>=0 (alto) vs <0;dif(alto-baixo);pr_neg;125;-22413,713250517612;0,6896620675864827;completa
+gap>=0 (alto) vs <0;alto;m5_1;69;-119,05797101449275;-90,0;completa
+gap>=0 (alto) vs <0;baixo;m5_1;56;1,6071428571428572;-122,5;completa
+gap>=0 (alto) vs <0;dif(alto-baixo);m5_1;125;-120,66511387163561;0,3109378124375125;completa
+gap>=0 (alto) vs <0;alto;m5_6;69;-158,84057971014494;-255,0;completa
+gap>=0 (alto) vs <0;baixo;m5_6;56;-5,357142857142857;-182,5;completa
+gap>=0 (alto) vs <0;dif(alto-baixo);m5_6;125;-153,48343685300208;0,36312737452509497;completa
+gap>=0 (alto) vs <0;alto;gap_fechou;68;0,7205882352941176;1,0;completa
+gap>=0 (alto) vs <0;baixo;gap_fechou;56;0,7142857142857143;1,0;completa
+gap>=0 (alto) vs <0;dif(alto-baixo);gap_fechou;124;0,006302521008403339;1,0;completa
+gap>=0 (alto) vs <0;alto;gap_min_fecha;49;47,44897959183673;5,0;completa
+gap>=0 (alto) vs <0;baixo;gap_min_fecha;40;36,375;0,0;completa
+gap>=0 (alto) vs <0;dif(alto-baixo);gap_min_fecha;89;11,073979591836732;0,5746850629874025;completa
+gap>=0 (alto) vs <0;alto;extremo_1h;69;0,6666666666666666;1,0;completa
+gap>=0 (alto) vs <0;baixo;extremo_1h;56;0,6607142857142857;1,0;completa
+gap>=0 (alto) vs <0;dif(alto-baixo);extremo_1h;125;0,005952380952380931;1,0;completa
+gap>=0 (alto) vs <0;alto;gap_dir_x_var;69;-597,1014492753624;-760,0;completa
+gap>=0 (alto) vs <0;baixo;gap_dir_x_var;56;-230,71428571428572;-165,0;completa
+gap>=0 (alto) vs <0;dif(alto-baixo);gap_dir_x_var;125;-366,38716356107665;0,3049390121975605;completa
+|gap| pts;alto;var;60;-160,08333333333334;-117,5;limpa
+|gap| pts;baixo;var;60;-128,91666666666666;-252,5;limpa
+|gap| pts;dif(alto-baixo);var;120;-31,166666666666686;0,9324135172965407;limpa
+|gap| pts;alto;absvar;60;1243,5833333333333;1117,5;limpa
+|gap| pts;baixo;absvar;60;1794,0833333333333;1302,5;limpa
+|gap| pts;dif(alto-baixo);absvar;120;-550,5;0,021795640871825634;limpa
+|gap| pts;alto;amp;60;2886,4166666666665;2710,0;limpa
+|gap| pts;baixo;amp;60;3233,1666666666665;2897,5;limpa
+|gap| pts;dif(alto-baixo);amp;120;-346,75;0,07478504299140172;limpa
+|gap| pts;alto;pr_vol;60;17037819,0;16924706,5;limpa
+|gap| pts;baixo;pr_vol;60;17181556,2;16987893,5;limpa
+|gap| pts;dif(alto-baixo);pr_vol;120;-143737,19999999925;0,6842631473705258;limpa
+|gap| pts;alto;pr_neg;60;1770681,8166666667;1812787,0;limpa
+|gap| pts;baixo;pr_neg;60;1739753,4166666667;1802417,0;limpa
+|gap| pts;dif(alto-baixo);pr_neg;120;30928,399999999907;0,5612877424515097;limpa
+|gap| pts;alto;m5_1;60;-56,25;-40,0;limpa
+|gap| pts;baixo;m5_1;60;-22,583333333333332;-70,0;limpa
+|gap| pts;dif(alto-baixo);m5_1;120;-33,66666666666667;0,7758448310337932;limpa
+|gap| pts;alto;m5_6;60;-136,33333333333334;-242,5;limpa
+|gap| pts;baixo;m5_6;60;2,1666666666666665;-157,5;limpa
+|gap| pts;dif(alto-baixo);m5_6;120;-138,5;0,43171365726854627;limpa
+|gap| pts;alto;gap_fechou;60;0,65;1,0;limpa
+|gap| pts;baixo;gap_fechou;59;0,8305084745762712;1,0;limpa
+|gap| pts;dif(alto-baixo);gap_fechou;119;-0,18050847457627117;0,032993401319736056;limpa
+|gap| pts;alto;gap_min_fecha;39;86,66666666666667;25,0;limpa
+|gap| pts;baixo;gap_min_fecha;49;8,16326530612245;0,0;limpa
+|gap| pts;dif(alto-baixo);gap_min_fecha;88;78,50340136054422;0,0001999600079984003;limpa
+|gap| pts;alto;extremo_1h;60;0,6;1,0;limpa
+|gap| pts;baixo;extremo_1h;60;0,7666666666666667;1,0;limpa
+|gap| pts;dif(alto-baixo);extremo_1h;120;-0,16666666666666674;0,07678464307138572;limpa
+|gap| pts;alto;gap_dir_x_var;60;-368,9166666666667;-487,5;limpa
+|gap| pts;baixo;gap_dir_x_var;60;-439,4166666666667;-175,0;limpa
+|gap| pts;dif(alto-baixo);gap_dir_x_var;120;70,5;0,8480303939212157;limpa
+|gap|/amp20;alto;var;56;-72,32142857142857;-117,5;limpa
+|gap|/amp20;baixo;var;56;-306,1607142857143;-272,5;limpa
+|gap|/amp20;dif(alto-baixo);var;112;233,83928571428572;0,5290941811637673;limpa
+|gap|/amp20;alto;absvar;56;1312,5;1097,5;limpa
+|gap|/amp20;baixo;absvar;56;1707,767857142857;1232,5;limpa
+|gap|/amp20;dif(alto-baixo);absvar;112;-395,2678571428571;0,1221755648870226;limpa
+|gap|/amp20;alto;amp;56;2917,0535714285716;2710,0;limpa
+|gap|/amp20;baixo;amp;56;3212,410714285714;2897,5;limpa
+|gap|/amp20;dif(alto-baixo);amp;112;-295,35714285714266;0,14897020595880825;limpa
+|gap|/amp20;alto;pr_vol;56;16919809,39285714;16912939,0;limpa
+|gap|/amp20;baixo;pr_vol;56;17121817,410714287;16904371,0;limpa
+|gap|/amp20;dif(alto-baixo);pr_vol;112;-202008,01785714552;0,5770845830833833;limpa
+|gap|/amp20;alto;pr_neg;56;1723047,142857143;1776714,5;limpa
+|gap|/amp20;baixo;pr_neg;56;1723493,2142857143;1793404,0;limpa
+|gap|/amp20;dif(alto-baixo);pr_neg;112;-446,07142857136205;0,9944011197760448;limpa
+|gap|/amp20;alto;m5_1;56;-46,785714285714285;-40,0;limpa
+|gap|/amp20;baixo;m5_1;56;-60,80357142857143;-102,5;limpa
+|gap|/amp20;dif(alto-baixo);m5_1;112;14,017857142857146;0,9190161967606478;limpa
+|gap|/amp20;alto;m5_6;56;-116,42857142857143;-257,5;limpa
+|gap|/amp20;baixo;m5_6;56;-31,964285714285715;-250,0;limpa
+|gap|/amp20;dif(alto-baixo);m5_6;112;-84,46428571428572;0,648870225954809;limpa
+|gap|/amp20;alto;gap_fechou;56;0,6785714285714286;1,0;limpa
+|gap|/amp20;baixo;gap_fechou;55;0,8181818181818182;1,0;limpa
+|gap|/amp20;dif(alto-baixo);gap_fechou;111;-0,13961038961038963;0,1251749650069986;limpa
+|gap|/amp20;alto;gap_min_fecha;38;85,0;15,0;limpa
+|gap|/amp20;baixo;gap_min_fecha;45;6,666666666666667;0,0;limpa
+|gap|/amp20;dif(alto-baixo);gap_min_fecha;83;78,33333333333333;0,0001999600079984003;limpa
+|gap|/amp20;alto;extremo_1h;56;0,625;1,0;limpa
+|gap|/amp20;baixo;extremo_1h;56;0,75;1,0;limpa
+|gap|/amp20;dif(alto-baixo);extremo_1h;112;-0,125;0,21835632873425315;limpa
+|gap|/amp20;alto;gap_dir_x_var;56;-375,35714285714283;-455,0;limpa
+|gap|/amp20;baixo;gap_dir_x_var;56;-256,3392857142857;-57,5;limpa
+|gap|/amp20;dif(alto-baixo);gap_dir_x_var;112;-119,01785714285711;0,7488502299540092;limpa
+vol leilao;alto;var;61;-159,50819672131146;-290,0;limpa
+vol leilao;baixo;var;60;-132,33333333333334;-7,5;limpa
+vol leilao;dif(alto-baixo);var;121;-27,17486338797812;0,9380123975204959;limpa
+vol leilao;alto;absvar;61;1496,5573770491803;1045,0;limpa
+vol leilao;baixo;absvar;60;1521,6666666666667;1297,5;limpa
+vol leilao;dif(alto-baixo);absvar;121;-25,10928961748641;0,9204159168166367;limpa
+vol leilao;alto;amp;61;3123,5245901639346;2850,0;limpa
+vol leilao;baixo;amp;60;2971,3333333333335;2792,5;limpa
+vol leilao;dif(alto-baixo);amp;121;152,1912568306011;0,4497100579884023;limpa
+vol leilao;alto;pr_vol;61;17287404,098360654;16927775,0;limpa
+vol leilao;baixo;pr_vol;60;16904869,116666667;16937629,5;limpa
+vol leilao;dif(alto-baixo);pr_vol;121;382534,9816939868;0,2693461307738452;limpa
+vol leilao;alto;pr_neg;61;1686794,1967213114;1691106,0;limpa
+vol leilao;baixo;pr_neg;60;1831351,3333333333;1889055,5;limpa
+vol leilao;dif(alto-baixo);pr_neg;121;-144557,13661202183;0,007398520295940812;limpa
+vol leilao;alto;m5_1;61;-5,901639344262295;-30,0;limpa
+vol leilao;baixo;m5_1;60;-70,33333333333333;-70,0;limpa
+vol leilao;dif(alto-baixo);m5_1;121;64,43169398907104;0,5846830633873226;limpa
+vol leilao;alto;m5_6;61;-27,459016393442624;-65,0;limpa
+vol leilao;baixo;m5_6;60;-98,58333333333333;-220,0;limpa
+vol leilao;dif(alto-baixo);m5_6;121;71,1243169398907;0,6856628674265147;limpa
+vol leilao;alto;gap_fechou;61;0,7540983606557377;1,0;limpa
+vol leilao;baixo;gap_fechou;58;0,7241379310344828;1,0;limpa
+vol leilao;dif(alto-baixo);gap_fechou;119;0,02996042962125489;0,8366326734653069;limpa
+vol leilao;alto;gap_min_fecha;46;47,71739130434783;5,0;limpa
+vol leilao;baixo;gap_min_fecha;42;37,73809523809524;0,0;limpa
+vol leilao;dif(alto-baixo);gap_min_fecha;88;9,979296066252587;0,614877024595081;limpa
+vol leilao;alto;extremo_1h;61;0,7049180327868853;1,0;limpa
+vol leilao;baixo;extremo_1h;60;0,65;1,0;limpa
+vol leilao;dif(alto-baixo);extremo_1h;121;0,05491803278688523;0,5494901019796041;limpa
+vol leilao;alto;gap_dir_x_var;61;-322,95081967213116;-255,0;limpa
+vol leilao;baixo;gap_dir_x_var;59;-488,135593220339;-515,0;limpa
+vol leilao;dif(alto-baixo);gap_dir_x_var;120;165,18477354820783;0,6520695860827834;limpa
+vol leilao/mediana20;alto;var;56;-365,7142857142857;-492,5;limpa
+vol leilao/mediana20;baixo;var;56;-12,767857142857142;132,5;limpa
+vol leilao/mediana20;dif(alto-baixo);var;112;-352,94642857142856;0,3599280143971206;limpa
+vol leilao/mediana20;alto;absvar;56;1451,0714285714287;1050,0;limpa
+vol leilao/mediana20;baixo;absvar;56;1569,1964285714287;1177,5;limpa
+vol leilao/mediana20;dif(alto-baixo);absvar;112;-118,125;0,6346730653869226;limpa
+vol leilao/mediana20;alto;amp;56;2948,75;2712,5;limpa
+vol leilao/mediana20;baixo;amp;56;3180,714285714286;3027,5;limpa
+vol leilao/mediana20;dif(alto-baixo);amp;112;-231,96428571428578;0,26194761047790444;limpa
+vol leilao/mediana20;alto;pr_vol;56;17244497,75;17008297,5;limpa
+vol leilao/mediana20;baixo;pr_vol;56;16797129,05357143;16799264,0;limpa
+vol leilao/mediana20;dif(alto-baixo);pr_vol;112;447368,6964285709;0,20955808838232354;limpa
+vol leilao/mediana20;alto;pr_neg;56;1720497,4464285714;1775275,5;limpa
+vol leilao/mediana20;baixo;pr_neg;56;1726042,9107142857;1793404,0;limpa
+vol leilao/mediana20;dif(alto-baixo);pr_neg;112;-5545,464285714319;0,9068186362727455;limpa
+vol leilao/mediana20;alto;m5_1;56;-39,642857142857146;-40,0;limpa
+vol leilao/mediana20;baixo;m5_1;56;-67,94642857142857;-115,0;limpa
+vol leilao/mediana20;dif(alto-baixo);m5_1;112;28,303571428571423;0,8134373125374925;limpa
+vol leilao/mediana20;alto;m5_6;56;-116,60714285714286;-257,5;limpa
+vol leilao/mediana20;baixo;m5_6;56;-31,785714285714285;-250,0;limpa
+vol leilao/mediana20;dif(alto-baixo);m5_6;112;-84,82142857142858;0,649870025994801;limpa
+vol leilao/mediana20;alto;gap_fechou;56;0,75;1,0;limpa
+vol leilao/mediana20;baixo;gap_fechou;55;0,7454545454545455;1,0;limpa
+vol leilao/mediana20;dif(alto-baixo);gap_fechou;111;0,004545454545454519;1,0;limpa
+vol leilao/mediana20;alto;gap_min_fecha;42;51,30952380952381;2,5;limpa
+vol leilao/mediana20;baixo;gap_min_fecha;41;33,53658536585366;0,0;limpa
+vol leilao/mediana20;dif(alto-baixo);gap_min_fecha;83;17,77293844367015;0,3835232953409318;limpa
+vol leilao/mediana20;alto;extremo_1h;56;0,6607142857142857;1,0;limpa
+vol leilao/mediana20;baixo;extremo_1h;56;0,7142857142857143;1,0;limpa
+vol leilao/mediana20;dif(alto-baixo);extremo_1h;112;-0,0535714285714286;0,6930613877224555;limpa
+vol leilao/mediana20;alto;gap_dir_x_var;56;-412,85714285714283;-337,5;limpa
+vol leilao/mediana20;baixo;gap_dir_x_var;56;-218,83928571428572;-290,0;limpa
+vol leilao/mediana20;dif(alto-baixo);gap_dir_x_var;112;-194,0178571428571;0,6174765046990602;limpa
+neg leilao;alto;var;62;-429,43548387096774;-337,5;limpa
+neg leilao;baixo;var;59;151,77966101694915;-70,0;limpa
+neg leilao;dif(alto-baixo);var;121;-581,215144887917;0,121375724855029;limpa
+neg leilao;alto;absvar;62;1355,4032258064517;1140,0;limpa
+neg leilao;baixo;absvar;59;1670,4237288135594;1155,0;limpa
+neg leilao;dif(alto-baixo);absvar;121;-315,02050300710766;0,1895620875824835;limpa
+neg leilao;alto;amp;62;2940,1612903225805;2685,0;limpa
+neg leilao;baixo;amp;59;3161,4406779661017;3050,0;limpa
+neg leilao;dif(alto-baixo);amp;121;-221,2793876435212;0,25874825034993;limpa
+neg leilao;alto;pr_vol;62;17352109,629032258;17209536,5;limpa
+neg leilao;baixo;pr_vol;59;16830389,830508474;16537496,0;limpa
+neg leilao;dif(alto-baixo);pr_vol;121;521719,7985237837;0,13457308538292342;limpa
+neg leilao;alto;pr_neg;62;1873286,0;1883111,0;limpa
+neg leilao;baixo;pr_neg;59;1637827,0169491526;1595782,0;limpa
+neg leilao;dif(alto-baixo);pr_neg;121;235458,98305084743;0,0001999600079984003;limpa
+neg leilao;alto;m5_1;62;-70,64516129032258;-115,0;limpa
+neg leilao;baixo;m5_1;59;-3,389830508474576;15,0;limpa
+neg leilao;dif(alto-baixo);m5_1;121;-67,255330781848;0,5734853029394121;limpa
+neg leilao;alto;m5_6;62;-135,56451612903226;-207,5;limpa
+neg leilao;baixo;m5_6;59;13,813559322033898;-180,0;limpa
+neg leilao;dif(alto-baixo);m5_6;121;-149,37807545106617;0,3787242551489702;limpa
+neg leilao;alto;gap_fechou;61;0,7213114754098361;1,0;limpa
+neg leilao;baixo;gap_fechou;58;0,7586206896551724;1,0;limpa
+neg leilao;dif(alto-baixo);gap_fechou;119;-0,037309214245336286;0,6700659868026395;limpa
+neg leilao;alto;gap_min_fecha;44;44,54545454545455;0,0;limpa
+neg leilao;baixo;gap_min_fecha;44;41,36363636363637;0,0;limpa
+neg leilao;dif(alto-baixo);gap_min_fecha;88;3,18181818181818;0,876624675064987;limpa
+neg leilao;alto;extremo_1h;62;0,6290322580645161;1,0;limpa
+neg leilao;baixo;extremo_1h;59;0,7288135593220338;1,0;limpa
+neg leilao;dif(alto-baixo);extremo_1h;121;-0,09978130125751772;0,2529494101179764;limpa
+neg leilao;alto;gap_dir_x_var;61;-373,5245901639344;-450,0;limpa
+neg leilao;baixo;gap_dir_x_var;59;-435,8474576271187;-420,0;limpa
+neg leilao;dif(alto-baixo);gap_dir_x_var;120;62,32286746318425;0,8574285142971406;limpa
+vol/negocio;alto;var;61;84,91803278688525;-75,0;limpa
+vol/negocio;baixo;var;60;-380,8333333333333;-337,5;limpa
+vol/negocio;dif(alto-baixo);var;121;465,75136612021856;0,20895820835832835;limpa
+vol/negocio;alto;absvar;61;1493,1147540983607;1095,0;limpa
+vol/negocio;baixo;absvar;60;1525,1666666666667;1282,5;limpa
+vol/negocio;dif(alto-baixo);absvar;121;-32,05191256830608;0,8970205958808238;limpa
+vol/negocio;alto;amp;61;3146,065573770492;2980,0;limpa
+vol/negocio;baixo;amp;60;2948,4166666666665;2667,5;limpa
+vol/negocio;dif(alto-baixo);amp;121;197,64890710382542;0,3199360127974405;limpa
+vol/negocio;alto;pr_vol;61;16834623,557377048;16691393,0;limpa
+vol/negocio;baixo;pr_vol;60;17365196,0;17317072,0;limpa
+vol/negocio;dif(alto-baixo);pr_vol;121;-530572,4426229522;0,1267746450709858;limpa
+vol/negocio;alto;pr_neg;61;1601799,9344262294;1595782,0;limpa
+vol/negocio;baixo;pr_neg;60;1917762,1666666667;1923199,0;limpa
+vol/negocio;dif(alto-baixo);pr_neg;121;-315962,2322404373;0,0001999600079984003;limpa
+vol/negocio;alto;m5_1;61;-3,0327868852459017;15,0;limpa
+vol/negocio;baixo;m5_1;60;-73,25;-92,5;limpa
+vol/negocio;dif(alto-baixo);m5_1;121;70,2172131147541;0,5522895420915817;limpa
+vol/negocio;alto;m5_6;61;-3,1147540983606556;-180,0;limpa
+vol/negocio;baixo;m5_6;60;-123,33333333333333;-207,5;limpa
+vol/negocio;dif(alto-baixo);m5_6;121;120,21857923497268;0,48890221955608876;limpa
+vol/negocio;alto;gap_fechou;61;0,7868852459016393;1,0;limpa
+vol/negocio;baixo;gap_fechou;58;0,6896551724137931;1,0;limpa
+vol/negocio;dif(alto-baixo);gap_fechou;119;0,09723007348784618;0,3039392121575685;limpa
+vol/negocio;alto;gap_min_fecha;48;52,1875;0,0;limpa
+vol/negocio;baixo;gap_min_fecha;40;31,875;0,0;limpa
+vol/negocio;dif(alto-baixo);gap_min_fecha;88;20,3125;0,3067386522695461;limpa
+vol/negocio;alto;extremo_1h;61;0,7377049180327869;1,0;limpa
+vol/negocio;baixo;extremo_1h;60;0,6166666666666667;1,0;limpa
+vol/negocio;dif(alto-baixo);extremo_1h;121;0,12103825136612023;0,17596480703859227;limpa
+vol/negocio;alto;gap_dir_x_var;61;-454,75409836065575;-450,0;limpa
+vol/negocio;baixo;gap_dir_x_var;59;-351,864406779661;-450,0;limpa
+vol/negocio;dif(alto-baixo);gap_dir_x_var;120;-102,88969158099474;0,7674465106978604;limpa
+hora cruz (s apos 09:00) >= mediana;alto;var;61;-452,2950819672131;-565,0;limpa
+hora cruz (s apos 09:00) >= mediana;baixo;var;60;165,33333333333334;192,5;limpa
+hora cruz (s apos 09:00) >= mediana;dif(alto-baixo);var;121;-617,6284153005464;0,09258148370325935;limpa
+hora cruz (s apos 09:00) >= mediana;alto;absvar;61;1465,5737704918033;1055,0;limpa
+hora cruz (s apos 09:00) >= mediana;baixo;absvar;60;1553,1666666666667;1247,5;limpa
+hora cruz (s apos 09:00) >= mediana;dif(alto-baixo);absvar;121;-87,59289617486343;0,713257348530294;limpa
+hora cruz (s apos 09:00) >= mediana;alto;amp;61;2948,8524590163934;2675,0;limpa
+hora cruz (s apos 09:00) >= mediana;baixo;amp;60;3148,9166666666665;3027,5;limpa
+hora cruz (s apos 09:00) >= mediana;dif(alto-baixo);amp;121;-200,06420765027315;0,3001399720055989;limpa
+hora cruz (s apos 09:00) >= mediana;alto;pr_vol;61;17060940,68852459;16863456,0;limpa
+hora cruz (s apos 09:00) >= mediana;baixo;pr_vol;60;17135106,916666668;16962449,5;limpa
+hora cruz (s apos 09:00) >= mediana;dif(alto-baixo);pr_vol;121;-74166,22814207897;0,825634873025395;limpa
+hora cruz (s apos 09:00) >= mediana;alto;pr_neg;61;1748481,5901639345;1810397,0;limpa
+hora cruz (s apos 09:00) >= mediana;baixo;pr_neg;60;1768635,8166666667;1802417,0;limpa
+hora cruz (s apos 09:00) >= mediana;dif(alto-baixo);pr_neg;121;-20154,22650273214;0,7096580683863227;limpa
+hora cruz (s apos 09:00) >= mediana;alto;m5_1;61;-49,42622950819672;-120,0;limpa
+hora cruz (s apos 09:00) >= mediana;baixo;m5_1;60;-26,083333333333332;7,5;limpa
+hora cruz (s apos 09:00) >= mediana;dif(alto-baixo);m5_1;121;-23,342896174863387;0,8482303539292142;limpa
+hora cruz (s apos 09:00) >= mediana;alto;m5_6;61;-173,9344262295082;-285,0;limpa
+hora cruz (s apos 09:00) >= mediana;baixo;m5_6;60;50,333333333333336;-155,0;limpa
+hora cruz (s apos 09:00) >= mediana;dif(alto-baixo);m5_6;121;-224,26775956284155;0,1905618876224755;limpa
+hora cruz (s apos 09:00) >= mediana;alto;gap_fechou;60;0,7166666666666667;1,0;limpa
+hora cruz (s apos 09:00) >= mediana;baixo;gap_fechou;59;0,7627118644067796;1,0;limpa
+hora cruz (s apos 09:00) >= mediana;dif(alto-baixo);gap_fechou;119;-0,04604519774011295;0,673865226954609;limpa
+hora cruz (s apos 09:00) >= mediana;alto;gap_min_fecha;43;34,18604651162791;0,0;limpa
+hora cruz (s apos 09:00) >= mediana;baixo;gap_min_fecha;45;51,333333333333336;0,0;limpa
+hora cruz (s apos 09:00) >= mediana;dif(alto-baixo);gap_min_fecha;88;-17,14728682170543;0,3843231353729254;limpa
+hora cruz (s apos 09:00) >= mediana;alto;extremo_1h;61;0,6721311475409836;1,0;limpa
+hora cruz (s apos 09:00) >= mediana;baixo;extremo_1h;60;0,6833333333333333;1,0;limpa
+hora cruz (s apos 09:00) >= mediana;dif(alto-baixo);extremo_1h;121;-0,011202185792349773;1,0;limpa
+hora cruz (s apos 09:00) >= mediana;alto;gap_dir_x_var;60;-673,8333333333334;-557,5;limpa
+hora cruz (s apos 09:00) >= mediana;baixo;gap_dir_x_var;60;-134,5;-382,5;limpa
+hora cruz (s apos 09:00) >= mediana;dif(alto-baixo);gap_dir_x_var;120;-539,3333333333334;0,13777244551089782;limpa
+atraso >=90s;alto;var;81;-359,1975308641975;-420,0;limpa
+atraso >=90s;baixo;var;40;285,625;492,5;limpa
+atraso >=90s;dif(alto-baixo);var;121;-644,8225308641975;0,09618076384723055;limpa
+atraso >=90s;alto;absvar;81;1469,9382716049383;1055,0;limpa
+atraso >=90s;baixo;absvar;40;1588,125;1300,0;limpa
+atraso >=90s;dif(alto-baixo);absvar;121;-118,18672839506166;0,6524695060987803;limpa
+atraso >=90s;alto;amp;81;3011,8518518518517;2750,0;limpa
+atraso >=90s;baixo;amp;40;3121,375;3097,5;limpa
+atraso >=90s;dif(alto-baixo);amp;121;-109,52314814814827;0,6016796640671865;limpa
+atraso >=90s;alto;pr_vol;81;17156116,074074075;16927775,0;limpa
+atraso >=90s;baixo;pr_vol;40;16979459,875;16937629,5;limpa
+atraso >=90s;dif(alto-baixo);pr_vol;121;176656,19907407463;0,6294741051789642;limpa
+atraso >=90s;alto;pr_neg;81;1729808,049382716;1774775,0;limpa
+atraso >=90s;baixo;pr_neg;40;1816526,85;1868348,0;limpa
+atraso >=90s;dif(alto-baixo);pr_neg;121;-86718,80061728414;0,1235752849430114;limpa
+atraso >=90s;alto;m5_1;81;-53,20987654320987;-110,0;limpa
+atraso >=90s;baixo;m5_1;40;-6,75;62,5;limpa
+atraso >=90s;dif(alto-baixo);m5_1;121;-46,45987654320987;0,7012597480503899;limpa
+atraso >=90s;alto;m5_6;81;-119,44444444444444;-230,0;limpa
+atraso >=90s;baixo;m5_6;40;52,125;-177,5;limpa
+atraso >=90s;dif(alto-baixo);m5_6;121;-171,56944444444446;0,35392921415716855;limpa
+atraso >=90s;alto;gap_fechou;80;0,75;1,0;limpa
+atraso >=90s;baixo;gap_fechou;39;0,717948717948718;1,0;limpa
+atraso >=90s;dif(alto-baixo);gap_fechou;119;0,03205128205128205;0,8290341931613677;limpa
+atraso >=90s;alto;gap_min_fecha;60;46,083333333333336;2,5;limpa
+atraso >=90s;baixo;gap_min_fecha;28;36,25;0,0;limpa
+atraso >=90s;dif(alto-baixo);gap_min_fecha;88;9,833333333333336;0,6432713457308539;limpa
+atraso >=90s;alto;extremo_1h;81;0,6666666666666666;1,0;limpa
+atraso >=90s;baixo;extremo_1h;40;0,7;1,0;limpa
+atraso >=90s;dif(alto-baixo);extremo_1h;121;-0,033333333333333326;0,8410317936412718;limpa
+atraso >=90s;alto;gap_dir_x_var;80;-442,0625;-435,0;limpa
+atraso >=90s;baixo;gap_dir_x_var;40;-328,375;-465,0;limpa
+atraso >=90s;dif(alto-baixo);gap_dir_x_var;120;-113,6875;0,7762447510497901;limpa
+gap>=0 (alto) vs <0;alto;var;65;-490,53846153846155;-710,0;limpa
+gap>=0 (alto) vs <0;baixo;var;55;264,45454545454544;235,0;limpa
+gap>=0 (alto) vs <0;dif(alto-baixo);var;120;-754,9930069930069;0,041591681663667265;limpa
+gap>=0 (alto) vs <0;alto;absvar;65;1493,0;1265,0;limpa
+gap>=0 (alto) vs <0;baixo;absvar;55;1549,3636363636363;1110,0;limpa
+gap>=0 (alto) vs <0;dif(alto-baixo);absvar;120;-56,36363636363626;0,8164367126574685;limpa
+gap>=0 (alto) vs <0;alto;amp;65;3032,4615384615386;2730,0;limpa
+gap>=0 (alto) vs <0;baixo;amp;55;3092,090909090909;2950,0;limpa
+gap>=0 (alto) vs <0;dif(alto-baixo);amp;120;-59,62937062937044;0,767246550689862;limpa
+gap>=0 (alto) vs <0;alto;pr_vol;65;16900164,09230769;16855121,0;limpa
+gap>=0 (alto) vs <0;baixo;pr_vol;55;17357306,29090909;17259707,0;limpa
+gap>=0 (alto) vs <0;dif(alto-baixo);pr_vol;120;-457142,1986013986;0,1841631673665267;limpa
+gap>=0 (alto) vs <0;alto;pr_neg;65;1735031,1846153846;1774775,0;limpa
+gap>=0 (alto) vs <0;baixo;pr_neg;55;1779074,309090909;1820666,0;limpa
+gap>=0 (alto) vs <0;dif(alto-baixo);pr_neg;120;-44043,12447552453;0,4251149770045991;limpa
+gap>=0 (alto) vs <0;alto;m5_1;65;-78,76923076923077;-50,0;limpa
+gap>=0 (alto) vs <0;baixo;m5_1;55;7,090909090909091;-110,0;limpa
+gap>=0 (alto) vs <0;dif(alto-baixo);m5_1;120;-85,86013986013987;0,473505298940212;limpa
+gap>=0 (alto) vs <0;alto;m5_6;65;-112,23076923076923;-230,0;limpa
+gap>=0 (alto) vs <0;baixo;m5_6;55;-13,727272727272727;-185,0;limpa
+gap>=0 (alto) vs <0;dif(alto-baixo);m5_6;120;-98,5034965034965;0,5722855428914218;limpa
+gap>=0 (alto) vs <0;alto;gap_fechou;64;0,765625;1,0;limpa
+gap>=0 (alto) vs <0;baixo;gap_fechou;55;0,7090909090909091;1,0;limpa
+gap>=0 (alto) vs <0;dif(alto-baixo);gap_fechou;119;0,056534090909090895;0,5256948610277944;limpa
+gap>=0 (alto) vs <0;alto;gap_min_fecha;49;47,44897959183673;5,0;limpa
+gap>=0 (alto) vs <0;baixo;gap_min_fecha;39;37,30769230769231;0,0;limpa
+gap>=0 (alto) vs <0;dif(alto-baixo);gap_min_fecha;88;10,141287284144425;0,610877824435113;limpa
+gap>=0 (alto) vs <0;alto;extremo_1h;65;0,6923076923076923;1,0;limpa
+gap>=0 (alto) vs <0;baixo;extremo_1h;55;0,6727272727272727;1,0;limpa
+gap>=0 (alto) vs <0;dif(alto-baixo);extremo_1h;120;0,01958041958041956;0,8422315536892622;limpa
+gap>=0 (alto) vs <0;alto;gap_dir_x_var;65;-522,3846153846154;-710,0;limpa
+gap>=0 (alto) vs <0;baixo;gap_dir_x_var;55;-264,45454545454544;-235,0;limpa
+gap>=0 (alto) vs <0;dif(alto-baixo);gap_dir_x_var;120;-257,9300699300699;0,48530293941211755;limpa

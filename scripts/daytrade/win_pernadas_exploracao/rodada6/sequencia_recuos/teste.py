@@ -1,0 +1,13 @@
+import gera, time
+t = time.time()
+T, dv, modo, dr, rec, trd = gera.unidade((750, 5, "real", 0))
+print(time.time() - t, len(rec), len(trd))
+rec = gera.sequencia(rec)
+print(rec.head(6).T)
+print(trd.head(3).T)
+print(rec.res.value_counts())
+print(rec.elig.mean())
+print(rec.groupby("k_elig").size().head())
+print(rec[rec.elig].groupby("res").size())
+print(rec.first_ok.value_counts(dropna=False))
+print(rec.dia.min(), rec.dia.max(), rec.dia.nunique())

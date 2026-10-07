@@ -1,0 +1,12 @@
+{
+ "stop": 1200,
+ "liq_tick": 15103.5,
+ "n_tick": 62,
+ "liq_barra": 17446.5,
+ "n_barra": 63,
+ "liq_motor_raw": 17783.5,
+ "n_motor_raw": 63,
+ "liq_motor_loader": 17446.5,
+ "n_motor_loader": 63,
+ "identico_B": true
+}

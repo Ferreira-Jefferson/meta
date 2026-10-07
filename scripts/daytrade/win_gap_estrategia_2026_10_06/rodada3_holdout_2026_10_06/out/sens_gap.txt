@@ -1,0 +1,4 @@
+sinais V2 com gap proxy: 19; com gap WIN@D: 19; dias com gatilho diferente: 2; dias com sinal do gap invertido: 2 ['2026-01-22', '2026-02-19']
+dias de gatilho em ambos com DIRECAO diferente: 0
+V2 r0 | S700      gap WIN@D: sinais 19 fills 19 liquido B 1,531 R$/trade 80.6 win 42.1% BE 32.8% p nulo 0.336 nulo medio 745 [-2147;3675] | A: liquido 592 recusadas 0 caixa min 162 censurada=False | pior -705 pts (1.01x)
+V2 r0 | S.6atr    gap WIN@D: sinais 19 fills 19 liquido B 285 R$/trade 15.0 win 52.6% BE 51.3% p nulo 0.499 nulo medio 304 [-4131;4811] | A: liquido -918 recusadas 16 caixa min 82 censurada=True | pior -2215 pts (1.00x)

@@ -1,0 +1,192 @@
+simulado ('2026-08', 300, 600)
+simulado ('2026-06', 300, 600)
+simulado ('2026-09', 300, 600)
+simulado ('2026-07', 300, 600)
+simulado ('2026-04', 300, 600)
+simulado ('2026-05', 300, 600)
+simulado ('2026-06', 50, 300)
+simulado ('2026-07', 50, 300)
+simulado ('2026-09', 50, 300)
+simulado ('2026-05', 50, 300)
+simulado ('2026-08', 50, 300)
+simulado ('2026-04', 50, 300)
+
+================ stop/alvo 300/600 ================
+ops ajuste=1691 teste=1801
+AJUSTE s/filtron=1691 R$/op=  -1.03 +- 0.89 ac= 70.4% BE= 71.9% liq=  -1737 DD=-2421
+TESTE s/filtron=1801 R$/op=  -2.32 +- 0.90 ac= 67.0% BE= 70.3% liq=  -4179 DD=-4681
+saidas ajuste: stop=395(23%) trail=1270(75%) alvo=4(0%) zera=22(1%) | teste: stop=453(25%) trail=1321(73%) alvo=5(0%) zera=22(1%)
+-- Dias=2 AJUSTE (NaN razao: 0)
+  [AJUSTE] faixas de razao
+    <0,7          n= 169 R$/op=   2.32 +- 2.66 ac= 76.3% BE= 73.1% liq=    393 | stop=32(19%) trail=131(78%) alvo=1(1%) zera=5(3%)
+    0,7-1,0       n= 508 R$/op=  -1.11 +- 1.71 ac= 68.7% BE= 70.2% liq=   -566 | stop=127(25%) trail=375(74%) alvo=2(0%) zera=4(1%)
+    1,0-1,5       n= 682 R$/op=  -1.52 +- 1.40 ac= 69.4% BE= 71.5% liq=  -1039 | stop=165(24%) trail=510(75%) alvo=1(0%) zera=6(1%)
+    >=1,5         n= 332 R$/op=  -1.58 +- 1.88 ac= 72.3% BE= 74.7% liq=   -525 | stop=71(21%) trail=254(77%) alvo=0(0%) zera=7(2%)
+    quintis edges: [0.24 0.82 1.   1.2  1.49 5.68]
+    Q1            n= 339 R$/op=  -0.51 +- 2.05 ac= 71.4% BE= 72.1% liq=   -172 | stop=80(24%) trail=251(74%) alvo=2(1%) zera=6(2%)
+    Q2            n= 338 R$/op=  -0.00 +- 2.05 ac= 69.8% BE= 69.8% liq=     -1 | stop=79(23%) trail=255(75%) alvo=1(0%) zera=3(1%)
+    Q3            n= 338 R$/op=  -3.81 +- 2.07 ac= 65.1% BE= 70.5% liq=  -1289 | stop=91(27%) trail=240(71%) alvo=1(0%) zera=6(2%)
+    Q4            n= 338 R$/op=   0.62 +- 1.91 ac= 73.7% BE= 72.8% liq=    210 | stop=73(22%) trail=265(78%) alvo=0(0%) zera=0(0%)
+    Q5            n= 338 R$/op=  -1.43 +- 1.86 ac= 72.2% BE= 74.3% liq=   -484 | stop=72(21%) trail=259(77%) alvo=0(0%) zera=7(2%)
+  [AJUSTE] faixas de tend
+    <0,7          n= 141 R$/op=   0.93 +- 3.05 ac= 74.5% BE= 73.2% liq=    131 | stop=30(21%) trail=105(74%) alvo=1(1%) zera=5(4%)
+    0,7-1,0       n= 554 R$/op=  -1.34 +- 1.62 ac= 68.4% BE= 70.2% liq=   -743 | stop=140(25%) trail=409(74%) alvo=0(0%) zera=5(1%)
+    1,0-1,5       n= 792 R$/op=  -1.95 +- 1.31 ac= 69.6% BE= 72.3% liq=  -1544 | stop=192(24%) trail=588(74%) alvo=3(0%) zera=9(1%)
+    >=1,5         n= 204 R$/op=   2.05 +- 2.20 ac= 76.5% BE= 73.2% liq=    419 | stop=33(16%) trail=168(82%) alvo=0(0%) zera=3(1%)
+    quintis edges: [0.34 0.85 0.99 1.12 1.34 3.8 ]
+    Q1            n= 339 R$/op=  -1.19 +- 2.03 ac= 70.8% BE= 72.4% liq=   -404 | stop=81(24%) trail=250(74%) alvo=1(0%) zera=7(2%)
+    Q2            n= 338 R$/op=   0.24 +- 2.05 ac= 69.5% BE= 69.2% liq=     83 | stop=81(24%) trail=255(75%) alvo=0(0%) zera=2(1%)
+    Q3            n= 338 R$/op=  -1.34 +- 2.00 ac= 69.2% BE= 71.1% liq=   -452 | stop=81(24%) trail=251(74%) alvo=1(0%) zera=5(1%)
+    Q4            n= 338 R$/op=  -2.96 +- 2.02 ac= 68.9% BE= 73.2% liq=   -999 | stop=85(25%) trail=248(73%) alvo=2(1%) zera=3(1%)
+    Q5            n= 338 R$/op=   0.11 +- 1.84 ac= 73.7% BE= 73.5% liq=     36 | stop=67(20%) trail=266(79%) alvo=0(0%) zera=5(1%)
+  [AJUSTE] razao H1 sobre(>=1,5): n_faixa=332 dif(faixa-resto)=-0.69 R$/op p=0.734
+  [AJUSTE] razao H3 baixo(<0,7): n_faixa=169 dif(faixa-resto)=3.72 R$/op p=0.209
+  [AJUSTE] tend  H1 sobre(>=1,5): n_faixa=204 dif(faixa-resto)=3.50 R$/op p=0.193
+  [AJUSTE] tend  H3 baixo(<0,7): n_faixa=141 dif(faixa-resto)=2.13 R$/op p=0.517
+-- Dias=2 TESTE (NaN razao: 0)
+  [TESTE] faixas de razao
+    <0,7          n= 195 R$/op=  -5.57 +- 2.69 ac= 63.6% BE= 71.7% liq=  -1085 | stop=54(28%) trail=137(70%) alvo=0(0%) zera=4(2%)
+    0,7-1,0       n= 545 R$/op=  -1.34 +- 1.69 ac= 67.9% BE= 69.7% liq=   -731 | stop=142(26%) trail=398(73%) alvo=1(0%) zera=4(1%)
+    1,0-1,5       n= 758 R$/op=  -3.26 +- 1.38 ac= 65.4% BE= 70.1% liq=  -2469 | stop=194(26%) trail=555(73%) alvo=0(0%) zera=9(1%)
+    >=1,5         n= 303 R$/op=   0.35 +- 2.13 ac= 71.6% BE= 71.1% liq=    106 | stop=63(21%) trail=231(76%) alvo=4(1%) zera=5(2%)
+    quintis edges: [0.28 0.8  0.99 1.18 1.45 6.41]
+    Q1            n= 361 R$/op=  -4.68 +- 2.04 ac= 64.5% BE= 71.1% liq=  -1689 | stop=101(28%) trail=255(71%) alvo=1(0%) zera=4(1%)
+    Q2            n= 360 R$/op=  -0.66 +- 2.03 ac= 68.9% BE= 69.8% liq=   -236 | stop=90(25%) trail=266(74%) alvo=0(0%) zera=4(1%)
+    Q3            n= 360 R$/op=  -3.72 +- 2.06 ac= 64.4% BE= 69.6% liq=  -1340 | stop=97(27%) trail=257(71%) alvo=0(0%) zera=6(2%)
+    Q4            n= 360 R$/op=  -2.43 +- 1.99 ac= 65.8% BE= 69.4% liq=   -876 | stop=88(24%) trail=269(75%) alvo=0(0%) zera=3(1%)
+    Q5            n= 360 R$/op=  -0.10 +- 1.95 ac= 71.4% BE= 71.5% liq=    -37 | stop=77(21%) trail=274(76%) alvo=4(1%) zera=5(1%)
+  [TESTE] faixas de tend
+    <0,7          n= 141 R$/op=  -6.65 +- 3.42 ac= 62.4% BE= 71.4% liq=   -938 | stop=44(31%) trail=91(65%) alvo=1(1%) zera=5(4%)
+    0,7-1,0       n= 666 R$/op=  -2.92 +- 1.47 ac= 66.7% BE= 70.9% liq=  -1942 | stop=169(25%) trail=491(74%) alvo=0(0%) zera=6(1%)
+    1,0-1,5       n= 807 R$/op=  -1.33 +- 1.34 ac= 67.8% BE= 69.7% liq=  -1070 | stop=195(24%) trail=600(74%) alvo=2(0%) zera=10(1%)
+    >=1,5         n= 187 R$/op=  -1.22 +- 2.82 ac= 68.4% BE= 70.1% liq=   -229 | stop=45(24%) trail=139(74%) alvo=2(1%) zera=1(1%)
+    quintis edges: [0.33 0.83 0.97 1.12 1.32 3.92]
+    Q1            n= 361 R$/op=  -3.92 +- 2.06 ac= 65.4% BE= 70.8% liq=  -1414 | stop=99(27%) trail=252(70%) alvo=1(0%) zera=9(2%)
+    Q2            n= 360 R$/op=  -3.54 +- 1.99 ac= 66.1% BE= 71.2% liq=  -1275 | stop=93(26%) trail=265(74%) alvo=0(0%) zera=2(1%)
+    Q3            n= 360 R$/op=  -1.51 +- 2.04 ac= 68.3% BE= 70.4% liq=   -543 | stop=92(26%) trail=265(74%) alvo=1(0%) zera=2(1%)
+    Q4            n= 360 R$/op=  -2.19 +- 2.01 ac= 66.1% BE= 69.2% liq=   -789 | stop=89(25%) trail=265(74%) alvo=1(0%) zera=5(1%)
+    Q5            n= 360 R$/op=  -0.44 +- 1.97 ac= 69.2% BE= 69.8% liq=   -158 | stop=80(22%) trail=274(76%) alvo=2(1%) zera=4(1%)
+  [TESTE] razao H1 sobre(>=1,5): n_faixa=303 dif(faixa-resto)=3.21 R$/op p=0.206
+  [TESTE] razao H3 baixo(<0,7): n_faixa=195 dif(faixa-resto)=-3.64 R$/op p=0.211
+  [TESTE] tend  H1 sobre(>=1,5): n_faixa=187 dif(faixa-resto)=1.22 R$/op p=0.693
+  [TESTE] tend  H3 baixo(<0,7): n_faixa=141 dif(faixa-resto)=-4.70 R$/op p=0.161
+
+-- top 8 no AJUSTE por z (ganho vs filtro aleatorio mesmo tamanho; n_comb=364)
+ dias  nb  na       tipo    n  ganho     z     p
+   10 0.8 2.0   so_baixo  248 2288.8 1.528 0.066
+   10 0.7 1.5   so_baixo  120 2149.6 1.514 0.063
+   10 0.8 1.5   so_baixo  248 2288.8 1.508 0.056
+   10 0.8 1.7   so_baixo  248 2288.8 1.486 0.070
+   10 0.8 1.3   so_baixo  248 2288.8 1.443 0.070
+   10 0.7 1.7   so_baixo  120 2149.6 1.393 0.090
+    6 0.5 1.5 pula_baixo 1678  181.4 1.342 0.103
+   10 0.7 2.0   so_baixo  120 2149.6 1.333 0.083
+   mediana z de todas: -0.1 | frac p<0,05: 0.0
+
+-- TESTE da combinacao dias=10 nb=0.8 na=2.0 tipo=so_baixo
+  AJUSTE: sem filtro liq=-1737 n=1691 R$/op=-1.03 DD=-2421 | filtrado liq=552 n=248 R$/op=2.22 DD=-283 | ganho=2289 aleat=1475+-541 p=0.060
+      AJUSTE filtr. n= 248 R$/op=   2.22 +- 2.21 ac= 77.0% BE= 74.1% liq=    552
+  TESTE: sem filtro liq=-4179 n=1801 R$/op=-2.32 DD=-4681 | filtrado liq=-736 n=303 R$/op=-2.43 DD=-1012 | ganho=3442 aleat=3487+-609 p=0.522
+      TESTE filtr.  n= 303 R$/op=  -2.43 +- 2.14 ac= 69.3% BE= 72.7% liq=   -736
+
+-- TESTE da combinacao dias=10 nb=0.7 na=1.5 tipo=so_baixo
+  AJUSTE: sem filtro liq=-1737 n=1691 R$/op=-1.03 DD=-2421 | filtrado liq=413 n=120 R$/op=3.44 DD=-244 | ganho=2150 aleat=1621+-404 p=0.092
+      AJUSTE filtr. n= 120 R$/op=   3.44 +- 3.18 ac= 78.3% BE= 73.8% liq=    413
+  TESTE: sem filtro liq=-4179 n=1801 R$/op=-2.32 DD=-4681 | filtrado liq=-642 n=150 R$/op=-4.28 DD=-843 | ganho=3536 aleat=3850+-450 p=0.776
+      TESTE filtr.  n= 150 R$/op=  -4.28 +- 3.16 ac= 64.0% BE= 70.2% liq=   -642
+
+-- TESTE da combinacao dias=10 nb=0.8 na=1.5 tipo=so_baixo
+  AJUSTE: sem filtro liq=-1737 n=1691 R$/op=-1.03 DD=-2421 | filtrado liq=552 n=248 R$/op=2.22 DD=-283 | ganho=2289 aleat=1470+-521 p=0.058
+      AJUSTE filtr. n= 248 R$/op=   2.22 +- 2.21 ac= 77.0% BE= 74.1% liq=    552
+  TESTE: sem filtro liq=-4179 n=1801 R$/op=-2.32 DD=-4681 | filtrado liq=-736 n=303 R$/op=-2.43 DD=-1012 | ganho=3442 aleat=3467+-586 p=0.504
+      TESTE filtr.  n= 303 R$/op=  -2.43 +- 2.14 ac= 69.3% BE= 72.7% liq=   -736
+
+================ stop/alvo 50/300 ================
+ops ajuste=2828 teste=2820
+AJUSTE s/filtron=2828 R$/op=  -1.28 +- 0.31 ac= 31.9% BE= 35.9% liq=  -3633 DD=-3682
+TESTE s/filtron=2820 R$/op=  -1.67 +- 0.32 ac= 29.7% BE= 34.9% liq=  -4712 DD=-5125
+saidas ajuste: stop=1906(67%) trail=860(30%) alvo=62(2%) zera=0(0%) | teste: stop=1954(69%) trail=789(28%) alvo=77(3%) zera=0(0%)
+-- Dias=2 AJUSTE (NaN razao: 0)
+  [AJUSTE] faixas de razao
+    <0,7          n= 461 R$/op=  -0.97 +- 0.79 ac= 33.2% BE= 36.3% liq=   -447 | stop=305(66%) trail=145(31%) alvo=11(2%) zera=0(0%)
+    0,7-1,0       n= 877 R$/op=  -1.06 +- 0.58 ac= 32.0% BE= 35.4% liq=   -929 | stop=589(67%) trail=267(30%) alvo=21(2%) zera=0(0%)
+    1,0-1,5       n=1045 R$/op=  -1.20 +- 0.51 ac= 31.7% BE= 35.5% liq=  -1256 | stop=704(67%) trail=322(31%) alvo=19(2%) zera=0(0%)
+    >=1,5         n= 445 R$/op=  -2.25 +- 0.76 ac= 30.6% BE= 38.1% liq=  -1001 | stop=308(69%) trail=126(28%) alvo=11(2%) zera=0(0%)
+    quintis edges: [0.19 0.75 0.93 1.12 1.4  5.68]
+    Q1            n= 566 R$/op=  -1.32 +- 0.69 ac= 32.9% BE= 37.2% liq=   -745 | stop=377(67%) trail=177(31%) alvo=12(2%) zera=0(0%)
+    Q2            n= 565 R$/op=  -0.14 +- 0.77 ac= 33.1% BE= 33.5% liq=    -78 | stop=374(66%) trail=173(31%) alvo=18(3%) zera=0(0%)
+    Q3            n= 566 R$/op=  -1.58 +- 0.70 ac= 30.0% BE= 34.9% liq=   -893 | stop=388(69%) trail=167(30%) alvo=11(2%) zera=0(0%)
+    Q4            n= 565 R$/op=  -1.42 +- 0.68 ac= 31.5% BE= 36.0% liq=   -802 | stop=382(68%) trail=174(31%) alvo=9(2%) zera=0(0%)
+    Q5            n= 566 R$/op=  -1.97 +- 0.67 ac= 31.8% BE= 38.5% liq=  -1116 | stop=385(68%) trail=169(30%) alvo=12(2%) zera=0(0%)
+  [AJUSTE] faixas de tend
+    <0,7          n= 296 R$/op=  -1.42 +- 0.95 ac= 32.1% BE= 36.7% liq=   -420 | stop=201(68%) trail=90(30%) alvo=5(2%) zera=0(0%)
+    0,7-1,0       n= 940 R$/op=  -1.01 +- 0.56 ac= 31.4% BE= 34.5% liq=   -947 | stop=638(68%) trail=278(30%) alvo=24(3%) zera=0(0%)
+    1,0-1,5       n=1245 R$/op=  -1.44 +- 0.47 ac= 31.5% BE= 36.1% liq=  -1787 | stop=839(67%) trail=379(30%) alvo=27(2%) zera=0(0%)
+    >=1,5         n= 347 R$/op=  -1.38 +- 0.86 ac= 34.3% BE= 39.0% liq=   -478 | stop=228(66%) trail=113(33%) alvo=6(2%) zera=0(0%)
+    quintis edges: [0.27 0.82 0.98 1.12 1.35 3.83]
+    Q1            n= 566 R$/op=  -1.58 +- 0.69 ac= 30.9% BE= 35.9% liq=   -895 | stop=387(68%) trail=169(30%) alvo=10(2%) zera=0(0%)
+    Q2            n= 565 R$/op=  -0.09 +- 0.77 ac= 33.1% BE= 33.4% liq=    -53 | stop=376(67%) trail=170(30%) alvo=19(3%) zera=0(0%)
+    Q3            n= 566 R$/op=  -1.90 +- 0.69 ac= 30.0% BE= 36.1% liq=  -1074 | stop=390(69%) trail=165(29%) alvo=11(2%) zera=0(0%)
+    Q4            n= 565 R$/op=  -1.48 +- 0.69 ac= 32.2% BE= 37.1% liq=   -835 | stop=375(66%) trail=179(32%) alvo=11(2%) zera=0(0%)
+    Q5            n= 566 R$/op=  -1.37 +- 0.69 ac= 33.0% BE= 37.6% liq=   -776 | stop=378(67%) trail=177(31%) alvo=11(2%) zera=0(0%)
+  [AJUSTE] razao H1 sobre(>=1,5): n_faixa=445 dif(faixa-resto)=-1.14 R$/op p=0.174
+  [AJUSTE] razao H3 baixo(<0,7): n_faixa=461 dif(faixa-resto)=0.38 R$/op p=0.671
+  [AJUSTE] tend  H1 sobre(>=1,5): n_faixa=347 dif(faixa-resto)=-0.11 R$/op p=0.916
+  [AJUSTE] tend  H3 baixo(<0,7): n_faixa=296 dif(faixa-resto)=-0.15 R$/op p=0.872
+-- Dias=2 TESTE (NaN razao: 0)
+  [TESTE] faixas de razao
+    <0,7          n= 504 R$/op=  -0.24 +- 0.79 ac= 34.1% BE= 34.9% liq=   -123 | stop=328(65%) trail=162(32%) alvo=14(3%) zera=0(0%)
+    0,7-1,0       n= 961 R$/op=  -2.45 +- 0.53 ac= 27.3% BE= 34.8% liq=  -2357 | stop=691(72%) trail=249(26%) alvo=21(2%) zera=0(0%)
+    1,0-1,5       n=1001 R$/op=  -1.81 +- 0.55 ac= 29.1% BE= 34.6% liq=  -1815 | stop=700(70%) trail=269(27%) alvo=32(3%) zera=0(0%)
+    >=1,5         n= 354 R$/op=  -1.18 +- 0.91 ac= 31.9% BE= 35.7% liq=   -418 | stop=235(66%) trail=109(31%) alvo=10(3%) zera=0(0%)
+    quintis edges: [0.17 0.72 0.89 1.08 1.33 6.41]
+    Q1            n= 564 R$/op=  -0.83 +- 0.73 ac= 32.6% BE= 35.2% liq=   -466 | stop=376(67%) trail=174(31%) alvo=14(2%) zera=0(0%)
+    Q2            n= 564 R$/op=  -2.41 +- 0.68 ac= 28.0% BE= 35.6% liq=  -1361 | stop=401(71%) trail=153(27%) alvo=10(2%) zera=0(0%)
+    Q3            n= 564 R$/op=  -0.86 +- 0.76 ac= 30.9% BE= 33.4% liq=   -483 | stop=382(68%) trail=162(29%) alvo=20(4%) zera=0(0%)
+    Q4            n= 564 R$/op=  -2.19 +- 0.73 ac= 27.7% BE= 34.3% liq=  -1238 | stop=404(72%) trail=140(25%) alvo=20(4%) zera=0(0%)
+    Q5            n= 564 R$/op=  -2.07 +- 0.69 ac= 29.4% BE= 36.0% liq=  -1165 | stop=391(69%) trail=160(28%) alvo=13(2%) zera=0(0%)
+  [TESTE] faixas de tend
+    <0,7          n= 284 R$/op=  -1.94 +- 1.02 ac= 28.9% BE= 34.8% liq=   -550 | stop=201(71%) trail=74(26%) alvo=9(3%) zera=0(0%)
+    0,7-1,0       n=1087 R$/op=  -1.54 +- 0.51 ac= 30.7% BE= 35.6% liq=  -1676 | stop=742(68%) trail=316(29%) alvo=29(3%) zera=0(0%)
+    1,0-1,5       n=1194 R$/op=  -1.89 +- 0.49 ac= 29.0% BE= 34.8% liq=  -2259 | stop=835(70%) trail=327(27%) alvo=32(3%) zera=0(0%)
+    >=1,5         n= 255 R$/op=  -0.89 +- 1.14 ac= 29.8% BE= 32.4% liq=   -227 | stop=176(69%) trail=72(28%) alvo=7(3%) zera=0(0%)
+    quintis edges: [0.3  0.8  0.94 1.08 1.29 3.92]
+    Q1            n= 564 R$/op=  -1.83 +- 0.71 ac= 29.8% BE= 35.5% liq=  -1034 | stop=391(69%) trail=159(28%) alvo=14(2%) zera=0(0%)
+    Q2            n= 564 R$/op=  -1.68 +- 0.73 ac= 29.8% BE= 35.0% liq=   -947 | stop=392(70%) trail=154(27%) alvo=18(3%) zera=0(0%)
+    Q3            n= 564 R$/op=  -1.69 +- 0.71 ac= 30.1% BE= 35.5% liq=   -952 | stop=388(69%) trail=163(29%) alvo=13(2%) zera=0(0%)
+    Q4            n= 564 R$/op=  -1.92 +- 0.72 ac= 28.5% BE= 34.4% liq=  -1083 | stop=395(70%) trail=152(27%) alvo=17(3%) zera=0(0%)
+    Q5            n= 564 R$/op=  -1.23 +- 0.74 ac= 30.3% BE= 34.0% liq=   -696 | stop=388(69%) trail=161(29%) alvo=15(3%) zera=0(0%)
+  [TESTE] razao H1 sobre(>=1,5): n_faixa=354 dif(faixa-resto)=0.56 R$/op p=0.542
+  [TESTE] razao H3 baixo(<0,7): n_faixa=504 dif(faixa-resto)=1.74 R$/op p=0.030
+  [TESTE] tend  H1 sobre(>=1,5): n_faixa=255 dif(faixa-resto)=0.86 R$/op p=0.423
+  [TESTE] tend  H3 baixo(<0,7): n_faixa=284 dif(faixa-resto)=-0.30 R$/op p=0.769
+
+-- top 8 no AJUSTE por z (ganho vs filtro aleatorio mesmo tamanho; n_comb=384)
+ dias  nb  na       tipo    n  ganho     z     p
+    2 0.5 1.5    so_meio 2266 1458.0 2.138 0.020
+    2 0.5 2.0    so_meio 2566  859.0 1.950 0.020
+    2 0.5 1.7    so_meio 2422 1091.2 1.900 0.030
+    2 0.5 1.3    so_meio 1983 1849.6 1.819 0.033
+    2 0.5 2.0 pula_baixo 2711  457.4 1.764 0.040
+    2 0.5 1.3 pula_baixo 2711  457.4 1.763 0.037
+    2 0.5 1.5 pula_baixo 2711  457.4 1.752 0.030
+    2 0.5 1.7 pula_baixo 2711  457.4 1.615 0.053
+   mediana z de todas: 0.19 | frac p<0,05: 0.018
+
+-- TESTE da combinacao dias=2 nb=0.5 na=1.5 tipo=so_meio
+  AJUSTE: sem filtro liq=-3633 n=2828 R$/op=-1.28 DD=-3682 | filtrado liq=-2175 n=2266 R$/op=-0.96 DD=-2275 | ganho=1458 aleat=731+-354 p=0.019
+      AJUSTE filtr. n=2266 R$/op=  -0.96 +- 0.36 ac= 32.3% BE= 35.4% liq=  -2175
+  TESTE: sem filtro liq=-4712 n=2820 R$/op=-1.67 DD=-5125 | filtrado liq=-4499 n=2335 R$/op=-1.93 DD=-4908 | ganho=213 aleat=793+-343 p=0.958
+      TESTE filtr.  n=2335 R$/op=  -1.93 +- 0.35 ac= 28.8% BE= 34.7% liq=  -4499
+
+-- TESTE da combinacao dias=2 nb=0.5 na=2.0 tipo=so_meio
+  AJUSTE: sem filtro liq=-3633 n=2828 R$/op=-1.28 DD=-3682 | filtrado liq=-2774 n=2566 R$/op=-1.08 DD=-2845 | ganho=859 aleat=329+-254 p=0.012
+      AJUSTE filtr. n=2566 R$/op=  -1.08 +- 0.33 ac= 32.3% BE= 35.7% liq=  -2774
+  TESTE: sem filtro liq=-4712 n=2820 R$/op=-1.67 DD=-5125 | filtrado liq=-4690 n=2587 R$/op=-1.81 DD=-5114 | ganho=23 aleat=388+-248 p=0.923
+      TESTE filtr.  n=2587 R$/op=  -1.81 +- 0.34 ac= 29.3% BE= 34.9% liq=  -4690
+
+-- TESTE da combinacao dias=2 nb=0.5 na=1.7 tipo=so_meio
+  AJUSTE: sem filtro liq=-3633 n=2828 R$/op=-1.28 DD=-3682 | filtrado liq=-2542 n=2422 R$/op=-1.05 DD=-2616 | ganho=1091 aleat=520+-304 p=0.029
+      AJUSTE filtr. n=2422 R$/op=  -1.05 +- 0.34 ac= 32.2% BE= 35.5% liq=  -2542
+  TESTE: sem filtro liq=-4712 n=2820 R$/op=-1.67 DD=-5125 | filtrado liq=-4562 n=2471 R$/op=-1.85 DD=-5012 | ganho=150 aleat=584+-295 p=0.925
+      TESTE filtr.  n=2471 R$/op=  -1.85 +- 0.34 ac= 29.2% BE= 34.9% liq=  -4562

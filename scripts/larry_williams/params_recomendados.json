@@ -1,0 +1,3306 @@
+{
+  "gerado_por": "lw_relatorio.py",
+  "nota": "Celulas escolhidas SO' no IS (mediana entre ativos/semestres + vizinhanca). `recomendado_para_ea`=true so' quando aprovada no IS E positiva no OOS a 1 tick e a 2 ticks. Os demais ficam listados para reproducao, nao para operar. dias da semana nos filtros: 1=seg ... 5=sex (convencao MQL5 day_of_week-0 domingo: 1=seg).",
+  "setups": {
+    "VB": {
+      "ACAO": {
+        "classe": "ACAO",
+        "recomendado_para_ea": false,
+        "veredito": "NAO FUNCIONA: aprovada no IS, NAO se sustenta no OOS",
+        "status_is": "APROVADA_NO_IS",
+        "params_ea": {
+          "setup": "VB",
+          "lado_compra": true,
+          "lado_venda": false,
+          "modo_saida": "REVERSAO",
+          "stop_modo": "SEM_STOP",
+          "stop_frac": 0.0,
+          "tendencia": "SWING",
+          "filtro_dias_compra": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "filtro_dias_venda": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "kc": 1.0,
+          "kv": 1.0
+        },
+        "celula_motor": {
+          "p_k": [
+            1.0,
+            1.0
+          ],
+          "stop": [
+            "sem",
+            0.0
+          ],
+          "saida": [
+            "REVERSAO",
+            0
+          ],
+          "lados": "C",
+          "tend": "SWING",
+          "tdw": "sem_sex"
+        },
+        "is_score_mediana": 1.4111754894256592,
+        "is_n": 2499,
+        "vizinhas_positivas": "13/18",
+        "oos_n": 1359,
+        "oos_win_pct": 45.62178039550781,
+        "oos_breakeven_empirico_pct": 47.98596818074671,
+        "oos_exp_1tick": -0.21556329727172852,
+        "oos_exp_2ticks": -0.27139776945114136,
+        "slippage_ticks_assumido": 1,
+        "candidata_fraca": false,
+        "alternativa_com_stop": {
+          "veredito": "NAO FUNCIONA: reprovada nos criterios do IS",
+          "status_is": "REPROVADA_NO_IS",
+          "params_ea": {
+            "setup": "VB",
+            "lado_compra": true,
+            "lado_venda": false,
+            "modo_saida": "REVERSAO",
+            "stop_modo": "FRACAO_R1",
+            "stop_frac": 1.0,
+            "tendencia": "SMA50",
+            "filtro_dias_compra": [
+              1,
+              2,
+              4,
+              5
+            ],
+            "filtro_dias_venda": [
+              1,
+              2,
+              4,
+              5
+            ],
+            "kc": 0.3,
+            "kv": 0.3
+          },
+          "oos_n": 2888,
+          "oos_win_pct": 21.121883392333984,
+          "oos_exp_1tick": -0.4138141870498657
+        }
+      },
+      "WIN": {
+        "classe": "WIN",
+        "recomendado_para_ea": false,
+        "veredito": "POSITIVA FRACA no OOS (win% > breakeven mas o IC95% cruza o breakeven)",
+        "status_is": "APROVADA_NO_IS",
+        "params_ea": {
+          "setup": "VB",
+          "lado_compra": true,
+          "lado_venda": true,
+          "modo_saida": "REVERSAO",
+          "stop_modo": "FRACAO_R1",
+          "stop_frac": 1.0,
+          "tendencia": "SMA50",
+          "filtro_dias_compra": [
+            1,
+            2,
+            4,
+            5
+          ],
+          "filtro_dias_venda": [
+            1,
+            2,
+            4,
+            5
+          ],
+          "kc": 0.3,
+          "kv": 0.3
+        },
+        "celula_motor": {
+          "p_k": [
+            0.3,
+            0.3
+          ],
+          "stop": [
+            "frac",
+            1.0
+          ],
+          "saida": [
+            "REVERSAO",
+            0
+          ],
+          "lados": "CV",
+          "tend": "SMA50",
+          "tdw": "sem_qua"
+        },
+        "is_score_mediana": 146.8545379638672,
+        "is_n": 64,
+        "vizinhas_positivas": "17/18",
+        "oos_n": 59,
+        "oos_win_pct": 25.423728942871094,
+        "oos_breakeven_empirico_pct": 24.189097876377453,
+        "oos_exp_1tick": 20.174575805664062,
+        "oos_exp_2ticks": 18.174575805664062,
+        "slippage_ticks_assumido": 1,
+        "candidata_fraca": true,
+        "alternativa_com_stop": {
+          "veredito": "POSITIVA FRACA no OOS (win% > breakeven mas o IC95% cruza o breakeven)",
+          "status_is": "APROVADA_NO_IS",
+          "params_ea": {
+            "setup": "VB",
+            "lado_compra": true,
+            "lado_venda": true,
+            "modo_saida": "REVERSAO",
+            "stop_modo": "FRACAO_R1",
+            "stop_frac": 1.0,
+            "tendencia": "SMA50",
+            "filtro_dias_compra": [
+              1,
+              2,
+              4,
+              5
+            ],
+            "filtro_dias_venda": [
+              1,
+              2,
+              4,
+              5
+            ],
+            "kc": 0.3,
+            "kv": 0.3
+          },
+          "oos_n": 59,
+          "oos_win_pct": 25.423728942871094,
+          "oos_exp_1tick": 20.174575805664062
+        }
+      },
+      "WDO": {
+        "classe": "WDO",
+        "recomendado_para_ea": false,
+        "veredito": "POSITIVA FRACA no OOS (win% > breakeven mas o IC95% cruza o breakeven)",
+        "status_is": "APROVADA_NO_IS",
+        "params_ea": {
+          "setup": "VB",
+          "lado_compra": false,
+          "lado_venda": true,
+          "modo_saida": "BAILOUT",
+          "stop_modo": "SEM_STOP",
+          "stop_frac": 0.0,
+          "tendencia": "SWING",
+          "bailout_apos_dias": 1,
+          "filtro_dias_compra": [
+            1,
+            2,
+            3,
+            5
+          ],
+          "filtro_dias_venda": [
+            1,
+            2,
+            3,
+            5
+          ],
+          "kc": 0.3,
+          "kv": 0.3
+        },
+        "celula_motor": {
+          "p_k": [
+            0.3,
+            0.3
+          ],
+          "stop": [
+            "sem",
+            0.0
+          ],
+          "saida": [
+            "BAILOUT",
+            1
+          ],
+          "lados": "V",
+          "tend": "SWING",
+          "tdw": "sem_qui"
+        },
+        "is_score_mediana": 219.25,
+        "is_n": 86,
+        "vizinhas_positivas": "14/17",
+        "oos_n": 74,
+        "oos_win_pct": 87.83783721923828,
+        "oos_breakeven_empirico_pct": 79.25654301348463,
+        "oos_exp_1tick": 118.75675964355469,
+        "oos_exp_2ticks": 108.75675964355469,
+        "slippage_ticks_assumido": 1,
+        "candidata_fraca": true,
+        "alternativa_com_stop": {
+          "veredito": "POSITIVA FRACA no OOS (win% > breakeven mas o IC95% cruza o breakeven)",
+          "status_is": "APROVADA_NO_IS",
+          "params_ea": {
+            "setup": "VB",
+            "lado_compra": false,
+            "lado_venda": true,
+            "modo_saida": "REVERSAO",
+            "stop_modo": "FRACAO_R1",
+            "stop_frac": 1.0,
+            "tendencia": "NENHUM",
+            "filtro_dias_compra": [
+              1,
+              3,
+              4,
+              5
+            ],
+            "filtro_dias_venda": [
+              1,
+              3,
+              4,
+              5
+            ],
+            "kc": 0.3,
+            "kv": 0.3
+          },
+          "oos_n": 52,
+          "oos_win_pct": 32.69230651855469,
+          "oos_exp_1tick": 188.57691955566406
+        }
+      },
+      "ETF_BTC": {
+        "classe": "ETF_BTC",
+        "recomendado_para_ea": false,
+        "veredito": "AMOSTRA INSUFICIENTE (so' ~1 ano de M1 dos ETFs de bitcoin); OOS com 11 trades",
+        "status_is": "APROVADA_NO_IS",
+        "params_ea": {
+          "setup": "VB",
+          "lado_compra": false,
+          "lado_venda": true,
+          "modo_saida": "REVERSAO",
+          "stop_modo": "SEM_STOP",
+          "stop_frac": 0.0,
+          "tendencia": "NENHUM",
+          "filtro_dias_compra": [
+            2,
+            3,
+            4,
+            5
+          ],
+          "filtro_dias_venda": [
+            2,
+            3,
+            4,
+            5
+          ],
+          "kc": 1.0,
+          "kv": 1.0
+        },
+        "celula_motor": {
+          "p_k": [
+            1.0,
+            1.0
+          ],
+          "stop": [
+            "sem",
+            0.0
+          ],
+          "saida": [
+            "REVERSAO",
+            0
+          ],
+          "lados": "V",
+          "tend": "NENHUM",
+          "tdw": "sem_seg"
+        },
+        "is_score_mediana": 7.564323425292969,
+        "is_n": 19,
+        "vizinhas_positivas": "13/17",
+        "oos_n": 11,
+        "oos_win_pct": 45.45454406738281,
+        "oos_breakeven_empirico_pct": 47.2439031113777,
+        "oos_exp_1tick": -0.5504923462867737,
+        "oos_exp_2ticks": -0.7755206227302551,
+        "slippage_ticks_assumido": 1,
+        "candidata_fraca": false,
+        "alternativa_com_stop": {
+          "veredito": "NAO FUNCIONA: aprovada no IS, NAO se sustenta no OOS",
+          "status_is": "APROVADA_NO_IS",
+          "params_ea": {
+            "setup": "VB",
+            "lado_compra": false,
+            "lado_venda": true,
+            "modo_saida": "REVERSAO",
+            "stop_modo": "FRACAO_R1",
+            "stop_frac": 1.0,
+            "tendencia": "SMA50",
+            "filtro_dias_compra": [
+              1,
+              2,
+              4,
+              5
+            ],
+            "filtro_dias_venda": [
+              1,
+              2,
+              4,
+              5
+            ],
+            "kc": 0.3,
+            "kv": 0.3
+          },
+          "oos_n": 19,
+          "oos_win_pct": 21.052631378173828,
+          "oos_exp_1tick": -0.11852800101041794
+        }
+      }
+    },
+    "OOPS": {
+      "ACAO": {
+        "classe": "ACAO",
+        "recomendado_para_ea": false,
+        "veredito": "NAO FUNCIONA: aprovada no IS, NAO se sustenta no OOS",
+        "status_is": "APROVADA_NO_IS",
+        "params_ea": {
+          "setup": "OOPS",
+          "lado_compra": true,
+          "lado_venda": false,
+          "modo_saida": "BAILOUT",
+          "stop_modo": "SEM_STOP",
+          "stop_frac": 0.0,
+          "tendencia": "SWING",
+          "bailout_apos_dias": 0,
+          "filtro_dias_compra": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "filtro_dias_venda": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "gap_min": 0.25
+        },
+        "celula_motor": {
+          "p_gap_min": 0.25,
+          "stop": [
+            "sem",
+            0.0
+          ],
+          "saida": [
+            "BAILOUT",
+            0
+          ],
+          "lados": "C",
+          "tend": "SWING",
+          "tdw": "sem_sex"
+        },
+        "is_score_mediana": 0.5706318616867065,
+        "is_n": 869,
+        "vizinhas_positivas": "11/16",
+        "oos_n": 381,
+        "oos_win_pct": 75.32808685302734,
+        "oos_breakeven_empirico_pct": 79.3750527688174,
+        "oos_exp_1tick": -0.32469505071640015,
+        "oos_exp_2ticks": -0.43075835704803467,
+        "slippage_ticks_assumido": 1,
+        "candidata_fraca": false,
+        "alternativa_com_stop": {
+          "veredito": "NAO FUNCIONA: reprovada nos criterios do IS",
+          "status_is": "REPROVADA_NO_IS",
+          "params_ea": {
+            "setup": "OOPS",
+            "lado_compra": true,
+            "lado_venda": false,
+            "modo_saida": "BAILOUT",
+            "stop_modo": "FRACAO_R1",
+            "stop_frac": 1.0,
+            "tendencia": "SMA50",
+            "bailout_apos_dias": 0,
+            "filtro_dias_compra": [
+              1,
+              3,
+              4,
+              5
+            ],
+            "filtro_dias_venda": [
+              1,
+              3,
+              4,
+              5
+            ],
+            "gap_min": 0.0
+          },
+          "oos_n": 1328,
+          "oos_win_pct": 53.16265106201172,
+          "oos_exp_1tick": -0.3706597685813904
+        }
+      },
+      "WIN": {
+        "classe": "WIN",
+        "recomendado_para_ea": false,
+        "veredito": "NAO FUNCIONA: aprovada no IS, NAO se sustenta no OOS",
+        "status_is": "APROVADA_NO_IS",
+        "params_ea": {
+          "setup": "OOPS",
+          "lado_compra": true,
+          "lado_venda": true,
+          "modo_saida": "BAILOUT",
+          "stop_modo": "SEM_STOP",
+          "stop_frac": 0.0,
+          "tendencia": "NENHUM",
+          "bailout_apos_dias": 0,
+          "filtro_dias_compra": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "filtro_dias_venda": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "gap_min": 0.0
+        },
+        "celula_motor": {
+          "p_gap_min": 0.0,
+          "stop": [
+            "sem",
+            0.0
+          ],
+          "saida": [
+            "BAILOUT",
+            0
+          ],
+          "lados": "CV",
+          "tend": "NENHUM",
+          "tdw": "sem_sex"
+        },
+        "is_score_mediana": 112.62727355957031,
+        "is_n": 70,
+        "vizinhas_positivas": "15/16",
+        "oos_n": 49,
+        "oos_win_pct": 83.67346954345703,
+        "oos_breakeven_empirico_pct": 89.05964486780965,
+        "oos_exp_1tick": -101.7244873046875,
+        "oos_exp_2ticks": -103.7244873046875,
+        "slippage_ticks_assumido": 1,
+        "candidata_fraca": false,
+        "alternativa_com_stop": {
+          "veredito": "INCONCLUSIVO: OOS com 39 trades (< 40) -> CENSURADA",
+          "status_is": "APROVADA_NO_IS",
+          "params_ea": {
+            "setup": "OOPS",
+            "lado_compra": true,
+            "lado_venda": true,
+            "modo_saida": "ABERTURA_SEGUINTE",
+            "stop_modo": "FRACAO_R1",
+            "stop_frac": 0.5,
+            "tendencia": "NENHUM",
+            "filtro_dias_compra": [
+              1,
+              2,
+              4,
+              5
+            ],
+            "filtro_dias_venda": [
+              1,
+              2,
+              4,
+              5
+            ],
+            "gap_min": 0.1
+          },
+          "oos_n": 39,
+          "oos_win_pct": 43.589744567871094,
+          "oos_exp_1tick": 4.474359035491943
+        }
+      },
+      "WDO": {
+        "classe": "WDO",
+        "recomendado_para_ea": false,
+        "veredito": "POSITIVA FRACA no OOS (win% > breakeven mas o IC95% cruza o breakeven)",
+        "status_is": "APROVADA_NO_IS",
+        "params_ea": {
+          "setup": "OOPS",
+          "lado_compra": true,
+          "lado_venda": true,
+          "modo_saida": "BAILOUT",
+          "stop_modo": "SEM_STOP",
+          "stop_frac": 0.0,
+          "tendencia": "NENHUM",
+          "bailout_apos_dias": 0,
+          "filtro_dias_compra": [
+            1,
+            2,
+            3,
+            5
+          ],
+          "filtro_dias_venda": [
+            1,
+            2,
+            3,
+            5
+          ],
+          "gap_min": 0.0
+        },
+        "celula_motor": {
+          "p_gap_min": 0.0,
+          "stop": [
+            "sem",
+            0.0
+          ],
+          "saida": [
+            "BAILOUT",
+            0
+          ],
+          "lados": "CV",
+          "tend": "NENHUM",
+          "tdw": "sem_qui"
+        },
+        "is_score_mediana": 185.5833282470703,
+        "is_n": 61,
+        "vizinhas_positivas": "13/16",
+        "oos_n": 47,
+        "oos_win_pct": 85.10638427734375,
+        "oos_breakeven_empirico_pct": 82.65975191930237,
+        "oos_exp_1tick": 40.77659606933594,
+        "oos_exp_2ticks": 30.776596069335938,
+        "slippage_ticks_assumido": 1,
+        "candidata_fraca": true,
+        "alternativa_com_stop": {
+          "veredito": "POSITIVA FRACA no OOS (win% > breakeven mas o IC95% cruza o breakeven)",
+          "status_is": "APROVADA_NO_IS",
+          "params_ea": {
+            "setup": "OOPS",
+            "lado_compra": true,
+            "lado_venda": true,
+            "modo_saida": "TEMPO_N",
+            "stop_modo": "FRACAO_R1",
+            "stop_frac": 1.0,
+            "tendencia": "NENHUM",
+            "saida_dias": 3,
+            "filtro_dias_compra": [
+              2,
+              3,
+              4,
+              5
+            ],
+            "filtro_dias_venda": [
+              2,
+              3,
+              4,
+              5
+            ],
+            "gap_min": 0.0
+          },
+          "oos_n": 53,
+          "oos_win_pct": 50.943397521972656,
+          "oos_exp_1tick": 55.632076263427734
+        }
+      },
+      "ETF_BTC": {
+        "classe": "ETF_BTC",
+        "recomendado_para_ea": false,
+        "veredito": "AMOSTRA INSUFICIENTE (so' ~1 ano de M1 dos ETFs de bitcoin); OOS com 11 trades",
+        "status_is": "APROVADA_NO_IS",
+        "params_ea": {
+          "setup": "OOPS",
+          "lado_compra": false,
+          "lado_venda": true,
+          "modo_saida": "TEMPO_N",
+          "stop_modo": "SEM_STOP",
+          "stop_frac": 0.0,
+          "tendencia": "SWING",
+          "saida_dias": 3,
+          "filtro_dias_compra": [
+            2,
+            3,
+            4,
+            5
+          ],
+          "filtro_dias_venda": [
+            2,
+            3,
+            4,
+            5
+          ],
+          "gap_min": 0.0
+        },
+        "celula_motor": {
+          "p_gap_min": 0.0,
+          "stop": [
+            "sem",
+            0.0
+          ],
+          "saida": [
+            "TEMPO",
+            3
+          ],
+          "lados": "V",
+          "tend": "SWING",
+          "tdw": "sem_seg"
+        },
+        "is_score_mediana": 1.2734103202819824,
+        "is_n": 15,
+        "vizinhas_positivas": "9/14",
+        "oos_n": 11,
+        "oos_win_pct": 18.18181800842285,
+        "oos_breakeven_empirico_pct": 91.38600826799991,
+        "oos_exp_1tick": -1.8312363624572754,
+        "oos_exp_2ticks": -1.8564101457595825,
+        "slippage_ticks_assumido": 1,
+        "candidata_fraca": false,
+        "alternativa_com_stop": {
+          "veredito": "AMOSTRA INSUFICIENTE (so' ~1 ano de M1 dos ETFs de bitcoin); OOS com 12 trades",
+          "status_is": "APROVADA_NO_IS",
+          "params_ea": {
+            "setup": "OOPS",
+            "lado_compra": false,
+            "lado_venda": true,
+            "modo_saida": "TEMPO_N",
+            "stop_modo": "FRACAO_R1",
+            "stop_frac": 1.0,
+            "tendencia": "SMA50",
+            "saida_dias": 3,
+            "filtro_dias_compra": [
+              1,
+              3,
+              4,
+              5
+            ],
+            "filtro_dias_venda": [
+              1,
+              3,
+              4,
+              5
+            ],
+            "gap_min": 0.0
+          },
+          "oos_n": 12,
+          "oos_win_pct": 41.66666793823242,
+          "oos_exp_1tick": -0.672005832195282
+        }
+      }
+    },
+    "SMASH": {
+      "ACAO": {
+        "classe": "ACAO",
+        "recomendado_para_ea": false,
+        "veredito": "NAO FUNCIONA: reprovada nos criterios do IS",
+        "status_is": "REPROVADA_NO_IS",
+        "params_ea": {
+          "setup": "SMASH",
+          "lado_compra": true,
+          "lado_venda": true,
+          "modo_saida": "ALVO_RR",
+          "stop_modo": "FRACAO_R1",
+          "stop_frac": 1.0,
+          "tendencia": "SWING",
+          "rr_alvo": 2.0,
+          "filtro_dias_compra": [
+            1,
+            3,
+            4,
+            5
+          ],
+          "filtro_dias_venda": [
+            1,
+            3,
+            4,
+            5
+          ],
+          "n": 5,
+          "excluir_outside": false
+        },
+        "celula_motor": {
+          "p_n": 5,
+          "p_excl_out": false,
+          "stop": [
+            "frac",
+            1.0
+          ],
+          "saida": [
+            "RR",
+            2.0
+          ],
+          "lados": "CV",
+          "tend": "SWING",
+          "tdw": "sem_ter"
+        },
+        "is_score_mediana": -0.052661407738924026,
+        "is_n": 532,
+        "vizinhas_positivas": "0/15",
+        "oos_n": 331,
+        "oos_win_pct": 24.773414611816406,
+        "oos_breakeven_empirico_pct": 35.49896886926195,
+        "oos_exp_1tick": -1.0815645456314087,
+        "oos_exp_2ticks": -1.1515309810638428,
+        "slippage_ticks_assumido": 1,
+        "candidata_fraca": false,
+        "alternativa_com_stop": {
+          "veredito": "NAO FUNCIONA: reprovada nos criterios do IS",
+          "status_is": "REPROVADA_NO_IS",
+          "params_ea": {
+            "setup": "SMASH",
+            "lado_compra": true,
+            "lado_venda": true,
+            "modo_saida": "ALVO_RR",
+            "stop_modo": "FRACAO_R1",
+            "stop_frac": 1.0,
+            "tendencia": "SWING",
+            "rr_alvo": 2.0,
+            "filtro_dias_compra": [
+              1,
+              3,
+              4,
+              5
+            ],
+            "filtro_dias_venda": [
+              1,
+              3,
+              4,
+              5
+            ],
+            "n": 5,
+            "excluir_outside": false
+          },
+          "oos_n": 331,
+          "oos_win_pct": 24.773414611816406,
+          "oos_exp_1tick": -1.0815645456314087
+        }
+      },
+      "WIN": {
+        "classe": "WIN",
+        "recomendado_para_ea": false,
+        "veredito": "POSITIVA FRACA no OOS (win% > breakeven mas o IC95% cruza o breakeven)",
+        "status_is": "APROVADA_NO_IS",
+        "params_ea": {
+          "setup": "SMASH",
+          "lado_compra": true,
+          "lado_venda": true,
+          "modo_saida": "TEMPO_N",
+          "stop_modo": "FRACAO_R1",
+          "stop_frac": 1.0,
+          "tendencia": "NENHUM",
+          "saida_dias": 3,
+          "filtro_dias_compra": [
+            1,
+            3,
+            4,
+            5
+          ],
+          "filtro_dias_venda": [
+            1,
+            3,
+            4,
+            5
+          ],
+          "n": 1,
+          "excluir_outside": false
+        },
+        "celula_motor": {
+          "p_n": 1,
+          "p_excl_out": false,
+          "stop": [
+            "frac",
+            1.0
+          ],
+          "saida": [
+            "TEMPO",
+            3
+          ],
+          "lados": "CV",
+          "tend": "NENHUM",
+          "tdw": "sem_ter"
+        },
+        "is_score_mediana": 103.27273559570312,
+        "is_n": 60,
+        "vizinhas_positivas": "15/18",
+        "oos_n": 47,
+        "oos_win_pct": 46.808509826660156,
+        "oos_breakeven_empirico_pct": 43.90584510531103,
+        "oos_exp_1tick": 23.478723526000977,
+        "oos_exp_2ticks": 21.478723526000977,
+        "slippage_ticks_assumido": 1,
+        "candidata_fraca": true,
+        "alternativa_com_stop": {
+          "veredito": "POSITIVA FRACA no OOS (win% > breakeven mas o IC95% cruza o breakeven)",
+          "status_is": "APROVADA_NO_IS",
+          "params_ea": {
+            "setup": "SMASH",
+            "lado_compra": true,
+            "lado_venda": true,
+            "modo_saida": "TEMPO_N",
+            "stop_modo": "FRACAO_R1",
+            "stop_frac": 1.0,
+            "tendencia": "NENHUM",
+            "saida_dias": 3,
+            "filtro_dias_compra": [
+              1,
+              3,
+              4,
+              5
+            ],
+            "filtro_dias_venda": [
+              1,
+              3,
+              4,
+              5
+            ],
+            "n": 1,
+            "excluir_outside": false
+          },
+          "oos_n": 47,
+          "oos_win_pct": 46.808509826660156,
+          "oos_exp_1tick": 23.478723526000977
+        }
+      },
+      "WDO": {
+        "classe": "WDO",
+        "recomendado_para_ea": false,
+        "veredito": "NAO FUNCIONA: aprovada no IS, NAO se sustenta no OOS",
+        "status_is": "APROVADA_NO_IS",
+        "params_ea": {
+          "setup": "SMASH",
+          "lado_compra": true,
+          "lado_venda": true,
+          "modo_saida": "ALVO_RR",
+          "stop_modo": "FRACAO_R1",
+          "stop_frac": 0.5,
+          "tendencia": "NENHUM",
+          "rr_alvo": 2.0,
+          "filtro_dias_compra": [
+            1,
+            2,
+            4,
+            5
+          ],
+          "filtro_dias_venda": [
+            1,
+            2,
+            4,
+            5
+          ],
+          "n": 1,
+          "excluir_outside": true
+        },
+        "celula_motor": {
+          "p_n": 1,
+          "p_excl_out": true,
+          "stop": [
+            "frac",
+            0.5
+          ],
+          "saida": [
+            "RR",
+            2.0
+          ],
+          "lados": "CV",
+          "tend": "NENHUM",
+          "tdw": "sem_qua"
+        },
+        "is_score_mediana": 167.05209350585938,
+        "is_n": 60,
+        "vizinhas_positivas": "16/18",
+        "oos_n": 46,
+        "oos_win_pct": 23.913043975830078,
+        "oos_breakeven_empirico_pct": 34.89000008850137,
+        "oos_exp_1tick": -94.25,
+        "oos_exp_2ticks": -103.0543441772461,
+        "slippage_ticks_assumido": 1,
+        "candidata_fraca": false,
+        "alternativa_com_stop": {
+          "veredito": "NAO FUNCIONA: aprovada no IS, NAO se sustenta no OOS",
+          "status_is": "APROVADA_NO_IS",
+          "params_ea": {
+            "setup": "SMASH",
+            "lado_compra": true,
+            "lado_venda": true,
+            "modo_saida": "ALVO_RR",
+            "stop_modo": "FRACAO_R1",
+            "stop_frac": 0.5,
+            "tendencia": "NENHUM",
+            "rr_alvo": 2.0,
+            "filtro_dias_compra": [
+              1,
+              2,
+              4,
+              5
+            ],
+            "filtro_dias_venda": [
+              1,
+              2,
+              4,
+              5
+            ],
+            "n": 1,
+            "excluir_outside": true
+          },
+          "oos_n": 46,
+          "oos_win_pct": 23.913043975830078,
+          "oos_exp_1tick": -94.25
+        }
+      },
+      "ETF_BTC": {
+        "classe": "ETF_BTC",
+        "recomendado_para_ea": false,
+        "veredito": "NAO FUNCIONA: aprovada no IS, NAO se sustenta no OOS",
+        "status_is": "APROVADA_NO_IS",
+        "params_ea": {
+          "setup": "SMASH",
+          "lado_compra": false,
+          "lado_venda": true,
+          "modo_saida": "TEMPO_N",
+          "stop_modo": "FRACAO_R1",
+          "stop_frac": 1.0,
+          "tendencia": "SMA50",
+          "saida_dias": 3,
+          "filtro_dias_compra": [
+            1,
+            2,
+            3,
+            5
+          ],
+          "filtro_dias_venda": [
+            1,
+            2,
+            3,
+            5
+          ],
+          "n": 1,
+          "excluir_outside": true
+        },
+        "celula_motor": {
+          "p_n": 1,
+          "p_excl_out": true,
+          "stop": [
+            "frac",
+            1.0
+          ],
+          "saida": [
+            "TEMPO",
+            3
+          ],
+          "lados": "V",
+          "tend": "SMA50",
+          "tdw": "sem_qui"
+        },
+        "is_score_mediana": 1.6915948390960693,
+        "is_n": 16,
+        "vizinhas_positivas": "14/15",
+        "oos_n": 18,
+        "oos_win_pct": 50.0,
+        "oos_breakeven_empirico_pct": 59.80869153525186,
+        "oos_exp_1tick": -0.37418434023857117,
+        "oos_exp_2ticks": -0.4374393820762634,
+        "slippage_ticks_assumido": 1,
+        "candidata_fraca": false,
+        "alternativa_com_stop": {
+          "veredito": "NAO FUNCIONA: aprovada no IS, NAO se sustenta no OOS",
+          "status_is": "APROVADA_NO_IS",
+          "params_ea": {
+            "setup": "SMASH",
+            "lado_compra": false,
+            "lado_venda": true,
+            "modo_saida": "TEMPO_N",
+            "stop_modo": "FRACAO_R1",
+            "stop_frac": 1.0,
+            "tendencia": "SMA50",
+            "saida_dias": 3,
+            "filtro_dias_compra": [
+              1,
+              2,
+              3,
+              5
+            ],
+            "filtro_dias_venda": [
+              1,
+              2,
+              3,
+              5
+            ],
+            "n": 1,
+            "excluir_outside": true
+          },
+          "oos_n": 18,
+          "oos_win_pct": 50.0,
+          "oos_exp_1tick": -0.37418434023857117
+        }
+      }
+    },
+    "HSMASH": {
+      "ACAO": {
+        "classe": "ACAO",
+        "recomendado_para_ea": false,
+        "veredito": "INCONCLUSIVO: OOS com 276 trades (< 300) -> CENSURADA",
+        "status_is": "REPROVADA_NO_IS",
+        "params_ea": {
+          "setup": "HSMASH",
+          "lado_compra": true,
+          "lado_venda": false,
+          "modo_saida": "BAILOUT",
+          "stop_modo": "EXTREMO_S",
+          "stop_frac": 0.5,
+          "tendencia": "NENHUM",
+          "bailout_apos_dias": 0,
+          "filtro_dias_compra": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "filtro_dias_venda": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "zona": 0.25,
+          "exige_close_oposto": true
+        },
+        "celula_motor": {
+          "p_zona": 0.25,
+          "p_close_contra": true,
+          "stop": [
+            "abs",
+            0.5
+          ],
+          "saida": [
+            "BAILOUT",
+            0
+          ],
+          "lados": "C",
+          "tend": "NENHUM",
+          "tdw": "sem_sex"
+        },
+        "is_score_mediana": -0.49780943989753723,
+        "is_n": 558,
+        "vizinhas_positivas": "0/10",
+        "oos_n": 276,
+        "oos_win_pct": 36.59420394897461,
+        "oos_breakeven_empirico_pct": 59.24039764688802,
+        "oos_exp_1tick": -0.7384569644927979,
+        "oos_exp_2ticks": -0.8076938390731812,
+        "slippage_ticks_assumido": 1,
+        "candidata_fraca": false,
+        "alternativa_com_stop": {
+          "veredito": "INCONCLUSIVO: OOS com 276 trades (< 300) -> CENSURADA",
+          "status_is": "REPROVADA_NO_IS",
+          "params_ea": {
+            "setup": "HSMASH",
+            "lado_compra": true,
+            "lado_venda": false,
+            "modo_saida": "BAILOUT",
+            "stop_modo": "EXTREMO_S",
+            "stop_frac": 0.5,
+            "tendencia": "NENHUM",
+            "bailout_apos_dias": 0,
+            "filtro_dias_compra": [
+              1,
+              2,
+              3,
+              4
+            ],
+            "filtro_dias_venda": [
+              1,
+              2,
+              3,
+              4
+            ],
+            "zona": 0.25,
+            "exige_close_oposto": true
+          },
+          "oos_n": 276,
+          "oos_win_pct": 36.59420394897461,
+          "oos_exp_1tick": -0.7384569644927979
+        }
+      },
+      "WIN": {
+        "classe": "WIN",
+        "recomendado_para_ea": false,
+        "veredito": "SEM TRADES SUFICIENTES (inconclusivo)",
+        "status_is": "SEM_DADOS_SUFICIENTES",
+        "params_ea": {
+          "setup": "HSMASH",
+          "lado_compra": true,
+          "lado_venda": true,
+          "modo_saida": "BAILOUT",
+          "stop_modo": "EXTREMO_S",
+          "stop_frac": 0.5,
+          "tendencia": "NENHUM",
+          "bailout_apos_dias": 0,
+          "zona": 0.25,
+          "exige_close_oposto": false
+        },
+        "celula_motor": {
+          "p_zona": 0.25,
+          "p_close_contra": false,
+          "stop": [
+            "abs",
+            0.5
+          ],
+          "saida": [
+            "BAILOUT",
+            0
+          ],
+          "lados": "CV",
+          "tend": "NENHUM",
+          "tdw": "todos"
+        },
+        "is_score_mediana": NaN,
+        "is_n": 8,
+        "vizinhas_positivas": "0/0",
+        "oos_n": 7,
+        "oos_win_pct": 71.42857360839844,
+        "oos_breakeven_empirico_pct": 54.73511407858269,
+        "oos_exp_1tick": 71.21428680419922,
+        "oos_exp_2ticks": 69.21428680419922,
+        "slippage_ticks_assumido": 1,
+        "candidata_fraca": false,
+        "alternativa_com_stop": {
+          "veredito": "SEM TRADES SUFICIENTES (inconclusivo)",
+          "status_is": "SEM_DADOS_SUFICIENTES",
+          "params_ea": {
+            "setup": "HSMASH",
+            "lado_compra": true,
+            "lado_venda": true,
+            "modo_saida": "BAILOUT",
+            "stop_modo": "EXTREMO_S",
+            "stop_frac": 0.5,
+            "tendencia": "NENHUM",
+            "bailout_apos_dias": 0,
+            "zona": 0.25,
+            "exige_close_oposto": false
+          },
+          "oos_n": 7,
+          "oos_win_pct": 71.42857360839844,
+          "oos_exp_1tick": 71.21428680419922
+        }
+      },
+      "WDO": {
+        "classe": "WDO",
+        "recomendado_para_ea": false,
+        "veredito": "SEM TRADES SUFICIENTES (inconclusivo)",
+        "status_is": "SEM_DADOS_SUFICIENTES",
+        "params_ea": {
+          "setup": "HSMASH",
+          "lado_compra": true,
+          "lado_venda": true,
+          "modo_saida": "BAILOUT",
+          "stop_modo": "EXTREMO_S",
+          "stop_frac": 0.5,
+          "tendencia": "NENHUM",
+          "bailout_apos_dias": 0,
+          "zona": 0.25,
+          "exige_close_oposto": false
+        },
+        "celula_motor": {
+          "p_zona": 0.25,
+          "p_close_contra": false,
+          "stop": [
+            "abs",
+            0.5
+          ],
+          "saida": [
+            "BAILOUT",
+            0
+          ],
+          "lados": "CV",
+          "tend": "NENHUM",
+          "tdw": "todos"
+        },
+        "is_score_mediana": NaN,
+        "is_n": 6,
+        "vizinhas_positivas": "0/0",
+        "oos_n": 5,
+        "oos_win_pct": 60.0,
+        "oos_breakeven_empirico_pct": 66.83385579937304,
+        "oos_exp_1tick": -54.5,
+        "oos_exp_2ticks": -64.5,
+        "slippage_ticks_assumido": 1,
+        "candidata_fraca": false,
+        "alternativa_com_stop": {
+          "veredito": "SEM TRADES SUFICIENTES (inconclusivo)",
+          "status_is": "SEM_DADOS_SUFICIENTES",
+          "params_ea": {
+            "setup": "HSMASH",
+            "lado_compra": true,
+            "lado_venda": true,
+            "modo_saida": "BAILOUT",
+            "stop_modo": "EXTREMO_S",
+            "stop_frac": 0.5,
+            "tendencia": "NENHUM",
+            "bailout_apos_dias": 0,
+            "zona": 0.25,
+            "exige_close_oposto": false
+          },
+          "oos_n": 5,
+          "oos_win_pct": 60.0,
+          "oos_exp_1tick": -54.5
+        }
+      },
+      "ETF_BTC": {
+        "classe": "ETF_BTC",
+        "recomendado_para_ea": false,
+        "veredito": "AMOSTRA INSUFICIENTE (so' ~1 ano de M1 dos ETFs de bitcoin); OOS com 7 trades",
+        "status_is": "REPROVADA_NO_IS",
+        "params_ea": {
+          "setup": "HSMASH",
+          "lado_compra": true,
+          "lado_venda": true,
+          "modo_saida": "ALVO_RR",
+          "stop_modo": "EXTREMO_S",
+          "stop_frac": 0.5,
+          "tendencia": "NENHUM",
+          "rr_alvo": 2.0,
+          "zona": 0.25,
+          "exige_close_oposto": false
+        },
+        "celula_motor": {
+          "p_zona": 0.25,
+          "p_close_contra": false,
+          "stop": [
+            "abs",
+            0.5
+          ],
+          "saida": [
+            "RR",
+            2.0
+          ],
+          "lados": "CV",
+          "tend": "NENHUM",
+          "tdw": "todos"
+        },
+        "is_score_mediana": -0.26734986901283264,
+        "is_n": 15,
+        "vizinhas_positivas": "3/14",
+        "oos_n": 7,
+        "oos_win_pct": 28.571428298950195,
+        "oos_breakeven_empirico_pct": 34.44685055771584,
+        "oos_exp_1tick": -0.20806068181991577,
+        "oos_exp_2ticks": -0.2637197971343994,
+        "slippage_ticks_assumido": 1,
+        "candidata_fraca": false,
+        "alternativa_com_stop": {
+          "veredito": "AMOSTRA INSUFICIENTE (so' ~1 ano de M1 dos ETFs de bitcoin); OOS com 7 trades",
+          "status_is": "REPROVADA_NO_IS",
+          "params_ea": {
+            "setup": "HSMASH",
+            "lado_compra": true,
+            "lado_venda": true,
+            "modo_saida": "ALVO_RR",
+            "stop_modo": "EXTREMO_S",
+            "stop_frac": 0.5,
+            "tendencia": "NENHUM",
+            "rr_alvo": 2.0,
+            "zona": 0.25,
+            "exige_close_oposto": false
+          },
+          "oos_n": 7,
+          "oos_win_pct": 28.571428298950195,
+          "oos_exp_1tick": -0.20806068181991577
+        }
+      }
+    },
+    "OUTSIDE": {
+      "ACAO": {
+        "classe": "ACAO",
+        "recomendado_para_ea": false,
+        "veredito": "NAO FUNCIONA: aprovada no IS, NAO se sustenta no OOS",
+        "status_is": "APROVADA_NO_IS",
+        "params_ea": {
+          "setup": "OUTSIDE",
+          "lado_compra": true,
+          "lado_venda": true,
+          "modo_saida": "BAILOUT",
+          "stop_modo": "SEM_STOP",
+          "stop_frac": 0.0,
+          "tendencia": "SWING",
+          "bailout_apos_dias": 0,
+          "filtro_dias_compra": [
+            1,
+            2,
+            3,
+            5
+          ],
+          "filtro_dias_venda": [
+            1,
+            2,
+            3,
+            5
+          ],
+          "modo_entrada": "A_MERCADO_NA_ABERTURA"
+        },
+        "celula_motor": {
+          "p_modo": "A_MERCADO_NA_ABERTURA",
+          "p_venda": true,
+          "stop": [
+            "sem",
+            0.0
+          ],
+          "saida": [
+            "BAILOUT",
+            0
+          ],
+          "lados": "CV",
+          "tend": "SWING",
+          "tdw": "sem_qui"
+        },
+        "is_score_mediana": 0.8320735692977905,
+        "is_n": 720,
+        "vizinhas_positivas": "10/12",
+        "oos_n": 322,
+        "oos_win_pct": 79.81366729736328,
+        "oos_breakeven_empirico_pct": 84.55192674047147,
+        "oos_exp_1tick": 0.29963958263397217,
+        "oos_exp_2ticks": 0.17429740726947784,
+        "slippage_ticks_assumido": 1,
+        "candidata_fraca": false,
+        "alternativa_com_stop": {
+          "veredito": "INCONCLUSIVO: OOS com 292 trades (< 300) -> CENSURADA",
+          "status_is": "APROVADA_NO_IS",
+          "params_ea": {
+            "setup": "OUTSIDE",
+            "lado_compra": true,
+            "lado_venda": true,
+            "modo_saida": "BAILOUT",
+            "stop_modo": "FRACAO_R1",
+            "stop_frac": 1.0,
+            "tendencia": "SMA50",
+            "bailout_apos_dias": 0,
+            "filtro_dias_compra": [
+              1,
+              3,
+              4,
+              5
+            ],
+            "filtro_dias_venda": [
+              1,
+              3,
+              4,
+              5
+            ],
+            "modo_entrada": "A_MERCADO_NA_ABERTURA"
+          },
+          "oos_n": 292,
+          "oos_win_pct": 63.698631286621094,
+          "oos_exp_1tick": -0.2826290726661682
+        }
+      },
+      "WIN": {
+        "classe": "WIN",
+        "recomendado_para_ea": false,
+        "veredito": "SEM TRADES SUFICIENTES (inconclusivo)",
+        "status_is": "SEM_DADOS_SUFICIENTES",
+        "params_ea": {
+          "setup": "OUTSIDE",
+          "lado_compra": true,
+          "lado_venda": true,
+          "modo_saida": "BAILOUT",
+          "stop_modo": "FRACAO_R1",
+          "stop_frac": 0.5,
+          "tendencia": "NENHUM",
+          "bailout_apos_dias": 0,
+          "modo_entrada": "A_MERCADO_NA_ABERTURA"
+        },
+        "celula_motor": {
+          "p_modo": "A_MERCADO_NA_ABERTURA",
+          "p_venda": true,
+          "stop": [
+            "frac",
+            0.5
+          ],
+          "saida": [
+            "BAILOUT",
+            0
+          ],
+          "lados": "CV",
+          "tend": "NENHUM",
+          "tdw": "todos"
+        },
+        "is_score_mediana": -7.5625,
+        "is_n": 17,
+        "vizinhas_positivas": "4/8",
+        "oos_n": 11,
+        "oos_win_pct": 72.7272720336914,
+        "oos_breakeven_empirico_pct": 33.2347216507431,
+        "oos_exp_1tick": 194.68182373046875,
+        "oos_exp_2ticks": 192.68182373046875,
+        "slippage_ticks_assumido": 1,
+        "candidata_fraca": false,
+        "alternativa_com_stop": {
+          "veredito": "SEM TRADES SUFICIENTES (inconclusivo)",
+          "status_is": "SEM_DADOS_SUFICIENTES",
+          "params_ea": {
+            "setup": "OUTSIDE",
+            "lado_compra": true,
+            "lado_venda": true,
+            "modo_saida": "BAILOUT",
+            "stop_modo": "FRACAO_R1",
+            "stop_frac": 0.5,
+            "tendencia": "NENHUM",
+            "bailout_apos_dias": 0,
+            "modo_entrada": "A_MERCADO_NA_ABERTURA"
+          },
+          "oos_n": 11,
+          "oos_win_pct": 72.7272720336914,
+          "oos_exp_1tick": 194.68182373046875
+        }
+      },
+      "WDO": {
+        "classe": "WDO",
+        "recomendado_para_ea": false,
+        "veredito": "SEM TRADES SUFICIENTES (inconclusivo)",
+        "status_is": "SEM_DADOS_SUFICIENTES",
+        "params_ea": {
+          "setup": "OUTSIDE",
+          "lado_compra": true,
+          "lado_venda": true,
+          "modo_saida": "BAILOUT",
+          "stop_modo": "FRACAO_R1",
+          "stop_frac": 0.5,
+          "tendencia": "NENHUM",
+          "bailout_apos_dias": 0,
+          "modo_entrada": "A_MERCADO_NA_ABERTURA"
+        },
+        "celula_motor": {
+          "p_modo": "A_MERCADO_NA_ABERTURA",
+          "p_venda": true,
+          "stop": [
+            "frac",
+            0.5
+          ],
+          "saida": [
+            "BAILOUT",
+            0
+          ],
+          "lados": "CV",
+          "tend": "NENHUM",
+          "tdw": "todos"
+        },
+        "is_score_mediana": NaN,
+        "is_n": 12,
+        "vizinhas_positivas": "0/0",
+        "oos_n": 14,
+        "oos_win_pct": 64.28571319580078,
+        "oos_breakeven_empirico_pct": 50.431557860964126,
+        "oos_exp_1tick": 114.14286041259766,
+        "oos_exp_2ticks": 104.14286041259766,
+        "slippage_ticks_assumido": 1,
+        "candidata_fraca": false,
+        "alternativa_com_stop": {
+          "veredito": "SEM TRADES SUFICIENTES (inconclusivo)",
+          "status_is": "SEM_DADOS_SUFICIENTES",
+          "params_ea": {
+            "setup": "OUTSIDE",
+            "lado_compra": true,
+            "lado_venda": true,
+            "modo_saida": "BAILOUT",
+            "stop_modo": "FRACAO_R1",
+            "stop_frac": 0.5,
+            "tendencia": "NENHUM",
+            "bailout_apos_dias": 0,
+            "modo_entrada": "A_MERCADO_NA_ABERTURA"
+          },
+          "oos_n": 14,
+          "oos_win_pct": 64.28571319580078,
+          "oos_exp_1tick": 114.14286041259766
+        }
+      },
+      "ETF_BTC": {
+        "classe": "ETF_BTC",
+        "recomendado_para_ea": false,
+        "veredito": "AMOSTRA INSUFICIENTE (so' ~1 ano de M1 dos ETFs de bitcoin); OOS com 4 trades",
+        "status_is": "SEM_DADOS_SUFICIENTES",
+        "params_ea": {
+          "setup": "OUTSIDE",
+          "lado_compra": true,
+          "lado_venda": true,
+          "modo_saida": "BAILOUT",
+          "stop_modo": "FRACAO_R1",
+          "stop_frac": 0.5,
+          "tendencia": "NENHUM",
+          "bailout_apos_dias": 0,
+          "modo_entrada": "A_MERCADO_NA_ABERTURA"
+        },
+        "celula_motor": {
+          "p_modo": "A_MERCADO_NA_ABERTURA",
+          "p_venda": true,
+          "stop": [
+            "frac",
+            0.5
+          ],
+          "saida": [
+            "BAILOUT",
+            0
+          ],
+          "lados": "CV",
+          "tend": "NENHUM",
+          "tdw": "todos"
+        },
+        "is_score_mediana": NaN,
+        "is_n": 6,
+        "vizinhas_positivas": "0/0",
+        "oos_n": 4,
+        "oos_win_pct": 25.0,
+        "oos_breakeven_empirico_pct": 37.58781461431684,
+        "oos_exp_1tick": -0.5290559530258179,
+        "oos_exp_2ticks": -0.5918153524398804,
+        "slippage_ticks_assumido": 1,
+        "candidata_fraca": false,
+        "alternativa_com_stop": {
+          "veredito": "AMOSTRA INSUFICIENTE (so' ~1 ano de M1 dos ETFs de bitcoin); OOS com 4 trades",
+          "status_is": "SEM_DADOS_SUFICIENTES",
+          "params_ea": {
+            "setup": "OUTSIDE",
+            "lado_compra": true,
+            "lado_venda": true,
+            "modo_saida": "BAILOUT",
+            "stop_modo": "FRACAO_R1",
+            "stop_frac": 0.5,
+            "tendencia": "NENHUM",
+            "bailout_apos_dias": 0,
+            "modo_entrada": "A_MERCADO_NA_ABERTURA"
+          },
+          "oos_n": 4,
+          "oos_win_pct": 25.0,
+          "oos_exp_1tick": -0.5290559530258179
+        }
+      }
+    },
+    "GSV": {
+      "ACAO": {
+        "classe": "ACAO",
+        "recomendado_para_ea": false,
+        "veredito": "NAO FUNCIONA: aprovada no IS, NAO se sustenta no OOS",
+        "status_is": "APROVADA_NO_IS",
+        "params_ea": {
+          "setup": "GSV",
+          "lado_compra": true,
+          "lado_venda": false,
+          "modo_saida": "BAILOUT",
+          "stop_modo": "SEM_STOP",
+          "stop_frac": 0.0,
+          "tendencia": "SWING",
+          "bailout_apos_dias": 0,
+          "filtro_dias_compra": [
+            1,
+            2,
+            4,
+            5
+          ],
+          "filtro_dias_venda": [
+            1,
+            2,
+            4,
+            5
+          ],
+          "kc": 0.8,
+          "kv": 1.2,
+          "n": 4
+        },
+        "celula_motor": {
+          "p_n": 4,
+          "p_k": [
+            0.8,
+            1.2
+          ],
+          "stop": [
+            "sem",
+            0.0
+          ],
+          "saida": [
+            "BAILOUT",
+            0
+          ],
+          "lados": "C",
+          "tend": "SWING",
+          "tdw": "sem_qua"
+        },
+        "is_score_mediana": 0.5556715130805969,
+        "is_n": 1033,
+        "vizinhas_positivas": "13/16",
+        "oos_n": 523,
+        "oos_win_pct": 75.52581024169922,
+        "oos_breakeven_empirico_pct": 82.37783115726387,
+        "oos_exp_1tick": -0.38479697704315186,
+        "oos_exp_2ticks": -0.4197927415370941,
+        "slippage_ticks_assumido": 1,
+        "candidata_fraca": false,
+        "alternativa_com_stop": {
+          "veredito": "NAO FUNCIONA: reprovada nos criterios do IS",
+          "status_is": "REPROVADA_NO_IS",
+          "params_ea": {
+            "setup": "GSV",
+            "lado_compra": true,
+            "lado_venda": false,
+            "modo_saida": "TEMPO_N",
+            "stop_modo": "FRACAO_R1",
+            "stop_frac": 1.0,
+            "tendencia": "SMA50",
+            "saida_dias": 3,
+            "filtro_dias_compra": [
+              2,
+              3,
+              4,
+              5
+            ],
+            "filtro_dias_venda": [
+              2,
+              3,
+              4,
+              5
+            ],
+            "kc": 0.5,
+            "kv": 0.5,
+            "n": 2
+          },
+          "oos_n": 1694,
+          "oos_win_pct": 21.133411407470703,
+          "oos_exp_1tick": -1.1576917171478271
+        }
+      },
+      "WIN": {
+        "classe": "WIN",
+        "recomendado_para_ea": false,
+        "veredito": "NAO FUNCIONA: aprovada no IS, NAO se sustenta no OOS",
+        "status_is": "APROVADA_NO_IS",
+        "params_ea": {
+          "setup": "GSV",
+          "lado_compra": true,
+          "lado_venda": true,
+          "modo_saida": "BAILOUT",
+          "stop_modo": "SEM_STOP",
+          "stop_frac": 0.0,
+          "tendencia": "NENHUM",
+          "bailout_apos_dias": 0,
+          "filtro_dias_compra": [
+            1,
+            2,
+            4,
+            5
+          ],
+          "filtro_dias_venda": [
+            1,
+            2,
+            4,
+            5
+          ],
+          "kc": 0.5,
+          "kv": 0.5,
+          "n": 1
+        },
+        "celula_motor": {
+          "p_n": 1,
+          "p_k": [
+            0.5,
+            0.5
+          ],
+          "stop": [
+            "sem",
+            0.0
+          ],
+          "saida": [
+            "BAILOUT",
+            0
+          ],
+          "lados": "CV",
+          "tend": "NENHUM",
+          "tdw": "sem_qua"
+        },
+        "is_score_mediana": 105.39583587646484,
+        "is_n": 74,
+        "vizinhas_positivas": "13/16",
+        "oos_n": 60,
+        "oos_win_pct": 85.0,
+        "oos_breakeven_empirico_pct": 91.9491662661089,
+        "oos_exp_1tick": -155.21665954589844,
+        "oos_exp_2ticks": -157.21665954589844,
+        "slippage_ticks_assumido": 1,
+        "candidata_fraca": false,
+        "alternativa_com_stop": {
+          "veredito": "NAO FUNCIONA: aprovada no IS, NAO se sustenta no OOS",
+          "status_is": "APROVADA_NO_IS",
+          "params_ea": {
+            "setup": "GSV",
+            "lado_compra": true,
+            "lado_venda": true,
+            "modo_saida": "TEMPO_N",
+            "stop_modo": "FRACAO_R1",
+            "stop_frac": 1.0,
+            "tendencia": "NENHUM",
+            "saida_dias": 3,
+            "kc": 0.5,
+            "kv": 0.5,
+            "n": 2
+          },
+          "oos_n": 85,
+          "oos_win_pct": 37.647064208984375,
+          "oos_exp_1tick": -56.83235168457031
+        }
+      },
+      "WDO": {
+        "classe": "WDO",
+        "recomendado_para_ea": false,
+        "veredito": "POSITIVA FRACA no OOS (win% > breakeven mas o IC95% cruza o breakeven)",
+        "status_is": "APROVADA_NO_IS",
+        "params_ea": {
+          "setup": "GSV",
+          "lado_compra": true,
+          "lado_venda": true,
+          "modo_saida": "TEMPO_N",
+          "stop_modo": "FRACAO_R1",
+          "stop_frac": 1.0,
+          "tendencia": "NENHUM",
+          "saida_dias": 3,
+          "filtro_dias_compra": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "filtro_dias_venda": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "kc": 0.5,
+          "kv": 0.5,
+          "n": 1
+        },
+        "celula_motor": {
+          "p_n": 1,
+          "p_k": [
+            0.5,
+            0.5
+          ],
+          "stop": [
+            "frac",
+            1.0
+          ],
+          "saida": [
+            "TEMPO",
+            3
+          ],
+          "lados": "CV",
+          "tend": "NENHUM",
+          "tdw": "sem_sex"
+        },
+        "is_score_mediana": 188.5625,
+        "is_n": 65,
+        "vizinhas_positivas": "14/16",
+        "oos_n": 58,
+        "oos_win_pct": 44.82758712768555,
+        "oos_breakeven_empirico_pct": 37.064392032755315,
+        "oos_exp_1tick": 95.4051742553711,
+        "oos_exp_2ticks": 85.4051742553711,
+        "slippage_ticks_assumido": 1,
+        "candidata_fraca": true,
+        "alternativa_com_stop": {
+          "veredito": "POSITIVA FRACA no OOS (win% > breakeven mas o IC95% cruza o breakeven)",
+          "status_is": "APROVADA_NO_IS",
+          "params_ea": {
+            "setup": "GSV",
+            "lado_compra": true,
+            "lado_venda": true,
+            "modo_saida": "TEMPO_N",
+            "stop_modo": "FRACAO_R1",
+            "stop_frac": 1.0,
+            "tendencia": "NENHUM",
+            "saida_dias": 3,
+            "filtro_dias_compra": [
+              1,
+              2,
+              3,
+              4
+            ],
+            "filtro_dias_venda": [
+              1,
+              2,
+              3,
+              4
+            ],
+            "kc": 0.5,
+            "kv": 0.5,
+            "n": 1
+          },
+          "oos_n": 58,
+          "oos_win_pct": 44.82758712768555,
+          "oos_exp_1tick": 95.4051742553711
+        }
+      },
+      "ETF_BTC": {
+        "classe": "ETF_BTC",
+        "recomendado_para_ea": false,
+        "veredito": "AMOSTRA INSUFICIENTE (so' ~1 ano de M1 dos ETFs de bitcoin); OOS com 14 trades",
+        "status_is": "APROVADA_NO_IS",
+        "params_ea": {
+          "setup": "GSV",
+          "lado_compra": false,
+          "lado_venda": true,
+          "modo_saida": "BAILOUT",
+          "stop_modo": "SEM_STOP",
+          "stop_frac": 0.0,
+          "tendencia": "NENHUM",
+          "bailout_apos_dias": 0,
+          "filtro_dias_compra": [
+            2,
+            3,
+            4,
+            5
+          ],
+          "filtro_dias_venda": [
+            2,
+            3,
+            4,
+            5
+          ],
+          "kc": 0.5,
+          "kv": 0.5,
+          "n": 2
+        },
+        "celula_motor": {
+          "p_n": 2,
+          "p_k": [
+            0.5,
+            0.5
+          ],
+          "stop": [
+            "sem",
+            0.0
+          ],
+          "saida": [
+            "BAILOUT",
+            0
+          ],
+          "lados": "V",
+          "tend": "NENHUM",
+          "tdw": "sem_seg"
+        },
+        "is_score_mediana": 2.021319627761841,
+        "is_n": 20,
+        "vizinhas_positivas": "10/14",
+        "oos_n": 14,
+        "oos_win_pct": 57.14285659790039,
+        "oos_breakeven_empirico_pct": 84.12139042082161,
+        "oos_exp_1tick": -0.1569315493106842,
+        "oos_exp_2ticks": -0.3811188340187073,
+        "slippage_ticks_assumido": 1,
+        "candidata_fraca": false,
+        "alternativa_com_stop": {
+          "veredito": "NAO FUNCIONA: reprovada nos criterios do IS",
+          "status_is": "REPROVADA_NO_IS",
+          "params_ea": {
+            "setup": "GSV",
+            "lado_compra": true,
+            "lado_venda": true,
+            "modo_saida": "TEMPO_N",
+            "stop_modo": "FRACAO_R1",
+            "stop_frac": 0.5,
+            "tendencia": "SMA50",
+            "saida_dias": 3,
+            "filtro_dias_compra": [
+              1,
+              3,
+              4,
+              5
+            ],
+            "filtro_dias_venda": [
+              1,
+              3,
+              4,
+              5
+            ],
+            "kc": 0.5,
+            "kv": 0.5,
+            "n": 1
+          },
+          "oos_n": 24,
+          "oos_win_pct": 8.333333015441895,
+          "oos_exp_1tick": -0.6800475120544434
+        }
+      }
+    },
+    "WR": {
+      "ACAO": {
+        "classe": "ACAO",
+        "recomendado_para_ea": false,
+        "veredito": "INCONCLUSIVO: OOS com 286 trades (< 300) -> CENSURADA",
+        "status_is": "APROVADA_NO_IS",
+        "params_ea": {
+          "setup": "WR",
+          "lado_compra": true,
+          "lado_venda": false,
+          "modo_saida": "BAILOUT",
+          "stop_modo": "SEM_STOP",
+          "stop_frac": 0.0,
+          "tendencia": "SWING",
+          "bailout_apos_dias": 0,
+          "filtro_dias_compra": [
+            1,
+            2,
+            3,
+            5
+          ],
+          "filtro_dias_venda": [
+            1,
+            2,
+            3,
+            5
+          ],
+          "n": 14,
+          "modo_entrada": "A_MERCADO_NA_ABERTURA",
+          "espera": 5,
+          "nivel_compra": 85.0,
+          "nivel_venda": 15.0,
+          "periodo": 14
+        },
+        "celula_motor": {
+          "p_n": 14,
+          "p_espera": 5,
+          "p_gatilho": 85.0,
+          "p_toque": 95.0,
+          "p_modo": "A_MERCADO_NA_ABERTURA",
+          "stop": [
+            "sem",
+            0.0
+          ],
+          "saida": [
+            "BAILOUT",
+            0
+          ],
+          "lados": "C",
+          "tend": "SWING",
+          "tdw": "sem_qui"
+        },
+        "is_score_mediana": 0.860621452331543,
+        "is_n": 509,
+        "vizinhas_positivas": "5/10",
+        "oos_n": 286,
+        "oos_win_pct": 80.06993103027344,
+        "oos_breakeven_empirico_pct": 84.42151107179276,
+        "oos_exp_1tick": 0.2691950500011444,
+        "oos_exp_2ticks": 0.16492024064064026,
+        "slippage_ticks_assumido": 1,
+        "candidata_fraca": false,
+        "alternativa_com_stop": {
+          "veredito": "INCONCLUSIVO: OOS com 115 trades (< 300) -> CENSURADA",
+          "status_is": "REPROVADA_NO_IS",
+          "params_ea": {
+            "setup": "WR",
+            "lado_compra": true,
+            "lado_venda": true,
+            "modo_saida": "INDICADOR",
+            "stop_modo": "FRACAO_R1",
+            "stop_frac": 1.0,
+            "tendencia": "SMA50",
+            "filtro_dias_compra": [
+              1,
+              2,
+              4,
+              5
+            ],
+            "filtro_dias_venda": [
+              1,
+              2,
+              4,
+              5
+            ],
+            "n": 10,
+            "modo_entrada": "A_MERCADO_NA_ABERTURA",
+            "espera": 5,
+            "nivel_compra": 95.0,
+            "nivel_venda": 5.0,
+            "periodo": 10
+          },
+          "oos_n": 115,
+          "oos_win_pct": 33.91304397583008,
+          "oos_exp_1tick": -0.22151103615760803
+        }
+      },
+      "WIN": {
+        "classe": "WIN",
+        "recomendado_para_ea": false,
+        "veredito": "SEM TRADES SUFICIENTES (inconclusivo)",
+        "status_is": "SEM_DADOS_SUFICIENTES",
+        "params_ea": {
+          "setup": "WR",
+          "lado_compra": true,
+          "lado_venda": true,
+          "modo_saida": "BAILOUT",
+          "stop_modo": "FRACAO_R1",
+          "stop_frac": 0.5,
+          "tendencia": "NENHUM",
+          "bailout_apos_dias": 0,
+          "n": 10,
+          "modo_entrada": "A_MERCADO_NA_ABERTURA",
+          "espera": 5,
+          "nivel_compra": 95.0,
+          "nivel_venda": 5.0,
+          "periodo": 10
+        },
+        "celula_motor": {
+          "p_n": 10,
+          "p_espera": 5,
+          "p_gatilho": 95.0,
+          "p_toque": 95.0,
+          "p_modo": "A_MERCADO_NA_ABERTURA",
+          "stop": [
+            "frac",
+            0.5
+          ],
+          "saida": [
+            "BAILOUT",
+            0
+          ],
+          "lados": "CV",
+          "tend": "NENHUM",
+          "tdw": "todos"
+        },
+        "is_score_mediana": 1.7916666269302368,
+        "is_n": 45,
+        "vizinhas_positivas": "11/16",
+        "oos_n": 33,
+        "oos_win_pct": 54.54545593261719,
+        "oos_breakeven_empirico_pct": 44.242805161737884,
+        "oos_exp_1tick": 58.34848403930664,
+        "oos_exp_2ticks": 56.34848403930664,
+        "slippage_ticks_assumido": 1,
+        "candidata_fraca": false,
+        "alternativa_com_stop": {
+          "veredito": "SEM TRADES SUFICIENTES (inconclusivo)",
+          "status_is": "SEM_DADOS_SUFICIENTES",
+          "params_ea": {
+            "setup": "WR",
+            "lado_compra": true,
+            "lado_venda": true,
+            "modo_saida": "BAILOUT",
+            "stop_modo": "FRACAO_R1",
+            "stop_frac": 0.5,
+            "tendencia": "NENHUM",
+            "bailout_apos_dias": 0,
+            "n": 10,
+            "modo_entrada": "A_MERCADO_NA_ABERTURA",
+            "espera": 5,
+            "nivel_compra": 95.0,
+            "nivel_venda": 5.0,
+            "periodo": 10
+          },
+          "oos_n": 33,
+          "oos_win_pct": 54.54545593261719,
+          "oos_exp_1tick": 58.34848403930664
+        }
+      },
+      "WDO": {
+        "classe": "WDO",
+        "recomendado_para_ea": false,
+        "veredito": "SEM TRADES SUFICIENTES (inconclusivo)",
+        "status_is": "SEM_DADOS_SUFICIENTES",
+        "params_ea": {
+          "setup": "WR",
+          "lado_compra": true,
+          "lado_venda": true,
+          "modo_saida": "BAILOUT",
+          "stop_modo": "FRACAO_R1",
+          "stop_frac": 0.5,
+          "tendencia": "NENHUM",
+          "bailout_apos_dias": 0,
+          "n": 10,
+          "modo_entrada": "A_MERCADO_NA_ABERTURA",
+          "espera": 5,
+          "nivel_compra": 95.0,
+          "nivel_venda": 5.0,
+          "periodo": 10
+        },
+        "celula_motor": {
+          "p_n": 10,
+          "p_espera": 5,
+          "p_gatilho": 95.0,
+          "p_toque": 95.0,
+          "p_modo": "A_MERCADO_NA_ABERTURA",
+          "stop": [
+            "frac",
+            0.5
+          ],
+          "saida": [
+            "BAILOUT",
+            0
+          ],
+          "lados": "CV",
+          "tend": "NENHUM",
+          "tdw": "todos"
+        },
+        "is_score_mediana": -137.0,
+        "is_n": 33,
+        "vizinhas_positivas": "2/13",
+        "oos_n": 38,
+        "oos_win_pct": 39.47368240356445,
+        "oos_breakeven_empirico_pct": 47.04151938645172,
+        "oos_exp_1tick": -48.657894134521484,
+        "oos_exp_2ticks": -58.657894134521484,
+        "slippage_ticks_assumido": 1,
+        "candidata_fraca": false,
+        "alternativa_com_stop": {
+          "veredito": "SEM TRADES SUFICIENTES (inconclusivo)",
+          "status_is": "SEM_DADOS_SUFICIENTES",
+          "params_ea": {
+            "setup": "WR",
+            "lado_compra": true,
+            "lado_venda": true,
+            "modo_saida": "BAILOUT",
+            "stop_modo": "FRACAO_R1",
+            "stop_frac": 0.5,
+            "tendencia": "NENHUM",
+            "bailout_apos_dias": 0,
+            "n": 10,
+            "modo_entrada": "A_MERCADO_NA_ABERTURA",
+            "espera": 5,
+            "nivel_compra": 95.0,
+            "nivel_venda": 5.0,
+            "periodo": 10
+          },
+          "oos_n": 38,
+          "oos_win_pct": 39.47368240356445,
+          "oos_exp_1tick": -48.657894134521484
+        }
+      },
+      "ETF_BTC": {
+        "classe": "ETF_BTC",
+        "recomendado_para_ea": false,
+        "veredito": "AMOSTRA INSUFICIENTE (so' ~1 ano de M1 dos ETFs de bitcoin); OOS com 10 trades",
+        "status_is": "APROVADA_NO_IS",
+        "params_ea": {
+          "setup": "WR",
+          "lado_compra": true,
+          "lado_venda": true,
+          "modo_saida": "INDICADOR",
+          "stop_modo": "SEM_STOP",
+          "stop_frac": 0.0,
+          "tendencia": "NENHUM",
+          "filtro_dias_compra": [
+            1,
+            2,
+            3,
+            5
+          ],
+          "filtro_dias_venda": [
+            1,
+            2,
+            3,
+            5
+          ],
+          "n": 10,
+          "modo_entrada": "LIMITE_NO_FECHAMENTO_S",
+          "espera": 5,
+          "nivel_compra": 85.0,
+          "nivel_venda": 15.0,
+          "periodo": 10
+        },
+        "celula_motor": {
+          "p_n": 10,
+          "p_espera": 5,
+          "p_gatilho": 85.0,
+          "p_toque": 95.0,
+          "p_modo": "LIMITE_NO_FECHAMENTO_S",
+          "stop": [
+            "sem",
+            0.0
+          ],
+          "saida": [
+            "OSC",
+            0
+          ],
+          "lados": "CV",
+          "tend": "NENHUM",
+          "tdw": "sem_qui"
+        },
+        "is_score_mediana": 3.883392095565796,
+        "is_n": 16,
+        "vizinhas_positivas": "11/13",
+        "oos_n": 10,
+        "oos_win_pct": 90.0,
+        "oos_breakeven_empirico_pct": 10.814224018927822,
+        "oos_exp_1tick": 1.7393348217010498,
+        "oos_exp_2ticks": 1.6623547077178955,
+        "slippage_ticks_assumido": 1,
+        "candidata_fraca": false,
+        "alternativa_com_stop": {
+          "veredito": "AMOSTRA INSUFICIENTE (so' ~1 ano de M1 dos ETFs de bitcoin); OOS com 8 trades",
+          "status_is": "APROVADA_NO_IS",
+          "params_ea": {
+            "setup": "WR",
+            "lado_compra": false,
+            "lado_venda": true,
+            "modo_saida": "INDICADOR",
+            "stop_modo": "FRACAO_R1",
+            "stop_frac": 1.0,
+            "tendencia": "NENHUM",
+            "n": 10,
+            "modo_entrada": "A_MERCADO_NA_ABERTURA",
+            "espera": 5,
+            "nivel_compra": 95.0,
+            "nivel_venda": 5.0,
+            "periodo": 10
+          },
+          "oos_n": 8,
+          "oos_win_pct": 25.0,
+          "oos_exp_1tick": -2.4437761306762695
+        }
+      }
+    },
+    "UO": {
+      "ACAO": {
+        "classe": "ACAO",
+        "recomendado_para_ea": false,
+        "veredito": "NAO FUNCIONA: reprovada nos criterios do IS (OOS isolado positivo, mas a celula nao passou no IS: nao confiavel, so' investigar)",
+        "status_is": "REPROVADA_NO_IS",
+        "params_ea": {
+          "setup": "UO",
+          "lado_compra": true,
+          "lado_venda": true,
+          "modo_saida": "BAILOUT",
+          "stop_modo": "SEM_STOP",
+          "stop_frac": 0.0,
+          "tendencia": "NENHUM",
+          "bailout_apos_dias": 0,
+          "filtro_dias_compra": [
+            1,
+            3,
+            4,
+            5
+          ],
+          "filtro_dias_venda": [
+            1,
+            3,
+            4,
+            5
+          ],
+          "modo_entrada": "A_MERCADO_NA_ABERTURA",
+          "nivel_compra": 35.0,
+          "nivel_venda": 70.0,
+          "janela": 10
+        },
+        "celula_motor": {
+          "p_compra_max": 35.0,
+          "p_venda_min": 70.0,
+          "p_validade": 10,
+          "p_modo": "A_MERCADO_NA_ABERTURA",
+          "stop": [
+            "sem",
+            0.0
+          ],
+          "saida": [
+            "BAILOUT",
+            0
+          ],
+          "lados": "CV",
+          "tend": "NENHUM",
+          "tdw": "sem_ter"
+        },
+        "is_score_mediana": 0.09184414893388748,
+        "is_n": 578,
+        "vizinhas_positivas": "1/11",
+        "oos_n": 308,
+        "oos_win_pct": 80.84415435791016,
+        "oos_breakeven_empirico_pct": 72.19131050596336,
+        "oos_exp_1tick": 0.7240127325057983,
+        "oos_exp_2ticks": 0.5737920999526978,
+        "slippage_ticks_assumido": 1,
+        "candidata_fraca": false,
+        "alternativa_com_stop": {
+          "veredito": "INCONCLUSIVO: OOS com 275 trades (< 300) -> CENSURADA",
+          "status_is": "REPROVADA_NO_IS",
+          "params_ea": {
+            "setup": "UO",
+            "lado_compra": true,
+            "lado_venda": true,
+            "modo_saida": "BAILOUT",
+            "stop_modo": "FRACAO_R1",
+            "stop_frac": 1.0,
+            "tendencia": "SMA50",
+            "bailout_apos_dias": 0,
+            "modo_entrada": "A_MERCADO_NA_ABERTURA",
+            "nivel_compra": 30.0,
+            "nivel_venda": 50.0,
+            "janela": 10
+          },
+          "oos_n": 275,
+          "oos_win_pct": 62.54545593261719,
+          "oos_exp_1tick": -0.19035285711288452
+        }
+      },
+      "WIN": {
+        "classe": "WIN",
+        "recomendado_para_ea": false,
+        "veredito": "SEM TRADES SUFICIENTES (inconclusivo)",
+        "status_is": "SEM_DADOS_SUFICIENTES",
+        "params_ea": {
+          "setup": "UO",
+          "lado_compra": true,
+          "lado_venda": true,
+          "modo_saida": "INDICADOR",
+          "stop_modo": "FRACAO_R1",
+          "stop_frac": 0.5,
+          "tendencia": "NENHUM",
+          "modo_entrada": "A_MERCADO_NA_ABERTURA",
+          "nivel_compra": 35.0,
+          "nivel_venda": 50.0,
+          "janela": 10
+        },
+        "celula_motor": {
+          "p_compra_max": 35.0,
+          "p_venda_min": 50.0,
+          "p_validade": 10,
+          "p_modo": "A_MERCADO_NA_ABERTURA",
+          "stop": [
+            "frac",
+            0.5
+          ],
+          "saida": [
+            "OSC",
+            0
+          ],
+          "lados": "CV",
+          "tend": "NENHUM",
+          "tdw": "todos"
+        },
+        "is_score_mediana": NaN,
+        "is_n": 12,
+        "vizinhas_positivas": "0/0",
+        "oos_n": 18,
+        "oos_win_pct": 5.55555534362793,
+        "oos_breakeven_empirico_pct": 15.153947423452374,
+        "oos_exp_1tick": -137.1666717529297,
+        "oos_exp_2ticks": -139.1666717529297,
+        "slippage_ticks_assumido": 1,
+        "candidata_fraca": false,
+        "alternativa_com_stop": {
+          "veredito": "SEM TRADES SUFICIENTES (inconclusivo)",
+          "status_is": "SEM_DADOS_SUFICIENTES",
+          "params_ea": {
+            "setup": "UO",
+            "lado_compra": true,
+            "lado_venda": true,
+            "modo_saida": "INDICADOR",
+            "stop_modo": "FRACAO_R1",
+            "stop_frac": 0.5,
+            "tendencia": "NENHUM",
+            "modo_entrada": "A_MERCADO_NA_ABERTURA",
+            "nivel_compra": 35.0,
+            "nivel_venda": 50.0,
+            "janela": 10
+          },
+          "oos_n": 18,
+          "oos_win_pct": 5.55555534362793,
+          "oos_exp_1tick": -137.1666717529297
+        }
+      },
+      "WDO": {
+        "classe": "WDO",
+        "recomendado_para_ea": false,
+        "veredito": "SEM TRADES SUFICIENTES (inconclusivo)",
+        "status_is": "SEM_DADOS_SUFICIENTES",
+        "params_ea": {
+          "setup": "UO",
+          "lado_compra": true,
+          "lado_venda": true,
+          "modo_saida": "BAILOUT",
+          "stop_modo": "FRACAO_R1",
+          "stop_frac": 0.5,
+          "tendencia": "NENHUM",
+          "bailout_apos_dias": 0,
+          "modo_entrada": "A_MERCADO_NA_ABERTURA",
+          "nivel_compra": 35.0,
+          "nivel_venda": 50.0,
+          "janela": 10
+        },
+        "celula_motor": {
+          "p_compra_max": 35.0,
+          "p_venda_min": 50.0,
+          "p_validade": 10,
+          "p_modo": "A_MERCADO_NA_ABERTURA",
+          "stop": [
+            "frac",
+            0.5
+          ],
+          "saida": [
+            "BAILOUT",
+            0
+          ],
+          "lados": "CV",
+          "tend": "NENHUM",
+          "tdw": "todos"
+        },
+        "is_score_mediana": 23.25,
+        "is_n": 25,
+        "vizinhas_positivas": "9/12",
+        "oos_n": 11,
+        "oos_win_pct": 72.7272720336914,
+        "oos_breakeven_empirico_pct": 48.34577702246713,
+        "oos_exp_1tick": 129.27272033691406,
+        "oos_exp_2ticks": 119.2727279663086,
+        "slippage_ticks_assumido": 1,
+        "candidata_fraca": false,
+        "alternativa_com_stop": {
+          "veredito": "SEM TRADES SUFICIENTES (inconclusivo)",
+          "status_is": "SEM_DADOS_SUFICIENTES",
+          "params_ea": {
+            "setup": "UO",
+            "lado_compra": true,
+            "lado_venda": true,
+            "modo_saida": "BAILOUT",
+            "stop_modo": "FRACAO_R1",
+            "stop_frac": 0.5,
+            "tendencia": "NENHUM",
+            "bailout_apos_dias": 0,
+            "modo_entrada": "A_MERCADO_NA_ABERTURA",
+            "nivel_compra": 35.0,
+            "nivel_venda": 50.0,
+            "janela": 10
+          },
+          "oos_n": 11,
+          "oos_win_pct": 72.7272720336914,
+          "oos_exp_1tick": 129.27272033691406
+        }
+      },
+      "ETF_BTC": {
+        "classe": "ETF_BTC",
+        "recomendado_para_ea": false,
+        "veredito": "AMOSTRA INSUFICIENTE (so' ~1 ano de M1 dos ETFs de bitcoin); OOS com 12 trades",
+        "status_is": "SEM_DADOS_SUFICIENTES",
+        "params_ea": {
+          "setup": "UO",
+          "lado_compra": true,
+          "lado_venda": true,
+          "modo_saida": "INDICADOR",
+          "stop_modo": "FRACAO_R1",
+          "stop_frac": 0.5,
+          "tendencia": "NENHUM",
+          "modo_entrada": "A_MERCADO_NA_ABERTURA",
+          "nivel_compra": 35.0,
+          "nivel_venda": 50.0,
+          "janela": 10
+        },
+        "celula_motor": {
+          "p_compra_max": 35.0,
+          "p_venda_min": 50.0,
+          "p_validade": 10,
+          "p_modo": "A_MERCADO_NA_ABERTURA",
+          "stop": [
+            "frac",
+            0.5
+          ],
+          "saida": [
+            "OSC",
+            0
+          ],
+          "lados": "CV",
+          "tend": "NENHUM",
+          "tdw": "todos"
+        },
+        "is_score_mediana": NaN,
+        "is_n": 8,
+        "vizinhas_positivas": "0/0",
+        "oos_n": 12,
+        "oos_win_pct": 33.33333206176758,
+        "oos_breakeven_empirico_pct": 14.432954560982878,
+        "oos_exp_1tick": 1.063033938407898,
+        "oos_exp_2ticks": 1.037940502166748,
+        "slippage_ticks_assumido": 1,
+        "candidata_fraca": false,
+        "alternativa_com_stop": {
+          "veredito": "AMOSTRA INSUFICIENTE (so' ~1 ano de M1 dos ETFs de bitcoin); OOS com 12 trades",
+          "status_is": "SEM_DADOS_SUFICIENTES",
+          "params_ea": {
+            "setup": "UO",
+            "lado_compra": true,
+            "lado_venda": true,
+            "modo_saida": "INDICADOR",
+            "stop_modo": "FRACAO_R1",
+            "stop_frac": 0.5,
+            "tendencia": "NENHUM",
+            "modo_entrada": "A_MERCADO_NA_ABERTURA",
+            "nivel_compra": 35.0,
+            "nivel_venda": 50.0,
+            "janela": 10
+          },
+          "oos_n": 12,
+          "oos_win_pct": 33.33333206176758,
+          "oos_exp_1tick": 1.063033938407898
+        }
+      }
+    },
+    "TDM": {
+      "ACAO": {
+        "classe": "ACAO",
+        "recomendado_para_ea": false,
+        "veredito": "NAO FUNCIONA: aprovada no IS, NAO se sustenta no OOS",
+        "status_is": "APROVADA_NO_IS",
+        "params_ea": {
+          "setup": "TDM",
+          "lado_compra": true,
+          "lado_venda": false,
+          "modo_saida": "TEMPO_N",
+          "stop_modo": "SEM_STOP",
+          "stop_frac": 0.0,
+          "tendencia": "SMA50",
+          "saida_dias": 3,
+          "filtro_dias_compra": [
+            2,
+            3,
+            4,
+            5
+          ],
+          "filtro_dias_venda": [
+            2,
+            3,
+            4,
+            5
+          ],
+          "dias_compra": [
+            1
+          ],
+          "filtro_meses_bloqueados": [
+            1,
+            2,
+            10
+          ]
+        },
+        "celula_motor": {
+          "p_dias": [
+            1
+          ],
+          "p_meses": [
+            1,
+            2,
+            10
+          ],
+          "stop": [
+            "sem",
+            0.0
+          ],
+          "saida": [
+            "TEMPO",
+            3
+          ],
+          "lados": "C",
+          "tend": "SMA50",
+          "tdw": "sem_seg"
+        },
+        "is_score_mediana": 0.7483285665512085,
+        "is_n": 1194,
+        "vizinhas_positivas": "15/18",
+        "oos_n": 554,
+        "oos_win_pct": 47.83393478393555,
+        "oos_breakeven_empirico_pct": 50.39331527117056,
+        "oos_exp_1tick": -0.22434791922569275,
+        "oos_exp_2ticks": -0.3525726795196533,
+        "slippage_ticks_assumido": 1,
+        "candidata_fraca": false,
+        "alternativa_com_stop": {
+          "veredito": "NAO FUNCIONA: aprovada no IS, NAO se sustenta no OOS",
+          "status_is": "APROVADA_NO_IS",
+          "params_ea": {
+            "setup": "TDM",
+            "lado_compra": true,
+            "lado_venda": false,
+            "modo_saida": "TEMPO_N",
+            "stop_modo": "FRACAO_R1",
+            "stop_frac": 1.0,
+            "tendencia": "SMA50",
+            "saida_dias": 3,
+            "filtro_dias_compra": [
+              2,
+              3,
+              4,
+              5
+            ],
+            "filtro_dias_venda": [
+              2,
+              3,
+              4,
+              5
+            ],
+            "dias_compra": [
+              1
+            ],
+            "filtro_meses_bloqueados": [
+              1,
+              2,
+              10
+            ]
+          },
+          "oos_n": 554,
+          "oos_win_pct": 39.53068542480469,
+          "oos_exp_1tick": -0.2823732793331146
+        }
+      },
+      "WIN": {
+        "classe": "WIN",
+        "recomendado_para_ea": false,
+        "veredito": "NAO FUNCIONA: reprovada nos criterios do IS (OOS isolado positivo, mas a celula nao passou no IS: nao confiavel, so' investigar)",
+        "status_is": "REPROVADA_NO_IS",
+        "params_ea": {
+          "setup": "TDM",
+          "lado_compra": true,
+          "lado_venda": false,
+          "modo_saida": "FECHAMENTO",
+          "stop_modo": "SEM_STOP",
+          "stop_frac": 0.0,
+          "tendencia": "NENHUM",
+          "dias_compra": [
+            1,
+            2,
+            3
+          ],
+          "filtro_meses_bloqueados": [
+            1,
+            2,
+            10
+          ]
+        },
+        "celula_motor": {
+          "p_dias": [
+            1,
+            2,
+            3
+          ],
+          "p_meses": [
+            1,
+            2,
+            10
+          ],
+          "stop": [
+            "sem",
+            0.0
+          ],
+          "saida": [
+            "FECHAMENTO",
+            0
+          ],
+          "lados": "C",
+          "tend": "NENHUM",
+          "tdw": "todos"
+        },
+        "is_score_mediana": -4.166666030883789,
+        "is_n": 72,
+        "vizinhas_positivas": "9/18",
+        "oos_n": 63,
+        "oos_win_pct": 55.55555725097656,
+        "oos_breakeven_empirico_pct": 44.35283083440671,
+        "oos_exp_1tick": 51.43650817871094,
+        "oos_exp_2ticks": 49.43650817871094,
+        "slippage_ticks_assumido": 1,
+        "candidata_fraca": false,
+        "alternativa_com_stop": {
+          "veredito": "NAO FUNCIONA: reprovada nos criterios do IS (OOS isolado positivo, mas a celula nao passou no IS: nao confiavel, so' investigar)",
+          "status_is": "REPROVADA_NO_IS",
+          "params_ea": {
+            "setup": "TDM",
+            "lado_compra": true,
+            "lado_venda": false,
+            "modo_saida": "BAILOUT",
+            "stop_modo": "FRACAO_R1",
+            "stop_frac": 1.0,
+            "tendencia": "NENHUM",
+            "bailout_apos_dias": 0,
+            "filtro_dias_compra": [
+              1,
+              3,
+              4,
+              5
+            ],
+            "filtro_dias_venda": [
+              1,
+              3,
+              4,
+              5
+            ],
+            "dias_compra": [
+              1,
+              2,
+              3
+            ],
+            "filtro_meses_bloqueados": []
+          },
+          "oos_n": 51,
+          "oos_win_pct": 66.66665649414062,
+          "oos_exp_1tick": 9.480392456054688
+        }
+      },
+      "WDO": {
+        "classe": "WDO",
+        "recomendado_para_ea": false,
+        "veredito": "NAO FUNCIONA: aprovada no IS, NAO se sustenta no OOS",
+        "status_is": "APROVADA_NO_IS",
+        "params_ea": {
+          "setup": "TDM",
+          "lado_compra": true,
+          "lado_venda": false,
+          "modo_saida": "BAILOUT",
+          "stop_modo": "SEM_STOP",
+          "stop_frac": 0.0,
+          "tendencia": "NENHUM",
+          "bailout_apos_dias": 0,
+          "filtro_dias_compra": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "filtro_dias_venda": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "dias_compra": [
+            1,
+            2,
+            3
+          ],
+          "filtro_meses_bloqueados": []
+        },
+        "celula_motor": {
+          "p_dias": [
+            1,
+            2,
+            3
+          ],
+          "p_meses": [],
+          "stop": [
+            "sem",
+            0.0
+          ],
+          "saida": [
+            "BAILOUT",
+            0
+          ],
+          "lados": "C",
+          "tend": "NENHUM",
+          "tdw": "sem_sex"
+        },
+        "is_score_mediana": 229.66665649414062,
+        "is_n": 61,
+        "vizinhas_positivas": "17/18",
+        "oos_n": 42,
+        "oos_win_pct": 71.42857360839844,
+        "oos_breakeven_empirico_pct": 86.57007022181124,
+        "oos_exp_1tick": -323.952392578125,
+        "oos_exp_2ticks": -333.952392578125,
+        "slippage_ticks_assumido": 1,
+        "candidata_fraca": false,
+        "alternativa_com_stop": {
+          "veredito": "NAO FUNCIONA: aprovada no IS, NAO se sustenta no OOS",
+          "status_is": "APROVADA_NO_IS",
+          "params_ea": {
+            "setup": "TDM",
+            "lado_compra": true,
+            "lado_venda": false,
+            "modo_saida": "BAILOUT",
+            "stop_modo": "FRACAO_R1",
+            "stop_frac": 1.0,
+            "tendencia": "NENHUM",
+            "bailout_apos_dias": 0,
+            "filtro_dias_compra": [
+              1,
+              2,
+              3,
+              4
+            ],
+            "filtro_dias_venda": [
+              1,
+              2,
+              3,
+              4
+            ],
+            "dias_compra": [
+              1,
+              2,
+              3
+            ],
+            "filtro_meses_bloqueados": []
+          },
+          "oos_n": 56,
+          "oos_win_pct": 55.35714340209961,
+          "oos_exp_1tick": -90.23213958740234
+        }
+      },
+      "ETF_BTC": {
+        "classe": "ETF_BTC",
+        "recomendado_para_ea": false,
+        "veredito": "AMOSTRA INSUFICIENTE (so' ~1 ano de M1 dos ETFs de bitcoin); OOS com 7 trades",
+        "status_is": "APROVADA_NO_IS",
+        "params_ea": {
+          "setup": "TDM",
+          "lado_compra": true,
+          "lado_venda": false,
+          "modo_saida": "BAILOUT",
+          "stop_modo": "SEM_STOP",
+          "stop_frac": 0.0,
+          "tendencia": "SWING",
+          "bailout_apos_dias": 0,
+          "filtro_dias_compra": [
+            1,
+            3,
+            4,
+            5
+          ],
+          "filtro_dias_venda": [
+            1,
+            3,
+            4,
+            5
+          ],
+          "dias_compra": [
+            1,
+            2,
+            3
+          ],
+          "filtro_meses_bloqueados": []
+        },
+        "celula_motor": {
+          "p_dias": [
+            1,
+            2,
+            3
+          ],
+          "p_meses": [],
+          "stop": [
+            "sem",
+            0.0
+          ],
+          "saida": [
+            "BAILOUT",
+            0
+          ],
+          "lados": "C",
+          "tend": "SWING",
+          "tdw": "sem_ter"
+        },
+        "is_score_mediana": 1.5758804082870483,
+        "is_n": 16,
+        "vizinhas_positivas": "9/12",
+        "oos_n": 7,
+        "oos_win_pct": 71.42857360839844,
+        "oos_breakeven_empirico_pct": 82.7739288382917,
+        "oos_exp_1tick": -0.21007709205150604,
+        "oos_exp_2ticks": -0.4298679828643799,
+        "slippage_ticks_assumido": 1,
+        "candidata_fraca": false,
+        "alternativa_com_stop": {
+          "veredito": "AMOSTRA INSUFICIENTE (so' ~1 ano de M1 dos ETFs de bitcoin); OOS com 13 trades",
+          "status_is": "APROVADA_NO_IS",
+          "params_ea": {
+            "setup": "TDM",
+            "lado_compra": true,
+            "lado_venda": false,
+            "modo_saida": "TEMPO_N",
+            "stop_modo": "FRACAO_R1",
+            "stop_frac": 1.0,
+            "tendencia": "NENHUM",
+            "saida_dias": 3,
+            "filtro_dias_compra": [
+              1,
+              2,
+              3,
+              5
+            ],
+            "filtro_dias_venda": [
+              1,
+              2,
+              3,
+              5
+            ],
+            "dias_compra": [
+              15
+            ],
+            "filtro_meses_bloqueados": []
+          },
+          "oos_n": 13,
+          "oos_win_pct": 23.076923370361328,
+          "oos_exp_1tick": -0.630251944065094
+        }
+      }
+    },
+    "TDW": {
+      "ACAO": {
+        "classe": "ACAO",
+        "recomendado_para_ea": false,
+        "veredito": "NAO FUNCIONA: reprovada nos criterios do IS",
+        "status_is": "REPROVADA_NO_IS",
+        "params_ea": {
+          "setup": "TDW",
+          "lado_compra": false,
+          "lado_venda": true,
+          "modo_saida": "FECHAMENTO",
+          "stop_modo": "SEM_STOP",
+          "stop_frac": 0.0,
+          "tendencia": "SMA50",
+          "dias_compra": [
+            1
+          ],
+          "dias_venda": [
+            1
+          ]
+        },
+        "celula_motor": {
+          "p_dia": 0,
+          "stop": [
+            "sem",
+            0.0
+          ],
+          "saida": [
+            "FECHAMENTO",
+            0
+          ],
+          "lados": "V",
+          "tend": "SMA50",
+          "tdw": "todos"
+        },
+        "is_score_mediana": -0.1538269966840744,
+        "is_n": 8927,
+        "vizinhas_positivas": "0/10",
+        "oos_n": 5841,
+        "oos_win_pct": 46.77281188964844,
+        "oos_breakeven_empirico_pct": 50.83219973541196,
+        "oos_exp_1tick": -0.15651583671569824,
+        "oos_exp_2ticks": -0.25525593757629395,
+        "slippage_ticks_assumido": 1,
+        "candidata_fraca": false,
+        "alternativa_com_stop": {
+          "veredito": "NAO FUNCIONA: reprovada nos criterios do IS",
+          "status_is": "REPROVADA_NO_IS",
+          "params_ea": {
+            "setup": "TDW",
+            "lado_compra": false,
+            "lado_venda": true,
+            "modo_saida": "FECHAMENTO",
+            "stop_modo": "FRACAO_R1",
+            "stop_frac": 1.0,
+            "tendencia": "SMA50",
+            "dias_compra": [
+              5
+            ],
+            "dias_venda": [
+              5
+            ]
+          },
+          "oos_n": 5662,
+          "oos_win_pct": 47.50971221923828,
+          "oos_exp_1tick": -0.1132645308971405
+        }
+      },
+      "WIN": {
+        "classe": "WIN",
+        "recomendado_para_ea": false,
+        "veredito": "POSITIVA FRACA no OOS (win% > breakeven mas o IC95% cruza o breakeven)",
+        "status_is": "APROVADA_NO_IS",
+        "params_ea": {
+          "setup": "TDW",
+          "lado_compra": true,
+          "lado_venda": false,
+          "modo_saida": "FECHAMENTO",
+          "stop_modo": "SEM_STOP",
+          "stop_frac": 0.0,
+          "tendencia": "SWING",
+          "dias_compra": [
+            4
+          ],
+          "dias_venda": [
+            4
+          ]
+        },
+        "celula_motor": {
+          "p_dia": 3,
+          "stop": [
+            "sem",
+            0.0
+          ],
+          "saida": [
+            "FECHAMENTO",
+            0
+          ],
+          "lados": "C",
+          "tend": "SWING",
+          "tdw": "todos"
+        },
+        "is_score_mediana": 69.03125,
+        "is_n": 67,
+        "vizinhas_positivas": "7/10",
+        "oos_n": 57,
+        "oos_win_pct": 50.877193450927734,
+        "oos_breakeven_empirico_pct": 50.35535581234206,
+        "oos_exp_1tick": 2.9912281036376953,
+        "oos_exp_2ticks": 0.9912280440330505,
+        "slippage_ticks_assumido": 1,
+        "candidata_fraca": true,
+        "alternativa_com_stop": {
+          "veredito": "NAO FUNCIONA: aprovada no IS, NAO se sustenta no OOS",
+          "status_is": "APROVADA_NO_IS",
+          "params_ea": {
+            "setup": "TDW",
+            "lado_compra": false,
+            "lado_venda": true,
+            "modo_saida": "FECHAMENTO",
+            "stop_modo": "FRACAO_R1",
+            "stop_frac": 1.0,
+            "tendencia": "SWING",
+            "dias_compra": [
+              2
+            ],
+            "dias_venda": [
+              2
+            ]
+          },
+          "oos_n": 51,
+          "oos_win_pct": 31.372549057006836,
+          "oos_exp_1tick": -60.5
+        }
+      },
+      "WDO": {
+        "classe": "WDO",
+        "recomendado_para_ea": false,
+        "veredito": "NAO FUNCIONA: aprovada no IS, NAO se sustenta no OOS",
+        "status_is": "APROVADA_NO_IS",
+        "params_ea": {
+          "setup": "TDW",
+          "lado_compra": false,
+          "lado_venda": true,
+          "modo_saida": "FECHAMENTO",
+          "stop_modo": "SEM_STOP",
+          "stop_frac": 0.0,
+          "tendencia": "SMA50",
+          "dias_compra": [
+            3
+          ],
+          "dias_venda": [
+            3
+          ]
+        },
+        "celula_motor": {
+          "p_dia": 2,
+          "stop": [
+            "sem",
+            0.0
+          ],
+          "saida": [
+            "FECHAMENTO",
+            0
+          ],
+          "lados": "V",
+          "tend": "SMA50",
+          "tdw": "todos"
+        },
+        "is_score_mediana": 84.11538696289062,
+        "is_n": 72,
+        "vizinhas_positivas": "6/10",
+        "oos_n": 80,
+        "oos_win_pct": 42.5,
+        "oos_breakeven_empirico_pct": 55.437553684168044,
+        "oos_exp_1tick": -67.3125,
+        "oos_exp_2ticks": -77.3125,
+        "slippage_ticks_assumido": 1,
+        "candidata_fraca": false,
+        "alternativa_com_stop": {
+          "veredito": "NAO FUNCIONA: aprovada no IS, NAO se sustenta no OOS",
+          "status_is": "APROVADA_NO_IS",
+          "params_ea": {
+            "setup": "TDW",
+            "lado_compra": false,
+            "lado_venda": true,
+            "modo_saida": "FECHAMENTO",
+            "stop_modo": "FRACAO_R1",
+            "stop_frac": 1.0,
+            "tendencia": "SMA50",
+            "dias_compra": [
+              3
+            ],
+            "dias_venda": [
+              3
+            ]
+          },
+          "oos_n": 80,
+          "oos_win_pct": 41.25,
+          "oos_exp_1tick": -50.3125
+        }
+      },
+      "ETF_BTC": {
+        "classe": "ETF_BTC",
+        "recomendado_para_ea": false,
+        "veredito": "NAO FUNCIONA: aprovada no IS, NAO se sustenta no OOS",
+        "status_is": "APROVADA_NO_IS",
+        "params_ea": {
+          "setup": "TDW",
+          "lado_compra": false,
+          "lado_venda": true,
+          "modo_saida": "FECHAMENTO",
+          "stop_modo": "SEM_STOP",
+          "stop_frac": 0.0,
+          "tendencia": "SWING",
+          "dias_compra": [
+            4
+          ],
+          "dias_venda": [
+            4
+          ]
+        },
+        "celula_motor": {
+          "p_dia": 3,
+          "stop": [
+            "sem",
+            0.0
+          ],
+          "saida": [
+            "FECHAMENTO",
+            0
+          ],
+          "lados": "V",
+          "tend": "SWING",
+          "tdw": "todos"
+        },
+        "is_score_mediana": 1.8645906448364258,
+        "is_n": 29,
+        "vizinhas_positivas": "5/10",
+        "oos_n": 30,
+        "oos_win_pct": 40.0,
+        "oos_breakeven_empirico_pct": 45.9831649873521,
+        "oos_exp_1tick": -0.16531366109848022,
+        "oos_exp_2ticks": -0.262127161026001,
+        "slippage_ticks_assumido": 1,
+        "candidata_fraca": false,
+        "alternativa_com_stop": {
+          "veredito": "NAO FUNCIONA: aprovada no IS, NAO se sustenta no OOS",
+          "status_is": "APROVADA_NO_IS",
+          "params_ea": {
+            "setup": "TDW",
+            "lado_compra": false,
+            "lado_venda": true,
+            "modo_saida": "FECHAMENTO",
+            "stop_modo": "FRACAO_R1",
+            "stop_frac": 0.5,
+            "tendencia": "SWING",
+            "dias_compra": [
+              4
+            ],
+            "dias_venda": [
+              4
+            ]
+          },
+          "oos_n": 30,
+          "oos_win_pct": 40.0,
+          "oos_exp_1tick": -0.21616008877754211
+        }
+      }
+    },
+    "TRES_BARRAS": {
+      "WIN": {
+        "classe": "WIN",
+        "recomendado_para_ea": false,
+        "veredito": "NAO FUNCIONA: aprovada no IS, NAO se sustenta no OOS",
+        "status_is": "APROVADA_NO_IS",
+        "params_ea": {
+          "setup": "TRES_BARRAS",
+          "lado_compra": true,
+          "lado_venda": true,
+          "modo_saida": "ALVO_LIMITE_SMA3",
+          "stop_modo": "FRACAO_R1",
+          "stop_frac": 2.0,
+          "tendencia": "SMA50",
+          "timeframe": "M5",
+          "tendencia_3b": "SMA50"
+        },
+        "celula_motor": {
+          "tf": 5,
+          "stop": [
+            "frac",
+            2.0
+          ],
+          "tend": "SMA50"
+        },
+        "is_score_mediana": 0.8835847973823547,
+        "is_n": 2626,
+        "vizinhas_positivas": "2/4",
+        "oos_n": 2095,
+        "oos_win_pct": 77.8042984008789,
+        "oos_breakeven_empirico_pct": 78.81218898405308,
+        "oos_exp_1tick": -2.2904534339904785,
+        "oos_exp_2ticks": -2.6365156173706055,
+        "slippage_ticks_assumido": 1,
+        "candidata_fraca": false,
+        "alternativa_com_stop": {
+          "veredito": "NAO FUNCIONA: aprovada no IS, NAO se sustenta no OOS",
+          "status_is": "APROVADA_NO_IS",
+          "params_ea": {
+            "setup": "TRES_BARRAS",
+            "lado_compra": true,
+            "lado_venda": true,
+            "modo_saida": "ALVO_LIMITE_SMA3",
+            "stop_modo": "FRACAO_R1",
+            "stop_frac": 2.0,
+            "tendencia": "SMA50",
+            "timeframe": "M5",
+            "tendencia_3b": "SMA50"
+          },
+          "oos_n": 2095,
+          "oos_win_pct": 77.8042984008789,
+          "oos_exp_1tick": -2.2904534339904785
+        }
+      },
+      "WDO": {
+        "classe": "WDO",
+        "recomendado_para_ea": false,
+        "veredito": "NAO FUNCIONA: reprovada nos criterios do IS",
+        "status_is": "REPROVADA_NO_IS",
+        "params_ea": {
+          "setup": "TRES_BARRAS",
+          "lado_compra": true,
+          "lado_venda": true,
+          "modo_saida": "ALVO_LIMITE_SMA3",
+          "stop_modo": "FRACAO_R1",
+          "stop_frac": 1.0,
+          "tendencia": "SWING",
+          "timeframe": "M5",
+          "tendencia_3b": "SWING"
+        },
+        "celula_motor": {
+          "tf": 5,
+          "stop": [
+            "frac",
+            1.0
+          ],
+          "tend": "SWING"
+        },
+        "is_score_mediana": -5.56084680557251,
+        "is_n": 2553,
+        "vizinhas_positivas": "0/4",
+        "oos_n": 2090,
+        "oos_win_pct": 73.5406723022461,
+        "oos_breakeven_empirico_pct": 75.89911497206164,
+        "oos_exp_1tick": -7.019138813018799,
+        "oos_exp_2ticks": -9.72009563446045,
+        "slippage_ticks_assumido": 1,
+        "candidata_fraca": false,
+        "alternativa_com_stop": {
+          "veredito": "NAO FUNCIONA: reprovada nos criterios do IS",
+          "status_is": "REPROVADA_NO_IS",
+          "params_ea": {
+            "setup": "TRES_BARRAS",
+            "lado_compra": true,
+            "lado_venda": true,
+            "modo_saida": "ALVO_LIMITE_SMA3",
+            "stop_modo": "FRACAO_R1",
+            "stop_frac": 1.0,
+            "tendencia": "SWING",
+            "timeframe": "M5",
+            "tendencia_3b": "SWING"
+          },
+          "oos_n": 2090,
+          "oos_win_pct": 73.5406723022461,
+          "oos_exp_1tick": -7.019138813018799
+        }
+      }
+    }
+  }
+}

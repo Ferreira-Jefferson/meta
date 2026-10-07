@@ -1,0 +1,29 @@
+familia,recorte,estatistica,n,valor,p2s_perm,obs
+A.vol,range_total,"corr(|gap|,y)",122,0.150684360701242,0.09515,
+A.vol,range_60m,"corr(|gap|,y)",122,0.11546474523515038,0.207,
+A.vol,realized_var_total,"corr(|gap|,y)",122,0.27079374174949133,0.0035,
+A.vol,realized_var_60m,"corr(|gap|,y)",122,0.22833867451082482,0.01175,
+A.vol,vol_60m(participacao),"corr(|gap|,y)",122,0.3362314469373608,0.00025,
+C.fill,fillrate curto-longo,diff_proporcao,118,-0.04559139784946242,0.81715,curto=0.634 longo=0.680
+C.fill,fillrate pequeno-grande,diff_proporcao,78,0.4772577455504285,5e-05,pequeno=0.892 grande=0.415
+C.fill,|gap| x frac_fechada_eod,corr,118,0.061453016736854986,0.4745,
+C.fill,gap(sinal) x frac_fechada_eod,corr,118,0.0040635323507560205,0.9618,
+D.dow,segunda vs resto (eod_ret),diff_media,122,-0.002115524214786965,0.16585,
+D.dow,sexta vs resto (eod_ret),diff_media,122,0.00042650991674973314,0.7933,
+D.dow,omnibus dia-da-semana,var_entre_grupos,122,0.00018920516773179686,0.4103,
+E.vol,|gap| x volume_60m,corr,122,0.3362314469373608,0.0002,
+E.vol,gap x eod_ret | volume ALTO,corr,61,-0.08707907733366167,0.5008,
+E.vol,gap x eod_ret | volume BAIXO,corr,61,0.08280444780865483,0.52815,
+F.crossday,gap_hoje x intradia_ontem,corr,122,-0.25853753884525726,0.00425,
+F.crossday,eod_ret | sinais concordam vs nao,diff_media,122,-0.0011488272951181012,0.38375,
+F.crossday,(gap+intradia_ontem) x eod_ret,corr,122,0.01493816844046504,0.87175,
+G.extremo,|eod_ret| decil-top-|gap| vs resto,diff_media,122,0.0002552757714840252,0.8542,n_top=13
+G.extremo,eod_ret decil+ vs decil-,diff_media,26,-0.002298392629557726,0.42205,n+=13 n-=13
+H.estabilidade,gap x eod_ret | janela=IS,corr,71,-0.062242055546558324,0.6071,
+H.estabilidade,gap x eod_ret | janela=OOS,corr,51,0.02490389277926838,0.8638,
+J.autocorr,gap(t) x gap(t+1),corr,121,-0.014354652698057762,0.87635,
+L.tendencia,|trend_r_1a_hora| gap-grande vs gap-pequeno,diff_media,122,0.01871034669125171,0.71945,
+M.interacao,eod_ret gap-grande: longo vs curto,diff_media,41,-0.0014622336976993782,0.5962,
+M.interacao,fillrate gap-grande: longo vs curto,diff_proporcao,41,-0.049242424242424254,1.0,longo=0.375 curto=0.424
+N.cluster,|gap|_hoje x realized_var_AMANHA,corr,121,0.13836567706075428,0.13205,
+N.cluster,|gap|_hoje x range_AMANHA,corr,121,0.048852227058848445,0.59685,
