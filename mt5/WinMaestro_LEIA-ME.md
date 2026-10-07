@@ -119,4 +119,4 @@ Diferenças pequenas em relação aos EAs avulsos, mantidas de propósito (detal
 
 ## Testes unitários
 
-Removidos a pedido do dono em 2026-10-07 (`WinMaestro_Teste.mq5` + `WinMaestro/CorretoraFalsa.mqh`, 137 verificações com corretora falsa, nunca rodadas). Recuperar com `git show 257b1e4:mt5/WinMaestro_Teste.mq5` e `git show 257b1e4:mt5/WinMaestro/CorretoraFalsa.mqh`. O `#ifndef WINMAESTRO_TESTE` em `Corretora.mqh` ficou e não muda nada no EA de produção.
+Removidos a pedido do dono em 2026-10-07 (`WinMaestro_Teste.mq5` + `WinMaestro/CorretoraFalsa.mqh`, 137 verificações com corretora falsa, nunca rodadas). Recuperar com `git show 988e8e4:mt5/WinMaestro_Teste.mq5` e `git show 988e8e4:mt5/WinMaestro/CorretoraFalsa.mqh`. O `#ifndef WINMAESTRO_TESTE` em `Corretora.mqh` ficou e não muda nada no EA de produção.

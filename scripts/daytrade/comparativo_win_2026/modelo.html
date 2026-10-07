@@ -105,6 +105,56 @@ details.hist > summary:focus-visible { outline: 2px solid var(--amber); outline-
     </table></div>
   </section>
 
+  <section style="display:grid;gap:16px" id="sec-maestro">
+    <h2>WinMaestro: os 5 robôs juntos na mesma conta</h2>
+    <p class="lede">O WinMaestro roda os 5 robôs num EA só, numa conta NETTING da B3. Cada robô tem a sua ficha (posição virtual) e manda as ordens com o seu magic. A posição real da conta é a soma das fichas: dois robôs comprados dão 2 contratos, um comprado e um vendido dão zero. Abaixo, a simulação dessa conta com as operações de cada robô tal como na tabela acima (tempos padrão e regra do gap), de 2022 a 05/10/2026. O custo é de R$1 por contrato que a posição líquida varia, o mesmo que os R$2 por operação da tabela acima; ordens simultâneas que se compensam não pagam. Cada ano recomeça com R$1.000 na conta única. <b>O maestro reproduz a soma dos robôs isolados: +33.567 em 5 anos, contra +33.545 com cada robô na sua conta.</b> O menor saldo, marcado a mercado, foi R$700 em 2026 e R$866 em 2024. Nenhum ano quebrou.</p>
+    <div class="scroll"><table>
+      <thead><tr><th class="l">Ano</th><th>Soma isolada<br>(5 contas)</th><th>WinMaestro<br>líquido</th><th>Bruto</th><th>Custo</th><th>Ops</th><th>Maior queda</th><th>Saldo mín.<br>realizado</th><th>Saldo mín.<br>a mercado</th><th>Máx.<br>contratos</th><th>Margem<br>(R$100/ct)</th></tr></thead>
+      <tbody>
+        <tr><td class="l">2022</td><td class="pos">+5.026</td><td class="m pos">+5.028</td><td>5.972</td><td>944</td><td>473</td><td>2.537</td><td>994</td><td>985</td><td>4</td><td>400</td></tr>
+        <tr><td class="l">2023</td><td class="pos">+4.512</td><td class="m pos">+4.514</td><td>5.422</td><td>908</td><td>455</td><td>2.170</td><td>998</td><td>989</td><td>4</td><td>400</td></tr>
+        <tr><td class="l">2024</td><td class="pos">+4.720</td><td class="m pos">+4.726</td><td>5.674</td><td>948</td><td>477</td><td>2.031</td><td>867</td><td>866</td><td>4</td><td>400</td></tr>
+        <tr><td class="l">2025 (até set)</td><td class="pos">+5.208</td><td class="m pos">+5.212</td><td>5.896</td><td>684</td><td>344</td><td>3.163</td><td>982</td><td>910</td><td>4</td><td>400</td></tr>
+        <tr><td class="l">2026 (até 05/10)</td><td class="pos">+14.079</td><td class="m pos">+14.087</td><td>14.801</td><td>714</td><td>361</td><td>3.350</td><td>622</td><td>700</td><td>4</td><td>400</td></tr>
+      </tbody>
+      <tfoot><tr><td class="l">Total</td><td class="pos">+33.545</td><td class="pos">+33.567</td><td>37.765</td><td>4.198</td><td>2.110</td><td>—</td><td>—</td><td>—</td><td>4</td><td>400</td></tr></tfoot>
+    </table></div>
+    <div class="legend"><span>Maior queda do maestro: a mercado, nos instantes de evento. Da soma isolada: por saídas.</span><span>Saldo a mercado só é medido nos instantes em que alguma ordem acontece; picos entre eventos não aparecem.</span></div>
+
+    <h3 style="margin:8px 0 0;font-size:13px;color:var(--fg-strong)">Contra as outras formas de juntar os robôs numa conta NETTING</h3>
+    <div class="scroll"><table>
+      <thead><tr><th class="l">Forma de convivência</th><th>2022–2025</th><th>2026</th><th>Total</th><th class="l"></th></tr></thead>
+      <tbody>
+        <tr><td class="l">Cada robô na sua conta (referência)</td><td>+19.466</td><td>+14.079</td><td class="tot">+33.545</td><td class="l"></td></tr>
+        <tr><td class="l"><b>WinMaestro: posição líquida, sem teto (chegou a 4 contratos; o EA permite até 5)</b> <span class="pill ok">padrão</span></td><td class="pos">+19.480</td><td class="pos">+14.087</td><td class="tot pos">+33.567</td><td class="l"><span class="pill ok">igual ao isolado</span></td></tr>
+        <tr><td class="l">WinMaestro com teto de 2 contratos</td><td>+17.476</td><td>+13.103</td><td class="tot">+30.579</td><td class="l"><span class="pill x">perde 2.966</span></td></tr>
+        <tr><td class="l">WinMaestro com teto de 1 contrato</td><td>+15.106</td><td>+6.769</td><td class="tot">+21.875</td><td class="l"><span class="pill x">perde 11.670</span></td></tr>
+        <tr><td class="l">EAs separados, como hoje: quem entra primeiro bloqueia os outros</td><td>+16.944</td><td>+5.131</td><td class="tot">+22.075</td><td class="l"><span class="pill x">perde 11.470</span></td></tr>
+        <tr><td class="l">Prioridade fixa entre robôs</td><td>+16.287</td><td>+5.167</td><td class="tot">+21.454</td><td class="l"><span class="pill x">perde 12.091</span></td></tr>
+        <tr><td class="l">Conflito de lado = todos ficam fora</td><td>+15.082</td><td>+6.526</td><td class="tot">+21.608</td><td class="l"><span class="pill x">perde 11.937</span></td></tr>
+        <tr><td class="l">Mesmo lado mantém, lado oposto inverte</td><td>+14.629</td><td>+8.389</td><td class="tot">+23.018</td><td class="l"><span class="pill x">perde 10.527</span></td></tr>
+        <tr><td class="l">Preempção: o sinal novo fecha a posição e assume</td><td>+7.450</td><td>+6.548</td><td class="tot">+13.998</td><td class="l"><span class="pill x">perde 19.547</span></td></tr>
+        <tr><td class="l">Consenso: só entra com ≥ 2 robôs do mesmo lado</td><td>+7.026</td><td>+5.412</td><td class="tot">+12.438</td><td class="l"><span class="pill x">perde 21.107</span></td></tr>
+      </tbody>
+    </table></div>
+
+    <h3 style="margin:8px 0 0;font-size:13px;color:var(--fg-strong)">Quanto tempo a conta fica com cada tamanho de posição (horas no ano)</h3>
+    <div class="scroll"><table>
+      <thead><tr><th class="l">Ano</th><th>Zerada entre eventos</th><th>1 contrato</th><th>2 contratos</th><th>3 contratos</th><th>4 contratos</th></tr></thead>
+      <tbody>
+        <tr><td class="l">2022</td><td>261</td><td>1.013</td><td>209</td><td>56</td><td>3</td></tr>
+        <tr><td class="l">2023</td><td>147</td><td>979</td><td>292</td><td>54</td><td>4</td></tr>
+        <tr><td class="l">2024</td><td>170</td><td>1.061</td><td>326</td><td>63</td><td>2</td></tr>
+        <tr><td class="l">2025 (até set)</td><td>102</td><td>749</td><td>262</td><td>59</td><td>9</td></tr>
+        <tr><td class="l">2026 (até 05/10)</td><td>115</td><td>694</td><td>280</td><td>65</td><td>2</td></tr>
+      </tbody>
+    </table></div>
+
+    <p class="lede">Só a posição líquida igual à soma das fichas preserva o resultado de cada robô. Toda regra que impede um robô de entrar perde dinheiro, porque quando os robôs discordam os dois lados costumam ganhar. Os EAs separados na mesma conta, como estão hoje, deixariam de ganhar cerca de R$11,5 mil nesses 5 anos, R$9 mil só em 2026. O preço do maestro é a exposição: a conta passa a maior parte do tempo com 1 contrato, de 200 a 330 horas por ano com 2, cerca de 60 com 3, e chega a 4 por poucas horas. Limitar a 2 contratos custa R$3 mil e não reduz a maior queda de forma consistente; limitar a 1 custa R$11,7 mil.</p>
+    <p class="lede"><b>O que esta simulação não mostra.</b> Cada ordem executa ao preço que o robô obteria sozinho. O maestro real manda ordens separadas por robô, então o bruto é o mesmo por construção (conferido: diferença zero em todos os anos), mas a fila e o deslize de várias ordens no mesmo instante não foram medidos. Em 2022 o WinGapBarra1 continua operando na conta única depois do ponto em que quebraria a conta própria (−1.034 na tabela acima); por isso a soma isolada de 2022 é maior que a soma das linhas daquela tabela. A especificação do EA cita R$7.000 como capital recomendado, só como informação; a simulação parte de R$1.000. <b>O EA ainda não foi testado no MT5:</b> a v2.02 compila sem erros, mas as 137 verificações do EA de teste ainda não rodaram, e a equivalência no Testador (WINV26, 13/08 a 30/09) está pendente (roteiro em mt5/WinMaestro_ROTEIRO_TESTE.md).</p>
+  </section>
+
+
   <section style="display:grid;gap:16px">
     <h2>Outros tempos gráficos</h2>
     <p class="lede">Cada robô rodou em outros tempos gráficos com os mesmos números do EA. Uma EMA de 34 continua sendo de 34 velas, agora do novo tempo. O filtro de tempo maior acompanha a troca. No tempo nativo, cada versão reproduz exatamente as operações originais. Os valores têm custo de R$2 por operação, 1 contrato. Nada foi adotado: um tempo gráfico só conta se for positivo nos 5 anos, e mesmo assim passa pelo acompanhamento de outubro.</p>
