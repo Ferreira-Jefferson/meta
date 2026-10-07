@@ -1,0 +1,42 @@
+{
+ "WinDeslocamentoMatinal": {
+  "resumo": "v1.31 · decisão 10:30, 1 op/dia · gap",
+  "textos": [
+   "Port de WinDeslocamentoMatinal.mq5 v1.30. A decisão sai no primeiro tick depois de 90 minutos de pregão. A entrada é limitada, com prazo de 15 min. O stop fica do outro lado da abertura e é apertado até 10% do saldo corrente.",
+   "Validação, 13/08 a 30/09 no WINV26: mesmos 11 sinais e mesmas 11 operações (dia e lado) do replay anterior. A diferença por operação vai de −R$21 a +R$2. Ela vem só do preço, porque o Testador enche a limitada no preço pedido e não há compra/venda separadas.",
+   "Corrigido em relação ao replay anterior: o teto de risco de 10% do saldo, que o replay anterior não tinha. Ele apertou o stop em 48 das 66 decisões.",
+   "v1.31: não abre posição no dia em que a abertura salta ≥ 1 ATR diário em relação ao fechamento anterior (input NaoOperarGapATR; 0 desliga). Em 2026 isso bloqueia 03/03, 08/04 e 05/10."
+  ]
+ },
+ "Win_c1": {
+  "resumo": "v2.07 · H1, filtro H3, break-even 15 min · gap",
+  "textos": [
+   "Win_c1.mq5 v2.06: o Win em H1/H3, com break-even a mercado 15 minutos depois da abertura da vela de entrada. Foi o tempo escolhido pelo dono: +2.267 com custo de 2022 a 2026, positivo em 4 de 5 anos (perde em 2024).",
+   "v2.07: não abre posição no dia em que a abertura salta ≥ 1 ATR diário em relação ao fechamento anterior (input NaoOperarGapATR; 0 desliga). Em 2026 isso bloqueia 03/03, 08/04 e 05/10."
+  ]
+ },
+ "WinCincoMedias": {
+  "resumo": "v2.05 · H2, Supertrend H4 · gap",
+  "textos": [
+   "WinCincoMedias.mq5 v2.04: 5 EMAs agora no H2, com Supertrend no H4, tempo fixo no código. Zera antes do fim real do pregão. Foi positivo com custo em todos os anos de 2022 a 2026 (+1.446 / +1.232 / +1.291 / +657 / +3.196), sem quebrar.",
+   "No M30 (v2.03), o de 2026 inteiro deu +8.859 sem custo, mas foi negativo em 2022 e 2024. As operações M30 estão em resultados_M30_historico/.",
+   "v2.05: não abre posição no dia em que a abertura salta ≥ 1 ATR diário em relação ao fechamento anterior (input NaoOperarGapATR; 0 desliga). Em 2026 isso bloqueia 03/03, 08/04 e 05/10."
+  ]
+ },
+ "WinRetanguloEma34": {
+  "resumo": "v1.07 · M15 ajustado, filtro 0,5 ATR · gap",
+  "textos": [
+   "WinRetanguloEma34.mq5 v1.06: retângulo de 20 velas M15 com EMA34. Só entra se o pregão já andou ao menos 0,5 × ATR14 diário até a hora da decisão (input FiltroAmplitudeATR; 0 desliga) e ignora velas depois do fim do pregão.",
+   "O filtro corrigiu a quebra de 2024. A perda vinha de manhãs com o mercado parado, no ano mais calmo da base. Com o filtro, o total de 2022 a 2026 vai de +1.872 para +2.818, sem quebra em nenhum ano. A melhora vem de 2022–24; 2025 e 2026 rendem menos que sem filtro. Os limites de 0,4 a 0,6 dão resultados parecidos, e o 0,5 é o centro.",
+   "Não passou no critério estatístico definido antes (percentil 94–95 contra o sorteio) e foi aplicado por decisão do dono. Versões anteriores: resultados_M1_historico/ (v1.04) e resultados_M15_v105_historico/ (v1.05).",
+   "v1.07: não abre posição no dia em que a abertura salta ≥ 1 ATR diário em relação ao fechamento anterior (input NaoOperarGapATR; 0 desliga). Em 2026 isso bloqueia 03/03, 08/04 e 05/10."
+  ]
+ },
+ "WinGapBarra1": {
+  "resumo": "v1.00 · gap + 1ª barra M5",
+  "textos": [
+   "WinGapBarra1.mq5 v1.00, criado em outra sessão em 06/10. Mede o gap entre o call de ontem e o leilão de hoje. Se a 1ª barra M5 (09:00–09:05) fecha contra o gap, entra por ordem limitada no fechamento dela, no sentido da barra, válida até 09:35. Stop de 1.200 pts, sem alvo, zera às 18:20. Uma operação por dia; não opera no 1º pregão após o vencimento.",
+   "Não tem a regra do gap de 1 ATR dos outros robôs: a estratégia dele é justamente operar o gap. Especificação e números em mt5/WinGapBarra1_LEIA-ME.md. Não foi medido em 2022–2025 neste comparativo."
+  ]
+ }
+}

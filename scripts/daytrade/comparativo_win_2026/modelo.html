@@ -1,0 +1,361 @@
+<title>Robôs no WIN 2026</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500;700&display=swap">
+<style>
+/* Layout: uma coluna editorial; a tabela é a peça central, o gráfico de saldo e as notas vêm depois. */
+:root {
+  --bg: #f4f1e8; --bg-el: #ede9de; --bg-hover: #e5e1d4;
+  --fg: #1c1a14; --fg-strong: #0e0d09; --muted: #7a7367; --faint: #c0bab0;
+  --grid: #d4cfc0; --grid-strong: #c0b9a8;
+  --amber: #9a6e1a; --amber-dim: #f0e4c0; --green: #3d7d3d; --red: #a83028;
+  --green-bg: rgba(61,125,61,.10); --red-bg: rgba(168,48,40,.10);
+  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --serif: "Instrument Serif", "Iowan Old Style", Palatino, Georgia, serif;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0d0d0e; --bg-el: #151517; --bg-hover: #1c1c1e; --fg: #e8e4d9; --fg-strong: #f5f2ea; --muted: #8a8579; --faint: #4a463f;
+  --grid: #26251f; --grid-strong: #3a382f; --amber: #d9a441; --amber-dim: #3b2f17; --green: #7aa87a; --red: #c25a4c;
+  --green-bg: rgba(122,168,122,.13); --red-bg: rgba(194,90,76,.14); color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #0d0d0e; --bg-el: #151517; --bg-hover: #1c1c1e; --fg: #e8e4d9; --fg-strong: #f5f2ea; --muted: #8a8579; --faint: #4a463f;
+  --grid: #26251f; --grid-strong: #3a382f; --amber: #d9a441; --amber-dim: #3b2f17; --green: #7aa87a; --red: #c25a4c;
+  --green-bg: rgba(122,168,122,.13); --red-bg: rgba(194,90,76,.14); color-scheme: dark; }
+body { background: var(--bg); color: var(--fg); font-family: var(--mono); font-size: 13px; line-height: 1.55; }
+.wrap { max-width: 1360px; margin: 0 auto; padding-inline: 24px; padding-block: 40px 72px; display: grid; gap: 40px; }
+@media (max-width: 600px) { .wrap { padding-inline: 16px; padding-block: 24px 48px; } }
+header { display: grid; gap: 12px; }
+.eyebrow { font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--amber); }
+h1 { font-family: var(--serif); font-weight: 400; font-size: clamp(2.4rem, 6vw, 4.5rem); line-height: 1.05; margin: 0; color: var(--fg-strong); text-wrap: balance; }
+h1 em { color: var(--amber); }
+h2 { font-family: var(--serif); font-weight: 400; font-size: 1.75rem; margin: 0; color: var(--fg-strong); }
+.lede { max-width: 72ch; color: var(--muted); margin: 0; }
+.lede b { color: var(--fg); font-weight: 500; }
+.bar { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: center; justify-content: space-between; }
+.seg { display: inline-flex; border: 1px solid var(--grid-strong); border-radius: 3px; overflow: hidden; }
+.seg button { font: inherit; font-size: 12px; background: transparent; color: var(--muted); border: 0; padding: 6px 12px; cursor: pointer; }
+.seg button[aria-pressed="true"] { background: var(--fg); color: var(--bg); }
+.seg button:focus-visible { outline: 2px solid var(--amber); outline-offset: -2px; }
+.legend { font-size: 11px; color: var(--muted); display: flex; gap: 16px; flex-wrap: wrap; }
+.scroll { overflow-x: auto; border-top: 2px solid var(--fg); }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; white-space: nowrap; }
+th, td { padding: 9px 10px; text-align: right; border-bottom: 1px solid var(--grid); }
+th { font-weight: 500; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); vertical-align: bottom; }
+th.l, td.l { text-align: left; }
+td.nome { font-weight: 700; color: var(--fg-strong); position: sticky; left: 0; background: var(--bg); }
+td.nome small { display: block; font-weight: 400; color: var(--muted); font-size: 11px; }
+tbody tr:hover td { background: var(--bg-hover); }
+tfoot td { border-top: 2px solid var(--fg); border-bottom: 0; font-weight: 700; }
+td.rk { color: var(--muted); width: 2ch; }
+.pos { color: var(--green); } .neg { color: var(--red); } .zero { color: var(--faint); }
+td.m.pos { background: var(--green-bg); } td.m.neg { background: var(--red-bg); }
+td.tot { font-weight: 700; border-left: 1px solid var(--grid-strong); }
+td.quebra { background: var(--red); color: var(--bg); font-weight: 700; }
+.pill { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 99px; border: 1px solid currentColor; }
+.pill.ok { color: var(--green); } .pill.x { color: var(--red); }
+td .n { display: block; font-size: 10px; color: var(--muted); }
+.chart { width: 100%; height: auto; display: block; }
+.chart text { fill: var(--muted); font-family: var(--mono); font-size: 11px; }
+.notas { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); gap: 24px 40px; }
+.nota { border-top: 1px solid var(--grid-strong); padding-top: 12px; min-width: 0; }
+.nota h3 { margin: 0 0 6px; font-size: 13px; color: var(--fg-strong); }
+.nota p { margin: 0 0 6px; color: var(--muted); }
+.metodo { max-width: 80ch; color: var(--muted); display: grid; gap: 10px; }
+.metodo p { margin: 0; } .metodo b { color: var(--fg); font-weight: 500; }
+details.hist { border-top: 2px solid var(--fg); padding-top: 16px; }
+details.hist > summary { cursor: pointer; list-style: none; display: grid; gap: 4px; }
+details.hist > summary::-webkit-details-marker { display: none; }
+details.hist > summary h2::before { content: "▸ "; color: var(--amber); }
+details.hist[open] > summary h2::before { content: "▾ "; }
+details.hist > summary:focus-visible { outline: 2px solid var(--amber); outline-offset: 4px; }
+.chip { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">Replay no padrão do Testador do MT5 · WIN$N · R$1.000 de capital inicial</div>
+    <h1>Robôs no WIN, <em>2026</em></h1>
+    <p class="lede" id="lede"></p>
+    <p class="lede"><b>Desde 06/10/2026 os padrões são:</b> Win_c1 em H1 (filtro H3), WinCincoMedias em H2 (Supertrend H4), WinDeslocamentoMatinal em M1 e WinRetanguloEma34 em M15 ajustado com filtro de 0,5 ATR. Todos não operam em dia de gap de abertura ≥ 1 ATR diário (regra aprovada em 06/10: 10 dias em 5 anos, como eleições, a invasão da Ucrânia e o crash de 05/08/2024). A tabela mensal, o gráfico e a tabela ano a ano já usam esses tempos. As pesquisas feitas com as versões anteriores (Win e Win_c1 em M5, CincoMedias em M30) estão no histórico, no fim da página.</p>
+  </header>
+
+  <section style="display:grid;gap:16px">
+    <div class="bar">
+      <h2>Resultado por mês</h2>
+      <div class="seg" role="group" aria-label="Cenário de custo">
+        <button id="b-testador" aria-pressed="true">Como o Testador (sem custo)</button>
+        <button id="b-custo" aria-pressed="false">Com custo</button>
+      </div>
+    </div>
+    <div class="scroll"><table id="tab"></table></div>
+    <div class="legend"><span>Valores em R$ por mês, 1 contrato.</span><span>Abaixo de cada valor: nº de operações.</span><span>Célula vermelha cheia = mês em que o saldo chegou a zero; depois dele a estratégia não opera.</span></div>
+  </section>
+
+  <section style="display:grid;gap:16px">
+    <h2>Saldo ao longo do ano</h2>
+    <svg class="chart" id="graf" viewBox="0 0 1000 380" role="img" aria-label="Saldo de cada estratégia ao longo de 2026"></svg>
+    <div class="legend" id="leg"></div>
+  </section>
+
+  <section style="display:grid;gap:16px">
+    <h2>Os robôs ano a ano, 2022 a 2026</h2>
+    <p class="lede">Cada robô no tempo gráfico padrão atual, com a regra do gap (não opera em dia de gap de abertura ≥ 1 ATR), com custo de R$2 por operação e 1 contrato. Cada ano recomeça com R$1.000: abaixo de cada valor aparecem as operações e o menor saldo do ano, ou "quebra" se o saldo chegou a zero. De 2022 a 2025 os ticks foram gerados a partir das velas M1; 2026 usa ticks reais desde 20/02. <b>WinCincoMedias (H2) e WinDeslocamentoMatinal (M1) são positivos em todos os anos.</b> O Win_c1 (H1) perde só em 2024. O WinRetanguloEma34, com o filtro de 0,5 ATR, deixou de quebrar.</p>
+    <div class="scroll"><table>
+      <thead><tr><th class="l">Robô · tempo padrão</th><th>2022</th><th>2023</th><th>2024</th><th>2025 (até set)</th><th>2026 (até 05/10)</th><th>Total</th><th>Anos +</th></tr></thead>
+      <tbody><tr><td class="nome l">WinGapBarra1<small>M5 · stop 1.200 sem alvo</small></td><td class="m neg">−1.034<span class="n">45 ops · <b style="color:var(--red)">quebra</b></span></td><td class="m pos">+1.291<span class="n">114 ops · mín. R$617</span></td><td class="m pos">+2.287<span class="n">109 ops · mín. R$1.000</span></td><td class="m pos">+1.567<span class="n">91 ops · mín. R$1.000</span></td><td class="m pos">+5.740<span class="n">90 ops · mín. R$861</span></td><td class="tot pos">+9.851</td><td>4/5 </td></tr><tr><td class="nome l">WinCincoMedias<small>H2 · Supertrend H4 · gap</small></td><td class="m pos">+2.695<span class="n">195 ops · mín. R$975</span></td><td class="m pos">+1.232<span class="n">169 ops · mín. R$508</span></td><td class="m pos">+1.493<span class="n">192 ops · mín. R$416</span></td><td class="m pos">+859<span class="n">129 ops · mín. R$979</span></td><td class="m pos">+3.339<span class="n">130 ops · mín. R$746</span></td><td class="tot pos">+9.618</td><td>5/5 <span class="pill ok">5/5</span></td></tr><tr><td class="nome l">WinDeslocamentoMatinal<small>M1 · gap</small></td><td class="m neg">−255<span class="n">45 ops · mín. R$201</span></td><td class="m pos">+1.404<span class="n">39 ops · mín. R$1.000</span></td><td class="m pos">+1.347<span class="n">56 ops · mín. R$605</span></td><td class="m pos">+1.811<span class="n">41 ops · mín. R$1.000</span></td><td class="m pos">+2.465<span class="n">63 ops · mín. R$417</span></td><td class="tot pos">+6.772</td><td>4/5 </td></tr><tr><td class="nome l">WinRetanguloEma34<small>M15 ajustado · filtro 0,5 ATR · gap</small></td><td class="m pos">+1.148<span class="n">75 ops · mín. R$1.000</span></td><td class="m pos">+140<span class="n">88 ops · mín. R$665</span></td><td class="m neg">−23<span class="n">79 ops · mín. R$723</span></td><td class="m pos">+459<span class="n">54 ops · mín. R$568</span></td><td class="m pos">+1.210<span class="n">47 ops · mín. R$385</span></td><td class="tot pos">+2.934</td><td>4/5 </td></tr><tr><td class="nome l">Win_c1<small>H1 · filtro H3 · gap</small></td><td class="m pos">+224<span class="n">32 ops · mín. R$893</span></td><td class="m pos">+445<span class="n">45 ops · mín. R$1.000</span></td><td class="m neg">−384<span class="n">41 ops · mín. R$616</span></td><td class="m pos">+512<span class="n">29 ops · mín. R$926</span></td><td class="m pos">+1.325<span class="n">31 ops · mín. R$1.000</span></td><td class="tot pos">+2.122</td><td>4/5 </td></tr></tbody>
+    </table></div>
+  </section>
+
+  <section style="display:grid;gap:16px">
+    <h2>Outros tempos gráficos</h2>
+    <p class="lede">Cada robô rodou em outros tempos gráficos com os mesmos números do EA. Uma EMA de 34 continua sendo de 34 velas, agora do novo tempo. O filtro de tempo maior acompanha a troca. No tempo nativo, cada versão reproduz exatamente as operações originais. Os valores têm custo de R$2 por operação, 1 contrato. Nada foi adotado: um tempo gráfico só conta se for positivo nos 5 anos, e mesmo assim passa pelo acompanhamento de outubro.</p>
+    <div class="scroll"><table>
+      <thead><tr><th class="l">Robô</th><th class="l">Tempo</th><th>2022</th><th>2023</th><th>2024</th><th>2025 (até set)</th><th>2026</th><th>Total</th><th>Anos +</th><th class="l"></th></tr></thead>
+      <tbody><tr><td class="l"><b>WinCincoMedias</b></td><td class="l">M5</td><td class="neg">−1.346</td><td class="neg">−4.367</td><td class="neg">−5.337</td><td class="neg">−1.923</td><td class="pos">+2.407</td><td class="tot neg">−10.566</td><td>1/5</td><td class="l"></td></tr><tr><td class="l"><b></b></td><td class="l">M10</td><td class="pos">+274</td><td class="pos">+798</td><td class="neg">−3.666</td><td class="neg">−2.784</td><td class="pos">+3.150</td><td class="tot neg">−2.228</td><td>3/5</td><td class="l"></td></tr><tr><td class="l"><b></b></td><td class="l">M15</td><td class="pos">+1.340</td><td class="pos">+2.056</td><td class="neg">−2.355</td><td class="neg">−943</td><td class="pos">+2.317</td><td class="tot pos">+2.415</td><td>3/5</td><td class="l"></td></tr><tr><td class="l"><b></b></td><td class="l">M20 ¹</td><td class="pos">+766</td><td class="pos">+2.847</td><td class="neg">−3.001</td><td class="pos">+382</td><td class="pos">+3.451</td><td class="tot pos">+4.445</td><td>4/5</td><td class="l"></td></tr><tr><td class="l"><b></b></td><td class="l">M30 (nativo)</td><td class="neg">−939</td><td class="pos">+2.261</td><td class="neg">−1.942</td><td class="pos">+314</td><td class="pos">+8.243</td><td class="tot pos">+7.937</td><td>3/5</td><td class="l"></td></tr><tr><td class="l"><b></b></td><td class="l">H1</td><td class="neg">−1.406</td><td class="pos">+311</td><td class="pos">+626</td><td class="pos">+734</td><td class="pos">+1.974</td><td class="tot pos">+2.239</td><td>4/5</td><td class="l"></td></tr><tr><td class="l"><b></b></td><td class="l">H2 <span class="pill ok">padrão</span></td><td class="pos">+1.446</td><td class="pos">+1.232</td><td class="pos">+1.291</td><td class="pos">+657</td><td class="pos">+3.196</td><td class="tot pos">+7.822</td><td>5/5</td><td class="l"><span class="pill ok">5/5</span></td></tr><tr><td class="l"><b>WinDeslocamentoMatinal</b></td><td class="l">M1 (nativo) <span class="pill ok">padrão</span></td><td class="pos">+235</td><td class="pos">+1.404</td><td class="pos">+1.347</td><td class="pos">+1.862</td><td class="pos">+2.089</td><td class="tot pos">+6.937</td><td>5/5</td><td class="l"><span class="pill ok">5/5</span></td></tr><tr><td class="l"><b></b></td><td class="l">M2</td><td class="pos">+41</td><td class="pos">+1.552</td><td class="pos">+1.336</td><td class="pos">+1.447</td><td class="pos">+1.912</td><td class="tot pos">+6.288</td><td>5/5</td><td class="l"><span class="pill ok">5/5</span></td></tr><tr><td class="l"><b></b></td><td class="l">M3</td><td class="neg">−214</td><td class="pos">+1.029</td><td class="pos">+838</td><td class="pos">+2.065</td><td class="pos">+1.637</td><td class="tot pos">+5.355</td><td>4/5</td><td class="l"></td></tr><tr><td class="l"><b></b></td><td class="l">M5</td><td class="neg">−257</td><td class="pos">+705</td><td class="pos">+568</td><td class="pos">+2.367</td><td class="pos">+1.134</td><td class="tot pos">+4.517</td><td>4/5</td><td class="l"></td></tr><tr><td class="l"><b></b></td><td class="l">M10</td><td class="neg">−956</td><td class="neg">−190</td><td class="zero">quebrou</td><td class="zero">quebrou</td><td class="pos">+449</td><td class="tot neg">−697</td><td>1/5</td><td class="l"></td></tr><tr><td class="l"><b></b></td><td class="l">M15</td><td class="neg">−978</td><td class="neg">−215</td><td class="zero">quebrou</td><td class="zero">quebrou</td><td class="pos">+449</td><td class="tot neg">−744</td><td>1/5</td><td class="l"></td></tr><tr><td class="l"><b></b></td><td class="l">M30</td><td class="neg">−1.042</td><td class="neg">−101</td><td class="zero">quebrou</td><td class="zero">quebrou</td><td class="pos">+326</td><td class="tot neg">−817</td><td>1/5</td><td class="l"></td></tr><tr><td class="l"><b>Win_c1</b></td><td class="l">M1</td><td class="neg">−8.826</td><td class="neg">−7.652</td><td class="neg">−8.061</td><td class="neg">−6.143</td><td class="neg">−3.529</td><td class="tot neg">−34.211</td><td>0/5</td><td class="l"></td></tr><tr><td class="l"><b></b></td><td class="l">M2</td><td class="neg">−2.686</td><td class="neg">−5.094</td><td class="neg">−3.639</td><td class="neg">−2.125</td><td class="pos">+1.542</td><td class="tot neg">−12.002</td><td>1/5</td><td class="l"></td></tr><tr><td class="l"><b></b></td><td class="l">M3</td><td class="neg">−1.281</td><td class="neg">−3.002</td><td class="neg">−2.536</td><td class="neg">−1.357</td><td class="pos">+2.969</td><td class="tot neg">−5.207</td><td>1/5</td><td class="l"></td></tr><tr><td class="l"><b></b></td><td class="l">M5 (nativo)</td><td class="neg">−179</td><td class="neg">−1.439</td><td class="neg">−1.155</td><td class="neg">−429</td><td class="pos">+3.425</td><td class="tot pos">+223</td><td>1/5</td><td class="l"></td></tr><tr><td class="l"><b></b></td><td class="l">M10</td><td class="neg">−1.278</td><td class="neg">−1.950</td><td class="neg">−1.312</td><td class="pos">+285</td><td class="pos">+421</td><td class="tot neg">−3.834</td><td>2/5</td><td class="l"></td></tr><tr><td class="l"><b></b></td><td class="l">M15</td><td class="neg">−1.055</td><td class="neg">−845</td><td class="neg">−732</td><td class="pos">+474</td><td class="pos">+917</td><td class="tot neg">−1.241</td><td>2/5</td><td class="l"></td></tr><tr><td class="l"><b></b></td><td class="l">M30</td><td class="pos">+547</td><td class="pos">+648</td><td class="neg">−551</td><td class="neg">−436</td><td class="pos">+528</td><td class="tot pos">+736</td><td>3/5</td><td class="l"></td></tr><tr><td class="l"><b></b></td><td class="l">H1 <span class="pill ok">padrão</span></td><td class="pos">+224</td><td class="pos">+445</td><td class="neg">−391</td><td class="pos">+512</td><td class="pos">+1.477</td><td class="tot pos">+2.267</td><td>4/5</td><td class="l"></td></tr><tr><td class="l"><b></b></td><td class="l">H2</td><td class="neg">−380</td><td class="neg">−306</td><td class="neg">−638</td><td class="neg">−34</td><td class="pos">+720</td><td class="tot neg">−638</td><td>1/5</td><td class="l"></td></tr><tr><td class="l"><b></b></td><td class="l">H3</td><td class="pos">+53</td><td class="neg">−237</td><td class="pos">+74</td><td class="neg">−68</td><td class="pos">+196</td><td class="tot pos">+18</td><td>3/5</td><td class="l"></td></tr><tr><td class="l"><b></b></td><td class="l">H4</td><td class="pos">+33</td><td class="neg">−319</td><td class="neg">−56</td><td class="neg">−152</td><td class="pos">+263</td><td class="tot neg">−231</td><td>2/5</td><td class="l"></td></tr><tr><td class="l"><b>WinRetanguloEma34</b></td><td class="l">M1 (nativo)</td><td class="neg">−2.911</td><td class="neg">−1.421</td><td class="neg">−256</td><td class="neg">−856</td><td class="pos">+841</td><td class="tot neg">−4.603</td><td>1/5</td><td class="l"></td></tr><tr><td class="l"><b></b></td><td class="l">M2</td><td class="neg">−3.547</td><td class="neg">−2.574</td><td class="neg">−191</td><td class="neg">−1.708</td><td class="pos">+478</td><td class="tot neg">−7.542</td><td>1/5</td><td class="l"></td></tr><tr><td class="l"><b></b></td><td class="l">M3</td><td class="neg">−728</td><td class="neg">−880</td><td class="neg">−131</td><td class="pos">+552</td><td class="pos">+1.648</td><td class="tot pos">+461</td><td>2/5</td><td class="l"></td></tr><tr><td class="l"><b></b></td><td class="l">M5</td><td class="neg">−973</td><td class="pos">+100</td><td class="neg">−354</td><td class="neg">−181</td><td class="pos">+90</td><td class="tot neg">−1.318</td><td>2/5</td><td class="l"></td></tr><tr><td class="l"><b></b></td><td class="l">M15 ajustado</td><td class="pos">+70</td><td class="neg">−98</td><td class="neg">−1.061</td><td class="pos">+1.007</td><td class="pos">+1.470</td><td class="tot pos">+1.388</td><td>3/5</td><td class="l"></td></tr><tr><td class="l"><b></b></td><td class="l">M15 ajustado + filtro 0,5 ATR <span class="pill ok">padrão</span></td><td class="pos">+1.024</td><td class="pos">+140</td><td class="neg">−23</td><td class="pos">+507</td><td class="pos">+1.170</td><td class="tot pos">+2.818</td><td>4/5</td><td class="l"></td></tr></tbody>
+    </table></div>
+    <p class="lede">Três linhas ficam positivas nos 5 anos: o <b>WinDeslocamentoMatinal no M1</b> (o nativo) e no M2, e o <b>WinCincoMedias no H2</b>, com o Supertrend no H4. O CincoMedias no H2 não quebra a conta em nenhum ano, mesmo recomeçando com R$1.000 a cada ano; o pior saldo foi R$214, em 2024. Ele faz de 130 a 200 operações por ano, com fator de lucro entre 1,09 e 1,28. Um cuidado: o H2 é o maior tempo da grade e foi o único dos 7 tempos do CincoMedias a passar, então pode ser o melhor de 7 tentativas. O vizinho H1 passou em 4 de 5 anos. O Win_c1 também foi testado em H1, H2, H3 e H4, e nenhum tempo ficou positivo nos 5 anos. O mais perto foi o H1, com 4 de 5 anos positivos e perda em 2024. O Win, quase igual ao Win_c1, foi removido pelo dono em 06/10. O WinRetanguloEma34 não opera do M10 para cima por três regras pensadas para o M1. Com essas regras adaptadas (janela de 20 velas atravessando dias, corte de entrada limitado a 60 min e descarte de vela anômala proporcional ao tempo), ele passou a operar do M10 ao H4. Mesmo assim nenhum tempo ficou positivo nos 5 anos. O melhor foi o M15: +1.388, com 3 de 5 anos positivos. No H3 e no H4 ele quase não opera: 7 operações em quase 4 anos. ¹ No M20, o Supertrend usa o H1, que é o triplo do tempo base. Nesse caso a vela H1 lida pode ainda não ter fechado, então o M20 está sob suspeita de olhar o futuro.</p>
+  </section>
+
+  <details class="hist" id="historico">
+    <summary><h2>Histórico: pesquisas feitas com as versões anteriores</h2><span class="legend">Win e Win_c1 em M5, WinCincoMedias em M30 · validação fora de 2026, candidatas e combinações · clique para abrir</span></summary>
+    <div style="display:grid;gap:40px;padding-top:24px">
+  <section style="display:grid;gap:16px">
+    <h2>Validação fora de 2026</h2>
+    <p class="lede">Os robôs e as candidatas rodaram de <b>jul/2024 a set/2025</b>, uma única vez, com as regras congeladas antes da rodada. Nesse período os ticks foram gerados a partir das velas M1. O custo é de R$2 por operação e o capital inicial de R$1.000. As 13 candidatas foram testadas juntas, com a correção de Holm.</p>
+    <div class="scroll"><table>
+      <thead><tr><th class="l">Robô original</th><th>Ops</th><th>Jul/24–set/25 c/ custo</th><th>2026 c/ custo</th><th class="l">Situação</th></tr></thead>
+      <tbody>
+        <tr><td class="l">WinDeslocamentoMatinal</td><td>69</td><td class="pos">+3.672</td><td class="pos">+2.089</td><td class="l"><span class="pill ok">positivo nos dois</span></td></tr>
+        <tr><td class="l">WinCincoMedias</td><td>543</td><td class="neg">−1.070</td><td class="pos">+8.243</td><td class="l"><span class="pill x">só em 2026</span></td></tr>
+        <tr><td class="l">WinRetanguloEma34</td><td>163</td><td class="neg">−802</td><td class="pos">+841</td><td class="l"><span class="pill x">só em 2026</span></td></tr>
+        <tr><td class="l">Win_c1</td><td>331</td><td class="neg">−1.688</td><td class="pos">+3.425</td><td class="l"><span class="pill x">só em 2026</span></td></tr>
+        <tr><td class="l">Win</td><td>320</td><td class="neg">−2.745</td><td class="pos">+3.635</td><td class="l"><span class="pill x">quebraria</span></td></tr>
+      </tbody>
+    </table></div>
+    <div class="scroll"><table>
+      <thead><tr><th class="l">Candidata</th><th>Diferença vs. original (c/ custo)</th><th>p bruto</th><th>p Holm</th><th class="l">Veredito</th></tr></thead>
+      <tbody>
+        <tr><td class="l">Win_c1 + filtro pela nota</td><td class="pos">+1.774 (de −1.688 para +86)</td><td>0,102</td><td>0,917</td><td class="l"><span class="pill ok">aprovada pelo dono</span></td></tr>
+        <tr><td class="l">WinDeslocamentoMatinal + consenso</td><td class="neg">−1.415</td><td>0,051</td><td>0,505</td><td class="l"><span class="pill x">refutada</span></td></tr>
+        <tr><td class="l">WinDeslocamentoMatinal + saída na virada (2 versões)</td><td class="pos">+53 / +134</td><td>0,52 / 0,89</td><td>1,0</td><td class="l"><span class="pill x">refutadas</span></td></tr>
+        <tr><td class="l">Win + saída na virada da outra família</td><td class="pos">+214</td><td>0,677</td><td>1,0</td><td class="l"><span class="pill x">refutada</span></td></tr>
+        <tr><td class="l">WinCincoMedias + saída na virada (2 versões)</td><td>−5 / +23</td><td>0,68 / 1,0</td><td>1,0</td><td class="l"><span class="pill x">refutadas</span></td></tr>
+        <tr><td class="l">WinRetanguloEma34 + alvo/stop pela nota</td><td class="neg">−306</td><td>0,223</td><td>1,0</td><td class="l"><span class="pill x">refutada</span></td></tr>
+        <tr><td class="l">ConsensoGatilho (robô novo)</td><td class="neg">líquido −4.146, quebra 30/10/24</td><td>0,814</td><td>1,0</td><td class="l"><span class="pill x">refutada</span></td></tr>
+      </tbody>
+    </table></div>
+    <p class="lede"><b>Win_c1 + filtro pela nota foi aprovado por decisão do dono.</b> O filtro cortou 264 das 331 operações, a maioria perdedora, e tirou o robô de uma quebra (−1.688 → +86, ou seja, +1.774). O critério estatístico pré-definido não foi atingido: cortar ao acaso a mesma quantidade de operações melhora +1.339 na mediana (p 0,102). Ao tentar colocá-lo no EA, a regra mostrou que não vira regra fixa: ela se ajusta todo mês pelo resultado dos outros robôs, deixou quase tudo passar em 2026 e filtrou forte em 2024–25. <b>O Win_c1 continua na v2.05, sem o filtro.</b> No lugar disso foram testadas duas ideias com regras fixas (Unanimidade e Seletor), as duas refutadas.</p>
+    <p class="lede">Fora ele, nada do que parecia funcionar em 2026 se sustentou. Três candidatas caíram antes da rodada, porque ao tirar o voto do WdoRetangulo deixaram de passar em 2026. Fora de 2026, só o <b>WinDeslocamentoMatinal</b> continuou lucrativo, e foi também o único que não precisou de filtro. Os demais foram escolhidos olhando 2026. Outubro em diante é a próxima conferência limpa.</p>
+  </section>
+
+  <section style="display:grid;gap:16px" id="sec-ranking">
+    <div class="bar">
+      <h2>Candidatas</h2>
+      <label class="legend" style="cursor:pointer"><input type="checkbox" id="rk-todas"> mostrar também as variantes que não passaram</label>
+    </div>
+    <p class="lede" id="rk-lede"></p>
+    <div class="scroll"><table id="rk"></table></div>
+    <div class="legend"><span>Clique no título de uma coluna para ordenar.</span><span>Fator de recuperação = líquido ÷ maior queda.</span><span>Payoff = ganho médio ÷ perda média.</span><span>Linhas em cinza = os robôs originais, como referência.</span></div>
+  </section>
+
+  <section style="display:grid;gap:16px">
+    <h2>Combinações testadas</h2>
+    <p class="lede">Testamos se os robôs, conversando entre si, decidem melhor do que cada um sozinho. A base é a soma dos 5 robôs (sem o Win_c1, que vota igual ao Win): <b>+20.219 sem custo e +17.377 com R$2/op</b>. Esses testes foram feitos quando o WdoRetangulo ainda fazia parte do grupo; ele entra nas somas desta tabela, mas foi removido do comparativo e das candidatas. Em todos os testes, os parâmetros de cada mês foram escolhidos só com os meses anteriores, e cada regra foi comparada com um sorteio que descarta a mesma quantidade de entradas. Uma regra só conta como real se ficar acima de 95% dos sorteios.</p>
+    <div class="scroll"><table>
+      <thead><tr><th class="l">Ideia</th><th>Com R$2/op</th><th>Diferença</th><th>Percentil no sorteio</th><th class="l">Veredito</th></tr></thead>
+      <tbody>
+        <tr><td class="l">Portfólio único com limite de 3 contratos, conta B3 real (NETTING)</td><td>+14.561</td><td class="neg">−2.816</td><td>55</td><td class="l"><span class="pill x">não ajuda</span></td></tr>
+        <tr><td class="l">Consenso: só entra se os outros concordam</td><td>+17.864</td><td class="pos">+487</td><td>94,5</td><td class="l"><span class="pill x">não passa</span></td></tr>
+        <tr><td class="l">Robô novo: entra quando ≥3 votos se alinham (limitada, alvo 2 ATR)</td><td>+3.163</td><td>sozinho</td><td>91,5</td><td class="l"><span class="pill x">não passa</span></td></tr>
+        <tr><td class="l">Nota → probabilidade de acerto → entra ou não</td><td>+13.890</td><td class="neg">−3.487</td><td>16</td><td class="l"><span class="pill x">refutada</span></td></tr>
+        <tr><td class="l">Sinal das 10:30 como regime do dia</td><td>+17.258</td><td class="neg">−119</td><td>59</td><td class="l"><span class="pill x">refutada</span></td></tr>
+        <tr><td class="l">Sair quando a outra família vira contra</td><td>+14.197</td><td class="neg">−3.180</td><td>32,5</td><td class="l"><span class="pill x">refutada</span></td></tr>
+        <tr><td class="l">Vetar entrada se a outra família está posicionada contra</td><td>+14.554</td><td class="neg">−2.823</td><td>33,5</td><td class="l"><span class="pill x">refutada</span></td></tr>
+        <tr><td class="l">Unanimidade, robô novo com regras fixas: entra quando os 4 concordam (2022–jun/24)</td><td>−232 a −2.457</td><td>sozinha</td><td>—</td><td class="l"><span class="pill x">refutada; as 4 saídas quebram</span></td></tr>
+        <tr><td class="l">Seletor, robô novo: segue o 1º robô que sinaliza, 1 contrato, ranking fixo (2022–jun/24)</td><td>−819 a −1.183</td><td>sozinho</td><td>—</td><td class="l"><span class="pill x">refutado; quebra</span></td></tr>
+        <tr><td class="l">RDT, estratégia nova (recuo fundo no dia de tendência), validada em jul/24–set/25</td><td>+215</td><td>sozinha</td><td>82</td><td class="l"><span class="pill x">refutada na validação</span></td></tr>
+      </tbody>
+    </table></div>
+    <p class="lede">Nenhuma combinação passou. A previsão de acerto feita a partir dos votos das outras estratégias acerta tanto quanto uma moeda (AUC 0,48 a 0,50). Os robôs de tendência concordam entre si em 94% a 99% do tempo, e os de retângulo não têm relação com eles. Quando discordam, os dois lados costumam ganhar, então cortar um deles custa dinheiro. Na conta real da B3, que compensa posições opostas, rodar todos juntos custa cerca de R$3 mil a R$4 mil por ano, porque as entradas contrárias são bloqueadas.</p>
+  </section>
+
+    </div>
+  </details>
+
+  <section style="display:grid;gap:16px" id="sec-gap-barra1">
+    <h2>win_gap_barra1, gap contra a 1ª barra</h2>
+    <p class="lede">Estratégia nova (EA <b>WinGapBarra1</b>). <b>Ela também aparece agora na tabela mensal, no gráfico e na tabela ano a ano acima, na convenção do replay (Testador, 02/01 a 05/10, 2022 a 2025 com ticks das M1).</b> Os números desta seção vêm da pesquisa de origem, que usa outro simulador: <b>ticks reais, 06/04 a 05/10/2026, 120 pregões, 1 contrato, R$0,50 por contrato de custo e 1 tick de deslize no stop e no zeramento</b>. Não tem janeiro a março porque nasceu e foi medida só nessa janela, que é onde a pista foi descoberta. Meses em R$, abaixo de cada valor o nº de operações.</p>
+    <div class="scroll"><table>
+      <thead><tr><th class="l"></th><th class="l">Estratégia</th><th>jan</th><th>fev</th><th>mar</th><th>abr</th><th>mai</th><th>jun</th><th>jul</th><th>ago</th><th>set</th><th>out</th><th>Total</th><th>Capital final</th><th>Ops</th><th>Acerto</th><th>Fator de lucro</th><th>Maior queda</th><th>Meses +</th><th class="l">Situação</th></tr></thead>
+      <tbody><tr><td class="rk l">1</td><td class="nome l">win_gap_barra1 · S1200<small>EA WinGapBarra1 · M5 · stop 1.200 sem alvo · adotada</small></td><td class="zero">—</td><td class="zero">—</td><td class="zero">—</td><td class="m pos">+1.613,00<span class="n">8</span></td><td class="m pos">+632,00<span class="n">8</span></td><td class="m pos">+446,00<span class="n">10</span></td><td class="m pos">+562,00<span class="n">10</span></td><td class="m pos">+2.004,00<span class="n">12</span></td><td class="m pos">+690,00<span class="n">12</span></td><td class="m neg">−483,00<span class="n">2</span></td><td class="tot pos">+5.464,00</td><td class="pos">6.464,00</td><td>62</td><td>50,0%</td><td>1,87</td><td class="neg">−1.267,50</td><td>6/7</td><td class="l"><span class="pill ok">adotada</span></td></tr><tr><td class="rk l">2</td><td class="nome l">win_gap_barra1 · S700<small>mesmo EA, <code>StopPts = 700</code> · alternativa</small></td><td class="zero">—</td><td class="zero">—</td><td class="zero">—</td><td class="m pos">+1.351,00<span class="n">8</span></td><td class="m pos">+308,00<span class="n">8</span></td><td class="m pos">+846,00<span class="n">10</span></td><td class="m pos">+615,00<span class="n">10</span></td><td class="m pos">+625,00<span class="n">12</span></td><td class="m pos">+1.324,00<span class="n">12</span></td><td class="m neg">−283,00<span class="n">2</span></td><td class="tot pos">+4.786,00</td><td class="pos">5.786,00</td><td>62</td><td>40,3%</td><td>1,97</td><td class="neg">−892,50</td><td>6/7</td><td class="l"><span class="pill">alternativa</span></td></tr></tbody>
+    </table></div>
+    <div class="legend"><span>1 contrato, capital inicial R$1.000, sem aporte. Outubro vai de 1 a 5.</span><span>Maior queda = curva por operação.</span><span>Fator de lucro calculado sobre as operações do arquivo de referência.</span></div>
+    <div class="notas">
+      <div class="nota"><h3>A regra</h3>
+        <p>gap = preço do leilão de hoje (abertura da 1ª barra M5, 09:00) menos o preço do call de ontem (fechamento da última barra M5, 18:20). Se a 1ª barra M5 (09:00 a 09:05) fecha <b>contra</b> o gap, manda uma ordem <b>limite</b> no fechamento dela, no sentido da barra: gap de alta e barra de baixa = venda; gap de baixa e barra de alta = compra.</p>
+        <p>A ordem vale até 09:35. Stop de 1.200 pts no servidor, sem alvo. Zera a mercado às 18:20 (17:50 no regime antigo da B3), nunca dentro do call. Não opera a 1ª sessão depois de um vencimento. Uma operação por pregão.</p></div>
+      <div class="nota"><h3>Números na janela de descoberta</h3>
+        <p>Stop 1.200, 1 contrato: 63 sinais, 62 ordens preenchidas (1,6% sem fill), 24 stops e 38 zeramentos, win 50,0%, ganho médio R$379, perda média R$202, <b>+R$5.464</b> (R$88,1 por operação), pior operação −R$242, maior sequência de perdas 6, MaxDD R$1.268.</p>
+        <p>Com sizing automático a partir de R$1.000 (1 a 5 contratos, média 3,6): +R$15.103,50 em 62 operações, MaxDD R$6.771, caixa mínimo ~R$466. O caixa compõe, então a dispersão é maior que a por contrato.</p></div>
+      <div class="nota"><h3>Platô do stop</h3>
+        <p>Sem alvo, todos os 10 stops testados (300 a 1.500) são positivos e ficam acima do nulo de direção aleatória (p ≤ 0,05 nos 10). Com 2 contratos o líquido vai de R$4.808 (stop 300) a R$12.222 (stop 1.500), com salto até 500 e subida lenta depois. Nas 110 células de stop × alvo, 110 têm líquido positivo; os alvos fixos rendem menos que "sem alvo" em todo stop.</p>
+        <p>Escolha pelo critério escrito antes da tabela: <b>stop 1.200, sem alvo</b> (p da célula 0,002, ajustado pelo máximo da grade 0,035).</p></div>
+      <div class="nota"><h3>Holdout, com pouco poder</h3>
+        <p>19/12/2025 a 19/02/2026, 38 pregões, 19 operações, sem ticks (barras M1 conservadoras), 2 contratos. Stop 700: <b>+R$3.201</b>, R$168 por operação, parecido com a janela de descoberta (R$154 a R$165), mas <b>p 0,134</b>: não passa no teste de direção. Stop 1.200: +R$3.327 (R$175 por operação). Com 19 operações o holdout não separa nem células vizinhas: efeito mínimo detectável R$337 por operação. Não é validação.</p></div>
+      <div class="nota"><h3>S1200 ou S700</h3>
+        <p>Os dois estão no mesmo platô. S1200 foi escolhido pelo critério; S700 tem menos risco por operação (pior −R$142 contra −R$242, MaxDD R$892 contra R$1.268) e melhor lucro/DD (5,36 contra 4,31 com 2 contratos; 4,90 contra 2,23 na conta contínua). S700 faz 34 stops e win 40,3%. Trocar é mudar só <code>StopPts</code> para 700.</p></div>
+      <div class="nota"><h3>Limitações</h3>
+        <p>A janela de descoberta é a mesma de onde a pista nasceu: nenhum número acima é fora da amostra. A fila do WIN não está calibrada (a limitada enche ao toque, o que é otimista). Antes de 20/02/2026 não há tick e o leilão e o call do holdout são aproximações (mediana de 178 pts de diferença contra o call real; o sinal do gap inverte em 2 dias). Com ticks reais, 3 dias têm buracos na fonte e ficam fora da referência.</p></div>
+      <div class="nota"><h3>Arquivos</h3>
+        <p><code>mt5/WinGapBarra1.mq5</code> (compila com 0 erros e 0 avisos), <code>mt5/WinGapBarra1_LEIA-ME.md</code>, classe <code>src/strategy/daytrade/lab/win_gap_barra1.py</code>, especificação <code>scripts/daytrade/win_gap_estrategia_2026_10_06/rodada4_estrategia_2026_10_06/EA_SPEC.md</code>, <code>RESULTADO.md</code>, <code>CRITERIO.md</code> e <code>EA_referencia_trades.csv</code>.</p>
+        <p>Teste no MT5: WIN$N, 06/04 a 05/10/2026, "todos os ticks com base em ticks reais". Deve dar 60 a 66 operações e R$4.400 a R$6.600 por contrato.</p></div>
+    </div>
+  </section>
+
+
+  <section style="display:grid;gap:16px">
+    <h2>Como cada robô foi reproduzido</h2>
+    <div class="notas" id="notas"></div>
+  </section>
+
+  <section class="metodo">
+    <h2>Método</h2>
+    <p><b>Dados.</b> WIN$N do MT5 da Rico: preço cru do contrato principal, na grade de 5 pontos. As barras M1 do WIN@ nesse terminal vêm ajustadas e foram descartadas. Ticks reais da corretora de 20/02/2026 em diante. De 02/01 a 19/02 a corretora não tem tick: cada M1 vira 4 ticks (abertura, extremo mais próximo, outro extremo, fechamento), que é o que o Testador faz sem tick real. Outubro vai só até o dia 5.</p>
+    <p><b>Execução, como no Testador.</b> Ordem a mercado sai no último negócio do tick. Stop dispara quando o último negócio toca o nível e sai no preço desse tick, pior se houver salto. Ordem limitada e alvo enchem ao tocar e saem no preço pedido. Latência zero. Os indicadores correm contínuos sobre o WIN$N, atravessando a rolagem de contrato, como num teste em símbolo contínuo.</p>
+    <p><b>Capital.</b> Cada robô começa 2026 com R$1.000 e opera os inputs padrão do EA, 1 contrato. O saldo anda operação a operação. Se chegar a zero, a operação fica marcada como a que quebrou a conta, com a data, e o robô para no resto do ano.</p>
+    <p><b>Custo.</b> O Testador está sem comissão, então a visão padrão não tem custo. A visão "com custo" desconta R$2 por operação (ida e volta, 1 contrato), a mesma premissa das pesquisas anteriores do WIN.</p>
+    <p><b>Limites.</b> O replay não modela fila no livro: a limitada enche ao primeiro toque, como no Testador, o que é otimista para robôs que entram ou saem com limitada. Os ticks do WIN$N não trazem compra/venda, então não há spread.</p>
+  </section>
+</div>
+
+<script>
+const D = /*__DADOS__*/null;
+const NOMES_MES = ["jan","fev","mar","abr","mai","jun","jul","ago","set","out"];
+const CORES = ["#c2410c","#2563eb","#15803d","#a21caf","#b45309","#0e7490","#be123c","#4d7c0f","#6d28d9","#475569"];
+const brl = (v, sinal) => (sinal && v > 0 ? "+" : "") + v.toLocaleString("pt-BR", {minimumFractionDigits: 2, maximumFractionDigits: 2});
+const cls = v => v > 0 ? "pos" : v < 0 ? "neg" : "zero";
+let modo = "testador";
+try { modo = localStorage.getItem("modo-win26") || "testador"; } catch (e) {}
+
+function lede() {
+  const n = D.estrategias.length;
+  document.getElementById("lede").innerHTML =
+    `<b>${n} configurações de ${new Set(D.estrategias.map(e => e.nome.replace(/_(tick5|win)$/, ""))).size} EAs</b> rodadas no mesmo período, 02/01 a 05/10/2026, ` +
+    `cada uma começando com <b>R$1.000</b> e sem aporte. A tabela está ordenada pelo saldo final.`;
+}
+
+function tabela() {
+  const est = [...D.estrategias].sort((a, b) => b[modo].final - a[modo].final);
+  let h = `<thead><tr><th class="l"></th><th class="l">Estratégia</th>${NOMES_MES.map(m => `<th>${m}</th>`).join("")}` +
+    `<th>Total</th><th>Capital final</th><th>Ops</th><th>Acerto</th><th>Fator de lucro</th><th>Maior queda</th><th>Meses +</th><th class="l">Situação</th></tr></thead><tbody>`;
+  est.forEach((e, i) => {
+    const r = e[modo];
+    h += `<tr><td class="rk l">${i + 1}</td><td class="nome l">${e.nome}<small>${(e.nota.resumo || "")}</small></td>`;
+    D.meses.forEach(m => {
+      const c = r.meses[m];
+      if (c === null) { h += `<td class="zero">—</td>`; return; }
+      const q = r.quebra && r.quebra.data.slice(0, 7) === m;
+      h += q ? `<td class="m quebra" title="Saldo zerou em ${r.quebra.data}">${brl(c.rs, true)}<span class="n" style="color:inherit">quebrou</span></td>`
+             : c.n === 0 ? `<td class="zero">0<span class="n">0</span></td>`
+             : `<td class="m ${cls(c.rs)}">${brl(c.rs, true)}<span class="n">${c.n}</span></td>`;
+    });
+    const sit = r.quebra ? `<span class="pill x">quebrou ${r.quebra.data.slice(8, 10)}/${r.quebra.data.slice(5, 7)}</span>` : `<span class="pill ok">sobreviveu</span>`;
+    h += `<td class="tot ${cls(r.total)}">${brl(r.total, true)}</td><td class="${cls(r.final - D.capital)}">${brl(r.final)}</td><td>${r.n}</td>` +
+      `<td>${r.acerto === null ? "—" : r.acerto.toLocaleString("pt-BR") + "%"}</td><td>${r.pf === null ? "—" : r.pf.toLocaleString("pt-BR")}</td>` +
+      `<td class="neg">${r.dd ? "−" + brl(r.dd) : "0,00"}</td><td>${r.meses_pos}/${r.meses_op}</td><td class="l">${sit}</td></tr>`;
+  });
+  // linha de soma: todas as estratégias juntas, mês a mês (mês depois da quebra conta zero)
+  let f = `</tbody><tfoot><tr><td class="rk l"></td><td class="nome l">Todas somadas<small>${est.length} estratégias · R$${brl(D.capital * est.length)} iniciais</small></td>`;
+  D.meses.forEach(m => {
+    const s = est.reduce((a, e) => a + (e[modo].meses[m] ? e[modo].meses[m].rs : 0), 0);
+    const n = est.reduce((a, e) => a + (e[modo].meses[m] ? e[modo].meses[m].n : 0), 0);
+    f += `<td class="m ${cls(s)}">${brl(s, true)}<span class="n">${n}</span></td>`;
+  });
+  const tot = est.reduce((a, e) => a + e[modo].total, 0), fin = est.reduce((a, e) => a + e[modo].final, 0);
+  const ops = est.reduce((a, e) => a + e[modo].n, 0);
+  const mp = D.meses.filter(m => est.reduce((a, e) => a + (e[modo].meses[m] ? e[modo].meses[m].rs : 0), 0) > 0).length;
+  f += `<td class="tot ${cls(tot)}">${brl(tot, true)}</td><td class="${cls(fin - D.capital * est.length)}">${brl(fin)}</td><td>${ops}</td>` +
+    `<td></td><td></td><td></td><td>${mp}/${D.meses.length}</td><td class="l"></td></tr></tfoot>`;
+  document.getElementById("tab").innerHTML = h + f;
+}
+
+function grafico() {
+  const W = 1000, H = 380, L = 64, R = 16, T = 12, B = 28;
+  const t0 = Date.parse("2026-01-01"), t1 = Date.parse("2026-10-06");
+  const est = [...D.estrategias].sort((a, b) => b[modo].final - a[modo].final);
+  let lo = 0, hi = D.capital;
+  est.forEach(e => e[modo].curva.forEach(([, s]) => { lo = Math.min(lo, s); hi = Math.max(hi, s); }));
+  const pad = (hi - lo) * 0.05; lo -= pad; hi += pad;
+  const x = d => L + (Date.parse(d) - t0) / (t1 - t0) * (W - L - R), y = s => T + (hi - s) / (hi - lo) * (H - T - B);
+  const passo = [100, 250, 500, 1000, 2000, 2500, 5000, 10000].find(p => (hi - lo) / p <= 7) || 20000;
+  let g = "";
+  for (let v = Math.ceil(lo / passo) * passo; v <= hi; v += passo)
+    g += `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="var(--grid)" stroke-width="1"/><text x="${L - 8}" y="${y(v) + 4}" text-anchor="end">${v.toLocaleString("pt-BR")}</text>`;
+  g += `<line x1="${L}" x2="${W - R}" y1="${y(0)}" y2="${y(0)}" stroke="var(--red)" stroke-width="1" stroke-dasharray="4 4"/>`;
+  g += `<line x1="${L}" x2="${W - R}" y1="${y(D.capital)}" y2="${y(D.capital)}" stroke="var(--grid-strong)" stroke-width="1"/>`;
+  NOMES_MES.forEach((m, i) => { const d = `2026-${String(i + 1).padStart(2, "0")}-01`; g += `<text x="${x(d) + 2}" y="${H - 8}">${m}</text><line x1="${x(d)}" x2="${x(d)}" y1="${T}" y2="${H - B}" stroke="var(--grid)" stroke-width="1"/>`; });
+  let leg = "";
+  est.forEach((e, i) => {
+    const c = CORES[D.estrategias.indexOf(e) % CORES.length], pts = e[modo].curva.map(([d, s]) => `${x(d).toFixed(1)},${y(s).toFixed(1)}`).join(" ");
+    g += `<polyline points="${pts}" fill="none" stroke="${c}" stroke-width="1.8" stroke-linejoin="round"/>`;
+    const [ud, us] = e[modo].curva[e[modo].curva.length - 1];
+    g += `<circle cx="${x(ud)}" cy="${y(us)}" r="3.5" fill="${c}"/>`;
+    if (e[modo].quebra) g += `<text x="${x(ud) + 6}" y="${y(us) + 4}" style="fill:var(--red)">✕</text>`;
+    leg += `<span><i class="chip" style="background:${c}"></i>${e.nome}</span>`;
+  });
+  document.getElementById("graf").innerHTML = g;
+  document.getElementById("leg").innerHTML = leg;
+}
+
+function notas() {
+  document.getElementById("notas").innerHTML = [...D.estrategias].map(e =>
+    `<div class="nota"><h3>${e.nome}</h3>${(e.nota.textos || []).map(t => `<p>${t}</p>`).join("")}</div>`).join("");
+}
+
+function render() {
+  document.getElementById("b-testador").setAttribute("aria-pressed", modo === "testador");
+  document.getElementById("b-custo").setAttribute("aria-pressed", modo === "custo");
+  document.getElementById("b-custo").textContent = `Com custo (R$${D.custo_op.toLocaleString("pt-BR", {minimumFractionDigits: 2})}/op)`;
+  tabela(); grafico();
+}
+["testador", "custo"].forEach(m => document.getElementById("b-" + m).addEventListener("click", () => {
+  modo = m; try { localStorage.setItem("modo-win26", m); } catch (e) {} render();
+}));
+let rkOrd = {col: "fr", desc: true};
+const RK_COLS = [
+  ["nome", "Estratégia", "l"], ["ops", "Ops"], ["liq", "Líquido c/ custo"], ["vs_original", "vs. original"],
+  ["acerto", "Acerto"], ["payoff", "Payoff"], ["pf", "Fator de lucro"], ["dd", "Maior queda"], ["fr", "Fator de recuperação"],
+  ["meses_pos", "Meses +"], ["quebra", "Quebra", "l"]];
+function ranking() {
+  const R = D.ranking;
+  if (!R) { document.getElementById("sec-ranking").hidden = true; return; }
+  const todas = document.getElementById("rk-todas").checked;
+  const linhas = R.linhas.filter(r => r.tipo === "original" || r.candidata || todas);
+  const nc = R.linhas.filter(r => r.candidata).length;
+  document.getElementById("rk-lede").innerHTML =
+    `Uma estratégia <b>nova</b> é candidata se, com custo de R$${brl(R.custo)} por operação, render mais que o pior robô original no mesmo período ` +
+    `(<b>${R.piso_nome}, ${brl(R.piso, true)}</b>). Uma <b>variante</b> de um robô (o robô com um filtro ou saída nova) também precisa render mais que o próprio original. ` +
+    `Sem essa segunda regra, qualquer variante do WinCincoMedias passaria só por herdar o lucro dele. <b>${nc} candidatas</b>. Tudo medido em 2026, o ano em que os robôs foram escolhidos. ` +
+    `Com tantas variantes olhadas, algumas passam por acaso, então a lista diz o que merece validação, não o que está aprovado.`;
+  const v = (r, c) => r[c] === null || r[c] === undefined ? -Infinity : r[c];
+  linhas.sort((a, b) => { const x = v(a, rkOrd.col), y = v(b, rkOrd.col);
+    return typeof x === "string" ? (rkOrd.desc ? y.localeCompare(x) : x.localeCompare(y)) : (rkOrd.desc ? y - x : x - y); });
+  let h = "<thead><tr>" + RK_COLS.map(([c, t, l]) =>
+    `<th class="${l || ""}" data-c="${c}" style="cursor:pointer" aria-sort="${rkOrd.col === c ? (rkOrd.desc ? "descending" : "ascending") : "none"}">${t}${rkOrd.col === c ? (rkOrd.desc ? " ▾" : " ▴") : ""}</th>`).join("") + "</tr></thead><tbody>";
+  const num = (x, d = 2) => x === null || x === undefined ? "—" : x.toLocaleString("pt-BR", {minimumFractionDigits: d, maximumFractionDigits: d});
+  linhas.forEach(r => {
+    const og = r.tipo === "original", tag = og ? "original" : r.tipo === "nova" ? "nova" : "variante";
+    const st = og ? ' style="color:var(--muted)"' : "";
+    h += `<tr${st}><td class="nome l"${st}>${r.nome}<small>${tag}${!og && !r.candidata ? " · não passou" : ""}</small></td><td>${r.ops}</td>` +
+      `<td class="${og ? "" : cls(r.liq)}">${brl(r.liq, true)}</td><td class="${r.vs_original === null ? "zero" : cls(r.vs_original)}">${r.vs_original === null ? "—" : brl(r.vs_original, true)}</td>` +
+      `<td>${num(r.acerto, 1)}%</td><td>${num(r.payoff)}</td><td>${num(r.pf)}</td><td>${r.dd ? "−" + brl(r.dd) : "0,00"}</td>` +
+      `<td><b>${num(r.fr)}</b></td><td>${r.meses_pos}/${r.meses_op}</td><td class="l">${r.quebra ? `<span class="pill x">${r.quebra.slice(8, 10)}/${r.quebra.slice(5, 7)}</span>` : ""}</td></tr>`;
+  });
+  const el = document.getElementById("rk");
+  el.innerHTML = h + "</tbody>";
+  el.querySelectorAll("th[data-c]").forEach(th => th.addEventListener("click", () => {
+    const c = th.dataset.c; rkOrd = {col: c, desc: rkOrd.col === c ? !rkOrd.desc : c !== "nome" && c !== "quebra"}; ranking();
+  }));
+}
+document.getElementById("rk-todas").addEventListener("change", ranking);
+lede(); notas(); render(); ranking();
+</script>
