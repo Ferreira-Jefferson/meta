@@ -1,7 +1,0 @@
-[14:18:09] copawin_300_reais_acerto_90_2026_09_13
-[14:20:33] fim copawin_300_reais_acerto_90_2026_09_13 rc=0
-[14:20:33] copawin_300_alvo_fino_sensibilidade_fila_2026_09_13
-[14:22:06] fim copawin_300_alvo_fino_sensibilidade_fila_2026_09_13 rc=0
-[14:22:06] copawin_300_robustez_por_data_de_inicio_2026_09_13
-[14:32:49] fim copawin_300_robustez_por_data_de_inicio_2026_09_13 rc=0
-FIM

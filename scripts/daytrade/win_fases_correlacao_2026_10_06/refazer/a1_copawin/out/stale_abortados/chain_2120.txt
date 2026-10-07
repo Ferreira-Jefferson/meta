@@ -1,5 +1,0 @@
-[14:00:12] copawin_piso_sobrevivencia_2026_08_29
-[14:02:12] fim copawin_piso_sobrevivencia_2026_08_29 rc=0
-[14:02:12] copawin_dimensionamento_por_risco_2026_08_29
-[14:04:23] fim copawin_dimensionamento_por_risco_2026_08_29 rc=0
-[14:04:23] copawin_recomendacao_final_2026_09_11

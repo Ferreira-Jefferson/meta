@@ -1,6 +1,0 @@
-medida,corr 1min,acerto sinal 1min,corr 5min,sinal 5min,corr 15min,sinal 15min,corr 30min,sinal 30min,corr acum dia,mediana corr acum/dia
-regra do tick (WIN@D),0.928,0.934,0.96,0.933,0.96,0.921,0.956,0.905,0.879,0.934
-regra do tick (WINV26),0.926,0.925,0.957,0.926,0.956,0.913,0.951,0.897,0.87,0.949
-candle CLV (M1),0.652,0.723,0.707,0.739,0.698,0.738,0.698,0.732,0.481,0.736
-candle corpo/range (M1),0.844,0.864,0.872,0.873,0.863,0.862,0.859,0.851,0.753,0.885
-sinal do corpo x vol (M1),0.742,0.864,0.777,0.809,0.773,0.803,0.778,0.803,0.689,0.804

@@ -1,8 +1,0 @@
-[14:40:22] copawin_recomendacao_final_2026_09_11
-[14:56:03] fim copawin_recomendacao_final_2026_09_11 rc=0
-[14:56:04] copawin_candidato_a76_validacao_2026_09_11
-[15:00:35] fim copawin_candidato_a76_validacao_2026_09_11 rc=0
-FIM
-[15:08:32] copawin_300_robustez_por_data_de_inicio_2026_09_13
-[15:20:07] fim copawin_300_robustez_por_data_de_inicio_2026_09_13 rc=0
-FIM

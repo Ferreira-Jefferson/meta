@@ -1,7 +1,0 @@
-[15:00:54] wdo_win_padrao_dia_horario_2026_09_04
-[15:01:43] fim wdo_win_padrao_dia_horario_2026_09_04 rc=0
-[15:01:44] wdo_win_filtro_dia_horario_impacto_2026_09_04
-[15:05:21] fim wdo_win_filtro_dia_horario_impacto_2026_09_04 rc=0
-[15:05:21] wdo_win_filtro_manual_fullhist_2026_09_04
-[15:06:51] fim wdo_win_filtro_manual_fullhist_2026_09_04 rc=0
-FIM

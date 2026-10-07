@@ -1,3 +1,0 @@
-feature,metodo,regra,limiar_calibrado_metade1,n_trades_metade2,n_mantidos,n_descartados,pnl_sem_filtro_brl,pnl_com_filtro_brl,maxdd_sem_filtro_brl,maxdd_com_filtro_brl,delta_pnl_dentro_da_propria_metade1_brl
-volume_toque,tercil_33_67_metade1,"manter so' se volume_toque <= 9,000",9.0,1387,900,487,5636.5,4000.0,99.0,85.5,
-volume_toque,grid_search_pct1-99_dentro_da_metade1,"manter so' se volume_toque <= 203,300 (percentil 99 da metade1)",203.30000000000018,1387,1363,24,5636.5,5793.5,99.0,85.5,-63.0

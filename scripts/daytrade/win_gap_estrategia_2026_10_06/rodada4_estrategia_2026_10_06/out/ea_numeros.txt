@@ -1,8 +1,0 @@
-S1200 | none  toque     sinais 63 fills 62 sem fill 1.6% | 1 contrato: liquido R$5,464 R$/trade 88.1 win 50.0% BE 34.8% ganho medio 379 perda media 202 maxDD R$1,268 maior seq perdas 6 stops 24 flatten 38 pior -242
-   por mes: {'2026-04': 1613, '2026-05': 632, '2026-06': 446, '2026-07': 562, '2026-08': 2004, '2026-09': 690, '2026-10': -483}
-S1200 | none  atrav+1t  sinais 63 fills 62 sem fill 1.6% | 1 contrato: liquido R$5,464 R$/trade 88.1 win 50.0% BE 34.8% ganho medio 379 perda media 202 maxDD R$1,268 maior seq perdas 6 stops 24 flatten 38 pior -242
-   por mes: {'2026-04': 1613, '2026-05': 632, '2026-06': 446, '2026-07': 562, '2026-08': 2004, '2026-09': 690, '2026-10': -483}
-S700 | none   toque     sinais 63 fills 62 sem fill 1.6% | 1 contrato: liquido R$4,786 R$/trade 77.2 win 40.3% BE 25.6% ganho medio 389 perda media 134 maxDD R$892 maior seq perdas 7 stops 34 flatten 28 pior -142
-   por mes: {'2026-04': 1351, '2026-05': 308, '2026-06': 846, '2026-07': 615, '2026-08': 625, '2026-09': 1324, '2026-10': -283}
-S700 | none   atrav+1t  sinais 63 fills 62 sem fill 1.6% | 1 contrato: liquido R$4,786 R$/trade 77.2 win 40.3% BE 25.6% ganho medio 389 perda media 134 maxDD R$892 maior seq perdas 7 stops 34 flatten 28 pior -142
-   por mes: {'2026-04': 1351, '2026-05': 308, '2026-06': 846, '2026-07': 615, '2026-08': 625, '2026-09': 1324, '2026-10': -283}

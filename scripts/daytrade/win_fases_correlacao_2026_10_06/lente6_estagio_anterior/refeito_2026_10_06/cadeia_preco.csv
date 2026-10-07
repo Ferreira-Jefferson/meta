@@ -1,4 +1,0 @@
-par,n,rho,p_shift
-B->C,122,-0.1255,0.1339
-C->A(gap seguinte),119,-0.0998,0.3303
-A->B (gap D+1 -> pregao D+1),119,-0.1964,0.0275

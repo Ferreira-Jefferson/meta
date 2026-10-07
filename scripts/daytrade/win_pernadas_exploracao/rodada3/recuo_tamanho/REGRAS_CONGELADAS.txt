@@ -1,5 +1,0 @@
-Congeladas ao fim da descoberta (jan-jun/26), ANTES de rodar jul-ago:
-F1: SE movimento (A>=375 pts do piso/topo) e recuo r>=38% do avanco ENTAO P(novo extremo) fica ABAIXO do acaso (excesso < 0), e P(1,5A)/P(2A) tambem.
-F2: SE A<375 e r>=38% ENTAO P(novo extremo) fica ACIMA do acaso (excesso > 0).
-F3: SE recuo e o 2o ou mais do movimento (ordinal>=2) e r>=50% ENTAO P(novo extremo) abaixo do acaso.
-Teste: excesso agrupado (real - media do nulo) com z contra 300 simulacoes de embaralho em blocos de 30 min. Confirma se mesmo sinal e |z|>=2 (ou pelo menos mesmo sinal com z>=1).
