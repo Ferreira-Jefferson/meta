@@ -54,7 +54,7 @@ orquestração. Se uma feature precisa de algo de outra, ou o dado sobe para
 - Fontes: JetBrains Mono (dados/números), Instrument Serif (leitura/headlines).
 - Cantos vivos (`border-radius: 0`). Bordas finas de 1px. Sem sombras.
 - Paleta em `static/css/tokens.css` — nunca hardcode cor em template.
-- Ao criar/editar template, **invoque a skill `frontend-design`** (`.claude/skills/frontend-design/SKILL.md`) para refinar.
+- Ao criar/editar template, **invoque a skill `frontend-design`** (plugin `frontend-design`) para refinar.
 
 ## Testes
 
@@ -88,7 +88,7 @@ por unidade e `flush=True` em todo print — ver
 Regra: nenhuma rodada longa espera todas as unidades terminarem para falar.
 Cada unidade que termina imprime **a linha dela** (formato da tabela padrão)
 na hora, com `flush=True`; o resumo ordenado vem depois, no fim. Ver
-`scripts/daytrade/sweep_copa.py`.
+`scripts/daytrade/gremah_defesa_corte_sweep_2026_09_03.py`.
 
 Motivo: uma varredura de 20 minutos que só fala no fim é uma varredura que
 ninguém consegue interromper com informação — e interromper cedo, ao ver que
