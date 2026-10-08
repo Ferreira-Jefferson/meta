@@ -21,7 +21,6 @@ Regras do .mq5 reproduzidas (inputs padrao):
 Nao reproduzido: FiltroMM (padrao 0), margem/saldo insuficiente para o lote, fila, custos.
 
 Uso: python port_deslocamento.py            -> rodada final 2026 (resultados/WinDeslocamentoMatinal.csv)
-     python port_deslocamento.py valida     -> compara com o replay antigo na janela do WINV26
 """
 import sys
 from datetime import date
@@ -182,36 +181,5 @@ def final():
     print(out, flush=True)
 
 
-def valida():
-    """Janela WINV26 (2026-08-13 -> 09-30): port (ticks WINV26, last>0) vs replay antigo (fill 'tocar', lat 0)."""
-    sys.path.insert(0, str(dados.ROOT / "scripts" / "daytrade"))
-    import win_deslocamento_replay_ticks as vel
-    ini, fim = date(2026, 8, 13), date(2026, 9, 30)
-    ant = vel.replay(ini, fim, 0.0, "fixa", {"fill": "tocar"}, "WINV26")
-    print("antigo:", ant["resumo"], ant["diag"], ant["avisos"], flush=True)
-    A = pd.DataFrame(ant["trades"])
-    m1 = vel.carregar_m1("WINV26", ini, fim, [])
-    m1 = m1[["open", "high", "low", "close"]]
-    dias = sorted(d for d in set(m1.index.date) if ini <= d <= fim)
-
-    def gt(d):
-        x = pd.read_pickle(vel.CACHE / "WINV26" / f"{d}.pkl")
-        x = x[x["last"] > 0]
-        return x.time_msc.to_numpy(), x["last"].to_numpy(float)
-    res = {}
-    for nome, kw in (("port sem teto (isola execucao)", dict(risco_pct=0.0)), ("port com teto 10%/saldo", dict())):
-        tr, saldo, q, dg = rodar(dias, m1, gt, **kw, log=lambda *a, **k: None)
-        B = pd.DataFrame(tr)
-        print(f"\n== {nome}: {len(B)} trades, R$ {B.rs.sum():.2f}, diag {dg}", flush=True)
-        res[nome] = B
-    B = res["port sem teto (isola execucao)"]
-    B["dia"] = B.entrada.str[:10]
-    m = A[["dia", "te", "tx", "d", "pe", "px", "mot", "rs"]].merge(
-        B[["dia", "entrada", "saida", "lado", "preco_entrada", "preco_saida", "motivo", "rs"]], on="dia", how="outer", suffixes=("_ant", "_port"))
-    pd.set_option("display.width", 250, "display.max_columns", 30)
-    print(m.to_string(), flush=True)
-    print("antigo total", A.rs.sum().round(2), "| port sem teto", B.rs.sum().round(2), "| com teto", res["port com teto 10%/saldo"].rs.sum().round(2))
-
-
 if __name__ == "__main__":
-    valida() if len(sys.argv) > 1 and sys.argv[1] == "valida" else final()
+    final()
