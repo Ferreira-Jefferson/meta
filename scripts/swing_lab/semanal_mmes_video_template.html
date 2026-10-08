@@ -94,6 +94,7 @@ summary { cursor: pointer; font-family: var(--serif); font-size: 1.6rem; color: 
       <div class="campo"><span class="rot">Atalhos</span>
         <div class="grp">
           <button class="btn" id="p-video" type="button">Filtro do vídeo</button>
+          <button class="btn" id="p-v4" type="button">Filtro v4</button>
           <button class="btn mute" id="p-limpa" type="button">Limpar filtros</button>
         </div>
       </div>
@@ -122,6 +123,9 @@ summary { cursor: pointer; font-family: var(--serif); font-size: 1.6rem; color: 
         <select id="f-liq"><option value="0">qualquer</option><option value="1e6">≥ R$ 1 mi</option><option value="5e6">≥ R$ 5 mi</option><option value="20e6">≥ R$ 20 mi</option><option value="100e6">≥ R$ 100 mi</option></select>
       </div>
       <div class="campo"><span class="rot">Sinal nesta semana</span><div class="grp" id="f-sinal"></div></div>
+      <div class="campo"><label class="rot" for="f-v4">Estratégia v4</label>
+        <select id="f-v4"><option value="">todos</option><option value="apta">aptas</option><option value="sinal">aptas com sinal</option></select>
+      </div>
       <div class="campo"><label class="rot" for="f-orig">Origem</label>
         <select id="f-orig"><option value="">todas</option><option value="grade">só a grade do vídeo</option><option value="mt5">só as acrescentadas</option></select>
       </div>
@@ -135,7 +139,7 @@ summary { cursor: pointer; font-family: var(--serif); font-size: 1.6rem; color: 
 <section aria-label="Ativos">
   <div class="resumo"><b id="cnt"></b><span class="mut" id="cnt-sub"></span>
     <span class="campo" style="margin-left:auto"><span class="grp"><span class="rot">histórico do setup</span>
-      <select id="h-setup" aria-label="gatilho"></select><select id="h-var" aria-label="saída"></select></span></span>
+      <select id="h-var" aria-label="saída"></select></span></span>
   </div>
   <div class="scroll"><table id="tab"></table></div>
 </section>
@@ -153,8 +157,8 @@ summary { cursor: pointer; font-family: var(--serif); font-size: 1.6rem; color: 
 
 <script>
 const D = /*__DADOS__*/null;
-const NS = {inside_bar: "Inside Bar", dave_landry: "Dave Landry", recuo_media: "Recuo à MME9"};
-const NV = {atr14x2: "Stop ATR 14×2", atr21x3: "Stop ATR 21×3", alvo3R: "Alvo 3R"};
+const NS = {recuo_media: "Recuo à MME9"};
+const NV = {atr14x2: "Stop ATR 14×2", atr21x3: "Stop ATR 21×3"};
 const PER = [["r1s", "1 semana"], ["r1m", "1 mês"], ["r3m", "3 meses"], ["r6m", "6 meses"], ["r12m", "12 meses"], ["r24m", "24 meses"], ["rano", "no ano"]];
 const MMS = [9, 21, 50];
 const f1 = (v, d = 1) => v == null || isNaN(v) ? "—" : (v * 100).toFixed(d).replace(".", ",") + "%";
@@ -171,10 +175,12 @@ $("lede").textContent = `${D.ativos.length} ações B3, todas negociáveis na Ri
   `Preços até ${ultima.split("-").reverse().join("/")}. As médias usam o último candle fechado. Retornos já incluem proventos.`;
 
 // ---------- estado dos filtros
-const PADRAO = {orig: "", busca: "", tf: "W", acima: [], sobe: [], alinh: false, perto: "", per: "r12m", min: "", max: "", top: "0", max52: "", liq: "0", sinal: [], setores: [],
+const PADRAO = {orig: "", busca: "", tf: "W", acima: [], sobe: [], alinh: false, perto: "", per: "r12m", min: "", max: "", top: "0", max52: "", liq: "0", sinal: [], setores: [], v4: "",
                 hs: "recuo_media", hv: "atr21x3", ord: "r12m", dir: -1};
 let F = {...PADRAO};
 try { const s = JSON.parse(localStorage.getItem("grade-b3-filtros") || "null"); if (s) F = {...PADRAO, ...s}; } catch (e) {}
+// filtro salvo antes da remocao do Inside Bar / Dave Landry / Alvo 3R
+F.hs = PADRAO.hs; F.sinal = F.sinal.filter(s => s in NS); if (!(F.hv in NV)) F.hv = PADRAO.hv;
 const salvar = () => { try { localStorage.setItem("grade-b3-filtros", JSON.stringify(F)); } catch (e) {} };
 
 // ---------- montar controles
@@ -194,11 +200,11 @@ toggles($("f-setor"), setores.map(s => [s, `${s} · ${D.ativos.filter(a => a.set
 $("f-tf").querySelectorAll(".tog").forEach(b => b.addEventListener("click", () => { F.tf = b.dataset.v; sync(); render(); }));
 $("f-alinh").addEventListener("click", () => { F.alinh = !F.alinh; sync(); render(); });
 PER.forEach(([k, t]) => $("f-per").add(new Option(t, k)));
-D.premissas.setups.forEach(s => $("h-setup").add(new Option(NS[s], s)));
 Object.keys(D.premissas.variantes).forEach(v => $("h-var").add(new Option(NV[v], v)));
-const inputs = {orig: "f-orig", busca: "f-busca", perto: "f-perto", per: "f-per", min: "f-min", max: "f-max", top: "f-top", max52: "f-max52", liq: "f-liq", hs: "h-setup", hv: "h-var"};
+const inputs = {orig: "f-orig", busca: "f-busca", perto: "f-perto", per: "f-per", min: "f-min", max: "f-max", top: "f-top", max52: "f-max52", liq: "f-liq", hv: "h-var", v4: "f-v4"};
 Object.entries(inputs).forEach(([k, id]) => $(id).addEventListener(id.startsWith("f-busca") || $(id).type === "number" ? "input" : "change", () => { F[k] = $(id).value; render(); }));
 $("p-video").addEventListener("click", () => { F = {...PADRAO, tf: "W", acima: ["9", "21", "50"], sobe: ["9", "21", "50"], top: "0.7", ord: F.ord, dir: F.dir, hs: F.hs, hv: F.hv}; sync(); render(); });
+$("p-v4").addEventListener("click", () => { F = {...PADRAO, v4: "apta", ord: "v4", dir: -1, hs: F.hs, hv: F.hv}; sync(); render(); });
 $("p-limpa").addEventListener("click", () => { F = {...PADRAO, ord: F.ord, dir: F.dir, hs: F.hs, hv: F.hv}; sync(); render(); });
 
 function sync() {
@@ -228,6 +234,7 @@ function passa(a) {
   const m52 = num(F.max52); if (m52 != null && -a.dist_max52 * 100 > m52) return false;
   if (a.vol_fin_3m < Number(F.liq)) return false;
   if (F.sinal.length && !F.sinal.some(s => a.setup_agora.includes(s))) return false;
+  if (F.v4 && !(a.v4 && a.v4.apta && (F.v4 === "apta" || a.v4.sinal))) return false;
   return true;
 }
 
@@ -246,6 +253,11 @@ const COLS = [
   {k: "dist_max52", t: "da máx. 52s", v: a => a.dist_max52, f: a => `<span class="${a.dist_max52 > -0.005 ? "pos" : "mut"}">${sg(a.dist_max52)}</span>`},
   {...mmCel(9), sep: true}, mmCel(21), mmCel(50),
   {k: "setup", t: "sinal na semana", l: 1, v: a => a.setup_agora.length, f: a => a.setup_agora.map(s => `<span class="chip">${NS[s]}</span>`).join(" ") || `<span class="mut">—</span>`},
+  {k: "v4", t: "v4: grande · força · estrutura", l: 1,
+   v: a => a.v4 ? (a.v4.grande + a.v4.forca + a.v4.estrutura) * 2 + (a.v4.apta && a.v4.sinal ? 1 : 0) : -1,
+   f: a => !a.v4 ? `<span class="mut">—</span>` : ["grande", "forca", "estrutura"].map((k, i) =>
+       `<span class="${a.v4[k] ? "pos" : "mut"}" title="${["financeiro mediano 63 pregões ≥ R$ 100 mi", "papel/IBOV acima da MME21 da razão", "ZigZag 3 ATR: topos e fundos ascendentes"][i]}">${a.v4[k] ? "●" : "○"}</span>`).join(" ") +
+       (a.v4.apta ? (a.v4.sinal ? ` <span class="chip">apta · sinal</span>` : ` <span class="chip">apta</span>`) : "")},
   {k: "vol_fin_3m", t: "financeiro/dia", v: a => a.vol_fin_3m, f: a => brl(a.vol_fin_3m)},
   HC("n", "operações", m => m.n, true),
   HC("win", "acerto", m => f1(m.win)),
@@ -266,7 +278,7 @@ function render() {
   });
   const nH = COLS.filter(c => c.k.startsWith("h.")).length;
   const grupos = `<tr class="grupos"><th class="l" colspan="3"></th><th class="sep" colspan="${PER.length}">retorno com proventos</th><th colspan="2"></th>` +
-    `<th class="sep" colspan="3">distância da média · ${F.tf === "W" ? "semanal" : "diário"}</th><th colspan="2"></th>` +
+    `<th class="sep" colspan="3">distância da média · ${F.tf === "W" ? "semanal" : "diário"}</th><th colspan="3"></th>` +
     `<th class="sep" colspan="${nH + 1}">histórico desde 2010 · ${NS[F.hs]} · ${NV[F.hv]}</th></tr>`;
   let h = `<thead>${grupos}<tr>` + COLS.map(c => `<th class="${c.l ? "l" : ""} ${c.sep ? "sep" : ""} ${F.ord === c.k ? "on" : ""}" tabindex="0" data-k="${c.k}" aria-sort="${F.ord === c.k ? (F.dir > 0 ? "ascending" : "descending") : "none"}">${c.t}${F.ord === c.k ? (F.dir > 0 ? " ↑" : " ↓") : ""}</th>`).join("") + "</tr></thead><tbody>";
   if (!rows.length) h += `<tr><td class="vazio" colspan="${COLS.length}">Nenhum ativo passa em todos os filtros. Afrouxe um deles ou use “Limpar filtros”.</td></tr>`;
@@ -285,11 +297,11 @@ function render() {
 // ---------- estudo agregado
 (function () {
   const cols = [["top30", "top 30% em 12m"], ["resto", "fora do top 30%"], ["ate2019", "2010–2019"], ["2020+", "2020 em diante"]];
-  let h = `<thead><tr><th class="l">gatilho</th><th class="l">saída</th><th>operações</th><th>acerto</th><th>equilíbrio</th><th>ganho médio</th><th>perda média</th><th>por operação</th><th>risco médio</th><th>dias (mediana)</th>` +
+  let h = `<thead><tr><th class="l">saída</th><th>operações</th><th>acerto</th><th>equilíbrio</th><th>ganho médio</th><th>perda média</th><th>por operação</th><th>risco médio</th><th>dias (mediana)</th>` +
     cols.map(([, n]) => `<th class="sep">${n}<br>por operação · n</th>`).join("") + `</tr></thead><tbody>`;
   for (const s of D.premissas.setups) for (const v of Object.keys(D.premissas.variantes)) {
     const g = D.agregados[`${s}|${v}`], a = g.todos; if (!a.n) continue;
-    h += `<tr><td class="l">${NS[s]}</td><td class="l">${NV[v]}</td><td>${a.n}</td><td>${f1(a.win)}</td><td class="mut">${f1(a.be)}</td>
+    h += `<tr><td class="l">${NV[v]}</td><td>${a.n}</td><td>${f1(a.win)}</td><td class="mut">${f1(a.be)}</td>
       <td class="pos">${f1(a.ganho_med)}</td><td class="neg">−${f1(a.perda_med)}</td><td><b class="${cl(a.exp)}">${sg(a.exp, 2)}</b></td><td>${f1(a.risco_med)}</td><td>${a.dias_med}</td>` +
       cols.map(([k]) => { const x = g[k]; return `<td class="sep ${cl(x.exp)}">${x.n ? sg(x.exp, 2) + ` <span class="mut">· ${x.n}</span>` : "—"}</td>`; }).join("") + `</tr>`;
   }
@@ -299,11 +311,12 @@ function render() {
     `Como a lista é a grade de 2024, só entram empresas que sobreviveram até lá, e isso infla principalmente o começo do período. Os anos recentes são a melhor estimativa do que esperar.`;
   const P = D.premissas;
   $("notes").innerHTML = [
-    `<p><b>Sinal.</b> As três MMEs semanais (9, 21, 50) sobem em relação à semana anterior. A mínima do candle fica até ${f1(P.tol_recuo, 0)} acima da MME9 (ou abaixo dela), e o fechamento fica acima da MME50. Inside Bar e Dave Landry somam o padrão do candle a isso.</p>`,
+    `<p><b>Sinal.</b> As três MMEs semanais (9, 21, 50) sobem em relação à semana anterior. A mínima do candle fica até ${f1(P.tol_recuo, 0)} acima da MME9 (ou abaixo dela), e o fechamento fica acima da MME50. Os gatilhos Inside Bar e Dave Landry foram medidos e retirados: cortavam metade das entradas sem melhorar o resultado por operação.</p>`,
     `<p><b>Entrada.</b> Ordem stop de compra 1 centavo acima da máxima do candle-sinal, válida só na semana seguinte. Se o papel abrir acima, compra na abertura. <b>Stop</b> 1 centavo abaixo da mínima, checado todo dia.</p>`,
-    `<p><b>Stop ATR.</b> Linha = fechamento − k × ATR(n), que só sobe. Quando a semana fecha abaixo da linha, vende na abertura seguinte. O vídeo não informa n nem k. <b>Alvo 3R.</b> Venda a 3 vezes o risco.</p>`,
+    `<p><b>Stop ATR.</b> Linha = fechamento − k × ATR(n), que só sobe. Quando a semana fecha abaixo da linha, vende na abertura seguinte. O vídeo não informa n nem k. O alvo de 3 vezes o risco foi medido e retirado: rendia de um terço à metade do Stop ATR.</p>`,
     `<p><b>Custo.</b> ${f1(P.custo_perna, 2)} por perna. A taxa fixa do fracionário (R$1,90 por ordem) não entra, porque depende do tamanho da posição.</p>`,
     `<p><b>Composto.</b> 100% do capital do ativo em cada operação, em sequência, uma posição por vez. Serve para comparar com “comprar e segurar”, não é a carteira real.</p>`,
+    D.v4 ? `<p><b>Estratégia v4</b> (estado da semana de ${D.v4.semana.split("-").reverse().join("/")}, diário do MT5). Apta = <b>grande</b> (mediana do financeiro dos 63 pregões ≥ R$ 100 mi) + <b>força</b> (razão papel/IBOV semanal acima da MME21 dela) + <b>estrutura</b> (ZigZag de 3 ATR semanais com os dois últimos topos e fundos ascendentes). “Sinal” = recuo à MME9 com as três MMEs subindo na semana fechada; a compra é no rompimento da máxima na semana seguinte, stop na mínima e saída pela linha ATR. <b>A v4 ainda não bate o CDI</b> (posicionada rende ~5%/ano contra ~6% no histórico 2011–21 e ~6% contra ~12,6% em 2022–25): serve para acompanhar, não para operar.</p>` : "",
     `<p><b>Universo.</b> A grade de setores do vídeo, sem os BDRs que ela misturava nos setores, mais toda ação ON/PN ou unit que a corretora lista no MT5 com mediana de financeiro ≥ R$ ${D.premissas.liq_min_mt5 / 1e6} mi/dia (marcadas “+ MT5”). Fundos imobiliários e ETFs ficam de fora. A grade escolhia uma classe por empresa, então PETR3/ITUB3/BBDC3 e outras entram agora.</p>`,
   ].join("");
 })();

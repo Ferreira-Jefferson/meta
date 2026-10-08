@@ -4,9 +4,15 @@ O QUE O VIDEO PROPOE (so a parte de B3 -- EUA/BDRs fora por decisao do dono):
   * grafico SEMANAL, tres MMEs: 9, 21, 50;
   * so opera ativo com as tres medias apontando para cima;
   * universo = ativos que mais subiram em 12 meses (a "grade" do Profit);
-  * compra no recuo perto das medias, gatilho Inside Bar / Dave Landry /
-    rompimento da maxima, stop abaixo da minima do candle-sinal;
-  * saida por alvo de 3x o risco OU por Stop ATR (sai so quando FECHA abaixo).
+  * compra no recuo perto das medias, gatilho no rompimento da maxima, stop
+    abaixo da minima do candle-sinal;
+  * saida por Stop ATR (sai so quando FECHA abaixo).
+
+O QUE FICOU DE FORA (medido em 2026-10-08, 133 acoes B3, 2010-2026): os
+gatilhos Inside Bar e Dave Landry e a saida por alvo de 3R. Os dois gatilhos
+cortam metade das entradas sem melhorar a expectativa por operacao (Landry
++5,85% contra +6,54% do recuo puro, ATR 21x3), entao so reduzem o lucro total.
+O alvo 3R rende de um terco a metade do Stop ATR em todas as fatias.
 
 COMO ESTE SCRIPT MEDE (premissas declaradas -- o video nao fixa nenhuma delas):
   * SINAL so no candle semanal FECHADO (sexta). Nada do candle em formacao.
@@ -112,9 +118,8 @@ TICK = 0.01
 VARIANTES = {
     "atr14x2": ("atr", 14, 2.0),
     "atr21x3": ("atr", 21, 3.0),
-    "alvo3R": ("alvo", 3.0, None),
 }
-SETUPS = ("inside_bar", "dave_landry", "recuo_media")
+SETUPS = ("recuo_media",)
 CORTE_ISOS = pd.Timestamp("2020-01-01")
 
 
@@ -260,9 +265,7 @@ def sinais(w: pd.DataFrame) -> pd.DataFrame:
     perto = (w["low"] <= e9 * (1 + TOL_RECUO)) & (w["close"] > e50)
     base = sobe & perto
     base &= pd.Series(np.arange(len(w)) >= 50, index=w.index)  # MME50 aquecida
-    ib = (w["high"] <= w["high"].shift()) & (w["low"] >= w["low"].shift())
-    dl = w["low"] < np.minimum(w["low"].shift(), w["low"].shift(2))
-    return pd.DataFrame({"inside_bar": base & ib, "dave_landry": base & dl, "recuo_media": base,
+    return pd.DataFrame({"recuo_media": base,
                          "e9": e9, "e21": e21, "e50": e50, "sobe": sobe}, index=w.index)
 
 
@@ -271,9 +274,21 @@ def semana_de(idx: pd.DatetimeIndex) -> np.ndarray:
     return (idx + pd.to_timedelta((4 - idx.weekday) % 7, unit="D")).values
 
 
-def simular(d: pd.DataFrame, w: pd.DataFrame, sig: pd.DataFrame, setup: str, variante: str) -> list[Trade]:
-    tipo, p1, p2 = VARIANTES[variante]
-    atr_w = atr(w, int(p1)).to_numpy() if tipo == "atr" else None
+def simular(d: pd.DataFrame, w: pd.DataFrame, sig: pd.DataFrame, setup: str, variante: str,
+            stop_inicial: bool = True, usar_atr: bool = True,
+            sair_semana: np.ndarray | None = None, motivo_semana: str = "inclinacao",
+            stop_max_pct: float | None = None, breakeven_r: float | None = None,
+            prazo_semanas: int | None = None) -> list[Trade]:
+    """`stop_inicial=False` sai so pela linha ATR (o stop continua calculado,
+    porque define o risco da operacao). `sair_semana` (um bool por semana de
+    `w`) sai na abertura seguinte a semana marcada, com `motivo_semana`;
+    `usar_atr=False` desliga a linha ATR. `stop_max_pct` limita a distancia
+    do stop inicial ao preco de entrada. `breakeven_r`: depois de a maxima do
+    dia andar esse numero de riscos a favor, o stop sobe para a entrada (vale
+    do pregao seguinte). `prazo_semanas`: no fechamento da N-esima semana, se
+    o papel nao estiver acima da entrada, sai na abertura seguinte."""
+    _, p1, p2 = VARIANTES[variante]
+    atr_w = atr(w, int(p1)).to_numpy()
     O, H, L, C = (d[c].to_numpy() for c in ("open", "high", "low", "close"))
     sem_dia = semana_de(d.index)
     sem_w = w.index.values
@@ -302,50 +317,51 @@ def simular(d: pd.DataFrame, w: pd.DataFrame, sig: pd.DataFrame, setup: str, var
         if ent is None:
             continue
         ent_px = max(O[ent], gatilho)
+        if stop_max_pct is not None:
+            stop = max(stop, ent_px * (1 - stop_max_pct))
         risco = (ent_px - stop) / ent_px
         if risco <= 0:
             continue
-        alvo = ent_px + p1 * (ent_px - stop) if tipo == "alvo" else None
+        alvo_be = ent_px + breakeven_r * (ent_px - stop) if breakeven_r is not None else None
+        semanas = 0
         linha = None
         sai, sai_px, motivo, ambiguo = None, None, None, False
-        sair_na_abertura = False
+        sair_na_abertura = None
         for k in range(ent, n):
             if sair_na_abertura:
-                sai, sai_px, motivo = k, O[k], "stop_atr"
+                sai, sai_px, motivo = k, O[k], sair_na_abertura
                 break
             if k == ent:
                 # Dia da entrada: no diario nao se sabe se a minima veio antes ou
                 # depois do gatilho. Abriu acima do gatilho -> compra primeiro,
                 # minima depois, stop vale. Senao e ambiguo: so conta o stop se
                 # o dia FECHOU abaixo dele (ai certamente passou por ele comprado).
-                if L[k] <= stop:
+                if stop_inicial and L[k] <= stop:
                     if O[k] >= gatilho or C[k] <= stop:
                         sai, sai_px, motivo = k, stop, "stop"
                         ambiguo = O[k] < gatilho
                         break
                     ambiguo = True
-                if alvo is not None and C[k] >= alvo:
-                    sai, sai_px, motivo = k, alvo, "alvo"
-                    break
-            else:
+            elif stop_inicial:
                 if O[k] <= stop:
                     sai, sai_px, motivo = k, O[k], "stop"
                     break
                 if L[k] <= stop:
                     sai, sai_px, motivo = k, stop, "stop"
                     break
-                if alvo is not None and O[k] >= alvo:
-                    sai, sai_px, motivo = k, O[k], "alvo"
-                    break
-                if alvo is not None and H[k] >= alvo:
-                    sai, sai_px, motivo = k, alvo, "alvo"
-                    break
-            if atr_w is not None and (k + 1 == n or sem_dia[k + 1] != sem_dia[k]):
+            if alvo_be is not None and H[k] >= alvo_be:
+                stop = max(stop, ent_px)
+            if (k + 1 == n or sem_dia[k + 1] != sem_dia[k]):
                 jw = pos_w.get(sem_dia[k])
                 if jw is not None:  # semana fechada (a em formacao nao esta em w)
+                    semanas += 1
                     nova = wc[jw] - p2 * atr_w[jw]
-                    if linha is not None and wc[jw] < linha:
-                        sair_na_abertura = True
+                    if usar_atr and linha is not None and wc[jw] < linha:
+                        sair_na_abertura = "stop_atr"
+                    elif sair_semana is not None and sair_semana[jw]:
+                        sair_na_abertura = motivo_semana
+                    elif prazo_semanas is not None and semanas == prazo_semanas and wc[jw] <= ent_px:
+                        sair_na_abertura = "prazo"
                     linha = nova if linha is None else max(linha, nova)
         if sai is None:  # aberto ate hoje: marca no ultimo fechamento
             sai, sai_px, motivo = n - 1, C[-1], "aberto"
