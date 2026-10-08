@@ -41,10 +41,6 @@ They are deliberately kept apart: `IntradayStrategy` does not inherit from `Stra
 
 The same live process (`scripts/run_live.py --slot swing|daytrade`) dispatches to the right runtime.
 
-## A terceira via: arbitragem social (`social_arbitrage/`) — discricionária, fora de `strategy/`
-
-Desde 2026-09-27 há um terceiro caminho, deliberadamente **fora** dos dois acima: teses discricionárias a partir de assimetria de informação real (não de OHLCV), inspiradas em Chris Camilo (observação de consumo antes do mercado notar) e Larry Williams (smart money via COT, calendário, confluência de sinais — não os indicadores dele). Vive em `src/social_arbitrage/`, **irmã** de `strategy/`/`journal/`/`backtest/`, nunca dentro de `strategy/`: a regra 2 do `AGENTS.md` (sinal puro OHLCV→decisão, portável para MQL5) não se aplica aqui de propósito — o insumo é observação de campo/menção social ou posicionamento externo, o dimensionamento é Kelly fracionário + teto de pior-caso (não a fórmula de risco do motor), e não há stop por padrão. Banco próprio (`db/social_arbitrage.sqlite`), CLI em `scripts/social_arbitrage_cli.py`. Hoje é só registro/apoio a decisão — **não manda ordem**; ver o faseamento completo e o porquê de cada fase estar ou não pronta na docstring de `src/social_arbitrage/__init__.py`.
-
 ## Layer boundaries (from AGENTS.md — non-negotiable)
 
 ```
@@ -197,7 +193,7 @@ Consequências que continuam valendo:
 
 1. O "padrão estrutural" da varredura de 250 células (*alvo=1 é o único regime saudável*) **descreve o motor antigo, não o mercado** — não cite como achado de estratégia. Aquela grade rodou sem cobrar o deslize e escolheu a célula que mais explorava a lacuna do modelo.
 2. Toda comparação T1×T2 feita antes de 2026-09-08 está viciada no mesmo eixo. Inclusive a de 2026-09-04.
-3. **7 scripts antigos de laboratório montam `IntradayCostModel` na mão** (`copa_lab.py`, `f8_win_lacuna_execucao_sweep.py`, `wdo_fillreal_study*.py`, `wdo_geo_sweep.py`, `wdo_geo_grid_rolling_market_sweep.py`, `wdo_grid_reload_f1_lab.py`) com `target_fills_as_maker=True` — eles **não** passam por `config_for` e continuam com o alvo de graça. Rodar um deles hoje produz número otimista de novo.
+3. **Script de laboratório que monta `IntradayCostModel` na mão** com `target_fills_as_maker=True` não passa por `config_for` e fica com o alvo de graça — produz número otimista. Os 7 que faziam isso (`copa_lab.py`, `wdo_fillreal_study*.py`, `wdo_geo_*`…) foram apagados; não recrie o padrão.
 4. **Os mesmos scripts que fogem de `config_for` também fogem da FILA** — nenhum deles passa por `backtest/intraday/fidelidade.py`, então rodam com `queue_ahead_qty=0.0` e `exit_queue_ahead_qty=0.0` (entrada E saída de graça). Somados os dois desvios, um número saído dali hoje é otimista em duas frentes independentes — e uma delas já se mostrou capaz de inverter o sinal do resultado.
 
 ## A base de fidelidade de execução — obrigatória em toda medição de robô maker
@@ -312,7 +308,7 @@ Na hora de portar a estratégia, o que viaja são essas cinco perguntas, não os
 1. **Sem caminho de arquivo fixo compartilhado.** `tmp_path` sempre. Dois workers ao mesmo tempo pegariam o mesmo arquivo.
 2. **Sem dependência de ordem entre testes.** `--dist load` distribui teste-a-teste; ordem de coleta ≠ ordem de execução.
 
-Mesmo espírito para **sweeps de parâmetro**: `ProcessPoolExecutor` com `submit`/`as_completed` (nunca `pool.map`, que trava resultado pronto atrás de unidade lenta), `redirect_stdout` por unidade, `flush=True` em todo print, cada unidade imprime a linha DELA assim que termina — resumo ordenado vem depois. Ver `scripts/daytrade/gremah_defesa_corte_sweep_2026_09_03.py` e `scripts/daytrade/sweep_copa.py`.
+Mesmo espírito para **sweeps de parâmetro**: `ProcessPoolExecutor` com `submit`/`as_completed` (nunca `pool.map`, que trava resultado pronto atrás de unidade lenta), `redirect_stdout` por unidade, `flush=True` em todo print, cada unidade imprime a linha DELA assim que termina — resumo ordenado vem depois. Ver `scripts/daytrade/gremah_defesa_corte_sweep_2026_09_03.py`.
 
 ## Base histórica do WDO — 5 anos, M1, `WDO@D`
 
