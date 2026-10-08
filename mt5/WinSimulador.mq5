@@ -16,6 +16,21 @@
 //|  - lote/stop/alvo ajustados por botoes - / + (o campo de texto   |
 //|    perdia o valor no grafico do Testador ao clicar no vizinho);  |
 //|    stop/alvo novos valem na hora para a posicao aberta.          |
+//| v1.02 (2026-10-08):                                              |
+//|  - compra saia a PRECO 0: clique no fim do pregao + atraso caia  |
+//|    no 1o tick do dia seguinte (leilao, bid/ask = 0). A ordem so' |
+//|    sai com compra e venda validas no livro, e e' cancelada se    |
+//|    ficar mais de 60 s sem mercado.                               |
+//|  - campos voltam a aceitar digitacao (alem do - / +); campo      |
+//|    apagado ou invalido volta ao valor vigente.                   |
+//|  - WIN$/WIN$N/WIN$D nao tem bid/ask nos ticks (medido: 0 em      |
+//|    86.934 de 86.934 no Rico-DEMO): testar no contrato (WINV26).  |
+//|  - stop/alvo executados pelo Testador com livro defasado sao     |
+//|    corrigidos para o preco justo (deposito da diferenca).        |
+//|  - input Roteiro: cliques automaticos para teste sem visual.     |
+//|  - stop/alvo em pontos de RESULTADO com sinal (stop -300; passou |
+//|    da entrada = +50, trava lucro; alvo +200 ou -50), nos campos  |
+//|    e nos rotulos das linhas do grafico.                          |
 //|                                                                  |
 //| COMO USAR                                                        |
 //|  Testador -> Expert: WinSimulador, simbolo WIN$N, modelagem      |
@@ -45,13 +60,13 @@
 //| vira a mao, como no pregao real.                                 |
 //+------------------------------------------------------------------+
 #property copyright "WinSimulador"
-#property version   "1.01"
+#property version   "1.02"
 
 #include <Trade\Trade.mqh>
 
 input double Lote               = 1;      // Contratos por clique (ajustavel no grafico)
-input double StopPts            = 300;    // Stop em pontos a partir do preco medio (0 = sem stop)
-input double AlvoPts            = 0;      // Alvo em pontos a partir do preco medio (0 = sem alvo)
+input double StopPts            = 0;      // Stop inicial: perda em pontos a partir do preco medio (0 = sem stop)
+input double AlvoPts            = 0;      // Alvo inicial: lucro em pontos a partir do preco medio (0 = sem alvo)
 input double PassoPts           = 50;     // Quanto cada clique em - / + muda o stop/alvo (pontos)
 input int    AtrasoMinMs        = 50;     // Atraso normal minimo entre clique e execucao (ms)
 input int    AtrasoMaxMs        = 300;    // Atraso normal maximo (ms)
@@ -64,6 +79,7 @@ input double ProbDeslizeAlvo    = 0.3333; // Chance de deslize quando o ALVO exe
 input int    DeslizeMaxTicks    = 3;      // Deslize maximo em ticks (sorteio favorece 1 tick)
 input int    Semente            = 0;      // Semente do sorteio (0 = diferente a cada teste)
 input ulong  MagicNumber        = 80100701; // Codigo que identifica as ordens deste EA
+input string Roteiro            = "";     // Teste automatico: "HH:MM COMPRA,HH:MM ZERAR" (vazio = desligado)
 
 #define BTN_C  "SIM_BTN_COMPRA"
 #define BTN_V  "SIM_BTN_VENDA"
@@ -87,8 +103,13 @@ bool     g_tester       = false;
 // Valores vigentes de lote/stop/alvo. Ficam no EA, nao no texto do campo:
 // no grafico do Testador o OBJ_EDIT perdia o valor ao clicar no campo vizinho.
 double   g_lote         = 0;
+// Stop e alvo = RESULTADO em pontos a partir do preco medio, com sinal:
+// stop -300 = sai com 300 de perda; stop +50 = passou da entrada e trava 50 de lucro.
+// alvo +200 = sai com 200 de lucro; alvo -50 = sai reduzindo a perda.
 double   g_stop         = 0;
 double   g_alvo         = 0;
+bool     g_stop_on      = false;  // false = sem stop
+bool     g_alvo_on      = false;  // false = sem alvo
 
 int      g_pend         = 0;      // ordem em transito: 1 compra, -1 venda, 2 zerar, 0 nenhuma
 long     g_pend_req_msc = 0;      // instante do clique (ms do tick)
@@ -102,6 +123,8 @@ double   g_env_ref      = 0;
 int      g_env_atraso   = 0;
 bool     g_reancorar    = false;  // conferir stop/alvo da posicao no proximo tick
 string   g_ult_modif    = "";     // ultimo sl/tp que a corretora recusou (evita repetir a cada tick)
+double   g_pos_sl       = 0;      // stop/alvo da posicao no ultimo tick
+double   g_pos_tp       = 0;
 
 double   g_custo_desl   = 0;      // R$ cobrados de deslize
 int      g_n_desl       = 0;
@@ -151,6 +174,10 @@ double NormVolume(double v)
    return v;
 }
 
+// Na abertura (leilao) os ticks reais da B3 vem sem compra/venda no livro
+// (bid/ask = 0 ou cruzados) e o Testador executaria a mercado a preco 0.
+bool LivroValido(const MqlTick &tk) { return tk.bid > 0 && tk.ask > 0 && tk.ask >= tk.bid; }
+
 string NomeAcao(int acao) { return acao == 1 ? "COMPRA" : (acao == -1 ? "VENDA" : "ZERAR"); }
 
 //+------------------------------------------------------------------+
@@ -194,17 +221,78 @@ void CriaCampo(string nome, string rotulo, string nomeRotulo, string btMenos, st
    ObjectSetInteger(0, nome, OBJPROP_ALIGN, ALIGN_CENTER);
    ObjectSetInteger(0, nome, OBJPROP_COLOR, clrBlack);
    ObjectSetInteger(0, nome, OBJPROP_BGCOLOR, clrWhite);
-   ObjectSetInteger(0, nome, OBJPROP_READONLY, true);
+   ObjectSetInteger(0, nome, OBJPROP_READONLY, false);
    ObjectSetInteger(0, nome, OBJPROP_SELECTABLE, false);
 
    CriaBotao(btMais, "+", x + 68, y, clrDimGray, 22, 20);
 }
 
+// So' reescreve o campo quando o texto difere do valor vigente: assim um valor
+// digitado valido nao e' tocado, e um campo apagado/invalido volta ao vigente.
+// Digitacao: o texto do campo so' e' lido depois de ficar PARADO (1 s se valido,
+// 4 s se vazio/invalido). Antes disso o EA nao toca no campo - ler a cada tick
+// aplicava numero pela metade e devolvia o valor antigo a um campo apagado.
+string g_campo_nome[3] = {ED_L, ED_S, ED_A};
+string g_campo_txt[3];            // ultimo texto visto em cada campo
+uint   g_campo_ms[3];             // GetTickCount() (relogio real) da ultima mudanca; 0 = escrito pelo EA
+
+void MostraCampo(int i, string texto)
+{
+   if(ObjectGetString(0, g_campo_nome[i], OBJPROP_TEXT) != texto)
+      ObjectSetString(0, g_campo_nome[i], OBJPROP_TEXT, texto);
+   g_campo_txt[i] = texto;
+   g_campo_ms[i]  = 0;
+}
+
 void MostraCampos()
 {
-   ObjectSetString(0, ED_L, OBJPROP_TEXT, DoubleToString(g_lote, 0));
-   ObjectSetString(0, ED_S, OBJPROP_TEXT, g_stop > 0 ? DoubleToString(g_stop, 0) : "sem");
-   ObjectSetString(0, ED_A, OBJPROP_TEXT, g_alvo > 0 ? DoubleToString(g_alvo, 0) : "sem");
+   MostraCampo(0, DoubleToString(g_lote, 0));
+   MostraCampo(1, g_stop_on ? Pts(g_stop) : "sem");
+   MostraCampo(2, g_alvo_on ? Pts(g_alvo) : "sem");
+}
+
+// ms que o texto do campo esta' parado; -1 = acabou de mudar (registra no Diario)
+int CampoParado(int i)
+{
+   string t = ObjectGetString(0, g_campo_nome[i], OBJPROP_TEXT);
+   if(t != g_campo_txt[i])
+   {
+      PrintFormat("[SIM] campo %s: '%s' -> '%s'", g_campo_nome[i], g_campo_txt[i], t);
+      g_campo_txt[i] = t;
+      g_campo_ms[i]  = GetTickCount();
+      return -1;
+   }
+   if(g_campo_ms[i] == 0) return 1000000;
+   return (int)(GetTickCount() - g_campo_ms[i]);
+}
+
+string Pts(double v) { return MathAbs(v) < 0.5 ? "0" : StringFormat("%+.0f", v); }
+
+// Le o campo: -1 = vazio/invalido (o campo volta ao vigente), 0 = "sem", 1 = numero.
+// comSinal diz se foi digitado + ou - na frente.
+int LeCampo(string nome, double &v, bool &comSinal)
+{
+   string s = ObjectGetString(0, nome, OBJPROP_TEXT);
+   StringTrimLeft(s);
+   StringTrimRight(s);
+   StringReplace(s, ",", ".");
+   if(s == "sem") return 0;
+   comSinal = false;
+   double sinal = 1;
+   if(StringLen(s) > 0 && (StringGetCharacter(s, 0) == '+' || StringGetCharacter(s, 0) == '-'))
+   {
+      comSinal = true;
+      if(StringGetCharacter(s, 0) == '-') sinal = -1;
+      s = StringSubstr(s, 1);
+   }
+   if(StringLen(s) == 0) return -1;
+   for(int i = 0; i < StringLen(s); i++)
+   {
+      ushort c = StringGetCharacter(s, i);
+      if((c < '0' || c > '9') && c != '.') return -1;
+   }
+   v = sinal * StringToDouble(s);
+   return 1;
 }
 
 //+------------------------------------------------------------------+
@@ -219,13 +307,16 @@ int OnInit()
    CriaBotao(BTN_V, "VENDA",  105, 50, clrFireBrick);
    CriaBotao(BTN_Z, "ZERAR",  200, 50, clrDimGray);
    CriaCampo(ED_L, "lote",      LB_L, BT_LM, BT_LP, 10,  90);
-   CriaCampo(ED_S, "stop pts",  LB_S, BT_SM, BT_SP, 105, 90);
-   CriaCampo(ED_A, "alvo pts",  LB_A, BT_AM, BT_AP, 200, 90);
+   CriaCampo(ED_S, "stop (resultado)", LB_S, BT_SM, BT_SP, 105, 90);
+   CriaCampo(ED_A, "alvo (resultado)", LB_A, BT_AM, BT_AP, 200, 90);
 
    g_lote = NormVolume(Lote);
-   g_stop = MathMax(0, StopPts);
-   g_alvo = MathMax(0, AlvoPts);
+   g_stop_on = (StopPts > 0);
+   g_stop    = -MathAbs(StopPts);
+   g_alvo_on = (AlvoPts > 0);
+   g_alvo    = MathAbs(AlvoPts);
    MostraCampos();
+   Roteiro_Carrega();
    ChartRedraw();
    return INIT_SUCCEEDED;
 }
@@ -258,13 +349,64 @@ void LeAjustes()
    bool mudouLote = false, mudouNiveis = false;
    if(Clicou(BT_LM)) { g_lote = NormVolume(g_lote - passoLote); mudouLote = true; }
    if(Clicou(BT_LP)) { g_lote = NormVolume(g_lote + passoLote); mudouLote = true; }
-   if(Clicou(BT_SM)) { g_stop = MathMax(0, g_stop - PassoPts);  mudouNiveis = true; }
-   if(Clicou(BT_SP)) { g_stop += PassoPts;                      mudouNiveis = true; }
-   if(Clicou(BT_AM)) { g_alvo = MathMax(0, g_alvo - PassoPts);  mudouNiveis = true; }
-   if(Clicou(BT_AP)) { g_alvo += PassoPts;                      mudouNiveis = true; }
-   if(!mudouLote && !mudouNiveis) return;
-   MostraCampos();
-   ChartRedraw();
+   // - / + andam o resultado em pontos e podem passar da entrada (stop +50 trava lucro).
+   // Com stop/alvo desligado ("sem"), o primeiro clique liga no valor padrao.
+   double stopIni = -(StopPts > 0 ? StopPts : PassoPts), alvoIni = (AlvoPts > 0 ? AlvoPts : PassoPts);
+   if(Clicou(BT_SM)) { if(g_stop_on) g_stop -= PassoPts; else { g_stop = stopIni; g_stop_on = true; } mudouNiveis = true; }
+   if(Clicou(BT_SP)) { if(g_stop_on) g_stop += PassoPts; else { g_stop = stopIni; g_stop_on = true; } mudouNiveis = true; }
+   if(Clicou(BT_AM)) { if(g_alvo_on) g_alvo -= PassoPts; else { g_alvo = alvoIni; g_alvo_on = true; } mudouNiveis = true; }
+   if(Clicou(BT_AP)) { if(g_alvo_on) g_alvo += PassoPts; else { g_alvo = alvoIni; g_alvo_on = true; } mudouNiveis = true; }
+
+   if(mudouLote || mudouNiveis) MostraCampos();
+
+   // valores digitados. Sem sinal: stop e' perda (300 = -300), alvo e' lucro.
+   // Numero do tamanho de um PRECO (ex. 182900) vira pontos a partir da entrada.
+   for(int i = 0; i < 3; i++)
+   {
+      int parado = CampoParado(i);
+      if(parado < 1000 || g_campo_ms[i] == 0) continue;   // digitando, ou texto e' do proprio EA
+      double v = 0;
+      bool sn = false;
+      int r = LeCampo(g_campo_nome[i], v, sn);
+      bool ok = false;
+      if(i == 0)
+      {
+         if(r == 1 && !sn && v > 0) { ok = true; if(MathAbs(NormVolume(v) - g_lote) > 1e-9) { g_lote = NormVolume(v); mudouLote = true; } }
+      }
+      else if(r == 0)
+      {
+         ok = true;
+         if(i == 1 && g_stop_on) { g_stop_on = false; mudouNiveis = true; }
+         if(i == 2 && g_alvo_on) { g_alvo_on = false; mudouNiveis = true; }
+      }
+      else if(r == 1)
+      {
+         double ref = SymbolInfoDouble(_Symbol, SYMBOL_LAST);
+         if(!sn && ref > 0 && v > ref / 2)            // digitou um preco
+         {
+            if(PositionSelect(_Symbol))
+            {
+               double dir = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY ? 1 : -1);
+               v  = (NormPreco(v) - PositionGetDouble(POSITION_PRICE_OPEN)) * dir;
+               sn = true;
+               ok = true;
+            }
+            else g_ultimo = "sem posicao aberta: digite stop/alvo em PONTOS (o preco depende da entrada)";
+         }
+         else ok = true;
+         if(ok && i == 1)
+         {
+            if(!sn) v = -v;
+            if(!g_stop_on || MathAbs(v - g_stop) > 1e-9) { g_stop = v; g_stop_on = true; mudouNiveis = true; }
+         }
+         if(ok && i == 2 && (!g_alvo_on || MathAbs(v - g_alvo) > 1e-9)) { g_alvo = v; g_alvo_on = true; mudouNiveis = true; }
+      }
+      if(ok || parado >= 4000)                       // valido: formata; invalido parado 4 s: volta ao vigente
+         MostraCampo(i, i == 0 ? DoubleToString(g_lote, 0) : (i == 1 ? (g_stop_on ? Pts(g_stop) : "sem")
+                                                                       : (g_alvo_on ? Pts(g_alvo) : "sem")));
+   }
+
+   if(mudouLote || mudouNiveis) ChartRedraw();
    if(mudouNiveis) g_reancorar = true;
 }
 
@@ -289,7 +431,7 @@ void LeBotoes(const MqlTick &tk)
    g_pend_ref     = (acao == 1 ? tk.ask : (acao == -1 ? tk.bid : 0));
    if(acao == 2 && PositionSelect(_Symbol))   // zerar comprado vende no bid, vendido compra no ask
       g_pend_ref = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY ? tk.bid : tk.ask);
-   if(g_pend_atraso == 0) Envia();
+   if(g_pend_atraso == 0 && LivroValido(tk)) Envia();
 }
 
 // Cobra o deslize como saque do saldo do Testador
@@ -312,8 +454,8 @@ void AjustaNiveis()
    double pm   = PositionGetDouble(POSITION_PRICE_OPEN);
    bool   comp = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY);
    double sl = 0, tp = 0;
-   if(g_stop > 0) sl = NormPreco(comp ? pm - g_stop : pm + g_stop);
-   if(g_alvo > 0) tp = NormPreco(comp ? pm + g_alvo : pm - g_alvo);
+   if(g_stop_on) sl = NormPreco(comp ? pm + g_stop : pm - g_stop);
+   if(g_alvo_on) tp = NormPreco(comp ? pm + g_alvo : pm - g_alvo);
    double meioTick = (TickSize() > 0 ? TickSize() : _Point) / 2;
    if(MathAbs(sl - PositionGetDouble(POSITION_SL)) < meioTick &&
       MathAbs(tp - PositionGetDouble(POSITION_TP)) < meioTick) return;   // nada a mudar
@@ -324,7 +466,7 @@ void AjustaNiveis()
       if(msg != g_ult_modif) { g_ultimo = g_ultimo + "  | " + msg; Print("[SIM] ", msg); }
       g_ult_modif = msg;
    }
-   else g_ult_modif = "";
+   else { g_ult_modif = ""; LogPosicao("stop/alvo ajustado"); }
 }
 
 // Envia a ordem depois do atraso. O preco, o stop/alvo e o deslize sao tratados
@@ -376,7 +518,8 @@ void MarcaNegocio(ulong deal, string tag, double preco)
    ObjectSetInteger(0, n + "_T", OBJPROP_SELECTABLE, false);
 }
 
-void Linha(string nome, double preco, color c, ENUM_LINE_STYLE estilo, string rotulo, datetime agora)
+void Linha(string nome, double preco, color c, ENUM_LINE_STYLE estilo, string rotulo, datetime agora,
+           bool arrastavel = false)
 {
    if(preco <= 0) { ObjectDelete(0, nome); ObjectDelete(0, nome + "_T"); return; }
    if(ObjectFind(0, nome) < 0)
@@ -384,8 +527,10 @@ void Linha(string nome, double preco, color c, ENUM_LINE_STYLE estilo, string ro
       ObjectCreate(0, nome, OBJ_HLINE, 0, 0, preco);
       ObjectSetInteger(0, nome, OBJPROP_COLOR, c);
       ObjectSetInteger(0, nome, OBJPROP_STYLE, estilo);
-      ObjectSetInteger(0, nome, OBJPROP_SELECTABLE, false);
-      ObjectSetInteger(0, nome, OBJPROP_BACK, true);
+      ObjectSetInteger(0, nome, OBJPROP_WIDTH, arrastavel ? 2 : 1);
+      ObjectSetInteger(0, nome, OBJPROP_SELECTABLE, arrastavel);
+      ObjectSetInteger(0, nome, OBJPROP_SELECTED, arrastavel);   // ja' selecionada: arrasta sem duplo clique
+      ObjectSetInteger(0, nome, OBJPROP_BACK, false);
       ObjectCreate(0, nome + "_T", OBJ_TEXT, 0, agora, preco);
       ObjectSetInteger(0, nome + "_T", OBJPROP_ANCHOR, ANCHOR_RIGHT_LOWER);
       ObjectSetInteger(0, nome + "_T", OBJPROP_COLOR, c);
@@ -394,21 +539,67 @@ void Linha(string nome, double preco, color c, ENUM_LINE_STYLE estilo, string ro
    }
    ObjectSetDouble (0, nome, OBJPROP_PRICE, preco);
    ObjectMove      (0, nome + "_T", 0, agora, preco);   // rotulo acompanha a ultima barra
-   ObjectSetString (0, nome + "_T", OBJPROP_TEXT, rotulo + " " + DoubleToString(preco, _Digits));
+   ObjectSetString (0, nome + "_T", OBJPROP_TEXT, rotulo);
 }
 
-void DesenhaNiveis(datetime agora)
+// Linha de stop/alvo arrastada com o mouse: o preco da linha difere do que o EA
+// desenhou por ultimo. Vira o novo resultado em pontos e reposiciona a ordem.
+double g_desenho_sl = 0, g_desenho_tp = 0;
+
+bool LeArrasto(string nome, double &desenhado, double pm, double dir, double &alvoPts, bool &ligado)
+{
+   if(ObjectFind(0, nome) < 0 || desenhado <= 0) return false;
+   double p = NormPreco(ObjectGetDouble(0, nome, OBJPROP_PRICE));
+   double meioTick = (TickSize() > 0 ? TickSize() : _Point) / 2;
+   if(MathAbs(p - desenhado) < meioTick) return false;
+   alvoPts  = (p - pm) * dir;
+   ligado   = true;
+   desenhado = p;
+   PrintFormat("[SIM] %s arrastado para %s (%s pts)", nome == "SIM_HL_STOP" ? "STOP" : "ALVO",
+               DoubleToString(p, _Digits), Pts(alvoPts));
+   return true;
+}
+
+// Rotulos em pontos de RESULTADO a partir da entrada: STOP -300 / +50, ALVO +200 / -50
+void DesenhaNiveis(const MqlTick &tk)
 {
    double pm = 0, sl = 0, tp = 0;
+   string rEnt = "", rStop = "", rAlvo = "";
    if(PositionSelect(_Symbol))
    {
+      bool   comp = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY);
+      double dir  = comp ? 1 : -1;
       pm = PositionGetDouble(POSITION_PRICE_OPEN);
+      bool arrastou = LeArrasto("SIM_HL_STOP", g_desenho_sl, pm, dir, g_stop, g_stop_on);
+      arrastou = LeArrasto("SIM_HL_ALVO", g_desenho_tp, pm, dir, g_alvo, g_alvo_on) || arrastou;
+      if(arrastou)
+      {
+         MostraCampos();
+         AjustaNiveis();          // manda o novo stop/alvo agora
+      }
       sl = PositionGetDouble(POSITION_SL);
       tp = PositionGetDouble(POSITION_TP);
+      if(arrastou && PositionSelect(_Symbol))
+      {
+         sl = PositionGetDouble(POSITION_SL);   // recusado pela corretora: a linha volta ao nivel vigente
+         tp = PositionGetDouble(POSITION_TP);
+         g_stop_on = (sl > 0);
+         if(g_stop_on) g_stop = (sl - pm) * dir;
+         g_alvo_on = (tp > 0);
+         if(g_alvo_on) g_alvo = (tp - pm) * dir;
+         MostraCampos();
+      }
+      double saida = comp ? tk.bid : tk.ask;   // preco em que zeraria agora
+      rEnt  = StringFormat("ENTRADA %s   agora %s", DoubleToString(pm, _Digits),
+                           saida > 0 ? Pts((saida - pm) * dir) : "-");
+      rStop = StringFormat("STOP %s pts   (%s)", Pts((sl - pm) * dir), DoubleToString(sl, _Digits));
+      rAlvo = StringFormat("ALVO %s pts   (%s)", Pts((tp - pm) * dir), DoubleToString(tp, _Digits));
    }
-   Linha("SIM_HL_ENTRADA", pm, clrSilver,    STYLE_DASH,  "ENTRADA", agora);
-   Linha("SIM_HL_STOP",    sl, clrRed,       STYLE_SOLID, "STOP",    agora);
-   Linha("SIM_HL_ALVO",    tp, clrLime,      STYLE_SOLID, "ALVO",    agora);
+   Linha("SIM_HL_ENTRADA", pm, clrSilver,    STYLE_DASH,  rEnt,  tk.time);
+   Linha("SIM_HL_STOP",    sl, clrRed,       STYLE_SOLID, rStop, tk.time, true);
+   Linha("SIM_HL_ALVO",    tp, clrLime,      STYLE_SOLID, rAlvo, tk.time, true);
+   g_desenho_sl = sl;
+   g_desenho_tp = tp;
 }
 
 //+------------------------------------------------------------------+
@@ -445,6 +636,7 @@ void OnTradeTransaction(const MqlTradeTransaction &t,
       g_ultimo = StringFormat("%s %.0f @ %s (atraso %d ms%s)", tag, vol,
                               DoubleToString(preco, _Digits), g_env_atraso, mov);
       MarcaNegocio(t.deal, tag, preco);
+      Print("[SIM] ", g_ultimo);
       if(acao != 2) g_reancorar = true;
       if(g_tester)
       {
@@ -457,12 +649,119 @@ void OnTradeTransaction(const MqlTradeTransaction &t,
 
    g_n_exec++;
    g_ultimo = StringFormat("%s executado %.0f @ %s", tag, vol, DoubleToString(preco, _Digits));
+
+   // O Testador dispara stop/alvo pelo ULTIMO negocio mas executa pelo bid/ask, e nos
+   // ticks historicos da B3 o livro fica defasado em movimento rapido (medido WINV26
+   // 01/09 11:00:04: ultimo varreu 182280->182245 com o ask parado em 182375; alvo de
+   // venda em 182260 saiu a 182375). Preco justo = o nivel; no stop, o ultimo se o
+   // mercado pulou alem dele. So' corrige quando o Testador foi PIOR que o justo.
+   double nivel = (motivo == DEAL_REASON_SL ? g_pos_sl : g_pos_tp);
+   if(g_tester && nivel > 0)
+   {
+      bool fechaComprado = (HistoryDealGetInteger(t.deal, DEAL_TYPE) == DEAL_TYPE_SELL);
+      double justo = nivel;
+      MqlTick k;
+      if(motivo == DEAL_REASON_SL && SymbolInfoTick(_Symbol, k) && k.last > 0)
+         justo = fechaComprado ? MathMin(nivel, k.last) : MathMax(nivel, k.last);
+      double pts = fechaComprado ? justo - preco : preco - justo;   // >0 = Testador pior
+      double tkSize = TickSize();
+      if(pts > 0 && tkSize > 0)
+      {
+         double rs = pts / tkSize * SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE) * vol;
+         TesterDeposit(rs);
+         g_ultimo += StringFormat("  | livro defasado: corrigido p/ %s (+R$%.2f)", DoubleToString(justo, _Digits), rs);
+         PrintFormat("[SIM] %s: Testador executou a %s com livro defasado; preco justo %s, devolvido +R$%.2f",
+                     tag, DoubleToString(preco, _Digits), DoubleToString(justo, _Digits), rs);
+         preco = justo;
+      }
+   }
    MarcaNegocio(t.deal, tag, preco);
+   Print("[SIM] ", g_ultimo);
    if(g_tester)
    {
       int desl = SorteiaDeslize(prob);
       if(desl > 0) CobraDeslize(desl, vol, tag);
    }
+}
+
+//+------------------------------------------------------------------+
+// Roteiro: cliques automaticos para testar o EA sem visualizacao.
+// Formato "HH:MM ACAO,HH:MM ACAO", ACAO = COMPRA | VENDA | ZERAR | STOP=n | ALVO=n.
+// Cada passo roda uma vez por dia, pelo mesmo caminho do clique na tela.
+string   g_rot_hora[];
+string   g_rot_acao[];
+int      g_rot_dia = -1;
+bool     g_rot_feito[];
+
+void Roteiro_Carrega()
+{
+   string passos[];
+   int n = StringSplit(Roteiro, ',', passos);
+   ArrayResize(g_rot_hora, 0);
+   ArrayResize(g_rot_acao, 0);
+   for(int i = 0; i < n; i++)
+   {
+      string p = passos[i];
+      StringTrimLeft(p);
+      StringTrimRight(p);
+      int sp = StringFind(p, " ");
+      if(sp < 0) continue;
+      int k = ArraySize(g_rot_hora);
+      ArrayResize(g_rot_hora, k + 1);
+      ArrayResize(g_rot_acao, k + 1);
+      g_rot_hora[k] = StringSubstr(p, 0, sp);
+      g_rot_acao[k] = StringSubstr(p, sp + 1);
+   }
+   ArrayResize(g_rot_feito, ArraySize(g_rot_hora));
+}
+
+// Digita no campo como se ja' estivesse parado ha' tempo (o teste sem visual roda
+// mais rapido que o relogio real)
+void Roteiro_Digita(int i, string texto)
+{
+   ObjectSetString(0, g_campo_nome[i], OBJPROP_TEXT, texto);
+   g_campo_txt[i] = texto;
+   g_campo_ms[i]  = GetTickCount() - 5000;
+}
+
+void Roteiro_Executa(const MqlTick &tk)
+{
+   if(ArraySize(g_rot_hora) == 0) return;
+   MqlDateTime d;
+   TimeToStruct(tk.time, d);
+   if(d.day_of_year != g_rot_dia) { g_rot_dia = d.day_of_year; ArrayInitialize(g_rot_feito, false); }
+   string agora = StringFormat("%02d:%02d", d.hour, d.min);
+   for(int i = 0; i < ArraySize(g_rot_hora); i++)
+   {
+      if(g_rot_feito[i] || agora < g_rot_hora[i]) continue;
+      g_rot_feito[i] = true;
+      string a = g_rot_acao[i];
+      PrintFormat("[ROTEIRO] %s %s (bid %s ask %s)", agora, a,
+                  DoubleToString(tk.bid, _Digits), DoubleToString(tk.ask, _Digits));
+      if(a == "COMPRA")      ObjectSetInteger(0, BTN_C, OBJPROP_STATE, true);
+      else if(a == "VENDA")  ObjectSetInteger(0, BTN_V, OBJPROP_STATE, true);
+      else if(a == "ZERAR")  ObjectSetInteger(0, BTN_Z, OBJPROP_STATE, true);
+      else if(StringFind(a, "STOP=") == 0) Roteiro_Digita(1, StringSubstr(a, 5));
+      else if(StringFind(a, "ALVO=") == 0) Roteiro_Digita(2, StringSubstr(a, 5));
+      // MOVE_STOP=+50 / MOVE_ALVO=-30: move a linha como o mouse faria (pontos de resultado)
+      else if((StringFind(a, "MOVE_STOP=") == 0 || StringFind(a, "MOVE_ALVO=") == 0) && PositionSelect(_Symbol))
+      {
+         double dir = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY ? 1 : -1);
+         double p   = PositionGetDouble(POSITION_PRICE_OPEN) + dir * StringToDouble(StringSubstr(a, 10));
+         ObjectSetDouble(0, StringFind(a, "MOVE_STOP=") == 0 ? "SIM_HL_STOP" : "SIM_HL_ALVO", OBJPROP_PRICE, p);
+      }
+   }
+}
+
+void LogPosicao(string quando)
+{
+   if(!PositionSelect(_Symbol)) { PrintFormat("[SIM] %s: ZERADO", quando); return; }
+   PrintFormat("[SIM] %s: %s %.0f @ %s stop %s alvo %s", quando,
+               PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY ? "COMPRADO" : "VENDIDO",
+               PositionGetDouble(POSITION_VOLUME),
+               DoubleToString(PositionGetDouble(POSITION_PRICE_OPEN), _Digits),
+               DoubleToString(PositionGetDouble(POSITION_SL), _Digits),
+               DoubleToString(PositionGetDouble(POSITION_TP), _Digits));
 }
 
 //+------------------------------------------------------------------+
@@ -474,6 +773,8 @@ void Painel(const MqlTick &tk)
    {
       bool comp = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY);
       flut = PositionGetDouble(POSITION_PROFIT);
+      g_pos_sl = PositionGetDouble(POSITION_SL);   // guardados para corrigir a execucao do stop/alvo
+      g_pos_tp = PositionGetDouble(POSITION_TP);
       pos = StringFormat("%s %.0f @ %s   stop %s   alvo %s",
                          comp ? "COMPRADO" : "VENDIDO",
                          PositionGetDouble(POSITION_VOLUME),
@@ -485,6 +786,9 @@ void Painel(const MqlTick &tk)
    if(g_pend != 0)
       transito = StringFormat("\n>>> ENVIANDO %s ... (%d ms)", NomeAcao(g_pend),
                               (int)(tk.time_msc - g_pend_req_msc));
+   if(!LivroValido(tk) && tk.last > 0)
+      transito += "\nAVISO: este tick nao tem compra/venda no livro (bid/ask = 0) - o Testador nao consegue executar."
+                  "\nWIN$/WIN$N/WIN$D nao trazem bid/ask nos ticks: teste no contrato (ex. WINV26).";
    Comment(StringFormat(
       "WinSimulador%s\n"
       "%s   |   flutuante R$ %.2f\n"
@@ -500,11 +804,25 @@ void OnTick()
 {
    MqlTick tk;
    if(!SymbolInfoTick(_Symbol, tk)) return;
+   Roteiro_Executa(tk);
    LeAjustes();
    LeBotoes(tk);
-   if(g_pend != 0 && tk.time_msc >= g_pend_exe_msc) Envia();
+   if(g_pend != 0 && tk.time_msc >= g_pend_exe_msc)
+   {
+      if(tk.time_msc - g_pend_exe_msc > 60000)
+      {
+         // o clique ficou sem mercado (fim de pregao, leilao): no pregao real a
+         // ordem nao atravessaria a noite esperando
+         g_ultimo = NomeAcao(g_pend) + StringFormat(" cancelada: 60 s sem compra/venda no livro (bid %s / ask %s / ultimo %s)",
+                    DoubleToString(tk.bid, _Digits), DoubleToString(tk.ask, _Digits), DoubleToString(tk.last, _Digits));
+         Print("[SIM] ", g_ultimo);
+         g_pend   = 0;
+      }
+      else if(LivroValido(tk)) Envia();
+      // senao: espera o proximo tick com compra e venda no livro
+   }
    if(g_reancorar) AjustaNiveis();
-   DesenhaNiveis(tk.time);
+   DesenhaNiveis(tk);
    Painel(tk);
 }
 //+------------------------------------------------------------------+
