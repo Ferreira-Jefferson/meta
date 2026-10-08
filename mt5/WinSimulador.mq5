@@ -122,6 +122,7 @@ int      g_env_acao     = 0;
 double   g_env_ref      = 0;
 int      g_env_atraso   = 0;
 bool     g_reancorar    = false;  // conferir stop/alvo da posicao no proximo tick
+bool     g_ajuste_manual = false; // ultimo stop/alvo veio do - / + com posicao aberta
 string   g_ult_modif    = "";     // ultimo sl/tp que a corretora recusou (evita repetir a cada tick)
 double   g_pos_sl       = 0;      // stop/alvo da posicao no ultimo tick
 double   g_pos_tp       = 0;
@@ -221,7 +222,9 @@ void CriaCampo(string nome, string rotulo, string nomeRotulo, string btMenos, st
    ObjectSetInteger(0, nome, OBJPROP_ALIGN, ALIGN_CENTER);
    ObjectSetInteger(0, nome, OBJPROP_COLOR, clrBlack);
    ObjectSetInteger(0, nome, OBJPROP_BGCOLOR, clrWhite);
-   ObjectSetInteger(0, nome, OBJPROP_READONLY, false);
+   // No Testador visual o texto digitado NAO chega ao EA (medido: so' cliques de botao
+   // chegam; teclas, nem com OnChartEvent). La' o campo so' exibe e vale o - / +.
+   ObjectSetInteger(0, nome, OBJPROP_READONLY, g_tester);
    ObjectSetInteger(0, nome, OBJPROP_SELECTABLE, false);
 
    CriaBotao(btMais, "+", x + 68, y, clrDimGray, 22, 20);
@@ -247,9 +250,15 @@ void MostraCampo(int i, string texto)
 void MostraCampos()
 {
    MostraCampo(0, DoubleToString(g_lote, 0));
-   MostraCampo(1, g_stop_on ? Pts(g_stop) : "sem");
-   MostraCampo(2, g_alvo_on ? Pts(g_alvo) : "sem");
+   MostraCampo(1, TxtStop());
+   MostraCampo(2, TxtAlvo());
 }
+
+// Campo = DISTANCIA em pontos da entrada (vazio = desligado). Negativa so' com
+// posicao aberta: stop -50 = 50 pts alem da entrada (trava lucro); alvo -50 = sai
+// antes da entrada (reduz a perda).
+string TxtStop() { return !g_stop_on ? "" : DoubleToString(-g_stop, 0); }
+string TxtAlvo() { return !g_alvo_on ? "" : DoubleToString(g_alvo, 0); }
 
 // ms que o texto do campo esta' parado; -1 = acabou de mudar (registra no Diario)
 int CampoParado(int i)
@@ -276,16 +285,9 @@ int LeCampo(string nome, double &v, bool &comSinal)
    StringTrimLeft(s);
    StringTrimRight(s);
    StringReplace(s, ",", ".");
-   if(s == "sem") return 0;
    comSinal = false;
+   if(s == "sem" || StringLen(s) == 0) return 0;
    double sinal = 1;
-   if(StringLen(s) > 0 && (StringGetCharacter(s, 0) == '+' || StringGetCharacter(s, 0) == '-'))
-   {
-      comSinal = true;
-      if(StringGetCharacter(s, 0) == '-') sinal = -1;
-      s = StringSubstr(s, 1);
-   }
-   if(StringLen(s) == 0) return -1;
    for(int i = 0; i < StringLen(s); i++)
    {
       ushort c = StringGetCharacter(s, i);
@@ -307,8 +309,8 @@ int OnInit()
    CriaBotao(BTN_V, "VENDA",  105, 50, clrFireBrick);
    CriaBotao(BTN_Z, "ZERAR",  200, 50, clrDimGray);
    CriaCampo(ED_L, "lote",      LB_L, BT_LM, BT_LP, 10,  90);
-   CriaCampo(ED_S, "stop (resultado)", LB_S, BT_SM, BT_SP, 105, 90);
-   CriaCampo(ED_A, "alvo (resultado)", LB_A, BT_AM, BT_AP, 200, 90);
+   CriaCampo(ED_S, "stop pts", LB_S, BT_SM, BT_SP, 105, 90);
+   CriaCampo(ED_A, "alvo pts", LB_A, BT_AM, BT_AP, 200, 90);
 
    g_lote = NormVolume(Lote);
    g_stop_on = (StopPts > 0);
@@ -349,17 +351,25 @@ void LeAjustes()
    bool mudouLote = false, mudouNiveis = false;
    if(Clicou(BT_LM)) { g_lote = NormVolume(g_lote - passoLote); mudouLote = true; }
    if(Clicou(BT_LP)) { g_lote = NormVolume(g_lote + passoLote); mudouLote = true; }
-   // - / + andam o resultado em pontos e podem passar da entrada (stop +50 trava lucro).
-   // Com stop/alvo desligado ("sem"), o primeiro clique liga no valor padrao.
-   double stopIni = -(StopPts > 0 ? StopPts : PassoPts), alvoIni = (AlvoPts > 0 ? AlvoPts : PassoPts);
-   if(Clicou(BT_SM)) { if(g_stop_on) g_stop -= PassoPts; else { g_stop = stopIni; g_stop_on = true; } mudouNiveis = true; }
-   if(Clicou(BT_SP)) { if(g_stop_on) g_stop += PassoPts; else { g_stop = stopIni; g_stop_on = true; } mudouNiveis = true; }
-   if(Clicou(BT_AM)) { if(g_alvo_on) g_alvo -= PassoPts; else { g_alvo = alvoIni; g_alvo_on = true; } mudouNiveis = true; }
-   if(Clicou(BT_AP)) { if(g_alvo_on) g_alvo += PassoPts; else { g_alvo = alvoIni; g_alvo_on = true; } mudouNiveis = true; }
+   // + aumenta a distancia da entrada (vazio -> PassoPts); - diminui. Sem posicao,
+   // chegando a 0 desliga (campo vazio); com posicao aberta passa de zero (stop alem
+   // da entrada trava lucro; alvo antes da entrada reduz a perda).
+   bool posicionado = PositionSelect(_Symbol);
+   if(Clicou(BT_SP)) { if(g_stop_on) g_stop -= PassoPts; else { g_stop = -PassoPts; g_stop_on = true; } mudouNiveis = true; }
+   if(Clicou(BT_SM) && g_stop_on) { g_stop += PassoPts; if(!posicionado && g_stop >= -0.5) g_stop_on = false; mudouNiveis = true; }
+   if(Clicou(BT_AP)) { if(g_alvo_on) g_alvo += PassoPts; else { g_alvo = PassoPts; g_alvo_on = true; } mudouNiveis = true; }
+   if(Clicou(BT_AM) && g_alvo_on) { g_alvo -= PassoPts; if(!posicionado && g_alvo <= 0.5) g_alvo_on = false; mudouNiveis = true; }
+   if(mudouNiveis && posicionado) g_ajuste_manual = true;
+   // zerado, distancia 0 ou negativa nao vale (seria alem da proxima entrada): desliga
+   if(!posicionado && g_pend == 0 && g_env_acao == 0)
+   {
+      if(g_stop_on && g_stop >= -0.5) { g_stop_on = false; mudouNiveis = true; }
+      if(g_alvo_on && g_alvo <= 0.5)  { g_alvo_on = false; mudouNiveis = true; }
+   }
 
    if(mudouLote || mudouNiveis) MostraCampos();
 
-   // valores digitados. Sem sinal: stop e' perda (300 = -300), alvo e' lucro.
+   // valores digitados (so' fora do Testador): distancia em pontos; vazio desliga.
    // Numero do tamanho de um PRECO (ex. 182900) vira pontos a partir da entrada.
    for(int i = 0; i < 3; i++)
    {
@@ -371,7 +381,7 @@ void LeAjustes()
       bool ok = false;
       if(i == 0)
       {
-         if(r == 1 && !sn && v > 0) { ok = true; if(MathAbs(NormVolume(v) - g_lote) > 1e-9) { g_lote = NormVolume(v); mudouLote = true; } }
+         if(r == 1 && v > 0) { ok = true; if(MathAbs(NormVolume(v) - g_lote) > 1e-9) { g_lote = NormVolume(v); mudouLote = true; } }
       }
       else if(r == 0)
       {
@@ -382,7 +392,7 @@ void LeAjustes()
       else if(r == 1)
       {
          double ref = SymbolInfoDouble(_Symbol, SYMBOL_LAST);
-         if(!sn && ref > 0 && v > ref / 2)            // digitou um preco
+         if(ref > 0 && v > ref / 2)                   // digitou um preco
          {
             if(PositionSelect(_Symbol))
             {
@@ -393,17 +403,13 @@ void LeAjustes()
             }
             else g_ultimo = "sem posicao aberta: digite stop/alvo em PONTOS (o preco depende da entrada)";
          }
-         else ok = true;
-         if(ok && i == 1)
-         {
-            if(!sn) v = -v;
-            if(!g_stop_on || MathAbs(v - g_stop) > 1e-9) { g_stop = v; g_stop_on = true; mudouNiveis = true; }
-         }
-         if(ok && i == 2 && (!g_alvo_on || MathAbs(v - g_alvo) > 1e-9)) { g_alvo = v; g_alvo_on = true; mudouNiveis = true; }
+         else { ok = true; if(i == 1) v = -v; }     // distancia: stop fica abaixo da entrada
+         bool liga = MathAbs(v) > 0.5;
+         if(ok && i == 1 && (g_stop_on != liga || MathAbs(v - g_stop) > 1e-9)) { g_stop = v; g_stop_on = liga; mudouNiveis = true; }
+         if(ok && i == 2 && (g_alvo_on != liga || MathAbs(v - g_alvo) > 1e-9)) { g_alvo = v; g_alvo_on = liga; mudouNiveis = true; }
       }
       if(ok || parado >= 4000)                       // valido: formata; invalido parado 4 s: volta ao vigente
-         MostraCampo(i, i == 0 ? DoubleToString(g_lote, 0) : (i == 1 ? (g_stop_on ? Pts(g_stop) : "sem")
-                                                                       : (g_alvo_on ? Pts(g_alvo) : "sem")));
+         MostraCampo(i, i == 0 ? DoubleToString(g_lote, 0) : (i == 1 ? TxtStop() : TxtAlvo()));
    }
 
    if(mudouLote || mudouNiveis) ChartRedraw();
@@ -465,8 +471,16 @@ void AjustaNiveis()
                                 DoubleToString(tp, _Digits), trade.ResultRetcodeDescription());
       if(msg != g_ult_modif) { g_ultimo = g_ultimo + "  | " + msg; Print("[SIM] ", msg); }
       g_ult_modif = msg;
+      if(g_ajuste_manual)   // ex.: stop alem do preco atual. Os campos voltam ao que vale.
+      {
+         double dir = comp ? 1 : -1, slv = PositionGetDouble(POSITION_SL), tpv = PositionGetDouble(POSITION_TP);
+         g_stop_on = (slv > 0); if(g_stop_on) g_stop = (slv - pm) * dir;
+         g_alvo_on = (tpv > 0); if(g_alvo_on) g_alvo = (tpv - pm) * dir;
+         MostraCampos();
+      }
    }
    else { g_ult_modif = ""; LogPosicao("stop/alvo ajustado"); }
+   g_ajuste_manual = false;
 }
 
 // Envia a ordem depois do atraso. O preco, o stop/alvo e o deslize sao tratados
