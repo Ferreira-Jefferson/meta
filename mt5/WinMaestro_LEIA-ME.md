@@ -44,7 +44,7 @@ A lógica de sinal de cada robô é a do EA avulso. Cada robô **declara o que q
 
 ### Checklist antes da primeira partida
 
-- [ ] Nenhum gráfico aberto com o **WinSeletor**, a **v1.03** ou qualquer EA avulso (WinGapBarra1, WinCincoMedias, WinDeslocamentoMatinal, WinRetanguloEma34, Win_c1). Dois programas mandando ordens com os mesmos magics quebram as fichas.
+- [ ] **Nenhum outro EA rodando em nenhum gráfico** do terminal, só o WinMaestro. Vale para qualquer EA, inclusive o **WinSeletor**, a **v1.03**, os avulsos (WinGapBarra1, WinCincoMedias, WinDeslocamentoMatinal, WinRetanguloEma34, Win_c1) e o WinSimulador. Dois programas mandando ordens com os mesmos magics quebram as fichas.
 - [ ] Os `.ex5` do WinSeletor e dos EAs avulsos fora da pasta `MQL5\Experts`, para não serem anexados por engano.
 - [ ] O WinMaestro em **um gráfico só**, num terminal só, num PC só.
 - [ ] Conta NETTING (conta hedging deixa o EA sem mandar nada).
