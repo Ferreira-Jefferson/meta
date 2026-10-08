@@ -1,0 +1,312 @@
+<title>Grade Semanal B3</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Serif&family=JetBrains+Mono:wght@400;500;700&display=swap">
+<style>
+/* Layout: screener — painel de filtros em cima, grade larga rolando no proprio container, estudo do setup abaixo. Tokens do painel do projeto (Terminal Editorial). */
+:root {
+  --bg: #f4f1e8; --bg-el: #ede9de; --bg-hover: #e5e1d4;
+  --fg: #1c1a14; --fg-strong: #0e0d09; --fg-muted: #6f685c; --grid: #d4cfc0; --grid-strong: #c0b9a8;
+  --amber: #8a6114; --amber-dim: #f0e4c0; --green: #2f6f2f; --red: #a83028;
+  --green-bg: #dde9d6; --red-bg: #f1dcd6;
+  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --serif: "Instrument Serif", "Iowan Old Style", Palatino, Georgia, serif;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0d0d0e; --bg-el: #151517; --bg-hover: #1c1c1e;
+  --fg: #e8e4d9; --fg-strong: #f5f2ea; --fg-muted: #8f8a7e; --grid: #26251f; --grid-strong: #3a382f;
+  --amber: #d9a441; --amber-dim: #3a2f17; --green: #8cbc8c; --red: #d26a5c;
+  --green-bg: #1b2a1b; --red-bg: #2e1a17; color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #0d0d0e; --bg-el: #151517; --bg-hover: #1c1c1e;
+  --fg: #e8e4d9; --fg-strong: #f5f2ea; --fg-muted: #8f8a7e; --grid: #26251f; --grid-strong: #3a382f;
+  --amber: #d9a441; --amber-dim: #3a2f17; --green: #8cbc8c; --red: #d26a5c;
+  --green-bg: #1b2a1b; --red-bg: #2e1a17; color-scheme: dark; }
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font-family: var(--mono); font-size: 13px; line-height: 1.5; }
+.page { max-width: 1480px; margin: 0 auto; padding-inline: 16px; padding-block: 28px 72px; display: grid; gap: 28px; }
+header { display: grid; gap: 6px; }
+.eyebrow { font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--amber); }
+h1 { font-family: var(--serif); font-weight: 400; font-size: clamp(2.2rem, 6vw, 3.2rem); line-height: 1.05; margin: 0; color: var(--fg-strong); }
+h2 { font-family: var(--serif); font-weight: 400; font-size: 1.8rem; margin: 0; color: var(--fg-strong); text-wrap: balance; }
+.lede, .sub { color: var(--fg-muted); margin: 0; max-width: 85ch; }
+section { display: grid; gap: 12px; min-width: 0; }
+
+/* filtros */
+.filtros { display: grid; gap: 14px; background: var(--bg-el); border: 1px solid var(--grid-strong); padding: 16px; }
+.linha { display: flex; flex-wrap: wrap; gap: 12px 26px; align-items: flex-start; }
+.campo { display: grid; gap: 6px; min-width: 0; }
+.rot { font-size: 11px; text-transform: uppercase; letter-spacing: .07em; color: var(--fg-muted); }
+.grp { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+select, input[type=search], input[type=number] { font: inherit; font-size: 13px; color: var(--fg); background: var(--bg); border: 1px solid var(--grid-strong); padding: 5px 8px; border-radius: 2px; }
+input[type=number] { width: 8.5em; }
+.tog { font: inherit; font-size: 12px; padding: 4px 10px; border: 1px solid var(--grid-strong); background: var(--bg); color: var(--fg-muted); border-radius: 2px; cursor: pointer; }
+.tog[aria-pressed="true"] { background: var(--fg-strong); color: var(--bg); border-color: var(--fg-strong); }
+.tog:hover { color: var(--fg-strong); }
+.tog[aria-pressed="true"]:hover { color: var(--bg); }
+.btn { font: inherit; font-size: 12px; padding: 5px 12px; border: 1px solid var(--amber); color: var(--amber); background: transparent; border-radius: 2px; cursor: pointer; }
+.btn:hover { background: var(--amber-dim); }
+.btn.mute { border-color: var(--grid-strong); color: var(--fg-muted); }
+:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
+.resumo { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: baseline; }
+.resumo b { font-size: 1.4rem; font-weight: 500; color: var(--fg-strong); }
+.mut { color: var(--fg-muted); }
+
+/* grade */
+.scroll { overflow: auto; max-height: 78vh; border: 1px solid var(--grid); }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+th, td { padding: 5px 9px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--grid); }
+thead th { font-size: 10.5px; font-weight: 500; text-transform: uppercase; letter-spacing: .05em; color: var(--fg-muted); background: var(--bg-el); position: sticky; top: 0; z-index: 1; cursor: pointer; user-select: none; }
+thead th:hover { color: var(--fg-strong); }
+thead th.on { color: var(--amber); }
+thead tr.grupos th { cursor: default; text-align: center; color: var(--fg-strong); border-bottom: 1px solid var(--grid-strong); position: static; }
+td.l, th.l { text-align: left; }
+.sep { border-left: 1px solid var(--grid-strong); }
+tbody tr:hover td { background: var(--bg-hover); }
+.pos { color: var(--green); } .neg { color: var(--red); }
+.tk { font-weight: 700; color: var(--fg-strong); }
+.old { font-size: 11px; color: var(--fg-muted); }
+.novo { font-size: 10px; padding: 0 5px; border: 1px solid var(--amber); color: var(--amber); border-radius: 2px; }
+.chip { display: inline-block; padding: 1px 7px; border-radius: 2px; font-size: 11px; background: var(--amber-dim); color: var(--amber); }
+.mm { display: inline-flex; gap: 4px; align-items: baseline; }
+.seta { font-size: 11px; }
+.rank { display: inline-block; width: 44px; height: 6px; background: var(--grid); vertical-align: middle; margin-right: 6px; position: relative; }
+.rank i { position: absolute; inset: 0 auto 0 0; background: var(--amber); }
+.vazio { padding: 28px; text-align: center; color: var(--fg-muted); }
+details { border-top: 1px solid var(--grid-strong); padding-top: 14px; }
+summary { cursor: pointer; font-family: var(--serif); font-size: 1.6rem; color: var(--fg-strong); }
+.notes { display: grid; gap: 8px; max-width: 90ch; }
+.notes p { margin: 0; }
+.notes b { color: var(--fg-strong); font-weight: 500; }
+.alerta { border-left: 3px solid var(--amber); padding: 8px 12px; background: var(--bg-el); max-width: 90ch; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="page">
+<header>
+  <div class="eyebrow">Screener · ações B3 · grade de setores do vídeo</div>
+  <h1>Grade Semanal B3</h1>
+  <p class="lede" id="lede"></p>
+</header>
+
+<section aria-label="Filtros">
+  <div class="filtros">
+    <div class="linha">
+      <div class="campo"><span class="rot">Atalhos</span>
+        <div class="grp">
+          <button class="btn" id="p-video" type="button">Filtro do vídeo</button>
+          <button class="btn mute" id="p-limpa" type="button">Limpar filtros</button>
+        </div>
+      </div>
+      <div class="campo"><label class="rot" for="f-busca">Ticker</label><input id="f-busca" type="search" placeholder="ex.: PETR4" autocomplete="off"></div>
+      <div class="campo"><span class="rot">Médias móveis exponenciais no gráfico</span>
+        <div class="grp" id="f-tf"><button class="tog" type="button" data-v="W">semanal</button><button class="tog" type="button" data-v="D">diário</button></div>
+      </div>
+    </div>
+    <div class="linha">
+      <div class="campo"><span class="rot">Preço acima da média</span><div class="grp" id="f-acima"></div></div>
+      <div class="campo"><span class="rot">Média apontando para cima</span><div class="grp" id="f-sobe"></div></div>
+      <div class="campo"><span class="rot">Ordem</span><div class="grp"><button class="tog" type="button" id="f-alinh">9 &gt; 21 &gt; 50</button></div></div>
+      <div class="campo"><label class="rot" for="f-perto">Até x% acima da MME9</label><input id="f-perto" type="number" step="1" placeholder="sem limite"></div>
+    </div>
+    <div class="linha">
+      <div class="campo"><label class="rot" for="f-per">Alta no período</label>
+        <div class="grp"><select id="f-per"></select>
+          <input id="f-min" type="number" step="1" placeholder="mín %" aria-label="retorno mínimo em %">
+          <input id="f-max" type="number" step="1" placeholder="máx %" aria-label="retorno máximo em %"></div>
+      </div>
+      <div class="campo"><label class="rot" for="f-top">Ranking de 12 meses</label>
+        <select id="f-top"><option value="0">todos</option><option value="0.5">metade de cima</option><option value="0.7">top 30%</option><option value="0.8">top 20%</option><option value="0.9">top 10%</option></select>
+      </div>
+      <div class="campo"><label class="rot" for="f-max52">Até x% abaixo da máxima de 52 sem.</label><input id="f-max52" type="number" step="1" placeholder="sem limite"></div>
+      <div class="campo"><label class="rot" for="f-liq">Financeiro por dia</label>
+        <select id="f-liq"><option value="0">qualquer</option><option value="1e6">≥ R$ 1 mi</option><option value="5e6">≥ R$ 5 mi</option><option value="20e6">≥ R$ 20 mi</option><option value="100e6">≥ R$ 100 mi</option></select>
+      </div>
+      <div class="campo"><span class="rot">Sinal nesta semana</span><div class="grp" id="f-sinal"></div></div>
+      <div class="campo"><label class="rot" for="f-orig">Origem</label>
+        <select id="f-orig"><option value="">todas</option><option value="grade">só a grade do vídeo</option><option value="mt5">só as acrescentadas</option></select>
+      </div>
+    </div>
+    <div class="linha">
+      <div class="campo" style="flex:1 1 100%"><span class="rot">Setor</span><div class="grp" id="f-setor"></div></div>
+    </div>
+  </div>
+</section>
+
+<section aria-label="Ativos">
+  <div class="resumo"><b id="cnt"></b><span class="mut" id="cnt-sub"></span>
+    <span class="campo" style="margin-left:auto"><span class="grp"><span class="rot">histórico do setup</span>
+      <select id="h-setup" aria-label="gatilho"></select><select id="h-var" aria-label="saída"></select></span></span>
+  </div>
+  <div class="scroll"><table id="tab"></table></div>
+</section>
+
+<details id="estudo">
+  <summary>O setup do vídeo funcionou no passado?</summary>
+  <div style="display:grid; gap:12px; margin-top:12px">
+    <p class="sub">Todas as operações de todos os ativos juntas, desde 2010, líquidas de custo. <b>Equilíbrio</b> é o acerto mínimo para empatar com o ganho e a perda médios observados. Acerto acima dele quer dizer expectativa positiva.</p>
+    <div class="scroll" style="max-height:none"><table id="tab-ag"></table></div>
+    <p class="alerta" id="alerta"></p>
+    <div class="notes" id="notes"></div>
+  </div>
+</details>
+</div>
+
+<script>
+const D = /*__DADOS__*/null;
+const NS = {inside_bar: "Inside Bar", dave_landry: "Dave Landry", recuo_media: "Recuo à MME9"};
+const NV = {atr14x2: "Stop ATR 14×2", atr21x3: "Stop ATR 21×3", alvo3R: "Alvo 3R"};
+const PER = [["r1s", "1 semana"], ["r1m", "1 mês"], ["r3m", "3 meses"], ["r6m", "6 meses"], ["r12m", "12 meses"], ["r24m", "24 meses"], ["rano", "no ano"]];
+const MMS = [9, 21, 50];
+const f1 = (v, d = 1) => v == null || isNaN(v) ? "—" : (v * 100).toFixed(d).replace(".", ",") + "%";
+const sg = (v, d = 1) => v == null || isNaN(v) ? "—" : (v > 0 ? "+" : v < 0 ? "−" : "") + f1(Math.abs(v), d);
+const nm = (v, d = 2) => v == null || isNaN(v) ? "—" : v.toFixed(d).replace(".", ",");
+const cl = v => v == null ? "mut" : v > 0 ? "pos" : v < 0 ? "neg" : "";
+const brl = v => v == null ? "—" : v >= 1e9 ? nm(v / 1e9, 1) + " bi" : v >= 1e6 ? nm(v / 1e6, 1) + " mi" : nm(v / 1e3, 0) + " mil";
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const $ = id => document.getElementById(id);
+
+const ultima = D.ativos.map(a => a.data).sort().at(-1);
+const nG = D.ativos.filter(a => a.origem === "grade").length, nM = D.ativos.length - nG;
+$("lede").textContent = `${D.ativos.length} ações B3, todas negociáveis na Rico: ${nG} da grade de setores do vídeo e ${nM} acrescentadas por liquidez (mediana ≥ R$ ${D.premissas.liq_min_mt5 / 1e6} mi/dia no MT5). ` +
+  `Preços até ${ultima.split("-").reverse().join("/")}. As médias usam o último candle fechado. Retornos já incluem proventos.`;
+
+// ---------- estado dos filtros
+const PADRAO = {orig: "", busca: "", tf: "W", acima: [], sobe: [], alinh: false, perto: "", per: "r12m", min: "", max: "", top: "0", max52: "", liq: "0", sinal: [], setores: [],
+                hs: "recuo_media", hv: "atr21x3", ord: "r12m", dir: -1};
+let F = {...PADRAO};
+try { const s = JSON.parse(localStorage.getItem("grade-b3-filtros") || "null"); if (s) F = {...PADRAO, ...s}; } catch (e) {}
+const salvar = () => { try { localStorage.setItem("grade-b3-filtros", JSON.stringify(F)); } catch (e) {} };
+
+// ---------- montar controles
+function toggles(cont, itens, chave) {
+  cont.innerHTML = itens.map(([v, t]) => `<button class="tog" type="button" data-v="${esc(v)}">${esc(t)}</button>`).join("");
+  cont.querySelectorAll(".tog").forEach(b => b.addEventListener("click", () => {
+    const v = b.dataset.v, arr = F[chave];
+    F[chave] = arr.includes(v) ? arr.filter(x => x !== v) : [...arr, v];
+    sync(); render();
+  }));
+}
+toggles($("f-acima"), MMS.map(n => [String(n), `MME${n}`]), "acima");
+toggles($("f-sobe"), MMS.map(n => [String(n), `MME${n}`]), "sobe");
+toggles($("f-sinal"), Object.entries(NS), "sinal");
+const setores = [...new Set(D.ativos.map(a => a.setor))].sort((a, b) => a.localeCompare(b, "pt"));
+toggles($("f-setor"), setores.map(s => [s, `${s} · ${D.ativos.filter(a => a.setor === s).length}`]), "setores");
+$("f-tf").querySelectorAll(".tog").forEach(b => b.addEventListener("click", () => { F.tf = b.dataset.v; sync(); render(); }));
+$("f-alinh").addEventListener("click", () => { F.alinh = !F.alinh; sync(); render(); });
+PER.forEach(([k, t]) => $("f-per").add(new Option(t, k)));
+D.premissas.setups.forEach(s => $("h-setup").add(new Option(NS[s], s)));
+Object.keys(D.premissas.variantes).forEach(v => $("h-var").add(new Option(NV[v], v)));
+const inputs = {orig: "f-orig", busca: "f-busca", perto: "f-perto", per: "f-per", min: "f-min", max: "f-max", top: "f-top", max52: "f-max52", liq: "f-liq", hs: "h-setup", hv: "h-var"};
+Object.entries(inputs).forEach(([k, id]) => $(id).addEventListener(id.startsWith("f-busca") || $(id).type === "number" ? "input" : "change", () => { F[k] = $(id).value; render(); }));
+$("p-video").addEventListener("click", () => { F = {...PADRAO, tf: "W", acima: ["9", "21", "50"], sobe: ["9", "21", "50"], top: "0.7", ord: F.ord, dir: F.dir, hs: F.hs, hv: F.hv}; sync(); render(); });
+$("p-limpa").addEventListener("click", () => { F = {...PADRAO, ord: F.ord, dir: F.dir, hs: F.hs, hv: F.hv}; sync(); render(); });
+
+function sync() {
+  Object.entries(inputs).forEach(([k, id]) => { $(id).value = F[k]; });
+  const marca = (cont, arr) => cont.querySelectorAll(".tog").forEach(b => b.setAttribute("aria-pressed", arr.includes(b.dataset.v)));
+  marca($("f-acima"), F.acima); marca($("f-sobe"), F.sobe); marca($("f-sinal"), F.sinal); marca($("f-setor"), F.setores);
+  $("f-tf").querySelectorAll(".tog").forEach(b => b.setAttribute("aria-pressed", b.dataset.v === F.tf));
+  $("f-alinh").setAttribute("aria-pressed", F.alinh);
+}
+
+// ---------- filtro
+const num = v => v === "" || v == null ? null : Number(String(v).replace(",", "."));
+function passa(a) {
+  const m = a.mm[F.tf];
+  if (F.busca && !(a.ticker + " " + a.ticker_grade).includes(F.busca.trim().toUpperCase())) return false;
+  if (F.setores.length && !F.setores.includes(a.setor)) return false;
+  if (F.orig && a.origem !== F.orig) return false;
+  for (const n of F.acima) if (!m["acima" + n]) return false;
+  for (const n of F.sobe) if (!m["sobe" + n]) return false;
+  if (F.alinh && !m.alinhada) return false;
+  const perto = num(F.perto); if (perto != null && m.dist9 * 100 > perto) return false;
+  const r = a[F.per], mn = num(F.min), mx = num(F.max);
+  if ((mn != null || mx != null) && r == null) return false;
+  if (mn != null && r * 100 < mn) return false;
+  if (mx != null && r * 100 > mx) return false;
+  if (Number(F.top) > 0 && !(a.pct12m_agora >= Number(F.top))) return false;
+  const m52 = num(F.max52); if (m52 != null && -a.dist_max52 * 100 > m52) return false;
+  if (a.vol_fin_3m < Number(F.liq)) return false;
+  if (F.sinal.length && !F.sinal.some(s => a.setup_agora.includes(s))) return false;
+  return true;
+}
+
+// ---------- colunas
+const mmCel = n => ({k: "mm" + n, t: `MME${n}`, v: a => a.mm[F.tf]["dist" + n],
+  f: a => { const m = a.mm[F.tf]; return `<span class="mm"><span class="${m["acima" + n] ? "pos" : "neg"}">${sg(m["dist" + n])}</span><span class="seta ${m["sobe" + n] ? "pos" : "neg"}" title="${m["sobe" + n] ? "média subindo" : "média caindo"}">${m["sobe" + n] ? "▲" : "▼"}</span></span>`; }});
+const HC = (k, t, fn, sep) => ({k: "h." + k, t, sep, v: a => { const m = a.medidas[F.hs + "|" + F.hv]; return m && m.n ? (k === "folga" ? m.win - m.be : m[k]) : null; },
+  f: a => { const m = a.medidas[F.hs + "|" + F.hv]; return m && m.n ? fn(m) : `<span class="mut">—</span>`; }});
+const COLS = [
+  {k: "ticker", t: "ativo", l: 1, v: a => a.ticker, f: a => `<span class="tk">${esc(a.ticker)}</span>${a.ticker_grade !== a.ticker ? ` <span class="old" title="código na grade do vídeo">ex-${esc(a.ticker_grade)}</span>` : ""}${a.origem === "mt5" ? ` <span class="novo" title="não está na grade do vídeo; entrou pela liquidez no MT5">+ MT5</span>` : ""}`},
+  {k: "setor", t: "setor", l: 1, v: a => a.setor, f: a => `<span class="mut">${esc(a.setor)}</span>`},
+  {k: "preco", t: "preço", v: a => a.preco, f: a => nm(a.preco)},
+  ...PER.map(([k, t], i) => ({k, t: t.replace(" meses", "m").replace(" mês", "m").replace(" semana", "s").replace("no ano", "ano"), sep: i === 0, v: a => a[k],
+    f: a => `<span class="${cl(a[k])}">${k === F.per ? "<b>" + sg(a[k]) + "</b>" : sg(a[k])}</span>`})),
+  {k: "pct12m_agora", t: "ranking 12m", v: a => a.pct12m_agora, f: a => a.pct12m_agora == null ? "—" : `<span class="rank"><i style="width:${Math.round(a.pct12m_agora * 100)}%"></i></span>${Math.round(a.pct12m_agora * 100)}`},
+  {k: "dist_max52", t: "da máx. 52s", v: a => a.dist_max52, f: a => `<span class="${a.dist_max52 > -0.005 ? "pos" : "mut"}">${sg(a.dist_max52)}</span>`},
+  {...mmCel(9), sep: true}, mmCel(21), mmCel(50),
+  {k: "setup", t: "sinal na semana", l: 1, v: a => a.setup_agora.length, f: a => a.setup_agora.map(s => `<span class="chip">${NS[s]}</span>`).join(" ") || `<span class="mut">—</span>`},
+  {k: "vol_fin_3m", t: "financeiro/dia", v: a => a.vol_fin_3m, f: a => brl(a.vol_fin_3m)},
+  HC("n", "operações", m => m.n, true),
+  HC("win", "acerto", m => f1(m.win)),
+  HC("folga", "acima do equilíbrio", m => `<span class="${cl(m.win - m.be)}">${sg(m.win - m.be)}</span>`),
+  HC("exp", "por operação", m => `<b class="${cl(m.exp)}">${sg(m.exp, 2)}</b>`),
+  HC("composto", "composto", m => `<span class="${cl(m.composto)}">${sg(m.composto, 0)}</span>`),
+  {k: "bh", t: "comprar e segurar", v: a => a.bh, f: a => `<span class="${cl(a.bh)}">${sg(a.bh, 0)}</span> <span class="mut">desde ${a.inicio.slice(0, 4)}</span>`},
+];
+
+function render() {
+  salvar();
+  const rows = D.ativos.filter(passa);
+  const col = COLS.find(c => c.k === F.ord) || COLS[0];
+  rows.sort((x, y) => {
+    const a = col.v(x), b = col.v(y);
+    if (a == null && b == null) return 0; if (a == null) return 1; if (b == null) return -1;
+    return typeof a === "string" ? F.dir * a.localeCompare(b) : F.dir * (a - b);
+  });
+  const nH = COLS.filter(c => c.k.startsWith("h.")).length;
+  const grupos = `<tr class="grupos"><th class="l" colspan="3"></th><th class="sep" colspan="${PER.length}">retorno com proventos</th><th colspan="2"></th>` +
+    `<th class="sep" colspan="3">distância da média · ${F.tf === "W" ? "semanal" : "diário"}</th><th colspan="2"></th>` +
+    `<th class="sep" colspan="${nH + 1}">histórico desde 2010 · ${NS[F.hs]} · ${NV[F.hv]}</th></tr>`;
+  let h = `<thead>${grupos}<tr>` + COLS.map(c => `<th class="${c.l ? "l" : ""} ${c.sep ? "sep" : ""} ${F.ord === c.k ? "on" : ""}" tabindex="0" data-k="${c.k}" aria-sort="${F.ord === c.k ? (F.dir > 0 ? "ascending" : "descending") : "none"}">${c.t}${F.ord === c.k ? (F.dir > 0 ? " ↑" : " ↓") : ""}</th>`).join("") + "</tr></thead><tbody>";
+  if (!rows.length) h += `<tr><td class="vazio" colspan="${COLS.length}">Nenhum ativo passa em todos os filtros. Afrouxe um deles ou use “Limpar filtros”.</td></tr>`;
+  for (const a of rows) h += "<tr>" + COLS.map(c => `<td class="${c.l ? "l" : ""} ${c.sep ? "sep" : ""}">${c.f(a)}</td>`).join("") + "</tr>";
+  const t = $("tab"); t.innerHTML = h + "</tbody>";
+  t.querySelectorAll("thead tr:last-child th").forEach(th => {
+    const go = () => { const k = th.dataset.k; F.dir = F.ord === k ? -F.dir : (["ticker", "setor"].includes(k) ? 1 : -1); F.ord = k; render(); };
+    th.addEventListener("click", go); th.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } });
+  });
+  $("cnt").textContent = `${rows.length} ativos`;
+  const comR = rows.filter(a => a[F.per] != null);
+  const med = comR.length ? comR.map(a => a[F.per]).sort((a, b) => a - b)[Math.floor(comR.length / 2)] : null;
+  $("cnt-sub").textContent = `de ${D.ativos.length} · mediana em ${PER.find(p => p[0] === F.per)[1]}: ${sg(med)}`;
+}
+
+// ---------- estudo agregado
+(function () {
+  const cols = [["top30", "top 30% em 12m"], ["resto", "fora do top 30%"], ["ate2019", "2010–2019"], ["2020+", "2020 em diante"]];
+  let h = `<thead><tr><th class="l">gatilho</th><th class="l">saída</th><th>operações</th><th>acerto</th><th>equilíbrio</th><th>ganho médio</th><th>perda média</th><th>por operação</th><th>risco médio</th><th>dias (mediana)</th>` +
+    cols.map(([, n]) => `<th class="sep">${n}<br>por operação · n</th>`).join("") + `</tr></thead><tbody>`;
+  for (const s of D.premissas.setups) for (const v of Object.keys(D.premissas.variantes)) {
+    const g = D.agregados[`${s}|${v}`], a = g.todos; if (!a.n) continue;
+    h += `<tr><td class="l">${NS[s]}</td><td class="l">${NV[v]}</td><td>${a.n}</td><td>${f1(a.win)}</td><td class="mut">${f1(a.be)}</td>
+      <td class="pos">${f1(a.ganho_med)}</td><td class="neg">−${f1(a.perda_med)}</td><td><b class="${cl(a.exp)}">${sg(a.exp, 2)}</b></td><td>${f1(a.risco_med)}</td><td>${a.dias_med}</td>` +
+      cols.map(([k]) => { const x = g[k]; return `<td class="sep ${cl(x.exp)}">${x.n ? sg(x.exp, 2) + ` <span class="mut">· ${x.n}</span>` : "—"}</td>`; }).join("") + `</tr>`;
+  }
+  $("tab-ag").innerHTML = h + "</tbody>";
+  const ag = D.agregados["recuo_media|atr21x3"];
+  $("alerta").innerHTML = `<b>Leia com desconto.</b> Antes de 2020, “Recuo à MME9 + Stop ATR 21×3” rendia ${sg(ag.ate2019.exp, 2)} por operação. De 2020 em diante, ${sg(ag["2020+"].exp, 2)}. ` +
+    `Como a lista é a grade de 2024, só entram empresas que sobreviveram até lá, e isso infla principalmente o começo do período. Os anos recentes são a melhor estimativa do que esperar.`;
+  const P = D.premissas;
+  $("notes").innerHTML = [
+    `<p><b>Sinal.</b> As três MMEs semanais (9, 21, 50) sobem em relação à semana anterior. A mínima do candle fica até ${f1(P.tol_recuo, 0)} acima da MME9 (ou abaixo dela), e o fechamento fica acima da MME50. Inside Bar e Dave Landry somam o padrão do candle a isso.</p>`,
+    `<p><b>Entrada.</b> Ordem stop de compra 1 centavo acima da máxima do candle-sinal, válida só na semana seguinte. Se o papel abrir acima, compra na abertura. <b>Stop</b> 1 centavo abaixo da mínima, checado todo dia.</p>`,
+    `<p><b>Stop ATR.</b> Linha = fechamento − k × ATR(n), que só sobe. Quando a semana fecha abaixo da linha, vende na abertura seguinte. O vídeo não informa n nem k. <b>Alvo 3R.</b> Venda a 3 vezes o risco.</p>`,
+    `<p><b>Custo.</b> ${f1(P.custo_perna, 2)} por perna. A taxa fixa do fracionário (R$1,90 por ordem) não entra, porque depende do tamanho da posição.</p>`,
+    `<p><b>Composto.</b> 100% do capital do ativo em cada operação, em sequência, uma posição por vez. Serve para comparar com “comprar e segurar”, não é a carteira real.</p>`,
+    `<p><b>Universo.</b> A grade de setores do vídeo, sem os BDRs que ela misturava nos setores, mais toda ação ON/PN ou unit que a corretora lista no MT5 com mediana de financeiro ≥ R$ ${D.premissas.liq_min_mt5 / 1e6} mi/dia (marcadas “+ MT5”). Fundos imobiliários e ETFs ficam de fora. A grade escolhia uma classe por empresa, então PETR3/ITUB3/BBDC3 e outras entram agora.</p>`,
+  ].join("");
+})();
+
+sync(); render();
+</script>

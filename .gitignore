@@ -80,3 +80,7 @@ data/*
 scripts/daytrade/comparativo_win_2026/comparativo_win_2026.html
 scripts/daytrade/comparativo_win_2026/comparativo_win_2026.json
 mt5/testes/resultados/
+# Saida da grade semanal (medicoes.json ~7 MB, cache do universo do MT5 e o
+# HTML gerado) -- regeneravel pelos scripts de scripts/swing_lab/semanal_mmes_video_*;
+# a pagina publicada e' a vista, o script e' a fonte.
+scripts/swing_lab/semanal_mmes_video/
