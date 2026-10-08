@@ -1,17 +1,18 @@
-"""Estado ATUAL da estrategia semanal v4 para cada papel, injetado na pagina da grade.
+"""Estado ATUAL da estrategia semanal v3 para cada papel, injetado na pagina da grade.
 
-v4 (ver VERSOES_SEMANAL.md): grande (mediana do financeiro dos 63 pregoes
->= R$100 mi) + forca (razao papel/IBOV semanal acima da MME21 dela) +
-estrutura (ZigZag de 3 ATR semanais, 2 ultimos topos e fundos ascendentes);
-sinal = recuo a MME9 com as tres MMEs semanais subindo, na ultima semana
-fechada.
+v3 (ver VERSOES_SEMANAL.md): grande (mediana do financeiro dos 63 pregoes
+>= R$100 mi) + forca (razao papel/IBOV semanal acima da MME21 dela); sinal =
+recuo a MME9 com as tres MMEs semanais subindo, na ultima semana fechada.
+E a versao que a pagina mostra desde 2026-10-08 (escolha do dono): a unica
+melhoria confirmada na validacao. v4 (ZigZag), v5 (prazo) e v6 (volume)
+pioraram la.
 
 Le o diario do MT5 ate o ultimo pregao, que fica no conjunto de VALIDACAO:
 leitura de estado para acompanhar, sem decisao de pesquisa, com o motivo no
 log da trava.
 
 Uso:
-  .venv/Scripts/python.exe scripts/swing_lab/semanal_v4_estado.py --dados <medicoes.json | pagina.html> [--saida X.html]
+  .venv/Scripts/python.exe scripts/swing_lab/semanal_estado.py --dados <medicoes.json | pagina.html> [--saida X.html]
 `--dados` aceita o medicoes.json da grade ou uma pagina ja gerada (o bloco
 `const D = ...`), porque o medicoes.json depende do arquivo .prt do Profit.
 """
@@ -27,9 +28,8 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import base_mt5 as base  # noqa: E402
 import semanal_mmes_video_2026_10_08 as setup  # noqa: E402
-from semanal_estrutura_2026_10_08 import zigzag  # noqa: E402
 
-MOTIVO = "estado atual da v4 para a pagina da grade semanal (acompanhamento, sem decisao de pesquisa)"
+MOTIVO = "estado atual da v3 para a pagina da grade semanal (acompanhamento, sem decisao de pesquisa)"
 TEMPLATE = Path(__file__).with_name("semanal_mmes_video_template.html")
 
 
@@ -38,7 +38,7 @@ def semanal_fechada(d: pd.DataFrame) -> pd.DataFrame:
     return w.iloc[:-1] if w.index[-1] > d.index[-1] else w
 
 
-def estado_v4() -> tuple[str, dict[str, dict]]:
+def estado_v3() -> tuple[str, dict[str, dict]]:
     ib = semanal_fechada(pd.read_parquet(base.PASTA / "IBOV.parquet")).close
     out, semana = {}, None
     for tk, _ in base.universo():
@@ -51,9 +51,9 @@ def estado_v4() -> tuple[str, dict[str, dict]]:
         ratio = w.close / ib.reindex(w.index, method="ffill")
         fin = float((d.close * d.volume).iloc[-63:].median())
         v = dict(grande=fin >= 100e6, forca=bool(ratio.iloc[-1] > e(ratio, 21).iloc[-1]),
-                 estrutura=bool(zigzag(w, setup.atr(w, 14), 3).iloc[-1]), sinal=bool(sig.recuo_media.iloc[-1]),
+                 sinal=bool(sig.recuo_media.iloc[-1]),
                  fin_mediana=fin)
-        v["apta"] = v["grande"] and v["forca"] and v["estrutura"]
+        v["apta"] = v["grande"] and v["forca"]
         out[tk] = v
         semana = str(w.index[-1].date())
     return semana, out
@@ -73,10 +73,10 @@ def main() -> None:
     ap.add_argument("--saida", type=Path, default=Path(__file__).with_name("semanal_mmes_video") / "grade_semanal_b3.html")
     a = ap.parse_args()
     D = carregar_dados(a.dados)
-    semana, est = estado_v4()
+    semana, est = estado_v3()
     for at in D["ativos"]:
-        at["v4"] = est.get(at["ticker"])
-    D["v4"] = {"semana": semana}
+        at["v3"] = est.get(at["ticker"])
+    D["v3"] = {"semana": semana}
     html = TEMPLATE.read_text(encoding="utf-8").replace("/*__DADOS__*/null", json.dumps(D, ensure_ascii=False))
     a.saida.parent.mkdir(parents=True, exist_ok=True)
     a.saida.write_text(html, encoding="utf-8")

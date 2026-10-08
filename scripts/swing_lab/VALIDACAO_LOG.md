@@ -8,3 +8,4 @@
 | 2026-10-08 14:26 | estado atual da v4 para a pagina da grade semanal (acompanhamento, sem decisao de pesquisa) |
 | 2026-10-08 16:13 | dono autorizou na conversa de 2026-10-08 ('sim, tudo'): validar a cadeia v2..v6 da estrategia semanal (v6 = v5 + volume do recuo abaixo da media de 20 semanas), regua pura |
 | 2026-10-08 16:13 | dono autorizou na conversa de 2026-10-08 ('sim, tudo'): validar a cadeia v2..v6 da estrategia semanal (v6 = v5 + volume do recuo abaixo da media de 20 semanas), regua pura |
+| 2026-10-08 16:15 | estado atual da v3 para a pagina da grade semanal (acompanhamento, sem decisao de pesquisa) |

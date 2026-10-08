@@ -35,10 +35,10 @@ Formato das células: por operação / rendimento anual enquanto posicionada.
 |---|---|---|---|---|---|
 | v1 | setup do vídeo: recuo à MME9 com as MMEs 9/21/50 semanais subindo, compra no rompimento da máxima, stop na mínima do candle do sinal, saída por linha ATR (14×2 ou 21×3) | — | — | — | ponto de partida |
 | v2 | v1 só nas grandes (financeiro ≥ R$100 mi/dia, mediana de 63 pregões no sinal) | +1,82% / −0,5% | +0,95% / +0,4% | +3,44% / +4,0% | decisão de escopo do dono |
-| v3 | v2 + força relativa: razão papel/IBOV semanal acima da MME21 dela | +1,93% / −0,5% | +1,28% / +1,3% | +4,71% / +7,0% | **fica** (melhora no IS por pouco e no OOS; yf também sobe) |
+| **v3 (atual, confirmada na validação)** | v2 + força relativa: razão papel/IBOV semanal acima da MME21 dela | +1,93% / −0,5% | +1,28% / +1,3% | +4,71% / +7,0% | **fica** (melhora no IS por pouco e no OOS; yf também sobe) |
 | v4 | v3 + estrutura (ideia do dono): ZigZag de 3 ATR semanais, 2 últimos topos e 2 últimos fundos ascendentes | +3,00% / +5,1% | +2,61% / +6,8% | +3,89% / +5,1% | **fica** (melhora no IS e no OOS; yf cai, possível efeito da mudança de mercado) |
 | v5 | v4 + prazo: se no fechamento da 8ª semana o papel não está acima da entrada, sai na abertura seguinte | +3,21% / +5,9% | +2,78% / +7,5% | +3,44% / +4,6% | **fica** (melhora no IS e no OOS; yf cai, possível efeito da mudança de mercado) |
-| **v6 (atual)** | v5 + volume: a semana do sinal (o recuo) com volume abaixo da média de 20 semanas | +3,72% / +8,3% | +3,32% / +9,3% | +2,49% / +2,2% | **fica** por pouco (melhora ~0,5 ponto no IS e no OOS; yf cai). Apoio: o lado oposto, recuo com volume ALTO, é pior nas 3 fontes |
+| v6 | v5 + volume: a semana do sinal (o recuo) com volume abaixo da média de 20 semanas | +3,72% / +8,3% | +3,32% / +9,3% | +2,49% / +2,2% | **fica** por pouco (melhora ~0,5 ponto no IS e no OOS; yf cai). Apoio: o lado oposto, recuo com volume ALTO, é pior nas 3 fontes |
 
 Todas as diferenças por operação ficam dentro do intervalo de confiança (±3 a ±4 pontos). São indícios na mesma direção nas duas fontes do MT5, não certezas.
 
@@ -87,3 +87,5 @@ No mesmo período: BOVA11 +42,5%, CDI +14,1%.
 - Estrutura ZigZag, prazo de 8 semanas e volume do recuo pioram aqui. Cada um tinha passado no IS e no OOS por margens bem menores que o intervalo de confiança.
 - Nenhuma versão passa no portão final.
 - O conjunto de validação está gasto para essas regras. Qualquer regra nova escolhida depois de ver isto não pode ser validada nele.
+
+**Decisão do dono (2026-10-08): a versão atual volta a ser a v3.** É a única confirmada na validação. A página da grade (`semanal_estado.py`) mostra o estado da v3.
