@@ -32,7 +32,7 @@ void MostraCaixa(double inicial, double lotes, ulong magic)
    double resultado = ResultadoDoRobo(magic);
    double caixa = inicial + resultado;
    double sugerido = CAIXA_POR_CONTRATO * lotes;
-   Comment(StringFormat("EscadaWinM15 v4.2\nCaixa informado: R$ %.2f\nResultado do robô: R$ %+.2f\nCaixa atual: R$ %.2f\nSugerido p/ %.0f contrato(s): R$ %.0f%s",
+   Comment(StringFormat("EscadaWinM15 v4.1\nCaixa informado: R$ %.2f\nResultado do robô: R$ %+.2f\nCaixa atual: R$ %.2f\nSugerido p/ %.0f contrato(s): R$ %.0f%s",
                         inicial, resultado, caixa, lotes, sugerido, caixa < sugerido ? "  << ABAIXO" : ""));
    if(caixa == ultimo) return;
    ultimo = caixa;
