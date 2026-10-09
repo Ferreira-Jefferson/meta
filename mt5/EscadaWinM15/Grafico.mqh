@@ -68,10 +68,31 @@ void Seta(string nome, datetime t, double p, int codigo, color cor, int largura,
    Estilo(nome, cor, largura);
 }
 
+//--- Visual do gráfico igual ao template MM34_4medias (sem as médias dele): velas, sem grade, sem volume.
+void AplicaVisual()
+{
+   ChartSetInteger(0, CHART_MODE, CHART_CANDLES);
+   ChartSetInteger(0, CHART_SHOW_GRID, false);
+   ChartSetInteger(0, CHART_SHOW_VOLUMES, CHART_VOLUME_HIDE);
+   ChartSetInteger(0, CHART_SHIFT, true);
+   ChartSetInteger(0, CHART_COLOR_BACKGROUND, CLR_NONE);
+   ChartSetInteger(0, CHART_COLOR_FOREGROUND, C'224,255,255');
+   ChartSetInteger(0, CHART_COLOR_CHART_UP, clrGreen);
+   ChartSetInteger(0, CHART_COLOR_CANDLE_BULL, clrGreen);
+   ChartSetInteger(0, CHART_COLOR_CHART_DOWN, clrTomato);
+   ChartSetInteger(0, CHART_COLOR_CANDLE_BEAR, clrTomato);
+   ChartSetInteger(0, CHART_COLOR_CHART_LINE, clrWhite);
+   ChartSetInteger(0, CHART_COLOR_BID, C'119,136,153');
+   ChartSetInteger(0, CHART_COLOR_LAST, C'32,178,170');
+   ChartSetInteger(0, CHART_COLOR_STOP_LEVEL, clrRed);
+   ChartRedraw(0);
+}
+
 //=================== partes do desenho ===================
 void GraficoInicia()
 {
    g_desenha = !MQLInfoInteger(MQL_TESTER) || MQLInfoInteger(MQL_VISUAL_MODE);
+   if(g_desenha) AplicaVisual();
    ArrayInitialize(g_h1_ant, 0.0);
    ObjectsDeleteAll(0, GR_PREFIXO);
 }

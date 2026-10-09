@@ -31,7 +31,7 @@
 //| gráfico (o EA monta o M15 sozinho a partir do M1).               |
 //+------------------------------------------------------------------+
 #property copyright "EscadaWinM15"
-#property version   "1.12"
+#property version   "1.13"
 #property strict
 
 #include "EscadaWinM15/Calendario.mqh"
