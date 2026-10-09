@@ -115,6 +115,30 @@ O que é universal, então, é a **lista de perguntas e o método**; a régua e 
 4. Confira, sem mudar nada, num período que não foi usado, e compare com o acaso (sortear a mesma quantidade de sinais).
 5. Escreva o gabarito numa tabela igual à de cima, marcando cada pergunta como **libera com sim**, **libera com não**, **embutida** ou **indiferente**. Se respondendo às perguntas com ele o resultado não for idêntico ao do robô, falta pergunta ou a régua está errada.
 
+### Quanto cada pergunta vale sozinha no mercado (medido em 2026-10-09)
+
+81 perguntas, entre 50 novas e conhecidas da literatura (VWAP, perfil de volume, níveis de ontem, Crabel, Wyckoff, Donchian, RSI, Bollinger, MACD, ADX, Dow, dólar) e 31 deste arquivo. Todas foram medidas sem saber de que estratégia vêm.
+
+A régua é universal: em cada vela M15 entre 09:30 e 16:45, o preço toca +1 ATR antes de −1 ATR? Os pesos saem do período de escolha (2022–set/25) e são conferidos fora da amostra (out/25–out/26) e no virgem (out–dez/21). O catálogo completo, com régua, peso e classe de cada pergunta, está em `scripts/daytrade/topos_fundos/banco_perguntas/catalogo_perguntas.md`.
+
+| resultado | número |
+|---|---|
+| perguntas que passam no teste fora da amostra (BH q=0,10) | **0 de 81** |
+| classe FRACA / INSTÁVEL / INERTE | 28 / 5 / 47 |
+| quanto a melhor muda o acerto | 1 a 6 pontos percentuais |
+| pesos que repetem o sinal fora da amostra / no virgem | 69% / **11%** |
+| soma dos pesos como filtro na escada | perde ~50% do lucro e piora a queda fora da amostra |
+| soma dos pesos como mão (2 ou 1 contrato) | igual a reduzir a mão ao acaso |
+| robô só com a soma dos pesos | negativo no virgem; o banco atual C1–C8 é igual ao acaso |
+
+O que isso ensina:
+
+- **Somar perguntas não cria vantagem.** Cada uma muda o acerto em poucos pontos, cerca de 15 delas dizem a mesma coisa ("tendência a favor"), e a soma conta essa informação várias vezes.
+- **O sinal de uma pergunta conhecida pode ser o contrário do que a literatura diz.** RSI ≤ 30 não reverte no WIN M15, continua caindo (−5 pp no período de escolha e fora da amostra). Clímax, absorção e retomada do VWAP também pioram a compra. O que funciona aqui é continuação, não reversão.
+- **Pergunta sem lado não serve para a direção.** Contração, NR7, inside day, volume alto e squeeze descrevem o regime: só servem para mudar mão, stop ou alvo, nunca para escolher entre compra e venda.
+- **Peso medido num alvo curto não serve a uma estratégia que vive da cauda.** Os 10% melhores trades da escada fazem 174% do lucro no período de escolha. Uma pergunta que acerta +1 ATR antes de −1 ATR não diz nada sobre quem ganha 3 ATR. **Meça cada pergunta no resultado da própria operação**, nunca num alvo genérico.
+- **O que vale num regime pode inverter em outro.** No virgem, praticamente todos os pesos inverteram (correlação −0,50). Toda conclusão precisa do bloco 0: hora, lado, volatilidade e trimestre.
+
 ---
 
 ## 0. Antes de aceitar qualquer conclusão: em que condições ela foi tirada?
