@@ -541,26 +541,41 @@ void Mae_Painel(void)
    if(mzCorr.Testador() && !MQLInfoInteger(MQL_VISUAL_MODE)) return;
    if(mzMono - mzPainelUlt < 1000) return;
    mzPainelUlt = mzMono;
-   string est = !mzTravaMinha ? "INERTE (trava de outro grafico)" : (!mzBaseOk ? "INVALIDO" : (mzNaoNetting ? "INVALIDO (nao NETTING)" : (mzParado ? "PARADO (ambiente)" : (mzProtegendo ? "PROTEGENDO" : "ok"))));
-   string s = StringFormat("WinMaestro v%s | %s | %s | %s\n", WM_VERSAO, _Symbol, TimeToString(mzAgora, TIME_DATE | TIME_SECONDS), est);
-   s += StringFormat("liquida %+d | externa %+d | Delta %+d | corte %s | %s\n", mzLiq, mzExterna, mzDeltaResto,
-                     TimeToString(Mae_CDe(mzAgora), TIME_MINUTES), Mae_Bloqueio() ? "BLOQUEIO: " + (mzBloqBotao ? mzBloqMotivo + (mzBloqDia ? " + parada diaria" : "") : (mzBloqDia ? "parada diaria (perda do dia)" : "automatico")) : "entradas liberadas");
-   s += StringFormat("resultado do dia R$%.2f (%.2f%% de R$%.0f; %s; ponto R$%.2f/contrato) | parada diaria %s\n", mzResDia, Risco_Pct(mzResDia), Risco_Capital, Risco_PorRobo(), eVp,
-                     !(Risco_PerdaDiaPct > 0.0 && Risco_Capital > 0.0) ? "desligada" :
-                     (mzBloqDia ? StringFormat("ATIVA (bateu -%.2f%%): sem entradas ate' o pregao seguinte", Risco_PerdaDiaPct) : StringFormat("em -%.2f%% (nao atingida)", Risco_PerdaDiaPct)));
-   string sits[4] = {"zero", "legitima", "TROCADA", "DUPLICADA"};
+   // Painel enxuto (pedido do dono, 2026-10-09): so' o consolidado. Detalhe por robo (ficha, S, A, E, intencao) fica no log.
+   MqlTick tk; double px = 0.0;
+   if(mzCorr.UltimoTick(tk)) px = tk.last > 0.0 ? tk.last : (tk.bid > 0.0 && tk.ask > 0.0 ? (tk.bid + tk.ask) / 2.0 : 0.0);
+   double aberto = 0.0; string operando = "";
    for(int r = 0; r < NROBOS; r++)
    {
-      string x = "";
-      if(!mzAtivo[r]) x += " [desligado]";
-      if(mzInitFalhou[r]) x += " [Init falhou]";
-      if(!mzEst[r].confiavel) x += " [RESTRITO]";
-      if(mzEst[r].noite) x += " [noite]";
-      int ie = mzEst[r].iE;
-      string e = (ie >= 0 && ie < ArraySize(mzViva)) ? DoubleToString(mzViva[ie].preco, 0) : "-";
-      int sit = (mzEst[r].sit >= 0 && mzEst[r].sit <= 3) ? mzEst[r].sit : 0;
-      s += StringFormat("%s: ficha %+d %s @%.0f | S %.0f | A %.0f | E %s | %s%s\n", mzNome[r], mzEst[r].f, sits[sit], mzEst[r].preco,
-                        mzNivS[r], mzVista[r].alvo_vivo, e, Int_Nome(mzInt[r].tipo), x);
+      if(mzEst[r].f == 0) continue;
+      if(px > 0.0) aberto += mzEst[r].f * (px - mzEst[r].preco) * eVp;   // flutuante sem custo: so' existe ao realizar
+      operando += (operando == "" ? "" : ", ") + mzNome[r];
+   }
+   double margem = mzCorr.ContaD(ACCOUNT_MARGIN);           // so' leitura; nada decide por saldo (B7)
+   double atual = Risco_Capital + mzResDia;
+   string s = StringFormat("WinMaestro v%s\n", WM_VERSAO);
+   // alertas: so' aparecem quando ha' algo a fazer ou a saber
+   string est = !mzTravaMinha ? "INERTE (trava de outro grafico)" : (!mzBaseOk ? "INVALIDO" : (mzNaoNetting ? "INVALIDO (nao NETTING)" : (mzParado ? "PARADO (ambiente)" : (mzProtegendo ? "PROTEGENDO" : ""))));
+   if(est != "") s += "ATENCAO: " + est + "\n";
+   if(Mae_Bloqueio()) s += "Entradas BLOQUEADAS: " + (mzBloqBotao ? mzBloqMotivo + (mzBloqDia ? " + parada diaria" : "") : (mzBloqDia ? "parada diaria" : "automatico")) + "\n";
+   if(mzExterna != 0) s += StringFormat("Posicao manual: %+d\n", mzExterna);
+   // So' o que esta' em uso: linha zerada ou que nao se aplica agora nao aparece (pedido do dono, 2026-10-09).
+   s += StringFormat("Capital: R$ %.2f\n", Risco_Capital);
+   if(mzResDia != 0.0) s += StringFormat("Resultado do dia: R$ %+.2f\nCaixa atual: R$ %.2f\n", mzResDia, atual);
+   if(operando != "")
+   {
+      s += "Operando: " + operando + "\n" + StringFormat("Resultado aberto: R$ %+.2f\n", aberto);
+      if(margem > 0.0) s += StringFormat("Margem em uso: R$ %.2f\n", margem);
+      s += StringFormat("Caixa livre: R$ %.2f\n", atual + aberto - margem);
+   }
+   if(Risco_PerdaDiaPct > 0.0 && Risco_Capital > 0.0)                      // desligada: nada a mostrar
+   {
+      if(mzBloqDia) s += "Parada diaria: ATINGIDA\n";
+      else
+      {
+         double resta = MathMax(0.0, Risco_LimiteDia() + mzResDia);
+         s += StringFormat("Parada diaria: %.2f%%\n", Risco_Pct(resta));
+      }
    }
    Comment(s);
 }

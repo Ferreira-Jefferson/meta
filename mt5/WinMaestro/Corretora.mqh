@@ -70,6 +70,7 @@ public:
    virtual long     SimboloI(const ENUM_SYMBOL_INFO_INTEGER p) = 0;
    virtual bool     UltimoTick(MqlTick &t) = 0;
    virtual long     ContaI(const ENUM_ACCOUNT_INFO_INTEGER p) = 0;
+   virtual double   ContaD(const ENUM_ACCOUNT_INFO_DOUBLE p) = 0;      // so' o painel (margem em uso); nada decide por saldo (B7)
    virtual string   ContaS(const ENUM_ACCOUNT_INFO_STRING p) = 0;
    virtual bool     RoboEmOutroSimbolo(const long &magics[]) = 0;      // O16
 };
@@ -207,6 +208,7 @@ public:
    virtual long   SimboloI(const ENUM_SYMBOL_INFO_INTEGER p)  { return SymbolInfoInteger(_Symbol, p); }
    virtual bool   UltimoTick(MqlTick &t)                      { return SymbolInfoTick(_Symbol, t); }
    virtual long   ContaI(const ENUM_ACCOUNT_INFO_INTEGER p)   { return AccountInfoInteger(p); }
+   virtual double ContaD(const ENUM_ACCOUNT_INFO_DOUBLE p)    { return AccountInfoDouble(p); }
    virtual string ContaS(const ENUM_ACCOUNT_INFO_STRING p)    { return AccountInfoString(p); }
 
    virtual bool RoboEmOutroSimbolo(const long &magics[])

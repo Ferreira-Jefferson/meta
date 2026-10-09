@@ -32,8 +32,24 @@ void MostraCaixa(double inicial, double lotes, ulong magic)
    double resultado = ResultadoDoRobo(magic);
    double caixa = inicial + resultado;
    double sugerido = CAIXA_POR_CONTRATO * lotes;
-   Comment(StringFormat("EscadaWinM15 v4.1\nCaixa informado: R$ %.2f\nResultado do robô: R$ %+.2f\nCaixa atual: R$ %.2f\nSugerido p/ %.0f contrato(s): R$ %.0f%s",
-                        inicial, resultado, caixa, lotes, sugerido, caixa < sugerido ? "  << ABAIXO" : ""));
+   // Só o que está em uso: linha zerada ou que não se aplica agora não aparece (pedido do dono, 2026-10-09).
+   string s = "EscadaWinM15 v4.1\nCaixa informado: R$ " + DoubleToString(inicial, 2) + "\n";
+   if(resultado != 0.0) s += StringFormat("Resultado do robô: R$ %+.2f\nCaixa atual: R$ %.2f\n", resultado, caixa);
+   if(caixa < sugerido) s += StringFormat("ATENÇÃO: caixa abaixo do sugerido (R$ %.0f)\n", sugerido);
+   // Posição aberta: o flutuante só vira caixa ao fechar; a margem fica bloqueada enquanto a posição existe.
+   if(PositionSelect(_Symbol) && (ulong)PositionGetInteger(POSITION_MAGIC) == magic)
+   {
+      double aberto = PositionGetDouble(POSITION_PROFIT), margem = AccountInfoDouble(ACCOUNT_MARGIN);
+      bool compra = PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY;
+      double entrada = PositionGetDouble(POSITION_PRICE_OPEN), sl = PositionGetDouble(POSITION_SL);
+      // stop em pontos a partir da entrada, do ponto de vista da operação: -635 = perde 635 se bater; +200 = garante 200
+      string stop_pts = sl > 0 ? StringFormat("%+.0f pts", (sl - entrada) * (compra ? 1 : -1)) : "sem stop";
+      s += StringFormat("Posição: %s %.0f @ %.0f | stop %s\nResultado aberto: R$ %+.2f\n", compra ? "compra" : "venda",
+                        PositionGetDouble(POSITION_VOLUME), entrada, stop_pts, aberto);
+      if(margem > 0.0) s += StringFormat("Margem em uso: R$ %.2f\n", margem);
+      s += StringFormat("Caixa livre: R$ %.2f\n", caixa + aberto - margem);
+   }
+   Comment(s);
    if(caixa == ultimo) return;
    ultimo = caixa;
    PrintFormat("CAIXA: informado R$ %.2f, resultado do robô R$ %+.2f, atual R$ %.2f%s", inicial, resultado, caixa,
