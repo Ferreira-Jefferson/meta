@@ -1,0 +1,126 @@
+50 dias completos de 50
+
+== PAINEL (mesmos dias) ==
+                                      total R$   ops  acerto%  F.lucro  pior queda  pior dia  dias +   R$/dia  custo US$
+v1 (54 perguntas)                       -1.105   122     47,5     0,80       1.746      -290  19/50       -22      0,639
+v3 (zerar a mercado)                    -1.578   271     42,1     0,83       2.189    -1.146  20/50       -32      0,518
+v3 (zerar limitado)                     -1.703   269     41,6     0,82       2.247    -1.148  20/50       -34      0,518
+v4 (portao+gestao+risco+reentrada)        -857   102     46,1     0,78       1.464      -230  16/50       -17      0,248
+
+== PAREADO POR DIA (diferenca de R$/dia) ==
+v4 - v3(L)   media R$     16,9/dia | IC95 bootstrap [-36,4 ; 75,0] | t = 0.59 (p = 0.561) | p sign-flip 0.589 | melhor em 26 dias, pior em 23
+v4 - v3(M)   media R$     14,4/dia | IC95 bootstrap [-39,0 ; 72,8] | t = 0.50 (p = 0.616) | p sign-flip 0.646 | melhor em 27 dias, pior em 23
+v4 - v1      media R$      5,0/dia | IC95 bootstrap [-50,5 ; 61,1] | t = 0.17 (p = 0.864) | p sign-flip 0.864 | melhor em 27 dias, pior em 23
+v3(L) - v1   media R$    -12,0/dia | IC95 bootstrap [-96,8 ; 66,9] | t = -0.28 (p = 0.778) | p sign-flip 0.792 | melhor em 18 dias, pior em 32
+
+== NULO (entradas aleatorias, mesma geometria das ordens preenchidas) ==
+nulo LIVRE (qualquer vela, 2 lados)      v4 R$ -857 | nulo media -439, p5 -1.590, p95 768 | p(nulo >= v4) = 0,703
+nulo COM PORTAO (so velas que passam, lado a favor; 599 pares em 50 dias, 102 geometrias)  v4 R$ -857 | nulo media -1.905, p5 -3.064, p95 -555 | p(nulo >= v4) = 0,083
+  (ref) nulo COM PORTAO com a geometria de v3 (zerar limitado) (269 geom.): media -8.160, p5 -11.267, p95 -4.474 | resultado real do v3L R$ -1.703 p = 0,000
+  (ref) nulo COM PORTAO com a geometria de v1 (54 perguntas) (122 geom.): media -3.016, p5 -4.760, p95 -913 | resultado real do v1 R$ -1.105 p = 0,067
+
+== POR TIPO DE DIA (eficiencia do dia, ex-post) ==
+grupo                        dias |   v1 R$  v3L R$   v4 R$ | ops v1   v3   v4 | acerto v1    v3    v4
+rotacao (<0,15)                41 |     245  -3.218  -1.633 |     85  208   76 |      57,6  37,5  38,2
+intermediario (0,15-0,30)       7 |  -1.110     743     680 |     30   48   20 |      26,7  52,1  70,0
+direcional (>=0,30)             2 |    -240     772      96 |      7   13    6 |      14,3  69,2  66,7
+
+== POR PERIODO (IS/OOS) ==
+grupo                        dias |   v1 R$  v3L R$   v4 R$ | ops v1   v3   v4 | acerto v1    v3    v4
+IS                             17 |    -868  -1.215      35 |     49  103   36 |      42,9  41,7  61,1
+OOS                            33 |    -237    -488    -892 |     73  166   66 |      50,7  41,6  37,9
+
+== SAIDAS POR MOTIVO ==
+-- v1 (54 perguntas) (122 saidas)
+   stop                         n   50 (  41%) | total R$  -4.466 | medio R$   -89,3
+   alvo                         n   49 (  40%) | total R$   3.698 | medio R$    75,5
+   fim do pregao (zerar)        n   18 (  15%) | total R$    -401 | medio R$   -22,3
+   zerar (mercado)              n    5 (   4%) | total R$      64 | medio R$    12,8
+-- v3 (zerar limitado) (269 saidas)
+   zerar (limite)               n  163 (  61%) | total R$  -5.545 | medio R$   -34,0
+   alvo                         n   72 (  27%) | total R$   5.596 | medio R$    77,7
+   stop                         n   28 (  10%) | total R$  -2.097 | medio R$   -74,9
+   fim do pregao (zerar)        n    6 (   2%) | total R$     343 | medio R$    57,2
+-- v4 (portao+gestao+risco+reentrada) (102 saidas)
+   stop                         n   53 (  52%) | total R$  -3.730 | medio R$   -70,4
+   alvo                         n   45 (  44%) | total R$   2.594 | medio R$    57,6
+   fim do pregao (zerar)        n    2 (   2%) | total R$     397 | medio R$   198,5
+   zerar (limite)               n    2 (   2%) | total R$    -118 | medio R$   -59,0
+
+== O QUE AS REGRAS FIZERAM (v4) ==
+   entradas_jev                       330
+   bloq_portao                        2
+   bloq_reent                         155
+   bloq_risco                         71
+   mao_reduzida                       0
+   gestao_zerar_jev                   2
+   gestao_stop_pivo_jev               0
+   guarda_bloqueou                    0
+   gestao_chamadas                    198
+   portao_jev_concorda_com_determ     328/330
+
+== CAIXA (escada: R$ 1.000/contrato, max 2, inicio R$ 2.000; < R$ 2.000 -> 1 contrato; < R$ 1.000 -> para) ==
+v1 (54 perguntas)                    final R$ 917 | minimo R$ 917 | maximo R$ 2.214 | dias abaixo de R$ 2.000: 48 | abaixo de R$ 1.000: 33 | parou: 2025-10-07 (68 trades pulados)
+v3 (zerar a mercado)                 final R$ 697 | minimo R$ 697 | maximo R$ 2.117 | dias abaixo de R$ 2.000: 48 | abaixo de R$ 1.000: 36 | parou: 2025-07-31 (174 trades pulados)
+v3 (zerar limitado)                  final R$ 649 | minimo R$ 649 | maximo R$ 2.116 | dias abaixo de R$ 2.000: 48 | abaixo de R$ 1.000: 36 | parou: 2025-07-31 (174 trades pulados)
+v4 (portao+gestao+risco+reentrada)   final R$ 985 | minimo R$ 985 | maximo R$ 2.343 | dias abaixo de R$ 2.000: 34 | abaixo de R$ 1.000: 15 | parou: 2026-04-17 (29 trades pulados)
+curva v4: 04-25 1.970 | 03-07 2.054 | 10-26 2.194 | 11-24 2.283 | 12-11 2.232 | 01-16 2.343 | 01-18 2.340 | 01-19 2.321 | 01-22 2.276 | 05-07 2.223 | 05-08 2.164 | 11-06 2.207 | 11-19 2.184 | 02-07 2.073 | 04-07 1.853 | 07-31 1.903 | 08-19 2.035 | 10-07 2.069 | 10-20 2.001 | 10-29 1.842 | 11-07 1.919 | 12-15 1.850 | 01-02 1.838 | 01-08 1.817 | 01-15 1.869 | 01-27 1.977 | 02-05 1.880 | 02-11 1.856 | 02-25 1.807 | 02-26 1.732 | 03-10 1.502 | 03-11 1.497 | 03-13 1.410 | 03-17 1.236 | 04-07 1.049 | 04-16 985 | 04-17 985 | 04-29 985 | 05-07 985 | 05-11 985 | 05-14 985 | 05-21 985 | 05-22 985 | 05-25 985 | 06-19 985 | 07-03 985 | 07-06 985 | 07-08 985 | 08-03 985 | 08-04 985
+
+== ABLACAO OFFLINE (respostas logadas; sem nova chamada; entrada sem resposta v4 na vela usa a da v3 = coluna fallback) ==
+variante                                              total R$   ops  acerto%  F.lucro  pior queda  pior dia  dias +  fallback
+v4 completa (checagem: deve igualar o vivo)               -857   102     46,1     0,78       1.464      -230  16/50          0
+v4 sem portao                                             -870   102     46,1     0,77       1.477      -243  16/50          0
+v4 sem gestao nova (gestao da v3)                       -1.212   101     42,6     0,68       1.563      -230  17/50         40
+v4 sem guarda determ. da gestao (so o Jev)                -857   102     46,1     0,78       1.464      -230  16/50          0
+v4 sem regra de risco                                     -676   114     54,4     0,85       1.281      -577  21/50         45
+v4 sem regra de reentrada/max 3                         -1.023   134     47,8     0,80       1.753      -304  15/50          0
+v4 sem NENHUMA das 4 (aprox. v3)                        -1.061   183     47,5     0,84       1.994      -428  21/50         25
+v4 com portao do Jev (P>=0,5) em vez do determ.           -870   102     46,1     0,77       1.477      -243  16/50          0
+v4 portao 0,15 (sensib. descritiva)                       -870   102     46,1     0,77       1.477      -243  16/50          0
+v4 portao 0,25 (sensib. descritiva)                       -190    83     49,4     0,93         699      -203  15/50         35
+   (checagem) v4 completa resimulada = vivo?  resim -857 x vivo -857
+   v4 sem portao                                        vs v4: media    -0,3/dia | IC95 [-0,8 ; 0,0] | p sign-flip 1.000
+   v4 sem gestao nova (gestao da v3)                    vs v4: media    -7,1/dia | IC95 [-24,0 ; 7,1] | p sign-flip 0.425
+   v4 sem guarda determ. da gestao (so o Jev)           vs v4: media     0,0/dia | IC95 [0,0 ; 0,0] | p sign-flip 1.000
+   v4 sem regra de risco                                vs v4: media     3,6/dia | IC95 [-24,7 ; 28,1] | p sign-flip 0.820
+   v4 sem regra de reentrada/max 3                      vs v4: media    -3,3/dia | IC95 [-24,2 ; 17,4] | p sign-flip 0.756
+   v4 sem NENHUMA das 4 (aprox. v3)                     vs v4: media    -4,1/dia | IC95 [-38,8 ; 30,9] | p sign-flip 0.828
+   v4 com portao do Jev (P>=0,5) em vez do determ.      vs v4: media    -0,3/dia | IC95 [-0,8 ; 0,0] | p sign-flip 1.000
+   v4 portao 0,15 (sensib. descritiva)                  vs v4: media    -0,3/dia | IC95 [-0,8 ; 0,0] | p sign-flip 1.000
+   v4 portao 0,25 (sensib. descritiva)                  vs v4: media    13,3/dia | IC95 [1,6 ; 26,3] | p sign-flip 0.040
+
+== DIAS RUINS DA v4: total < 0 ou v4 - v1 <= R$ -300 (34 de 50) ==
+ - 2022-04-25: v4 R$ -30 (1 ops) | v3 -58 | v1 +156 | dia alta ef 0.09 | saidas 1x stop (-30) | 0/1 entradas a favor do lado final do dia | pior trade 09:30-09:42 stop R$ -30 (n=1) | causa dominante: stop em dia que reverteu/rotacionou (dia de rotacao, ef<0,15: o portao libera so no inicio/ruido)
+ - 2023-12-11: v4 R$ -51 (1 ops) | v3 -181 | v1 +0 | dia alta ef 0.01 | saidas 1x stop (-51) | 0/1 entradas a favor do lado final do dia | pior trade 09:15-10:55 stop R$ -51 (n=1) | causa dominante: stop em dia que reverteu/rotacionou (dia de rotacao, ef<0,15: o portao libera so no inicio/ruido)
+ - 2024-01-18: v4 R$ -3 (2 ops) | v3 -231 | v1 -54 | dia baixa ef 0.17 | saidas 1x stop (-47), 1x fim do pregao (zerar) (+44) | 1/2 entradas a favor do lado final do dia | pior trade 09:15-10:05 stop R$ -47 (n=1) | causa dominante: stop em dia que reverteu/rotacionou
+ - 2024-01-19: v4 R$ -19 (2 ops) | v3 -89 | v1 -218 | dia baixa ef 0.04 | saidas 1x alvo (+38), 1x stop (-57) | 2/2 entradas a favor do lado final do dia | pior trade 13:15-14:27 stop R$ -57 (n=1) | causa dominante: stop em dia que reverteu/rotacionou (dia de rotacao, ef<0,15: o portao libera so no inicio/ruido)
+ - 2024-01-22: v4 R$ -45 (1 ops) | v3 -306 | v1 -59 | dia baixa ef 0.12 | saidas 1x stop (-45) | 1/1 entradas a favor do lado final do dia | pior trade 09:15-09:26 stop R$ -45 (n=1) | causa dominante: stop em dia que reverteu/rotacionou (dia de rotacao, ef<0,15: o portao libera so no inicio/ruido)
+ - 2024-05-07: v4 R$ -53 (3 ops) | v3 +89 | v1 +96 | dia alta ef 0.10 | saidas 1x alvo (+27), 1x stop (-41), 1x zerar (limite) (-39) | 3/3 entradas a favor do lado final do dia | pior trade 10:30-11:00 stop R$ -41 (n=1) | causa dominante: stop em dia que reverteu/rotacionou (dia de rotacao, ef<0,15: o portao libera so no inicio/ruido)
+ - 2024-05-08: v4 R$ -59 (3 ops) | v3 -55 | v1 +76 | dia alta ef 0.13 | saidas 2x alvo (+53), 1x stop (-112) | 0/3 entradas a favor do lado final do dia | pior trade 09:45-10:38 stop R$ -112 (n=1) | causa dominante: stop em dia que reverteu/rotacionou (dia de rotacao, ef<0,15: o portao libera so no inicio/ruido)
+ - 2024-11-19: v4 R$ -23 (2 ops) | v3 -97 | v1 -78 | dia alta ef 0.09 | saidas 1x alvo (+37), 1x stop (-60) | 2/2 entradas a favor do lado final do dia | pior trade 09:30-10:01 stop R$ -60 (n=1) | causa dominante: stop em dia que reverteu/rotacionou (dia de rotacao, ef<0,15: o portao libera so no inicio/ruido)
+ - 2025-02-07: v4 R$ -111 (2 ops) | v3 +117 | v1 -76 | dia baixa ef 0.15 | saidas 2x stop (-111) | 2/2 entradas a favor do lado final do dia | pior trade 14:30-15:15 stop R$ -60 (n=1) | causa dominante: stop em dia que reverteu/rotacionou (dia de rotacao, ef<0,15: o portao libera so no inicio/ruido)
+ - 2025-04-07: v4 R$ -220 (2 ops) | v3 -1148 | v1 +113 | dia alta ef 0.01 | saidas 2x stop (-220) | 1/2 entradas a favor do lado final do dia | pior trade 09:30-10:02 stop R$ -119 (n=1) | causa dominante: stop em dia que reverteu/rotacionou (dia de rotacao, ef<0,15: o portao libera so no inicio/ruido)
+ - 2025-10-20: v4 R$ -68 (2 ops) | v3 +79 | v1 -34 | dia alta ef 0.11 | saidas 2x stop (-68) | 2/2 entradas a favor do lado final do dia | pior trade 12:45-14:52 stop R$ -43 (n=1) | causa dominante: stop em dia que reverteu/rotacionou (dia de rotacao, ef<0,15: o portao libera so no inicio/ruido)
+ - 2025-10-29: v4 R$ -159 (2 ops) | v3 -142 | v1 +113 | dia alta ef 0.09 | saidas 2x stop (-159) | 1/2 entradas a favor do lado final do dia | pior trade 09:15-09:54 stop R$ -98 (n=1) | causa dominante: stop em dia que reverteu/rotacionou (dia de rotacao, ef<0,15: o portao libera so no inicio/ruido)
+ - 2025-12-15: v4 R$ -69 (3 ops) | v3 -283 | v1 +0 | dia alta ef 0.10 | saidas 1x alvo (+45), 2x stop (-114) | 3/3 entradas a favor do lado final do dia | pior trade 13:30-14:16 stop R$ -87 (n=1) | causa dominante: stop em dia que reverteu/rotacionou (dia de rotacao, ef<0,15: o portao libera so no inicio/ruido)
+ - 2026-01-02: v4 R$ -12 (2 ops) | v3 +79 | v1 +104 | dia baixa ef 0.11 | saidas 1x alvo (+46), 1x stop (-58) | 0/2 entradas a favor do lado final do dia | pior trade 10:00-10:09 stop R$ -58 (n=1) | causa dominante: stop em dia que reverteu/rotacionou (dia de rotacao, ef<0,15: o portao libera so no inicio/ruido)
+ - 2026-01-08: v4 R$ -21 (2 ops) | v3 -158 | v1 -75 | dia alta ef 0.09 | saidas 1x alvo (+30), 1x stop (-51) | 2/2 entradas a favor do lado final do dia | pior trade 10:30-10:49 stop R$ -51 (n=1) | causa dominante: stop em dia que reverteu/rotacionou (dia de rotacao, ef<0,15: o portao libera so no inicio/ruido)
+ - 2026-02-05: v4 R$ -97 (1 ops) | v3 -152 | v1 +149 | dia alta ef 0.02 | saidas 1x stop (-97) | 1/1 entradas a favor do lado final do dia | pior trade 09:38-09:48 stop R$ -97 (n=1) | causa dominante: stop em dia que reverteu/rotacionou (dia de rotacao, ef<0,15: o portao libera so no inicio/ruido)
+ - 2026-02-11: v4 R$ -24 (3 ops) | v3 -30 | v1 -80 | dia alta ef 0.14 | saidas 2x stop (-146), 1x alvo (+122) | 3/3 entradas a favor do lado final do dia | pior trade 09:15-09:30 stop R$ -84 (n=1) | causa dominante: stop em dia que reverteu/rotacionou (dia de rotacao, ef<0,15: o portao libera so no inicio/ruido)
+ - 2026-02-25: v4 R$ -49 (1 ops) | v3 -233 | v1 +0 | dia baixa ef 0.12 | saidas 1x stop (-49) | 1/1 entradas a favor do lado final do dia | pior trade 10:45-11:18 stop R$ -49 (n=1) | causa dominante: stop em dia que reverteu/rotacionou (dia de rotacao, ef<0,15: o portao libera so no inicio/ruido)
+ - 2026-02-26: v4 R$ -75 (1 ops) | v3 +79 | v1 +151 | dia alta ef 0.01 | saidas 1x stop (-75) | 1/1 entradas a favor do lado final do dia | pior trade 09:15-09:21 stop R$ -75 (n=1) | causa dominante: stop em dia que reverteu/rotacionou (dia de rotacao, ef<0,15: o portao libera so no inicio/ruido)
+ - 2026-03-10: v4 R$ -230 (3 ops) | v3 -3 | v1 +76 | dia alta ef 0.08 | saidas 3x stop (-230) | 3/3 entradas a favor do lado final do dia | pior trade 12:00-12:29 stop R$ -86 (n=1) | causa dominante: stop em dia que reverteu/rotacionou (dia de rotacao, ef<0,15: o portao libera so no inicio/ruido)
+ - 2026-03-11: v4 R$ -5 (2 ops) | v3 -102 | v1 -89 | dia baixa ef 0.00 | saidas 1x alvo (+105), 1x stop (-110) | 2/2 entradas a favor do lado final do dia | pior trade 09:45-10:05 stop R$ -110 (n=1) | causa dominante: stop em dia que reverteu/rotacionou (dia de rotacao, ef<0,15: o portao libera so no inicio/ruido)
+ - 2026-03-13: v4 R$ -87 (1 ops) | v3 +123 | v1 -257 | dia baixa ef 0.12 | saidas 1x stop (-87) | 1/1 entradas a favor do lado final do dia | pior trade 09:15-09:20 stop R$ -87 (n=1) | causa dominante: stop em dia que reverteu/rotacionou (dia de rotacao, ef<0,15: o portao libera so no inicio/ruido)
+ - 2026-03-17: v4 R$ -174 (2 ops) | v3 +35 | v1 +261 | dia alta ef 0.01 | saidas 2x stop (-174) | 2/2 entradas a favor do lado final do dia | pior trade 09:45-09:52 stop R$ -104 (n=1) | causa dominante: stop em dia que reverteu/rotacionou (dia de rotacao, ef<0,15: o portao libera so no inicio/ruido)
+ - 2026-04-07: v4 R$ -187 (2 ops) | v3 -232 | v1 +0 | dia alta ef 0.06 | saidas 2x stop (-187) | 0/2 entradas a favor do lado final do dia | pior trade 11:00-11:25 stop R$ -112 (n=1) | causa dominante: stop em dia que reverteu/rotacionou (dia de rotacao, ef<0,15: o portao libera so no inicio/ruido)
+ - 2026-04-16: v4 R$ -64 (1 ops) | v3 +134 | v1 +0 | dia baixa ef 0.09 | saidas 1x stop (-64) | 0/1 entradas a favor do lado final do dia | pior trade 09:45-10:04 stop R$ -64 (n=1) | causa dominante: stop em dia que reverteu/rotacionou (dia de rotacao, ef<0,15: o portao libera so no inicio/ruido)
+ - 2026-04-29: v4 R$ -36 (3 ops) | v3 +323 | v1 -52 | dia baixa ef 0.35 | saidas 2x stop (-120), 1x alvo (+84) | 3/3 entradas a favor do lado final do dia | pior trade 11:17-12:00 stop R$ -72 (n=1) | causa dominante: stop em dia que reverteu/rotacionou
+ - 2026-05-11: v4 R$ -35 (3 ops) | v3 +26 | v1 -290 | dia baixa ef 0.16 | saidas 2x stop (-158), 1x alvo (+123) | 3/3 entradas a favor do lado final do dia | pior trade 10:15-10:18 stop R$ -86 (n=1) | causa dominante: stop em dia que reverteu/rotacionou
+ - 2026-05-21: v4 R$ -67 (1 ops) | v3 -67 | v1 +235 | dia alta ef 0.05 | saidas 1x stop (-67) | 0/1 entradas a favor do lado final do dia | pior trade 09:30-09:37 stop R$ -67 (n=1) | causa dominante: stop em dia que reverteu/rotacionou (dia de rotacao, ef<0,15: o portao libera so no inicio/ruido)
+ - 2026-05-25: v4 R$ -58 (1 ops) | v3 -17 | v1 +0 | dia alta ef 0.01 | saidas 1x stop (-58) | 1/1 entradas a favor do lado final do dia | pior trade 09:15-09:16 stop R$ -58 (n=1) | causa dominante: stop em dia que reverteu/rotacionou (dia de rotacao, ef<0,15: o portao libera so no inicio/ruido)
+ - 2026-06-19: v4 R$ -4 (2 ops) | v3 -240 | v1 +85 | dia baixa ef 0.01 | saidas 1x alvo (+47), 1x stop (-51) | 2/2 entradas a favor do lado final do dia | pior trade 09:30-09:34 stop R$ -51 (n=1) | causa dominante: stop em dia que reverteu/rotacionou (dia de rotacao, ef<0,15: o portao libera so no inicio/ruido)
+ - 2026-07-03: v4 R$ -67 (1 ops) | v3 -138 | v1 +0 | dia alta ef 0.09 | saidas 1x stop (-67) | 1/1 entradas a favor do lado final do dia | pior trade 09:30-09:36 stop R$ -67 (n=1) | causa dominante: stop em dia que reverteu/rotacionou (dia de rotacao, ef<0,15: o portao libera so no inicio/ruido)
+ - 2026-07-06: v4 R$ -67 (3 ops) | v3 -5 | v1 +1 | dia baixa ef 0.16 | saidas 2x stop (-140), 1x alvo (+73) | 3/3 entradas a favor do lado final do dia | pior trade 10:30-10:45 stop R$ -84 (n=1) | causa dominante: stop em dia que reverteu/rotacionou
+ - 2026-08-03: v4 R$ -152 (2 ops) | v3 -42 | v1 -231 | dia baixa ef 0.08 | saidas 1x stop (-73), 1x zerar (limite) (-79) | 2/2 entradas a favor do lado final do dia | pior trade 10:45-14:15 zerar (limite) R$ -79 (n=1) | causa dominante: saidas 'zerar (limite)' (dia de rotacao, ef<0,15: o portao libera so no inicio/ruido)
+ - 2026-08-04: v4 R$ -67 (1 ops) | v3 +39 | v1 +200 | dia baixa ef 0.06 | saidas 1x stop (-67) | 0/1 entradas a favor do lado final do dia | pior trade 09:25-10:29 stop R$ -67 (n=1) | causa dominante: stop em dia que reverteu/rotacionou (dia de rotacao, ef<0,15: o portao libera so no inicio/ruido)
