@@ -1,0 +1,214 @@
+{
+ "seed": 20261010,
+ "metodo": "sorteio aleatorio simples dentro de cada periodo (OOS/IS), tamanho proporcional ao n de candidatos de cada periodo; numpy.random.default_rng(seed).choice(candidatos_ordenados, n, replace=False); candidatos = dias com sessao v1 em sessoes_dec/{OOS,IS} menos os 40 de referencia.json",
+ "candidatos": {
+  "OOS": 218,
+  "IS": 114
+ },
+ "n": {
+  "OOS": 33,
+  "IS": 17
+ },
+ "dias": [
+  {
+   "data": "2025-10-03",
+   "periodo": "OOS"
+  },
+  {
+   "data": "2025-10-08",
+   "periodo": "OOS"
+  },
+  {
+   "data": "2025-10-15",
+   "periodo": "OOS"
+  },
+  {
+   "data": "2025-10-30",
+   "periodo": "OOS"
+  },
+  {
+   "data": "2025-10-31",
+   "periodo": "OOS"
+  },
+  {
+   "data": "2025-11-13",
+   "periodo": "OOS"
+  },
+  {
+   "data": "2025-11-28",
+   "periodo": "OOS"
+  },
+  {
+   "data": "2025-12-02",
+   "periodo": "OOS"
+  },
+  {
+   "data": "2025-12-04",
+   "periodo": "OOS"
+  },
+  {
+   "data": "2025-12-18",
+   "periodo": "OOS"
+  },
+  {
+   "data": "2025-12-23",
+   "periodo": "OOS"
+  },
+  {
+   "data": "2025-12-29",
+   "periodo": "OOS"
+  },
+  {
+   "data": "2026-01-12",
+   "periodo": "OOS"
+  },
+  {
+   "data": "2026-01-13",
+   "periodo": "OOS"
+  },
+  {
+   "data": "2026-01-16",
+   "periodo": "OOS"
+  },
+  {
+   "data": "2026-01-20",
+   "periodo": "OOS"
+  },
+  {
+   "data": "2026-01-29",
+   "periodo": "OOS"
+  },
+  {
+   "data": "2026-02-18",
+   "periodo": "OOS"
+  },
+  {
+   "data": "2026-02-27",
+   "periodo": "OOS"
+  },
+  {
+   "data": "2026-03-04",
+   "periodo": "OOS"
+  },
+  {
+   "data": "2026-03-05",
+   "periodo": "OOS"
+  },
+  {
+   "data": "2026-03-12",
+   "periodo": "OOS"
+  },
+  {
+   "data": "2026-04-22",
+   "periodo": "OOS"
+  },
+  {
+   "data": "2026-05-13",
+   "periodo": "OOS"
+  },
+  {
+   "data": "2026-05-18",
+   "periodo": "OOS"
+  },
+  {
+   "data": "2026-05-26",
+   "periodo": "OOS"
+  },
+  {
+   "data": "2026-07-01",
+   "periodo": "OOS"
+  },
+  {
+   "data": "2026-07-20",
+   "periodo": "OOS"
+  },
+  {
+   "data": "2026-08-13",
+   "periodo": "OOS"
+  },
+  {
+   "data": "2026-09-09",
+   "periodo": "OOS"
+  },
+  {
+   "data": "2026-09-24",
+   "periodo": "OOS"
+  },
+  {
+   "data": "2026-09-29",
+   "periodo": "OOS"
+  },
+  {
+   "data": "2026-10-05",
+   "periodo": "OOS"
+  },
+  {
+   "data": "2022-01-21",
+   "periodo": "IS"
+  },
+  {
+   "data": "2022-04-07",
+   "periodo": "IS"
+  },
+  {
+   "data": "2022-04-18",
+   "periodo": "IS"
+  },
+  {
+   "data": "2022-05-24",
+   "periodo": "IS"
+  },
+  {
+   "data": "2022-06-07",
+   "periodo": "IS"
+  },
+  {
+   "data": "2022-08-12",
+   "periodo": "IS"
+  },
+  {
+   "data": "2022-09-05",
+   "periodo": "IS"
+  },
+  {
+   "data": "2022-11-04",
+   "periodo": "IS"
+  },
+  {
+   "data": "2023-05-22",
+   "periodo": "IS"
+  },
+  {
+   "data": "2023-09-29",
+   "periodo": "IS"
+  },
+  {
+   "data": "2024-01-12",
+   "periodo": "IS"
+  },
+  {
+   "data": "2024-05-29",
+   "periodo": "IS"
+  },
+  {
+   "data": "2024-12-20",
+   "periodo": "IS"
+  },
+  {
+   "data": "2025-03-07",
+   "periodo": "IS"
+  },
+  {
+   "data": "2025-05-22",
+   "periodo": "IS"
+  },
+  {
+   "data": "2025-06-16",
+   "periodo": "IS"
+  },
+  {
+   "data": "2025-07-21",
+   "periodo": "IS"
+  }
+ ]
+}
