@@ -49,6 +49,29 @@ Este arquivo não é um formulário para preencher; é um lembrete do que vale o
 - **Propor o teste.** Ao terminar, diga como transformaria o que viu numa regra mensurável e como testaria sem viés (em dias que não foram usados para ter a ideia).
 - **Melhorar este arquivo.** Se uma pergunta foi inútil, ambígua ou faltou alguma, proponha a mudança.
 
+## Perguntas que já provaram valor: a regra da escada
+
+As regras da escada WIN M15 (v4.1) são, no fundo, cinco perguntas cuja resposta separa os sinais que ganham dos que perdem. Elas são o modelo do que uma boa pergunta precisa ter: dá para responder com sim ou não usando só velas fechadas, e a resposta muda o resultado nos dois períodos, o de escolha e o de fora.
+
+Medido em todos os sinais da escada (fundo acima do anterior, ou topo abaixo), cada um operado sozinho; pontos por operação com 2 contratos e custo incluído (2026-10-09):
+
+| pergunta | 2022–25: sim × não | out/25–out/26: sim × não |
+|---|---|---|
+| O H1 fechado está em tendência a favor (MME 9/21/34)? | +44 × −32 | +155 × −106 |
+| O preço está do lado a favor da abertura do dia? | +22 × −34 | +65 × −60 |
+| A MMS17 está acima da MMS34 a favor? | +26 × −22 | +63 × −31 |
+| A MMS72 do open está inclinada a favor? | +52 × −51 | +144 × −112 |
+| O estocástico 14 está abaixo de 70 a favor, ou o H4 está neutro? | +30 × −46 | +76 × −89 |
+| **As cinco respostas são sim?** | **+140 × −30** | **+396 × −71** |
+
+O que essas perguntas ensinam:
+
+- **Nenhuma sozinha basta;** cada uma separa pouco. Juntas, transformam um sinal que é quase cara ou coroa (+8 pts por operação) em +140.
+- **Todas olham o contexto, não a vela:** a tendência do tempo maior, o lado do dia, a direção das médias, o quanto o preço já esticou. As perguntas sobre a vela do sinal em si (padrões de vela, figuras, Fibonacci, médias curtas) não separaram nada.
+- **Uma pergunta nova só vale se separar os sinais que JÁ passaram nas cinco.** Separar o conjunto inteiro é fácil, porque quase tudo que mede tendência repete o que essas cinco já dizem.
+
+**Como medir o valor de uma pergunta nova:** escreva a resposta como sim/não calculável no momento do sinal; meça o resultado médio com sim e com não nos sinais da estratégia; faça isso no período de escolha e depois, sem mudar nada, num período que não foi usado; compare com o acaso (sortear a mesma quantidade de sinais). Se a separação não aparece fora, a pergunta não decide nada, por mais que pareça fazer sentido.
+
 ---
 
 ## 0. Antes de aceitar qualquer conclusão: em que condições ela foi tirada?
