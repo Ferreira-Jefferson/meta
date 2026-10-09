@@ -3835,6 +3835,28 @@ pergunta nem se coloca.
 > real, e não uma exigência mais dura que o próprio livro.
 > **Pergunte à plataforma nova:** pergunta 146 (corrigida). (4.20, 4.22, 6.30, 6.38)
 
+### 4.35 "Cancela se tocou o stop antes de encher" parecia conservador e era viés otimista: na compra o preço passa pelo limite ANTES do stop — a ordem enche e SAI NO STOP, e o backtest contava um cancelamento
+
+Robô escada WIN M15 v4.2 (pesquisa, sem dinheiro real), 2026-10-09. O backtest em Python simulava a entrada como ordem limitada no `close` da barra de confirmação e **cancelava** a ordem se, numa barra, o preço tocasse o STOP "antes" de encher. Na aparência é a escolha prudente. Na geometria não é: numa compra o stop fica ABAIXO do limite, então o preço só chega ao stop passando pelo limite. A ordem enche e em seguida é stopada — **é uma perda, não um cancelamento.** A ambiguidade intrabarra foi resolvida a favor da estratégia, e o relatório nunca mostrou o custo.
+
+**Como apareceu.** O EA equivalente no Strategy Tester do MT5 (OOS out/2025–out/2026, M1 OHLC) fez **134 operações contra 116** do Python. Das 21 operações extras, quase todas foram stopadas em 1 a 10 minutos e somaram **−R$1.474**. Dos sinais do Python, **15** caíam exatamente nesse caso.
+
+| janela (pts, 2 contratos) | antes | depois da correção | variação |
+|---|---|---|---|
+| IS | +83.994 | +63.664 | **−24%** |
+| OOS | +62.554 | +53.408 | **−15%** |
+| período virgem | +2.817 | +1.957 | −31% |
+
+Depois da correção, Python e Testador **casam em 128 de 131 operações**; OOS em R$10.682 no Python contra R$10.998 no MT5, com o mesmo custo. Efeito colateral de método: **a ordem relativa entre versões mudou** — a vantagem de uma simplificação (tirar um filtro) encolheu e o DD dela piorou. Uma comparação de versões feita com o modelo antigo estava medindo quem se beneficiava mais do viés.
+
+> **A regra (portável).** Numa barra OHLC, quando dois eventos podem ter ocorrido na mesma barra (preencher e ser stopado; bater stop e alvo), **resolva pela GEOMETRIA dos preços, não por uma ordem fixa de checagem.** Se um nível só é alcançável passando pelo outro, os dois aconteceram. "Cancela se tocou o stop" num modelo em que o stop está além do limite é viés otimista, não conservadorismo. E todo backtest de barra deve ser **aferido contra um replay de ticks (Testador/EA) operação por operação**, não só pelo total — o total de 116 contra 134 já denunciava, o casamento 128/131 é que fecha.
+>
+> **Pergunte à plataforma nova:** pergunta 147. (4.34, 6.56, 6.54)
+
+Cruza com **6.56** (a mesma família: o que acontece DENTRO da barra do fill; lá o motor ignorava o stop na barra do fill, aqui o cancelava) e **4.21/4.22** (aferir contra extrato real é o que separa previsão de hipótese).
+
+---
+
 ---
 
 ## Parte 5 — Dados, relógio e instrumento
@@ -9686,6 +9708,14 @@ dinheiro ou meses.
      preenchidas em que fração das vezes neste instrumento? E qual é o deslize
      médio, em ticks, das saídas por stop e do zeramento a mercado? (4.34,
      4.22)
+147. Na plataforma nova, o backtest de barras resolve a ordem intrabarra entre
+     entrada, stop e alvo como — por geometria dos preços ou por uma ordem fixa
+     de checagem? Existe um replay por tick (Testador/EA) para aferir operação
+     por operação, não só o total? Aqui o Python cancelava a entrada quando o
+     preço tocava o stop antes de encher, embora na compra o preço passe pelo
+     limite antes do stop: o Testador fez 134 operações contra 116, as 21 extras
+     somaram −R$1.474, e a correção cortou IS −24% e OOS −15% (casamento
+     128/131). (4.35)
 
 ---
 
