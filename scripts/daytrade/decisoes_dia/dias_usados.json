@@ -227,5 +227,111 @@
     "ef": 0.057
    }
   ]
+ },
+ "ciclo3": {
+  "seed": 20261016,
+  "sorteio": "aleatorio simples do IS 2022-01-01..2025-09-30 (>=300 barras), fora dos 50 usados",
+  "dias": [
+   {
+    "dia": "2022-04-13",
+    "tipo": "ruim",
+    "ef": 0.024
+   },
+   {
+    "dia": "2022-05-17",
+    "tipo": "ruim",
+    "ef": 0.033
+   },
+   {
+    "dia": "2022-08-18",
+    "tipo": "ruim",
+    "ef": 0.032
+   },
+   {
+    "dia": "2022-09-21",
+    "tipo": "ruim",
+    "ef": 0.057
+   },
+   {
+    "dia": "2022-12-12",
+    "tipo": "intermediario",
+    "ef": 0.173
+   },
+   {
+    "dia": "2023-03-23",
+    "tipo": "intermediario",
+    "ef": 0.221
+   },
+   {
+    "dia": "2023-03-31",
+    "tipo": "intermediario",
+    "ef": 0.182
+   },
+   {
+    "dia": "2023-07-05",
+    "tipo": "ruim",
+    "ef": 0.079
+   },
+   {
+    "dia": "2023-10-30",
+    "tipo": "intermediario",
+    "ef": 0.157
+   },
+   {
+    "dia": "2024-01-18",
+    "tipo": "intermediario",
+    "ef": 0.171
+   },
+   {
+    "dia": "2024-01-22",
+    "tipo": "ruim",
+    "ef": 0.117
+   },
+   {
+    "dia": "2024-02-01",
+    "tipo": "ruim",
+    "ef": 0.031
+   },
+   {
+    "dia": "2024-04-26",
+    "tipo": "ruim",
+    "ef": 0.137
+   },
+   {
+    "dia": "2024-07-30",
+    "tipo": "ruim",
+    "ef": 0.108
+   },
+   {
+    "dia": "2024-08-22",
+    "tipo": "intermediario",
+    "ef": 0.161
+   },
+   {
+    "dia": "2024-09-05",
+    "tipo": "ruim",
+    "ef": 0.044
+   },
+   {
+    "dia": "2024-10-25",
+    "tipo": "ruim",
+    "ef": 0.071
+   },
+   {
+    "dia": "2025-02-07",
+    "tipo": "ruim",
+    "ef": 0.147
+   },
+   {
+    "dia": "2025-06-20",
+    "tipo": "intermediario",
+    "ef": 0.177
+   },
+   {
+    "dia": "2025-07-11",
+    "tipo": "ruim",
+    "ef": 0.061
+   }
+  ]
  }
 }
