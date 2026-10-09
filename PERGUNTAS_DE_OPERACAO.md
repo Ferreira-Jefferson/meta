@@ -25,6 +25,30 @@ Regras práticas, tiradas das primeiras autópsias de dias ruins feitas por IA (
 - **Material mínimo de uma autópsia:** operações com hora exata (M1) de entrada e saída e trajetória do stop; todos os sinais do dia com cada filtro; M15 dos dias anteriores com indicadores; M1 do dia com leilões; diário de 40 dias; H1 e H4; volume médio por horário dos 20 dias anteriores; calendário de eventos; o dólar no mesmo período; e uma tabela de referência das operações boas.
 
 
+## Onde procurar: olhe para trás em todas as escalas
+
+Uma decisão (ou uma autópsia) não olha só a vela do sinal. Antes de concluir, percorra o passado em camadas, da mais próxima à mais distante, e anote o que encontrar em cada uma. A lista é um ponto de partida, não um limite.
+
+- **As velas imediatamente antes do sinal:** tamanho, corpo e sombras, velocidade, volume, se aceleraram ou perderam força, se houve uma vela fora do normal.
+- **O próprio sinal:** como ele se formou, quanto tempo levou, o que os filtros e indicadores diziam naquele instante, se algum estava no limite.
+- **O dia até ali:** abertura e leilão, gap, mini gaps (saltos entre o fechamento de uma vela e a abertura da seguinte), amplitude já feita, topos e fundos do dia, onde o preço está dentro da faixa do dia, que tipo de dia está se formando.
+- **Os dias anteriores:** como fecharam (perto da máxima, da mínima, do meio), sequência de dias de alta e baixa, máxima e mínima de ontem, se hoje está dentro ou fora da faixa de ontem.
+- **A semana e o mês:** onde o preço está em relação à abertura da semana e do mês, se a semana já andou muito, em que ponto do calendário estamos (vencimento, fim de mês, véspera de feriado).
+- **Os tempos gráficos maiores:** tendência e estrutura no H1, H4 e diário, e se concordam com o sinal.
+- **Outros mercados:** dólar, índice americano, as ações de maior peso, o que fizeram até a hora do sinal.
+- **O histórico da própria estratégia:** como foram as últimas operações, em que condições ela costuma ganhar e perder.
+
+## Raciocine por conta própria
+
+Este arquivo não é um formulário para preencher; é um lembrete do que vale olhar. Quem estiver respondendo deve:
+
+- **Levantar hipóteses próprias.** Se notar algo que nenhuma pergunta cobre, anote e diga por que pode importar. Os melhores achados costumam vir do que ninguém pensou em perguntar.
+- **Desconfiar da primeira explicação.** Para cada padrão encontrado, procure ao menos uma explicação alternativa (horário, volume, tendência, acaso) e diga qual dados separariam as duas.
+- **Pensar no oposto.** Se algo aparece nos dias ruins, pergunte se aparece também nos bons; se aparece nos bons, se aparece também nos ruins. Só o que DIFERE entre eles pode virar sinal.
+- **Dizer o grau de certeza.** Separe "vi uma vez", "vi em vários dias" e "testado em todas as operações". Um dia só não prova nada, mas pode sugerir o que testar.
+- **Propor o teste.** Ao terminar, diga como transformaria o que viu numa regra mensurável e como testaria sem viés (em dias que não foram usados para ter a ideia).
+- **Melhorar este arquivo.** Se uma pergunta foi inútil, ambígua ou faltou alguma, proponha a mudança.
+
 ---
 
 ## 0. Antes de aceitar qualquer conclusão: em que condições ela foi tirada?
