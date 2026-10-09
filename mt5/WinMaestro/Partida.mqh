@@ -223,7 +223,7 @@ void Mae_CarregaMemoria(void)
    bool valida = ok != 2;
    string porque = ok == 2 ? "estado.txt e estado.bak ausentes ou corrompidos" : "";
    string ver = Mem_Get("versao", "");
-   if(valida && ver != WM_VERSAO && ver != WM_VERSAO_MEM_COMPAT && ver != WM_VERSAO_MEM_COMPAT2) { valida = false; porque = "memoria de outra versao (" + Mem_Get("versao", "?") + ")"; }
+   if(valida && ver != WM_VERSAO && ver != WM_VERSAO_MEM_COMPAT3 && ver != WM_VERSAO_MEM_COMPAT && ver != WM_VERSAO_MEM_COMPAT2) { valida = false; porque = "memoria de outra versao (" + Mem_Get("versao", "?") + ")"; }
    if(valida && (Mem_GetI("conta", -1) != mzCorr.ContaI(ACCOUNT_LOGIN) || Mem_Get("servidor", "") != mzCorr.ContaS(ACCOUNT_SERVER) || Mem_Get("simbolo", "") != _Symbol))
       { valida = false; porque = "memoria de outra conta, servidor ou simbolo"; }
    // copia para os modulos (Car_*)
@@ -242,11 +242,13 @@ void Mae_CarregaMemoria(void)
    mzMemDia = (datetime)Mem_GetI("dia", 0);
    mzCarMesmoDia = mzMemDia == Mae_Dia(mzCorr.Agora());
    mzProxLinha = Mem_GetI("prox_linha", 1);
+   bool memoria_5_robos = ver != WM_VERSAO;          // gravada antes do robo ES (R_ES = 5, MAESTRO = 6)
    for(int i = 0; i < n; i++)
    {
       if(StringFind(mzMemK[i], "L.") != 0) continue;
       SLinha l;
       if(!Mae_LinhaDeTexto(mzMemV[i], l)) continue;
+      if(memoria_5_robos && l.robo == R_MAE_ATE_203) l.robo = R_MAE;   // 2.03 e anteriores: o MAESTRO era o dono 5
       int k = ArraySize(mzL);
       ArrayResize(mzL, k + 1);
       mzL[k] = l;
@@ -260,6 +262,7 @@ void Mae_CarregaMemoria(void)
       mzEp[r] = (int)Mem_GetI(p + "ep", 0); mzEpAberto[r] = Mem_GetB(p + "epAb", false);
    }
    for(int d = 0; d <= NROBOS; d++) mzSeq[d] = (int)Mem_GetI(StringFormat("seq%d", d), 0);
+   if(memoria_5_robos) { mzSeq[R_MAE] = (int)Mem_GetI(StringFormat("seq%d", R_MAE_ATE_203), 0); mzSeq[R_ES] = 0; }
    mzSeqDia = (datetime)Mem_GetI("seqDia", 0);
    ArrayResize(mzConsR, 0); ArrayResize(mzConsId, 0);
    string cs[];

@@ -245,7 +245,7 @@ void Est_Fichas(void)
          if(absorveu && !Est_NaLista(mzAbsVistas, mzDeal[i].ticket))
          {
             Est_PoeLista(mzAbsVistas, mzDeal[i].ticket, 500);
-            Log("ALERTA", "MAESTRO", "ABSORVIDA", StringFormat("deal externo #%I64u (%+d @%.0f, magic %I64d) reduziu a liquida abaixo da soma das fichas: zeragem manual absorvida (ordem GB, CM, DM, RE, C1)",
+            Log("ALERTA", "MAESTRO", "ABSORVIDA", StringFormat("deal externo #%I64u (%+d @%.0f, magic %I64d) reduziu a liquida abaixo da soma das fichas: zeragem manual absorvida (ordem GB, CM, DM, RE, C1, ES)",
                 mzDeal[i].ticket, v, mzDeal[i].preco, mzDeal[i].magic));
             if(!Est_Reconhecido(mzDeal[i].ticket)) Mae_Bloqueia(StringFormat("zeragem manual (deal #%I64u)", mzDeal[i].ticket));
          }

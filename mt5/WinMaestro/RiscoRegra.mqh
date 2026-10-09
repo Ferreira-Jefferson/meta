@@ -38,7 +38,7 @@ double Risco_Aplica(int &f, double &pm, const int v, const double preco, const d
 //  1. compensa a externa existente de sinal oposto;
 //  2. o que sobra e aumenta |liquida| (ou liquida 0) -> externa;
 //  3. o que sobra e reduz: absorcao nas fichas do lado reduzido, prior primeiro (B2-4, so' o virtual), depois a ordem fixa
-//     do array (GB, CM, DM, RE, C1); o que nenhuma ficha absorve -> externa.
+//     do array (GB, CM, DM, RE, C1, ES); o que nenhuma ficha absorve -> externa.
 // Absorcao real: a parte absorvida e' uma saida da ficha ao preco do deal externo e realiza (rz[r] += , Risco_Aplica). Virtual
 // (Delta sem deal): sem preco, so' reduz a ficha, nao realiza nada.
 bool Risco_Externo(int &f[], double &pm[], int &ext, int v, const bool virtual_, const int prior, const double preco, const double vp,

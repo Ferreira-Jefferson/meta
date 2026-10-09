@@ -2,7 +2,7 @@
 //| WinMaestro/Decide.mqh                                            |
 //| Passo 4 do ciclo (sec. 3): motor de corte (sec. 5) e, antes de   |
 //| C + PRAZO_CORTE, a tabela (sec. 4.2) de cada robo, na ordem fixa |
-//| GB, CM, DM, RE, C1, com no maximo UMA acao por robo por ciclo.   |
+//| GB, CM, DM, RE, C1, ES, com no maximo UMA acao por robo por ciclo. |
 //| Cada linha da tabela e' um bloco marcado com o identificador do  |
 //| desenho (P1, P2, P3, X1, X2, X3, L1, L2, L3, L4, A1, A2, E1, Z); |
 //| a intencao efetiva idem (I1..I6); o nivel da S segue a cadeia da |

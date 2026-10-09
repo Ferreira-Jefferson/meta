@@ -1,10 +1,12 @@
 //+------------------------------------------------------------------+
 //| WinMaestro.mq5                                                   |
-//| EA unico para o MINI INDICE (WIN), conta NETTING: roda os 5 robos|
-//| (GB, CM, DM, RE, C1) ao mesmo tempo, cada um com a sua FICHA     |
+//| EA unico para o MINI INDICE (WIN), conta NETTING: roda os 6 robos|
+//| (GB, CM, DM, RE, C1, ES) ao mesmo tempo, cada um com a sua FICHA     |
 //| (posicao virtual = soma dos deals com o magic dele) e mandando as|
 //| ordens dele com o magic dele.                                    |
 //|                                                                  |
+//| v2.04 (2026-10-09): robo ES (EscadaWinM15 v4.2, escada M15),      |
+//| logica incluida de mt5/EscadaWinM15/; memoria da 2.03 convertida.|
 //| v2.03 (2026-10-08): parada diaria (Risco.mqh) sobre o capital    |
 //| fixo Risco_Capital: perda do dia -> sem entradas ate' amanha.    |
 //| v2.02 (2026-10-07): todos os achados da revisao de codigo 2      |
@@ -25,10 +27,11 @@
 //|   GB WinGapBarra1 M5 80080601 | CM WinCincoMedias H2 80080501    |
 //|   DM WinDeslocamentoMatinal M1 80080101 | RE WinRetanguloEma34   |
 //|   M15 20261005 | C1 Win_c1 H1 80080002                           |
+//|   ES EscadaWinM15 M15 41041015                                   |
 //+------------------------------------------------------------------+
 #property copyright "WinMaestro"
-#property version   "2.03"
-#property description "WinMaestro v2.03: os 5 robos do WIN ao mesmo tempo, cada um com a sua ficha e o seu magic (conta NETTING), com parada diaria por perda do dia"
+#property version   "2.04"
+#property description "WinMaestro v2.04: os 6 robos do WIN ao mesmo tempo, cada um com a sua ficha e o seu magic (conta NETTING), com parada diaria por perda do dia"
 #property strict
 
 #include "WinMaestro\Inputs.mqh"
@@ -38,6 +41,7 @@
 #include "WinMaestro\WinDeslocamentoMatinal.mqh"
 #include "WinMaestro\WinRetanguloEma34.mqh"
 #include "WinMaestro\Win_c1.mqh"
+#include "WinMaestro\EscadaWinM15.mqh"
 
 //+------------------------------------------------------------------+
 //| Ganchos do nucleo -> modulos (desenho sec. 7)                    |
@@ -51,6 +55,7 @@ int Robo_Init(const int r, const VistaRobo &v)
       case R_DM: return WDM::Init(v);
       case R_RE: return WRE::Init(v);
       case R_C1: return WC1::Init(v);
+      case R_ES: return WES::Init(v);
    }
    return INIT_FAILED;
 }
@@ -64,6 +69,7 @@ void Robo_Tick(const int r, const VistaRobo &v, Intencao &i)
       case R_DM: WDM::Tick(v, i);  break;
       case R_RE: WRE::Tick(v, i);  break;
       case R_C1: WC1::Tick(v, i);  break;
+      case R_ES: WES::Tick(v, i);  break;
    }
 }
 
@@ -76,6 +82,7 @@ void Robo_Evento(const int r, const SEvento &e, const VistaRobo &v, Intencao &i)
       case R_DM: WDM::Evento(e, v, i);  break;
       case R_RE: WRE::Evento(e, v, i);  break;
       case R_C1: WC1::Evento(e, v, i);  break;
+      case R_ES: WES::Evento(e, v, i);  break;
    }
 }
 
@@ -88,6 +95,7 @@ double Robo_StopRegra(const int r, const int lado)
       case R_DM: return WDM::StopRegra(lado);
       case R_RE: return WRE::StopRegra(lado);
       case R_C1: return WC1::StopRegra(lado);
+      case R_ES: return WES::StopRegra(lado);
    }
    return 0.0;
 }
@@ -101,6 +109,7 @@ int Robo_MinutoZerar(const int r, const datetime dia)
       case R_DM: return WDM::MinutoZerarRobo(dia);
       case R_RE: return WRE::MinutoZerarRobo(dia);
       case R_C1: return WC1::MinutoZerarRobo(dia);
+      case R_ES: return WES::MinutoZerarRobo(dia);
    }
    return 0;
 }
@@ -116,6 +125,7 @@ void Robo_Exporta(const int r)
       case R_DM: WDM::Exporta();  break;
       case R_RE: WRE::Exporta();  break;
       case R_C1: WC1::Exporta();  break;
+      case R_ES: WES::Exporta();  break;
    }
 }
 
@@ -129,6 +139,7 @@ void Robo_Deinit(const int r, const int reason)
       case R_DM: WDM::Deinit(reason);  break;
       case R_RE: WRE::Deinit(reason);  break;
       case R_C1: WC1::Deinit(reason);  break;
+      case R_ES: WES::Deinit(reason);  break;
    }
 }
 
@@ -145,13 +156,13 @@ int OnInit()
 {
    // P17: tudo reinicializado explicitamente (variaveis globais podem sobreviver a PARAMETERS/CHARTCHANGE)
    Mae_Reseta();
-   WGB1::Reseta(); WCM::Reseta(); WDM::Reseta(); WRE::Reseta(); WC1::Reseta();
-   WGB1::Configura(); WCM::Configura(); WDM::Configura(); WRE::Configura(); WC1::Configura();
+   WGB1::Reseta(); WCM::Reseta(); WDM::Reseta(); WRE::Reseta(); WC1::Reseta(); WES::Reseta();
+   WGB1::Configura(); WCM::Configura(); WDM::Configura(); WRE::Configura(); WC1::Configura(); WES::Configura();
 
    if(mzCorr != NULL) delete mzCorr;
    mzCorr = new CCorretoraReal();
 
-   mzAtivo[R_GB] = Ativo_GB; mzAtivo[R_CM] = Ativo_CM; mzAtivo[R_DM] = Ativo_DM; mzAtivo[R_RE] = Ativo_RE; mzAtivo[R_C1] = Ativo_C1;
+   mzAtivo[R_GB] = Ativo_GB; mzAtivo[R_CM] = Ativo_CM; mzAtivo[R_DM] = Ativo_DM; mzAtivo[R_RE] = Ativo_RE; mzAtivo[R_C1] = Ativo_C1; mzAtivo[R_ES] = Ativo_ES;
    mzSemTrava = mzCorr.Testador();          // P16: no Testador a trava e' pulada
    mzTela = true;
    mzLogImprime = true; mzLogAlert = true;
@@ -170,8 +181,8 @@ int OnInit()
    Log_Pasta(pasta);
    mzMemPasta = pasta;
 
-   Log("INFO", "MAESTRO", "INICIO", StringFormat("WinMaestro v%s em %s; ligados: GB %s CM %s DM %s RE %s C1 %s; pasta %s", WM_VERSAO,
-       _Symbol, Ativo_GB ? "sim" : "nao", Ativo_CM ? "sim" : "nao", Ativo_DM ? "sim" : "nao", Ativo_RE ? "sim" : "nao", Ativo_C1 ? "sim" : "nao", pasta));
+   Log("INFO", "MAESTRO", "INICIO", StringFormat("WinMaestro v%s em %s; ligados: GB %s CM %s DM %s RE %s C1 %s ES %s; pasta %s", WM_VERSAO,
+       _Symbol, Ativo_GB ? "sim" : "nao", Ativo_CM ? "sim" : "nao", Ativo_DM ? "sim" : "nao", Ativo_RE ? "sim" : "nao", Ativo_C1 ? "sim" : "nao", Ativo_ES ? "sim" : "nao", pasta));
    double tsz = mzCorr.SimboloD(SYMBOL_TRADE_TICK_SIZE), tvl = mzCorr.SimboloD(SYMBOL_TRADE_TICK_VALUE);
    string vp = StringFormat("valor do ponto R$%.2f por contrato (TICK_VALUE %.2f / TICK_SIZE %.2f)", tsz > 0.0 ? tvl / tsz : 0.0, tvl, tsz);
    Log("INFO", "MAESTRO", "RISCO", Risco_PerdaDiaPct > 0.0 && Risco_Capital > 0.0 ?

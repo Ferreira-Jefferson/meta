@@ -111,4 +111,7 @@ input int C1_BreakEvenMinutos = 15; // Break-even a mercado: minutos apos a aber
 input double C1_BreakEvenColchaoPts = 7.0; // Break-even: fecha a mercado se o resultado flutuante for <= N pontos a favor (7 = custo 5 + slippage 2)
 input double C1_NaoOperarGapATR = 1.0; // Z8: nao abre posicao nova no dia em que |abertura - fechamento anterior| >= N x ATR14 D1 (0 = desliga)
 
+input group "EscadaWinM15"
+input bool Ativo_ES = true;   // EscadaWinM15 (escada de topos e fundos M15, robo ES) ligado (desligado: nao abre nada novo)
+
 #endif

@@ -14,20 +14,23 @@
 
 #include "Corretora.mqh"
 
-#define WM_VERSAO "2.03"
+#define WM_VERSAO "2.04"
+#define WM_VERSAO_MEM_COMPAT3 "2.03"  // memoria de 5 robos (MAESTRO era o dono 5): lida com a troca 5 -> R_MAE (Partida)
 #define WM_VERSAO_MEM_COMPAT  "2.02"  // memoria gravada pela 2.02 e pela 2.01: mesmo formato da 2.03, lida (o bloqueio com botao
 #define WM_VERSAO_MEM_COMPAT2 "2.01"  // e os episodios atravessam a troca; a parada diaria da 2.03 nao grava nada)
 
-//--- robos (ordem fixa GB, CM, DM, RE, C1) e o MAESTRO (dono das ordens da conta, sec. 5)
-#define NROBOS 5
+//--- robos (ordem fixa GB, CM, DM, RE, C1, ES) e o MAESTRO (dono das ordens da conta, sec. 5)
+#define NROBOS 6
 #define R_GB  0
 #define R_CM  1
 #define R_DM  2
 #define R_RE  3
 #define R_C1  4
-#define R_MAE 5
-#define NDONOS 6
-#define MAGIC_MAESTRO 80089999     // escolha: magic do C_CONTA e dos K da conta (nao colide com os 5 robos)
+#define R_ES  5
+#define R_MAE 6
+#define NDONOS 7
+#define R_MAE_ATE_203 5             // indice do MAESTRO na memoria gravada pela 2.03 e anteriores
+#define MAGIC_MAESTRO 80089999     // escolha: magic do C_CONTA e dos K da conta (nao colide com os magics dos robos)
 
 //--- constantes do desenho (sec. 0 do desenho); tempos em ms quando terminam em _MS
 #define PROVA_MS            30000
@@ -220,8 +223,8 @@ struct SEst
 //+------------------------------------------------------------------+
 //| Estado global                                                    |
 //+------------------------------------------------------------------+
-string mzNome[NDONOS]  = {"GB", "CM", "DM", "RE", "C1", "MAESTRO"};
-long   mzMagic[NDONOS] = {80080601, 80080501, 80080101, 20261005, 80080002, MAGIC_MAESTRO};
+string mzNome[NDONOS]  = {"GB", "CM", "DM", "RE", "C1", "ES", "MAESTRO"};
+long   mzMagic[NDONOS] = {80080601, 80080501, 80080101, 20261005, 80080002, 41041015, MAGIC_MAESTRO};
 bool   mzAtivo[NROBOS];
 
 //--- snapshot (sec. 1.1), refeito no passo 1 de cada ciclo
