@@ -353,6 +353,8 @@ Memórias com os números: `escada_autopsia_*`, `banco_perguntas_pesos_refutado_
 - **`data/win_sem_leiloes/`** (14 MB): WIN$N M1 auditado, sem leilões, com IS, OOS e virgem. É a base de `scripts/daytrade/topos_fundos/dados.py`.
 - **`data/wdo-mt5/`** (47 MB): WDO@D M1 de 5 anos.
 
+**As duas crescem por PEDAÇOS, sem nunca regravar o arquivo grande** (2026-10-09). O git guarda toda versão de um arquivo. No WDO@D, cada rolagem mensal muda TODOS os preços (ajuste por diferença), então regravar somaria 47 MB ao histórico todo mês. Por isso o arquivo original fica congelado, e os pregões novos entram em arquivos mensais (`m1_WIN$N_AAAA-MM.parquet`, `WDO@D_M1_AAAA-MM.csv`). Cada rolagem vira uma linha em `data/wdo-mt5/ajustes.csv`, e `bases.csv` diz quando cada arquivo foi coletado. **Leia sempre por `market_data_intraday.bases_versionadas.le_win()` / `le_wdo()`**: elas juntam os pedaços e aplicam os ajustes. Abrir o arquivo congelado direto devolve a série truncada e, no WDO, no ajuste velho. Para atualizar, rode `scripts/daytrade/atualiza_bases_mt5.py` com o MT5 aberto: ele só acrescenta pregões completos, e no WIN usa as fases por tick, validadas contra a base original. Os PERIODOS de `topos_fundos/dados.py` têm fim fixo, então pregão novo não muda número congelado.
+
 O resto é regenerável da fonte, e o `.gitignore` explica cada caso.
 
 ## Testes rodam em paralelo — sempre
@@ -366,7 +368,7 @@ Mesmo espírito para **sweeps de parâmetro**: `ProcessPoolExecutor` com `submit
 
 ## Base histórica do WDO — 5 anos, M1, `WDO@D`
 
-`C:\Users\Jeffe\Documents\study\meta\data\wdo-mt5\WDO@D_M1_202109290900_202609291020.csv` — 2021-09-29 a 2026-09-29, M1, ~698 mil barras, TSV com cabeçalho `<DATE> <TIME> <OPEN> <HIGH> <LOW> <CLOSE> <TICKVOL> <VOL> <SPREAD>` (exportado do MT5). Use esta base para qualquer backtest de robô WDO que precise de mais de 2 meses de histórico — ela substitui puxar contrato único fresco do MT5 (que tem o problema de liquidez/rolagem já documentado abaixo) ou a série `data/raw_intraday/WDO_A_.parquet` (que está em UTC, não BRT, e teve saltos de dado achados perto do meio-dia em alguns pregões).
+`data/wdo-mt5/` (versionado; leia com `le_wdo()`, ver "Bases de dados versionadas") — desde 2021-09-29, M1, ~700 mil barras, TSV com cabeçalho `<DATE> <TIME> <OPEN> <HIGH> <LOW> <CLOSE> <TICKVOL> <VOL> <SPREAD>` (exportado do MT5). Use esta base para qualquer backtest de robô WDO que precise de mais de 2 meses de histórico — ela substitui puxar contrato único fresco do MT5 (que tem o problema de liquidez/rolagem já documentado abaixo) ou a série `data/raw_intraday/WDO_A_.parquet` (que está em UTC, não BRT, e teve saltos de dado achados perto do meio-dia em alguns pregões).
 
 **Por que `@D` (ajuste por diferença) e não `@` (sem ajuste) ou `@N` (proporcional) — decisão do dono, 2026-09-29:** o ajuste por diferença preserva a distância em PONTOS entre os preços através das trocas de contrato, que é exatamente o que importa pro stop e pro trailing de um robô medido em pontos (como o `wdo_ribbon_mm34`). A série sem ajuste (`WDO@`) tem degraus artificiais no dia da virada de contrato — um salto de preço que não é movimento de mercado nenhum, e que já causou saltos de 14-34 pontos irreais no meio de um pregão numa investigação anterior (`WDO_A_.parquet`, mesma raiz do problema). A série com ajuste proporcional (`WDO@N`) mantém a distância percentual, não a distância em pontos — distorce levemente o tamanho de cada movimento, o que atrapalha qualquer lógica calibrada em pontos absolutos (stop, alvo, filtros de range).
 

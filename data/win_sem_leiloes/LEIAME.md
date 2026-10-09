@@ -21,3 +21,6 @@ M5 reamostrado DEPOIS do ajuste, ancorado em 09:00.
 - Antes de 2026-04-06 (e 2025-10 a 2026-04-03) nao ha ticks: `PROXY=1` na barra do call. Close do call = close da barra anterior; volume do call e do leilao = excesso sobre
   a mediana das 5 barras vizinhas (`*_volume_estimado=True`); o OPEN da barra do leilao NAO e corrigido; high/low so sao encolhidos quando o preco removido era a propria maxima/minima (`HL_APROX=1`, limite inferior do intervalo real).
 - 2026-04-10: a maxima de 198580 do M1 do dia e o preco do call (18:24), nao divergencia de ticks; na base sem leilao ela deixa de existir.
+
+## Pregoes depois de 2026-10-05 (desde 2026-10-09)
+`m1_WIN$N.parquet` esta CONGELADO (ate 2026-10-05). Os pregoes seguintes entram em `m1_WIN$N_AAAA-MM.parquet`, um por mes, gerados por `scripts/daytrade/atualiza_bases_mt5.py` com o mesmo tratamento (fases por tick). Leia com `market_data_intraday.bases_versionadas.le_win("m1_WIN$N.parquet")`, que junta os pedacos.

@@ -2,12 +2,15 @@
 
 Cada período é montado sozinho (médias começam no início dele), como em toda a pesquisa.
 """
+import sys
 from datetime import date, timedelta
 from pathlib import Path
 import numpy as np
 import pandas as pd
 
 RAIZ = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(RAIZ / "src"))
+from market_data_intraday.bases_versionadas import le_wdo, le_win  # noqa: E402  base congelada + pedaços mensais
 PERIODOS = {  # nome: (arquivo M1 auditado, início, fim exclusivo)
     "IS": ("data/win_sem_leiloes/m1_WIN$N_2022_2025.parquet", "2022-01-01", "2025-10-01"),
     "OOS": ("data/win_sem_leiloes/m1_WIN$N.parquet", "2025-10-01", "2026-10-06"),
@@ -38,7 +41,7 @@ def atr(b):
 
 def m15(periodo):
     arq, ini, fim = PERIODOS[periodo]
-    m1 = pd.read_parquet(RAIZ / arq)
+    m1 = le_win(RAIZ / arq)
     m1 = m1[(m1.index >= ini) & (m1.index < fim)]
     b = m1.resample("15min").agg(dict(open="first", high="max", low="min", close="last", real_volume="sum")).dropna()
     b["dia"] = b.index.normalize()

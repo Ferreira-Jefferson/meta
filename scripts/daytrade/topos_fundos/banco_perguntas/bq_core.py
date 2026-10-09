@@ -15,8 +15,7 @@ _WDO = None
 def wdo15():
     global _WDO
     if _WDO is None:
-        w = pd.read_csv(RAIZ / "data/wdo-mt5/WDO@D_M1_202109290900_202609291020.csv", sep="\t")
-        w.index = pd.to_datetime(w["<DATE>"] + " " + w["<TIME>"], format="%Y.%m.%d %H:%M:%S")
+        w = dados.le_wdo()  # base congelada + pedacos mensais, no ajuste de hoje
         _WDO = w.resample("15min").agg({"<OPEN>": "first", "<CLOSE>": "last"}).dropna()
         _WDO.columns = ["o", "c"]
     return _WDO

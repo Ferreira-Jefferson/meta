@@ -14,7 +14,7 @@ GAP_MIN_PTS, GAP_ATR_MAX, ANDOU_ATR_MIN, FAIXA_N, FAIXA_ATR_MAX = 5, 1.0, 0.5, 2
 
 def atr_diario(periodo):
     """ATR diario = media simples de 14 TR diarios ate D-1 (montado do M1; usa o arquivo inteiro p/ aquecer)."""
-    m1 = pd.read_parquet(dados.RAIZ / dados.PERIODOS[periodo][0])
+    m1 = dados.le_win(dados.RAIZ / dados.PERIODOS[periodo][0])
     d = m1.resample("1D").agg(dict(high="max", low="min", close="last")).dropna()
     pc = d.close.shift(1)
     tr = pd.concat([d.high - d.low, (d.high - pc).abs(), (d.low - pc).abs()], axis=1).max(axis=1)
