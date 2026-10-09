@@ -84,3 +84,8 @@ mt5/testes/resultados/
 # HTML gerado) -- regeneravel pelos scripts de scripts/swing_lab/semanal_mmes_video_*;
 # a pagina publicada e' a vista, o script e' a fonte.
 scripts/swing_lab/semanal_mmes_video/
+# Bases AUDITADAS que a pesquisa usa (WIN sem leiloes 14 MB; WDO@D M1 5 anos 47 MB):
+# versionadas para a pesquisa rodar em outra maquina sem regenerar (pedido do dono, 2026-10-09).
+!data/win_sem_leiloes/
+!data/win_sem_leiloes/*.parquet
+!data/wdo-mt5/

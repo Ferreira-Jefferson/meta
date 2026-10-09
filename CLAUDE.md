@@ -301,6 +301,60 @@ Na hora de portar a estratégia, o que viaja são essas cinco perguntas, não os
 
 **E a ordem de entrada precisa de prazo.** Sem `ttl_bars` ela espera até o fim do pregão: medido um fill **269,7 minutos** depois do rompimento (rompeu 14:08, encheu 18:37). Isso não é o trade que a estratégia pediu, é uma ordem esquecida no livro que pegou o preço passando — e os fills atrasados foram justamente os piores resultados. Atenção: `ttl_bars` conta BARRAS, e em base de tick (barra degenerada, 1 negócio por barra) isso **não é tempo** — a base mede mediana de 336 barras/minuto, com p25 190 e p75 586. Calibre e reporte o atraso REALIZADO em minutos, nunca o prazo nominal.
 
+## Como pesquisar uma ideia de estratégia — o método que funcionou (WIN, 2026-10-09)
+
+Destilado de um dia inteiro de pesquisa sobre a escada WIN M15: ~30 rodadas e centenas de hipóteses. O método mata ideia ruim em horas, e o que sobrevive a ele também sobreviveu ao Testador do MT5. A v4.1 bateu ano a ano, R$11.074 contra R$11.459 do Python. Siga a ordem.
+
+**1. Gerar hipóteses: autópsia alternada, 10 ruins → 10 bons → bons × ruins, escalando.**
+
+| passo | como | por que funciona |
+|---|---|---|
+| 10 dias **ruins** | Sorteie 1 por faixa do período de escolha, nunca escolha a dedo. Use 1 subagente por dia, com ficha padrão e as perguntas de `PERGUNTAS_DE_OPERACAO.md`, e cruze as fichas. | Subagentes separados leem cada dia sem contaminar um ao outro. O sorteio por faixa evita juntar só dias pitorescos. |
+| 10 dias **bons**, mesmo pacote | Mesma ficha, mesmas perguntas. | **Ruins sozinhos acham o que é COMUM, não o que é DIFERENTE.** "Tarde", "dia esgotado" e "volume baixo" apareceram em 8 de 10 ruins e igualmente nos bons. Sem o grupo de controle eles virariam regra falsa. |
+| cruzar **bons × ruins** | Só vira hipótese o que aparece num grupo e não no outro. | Transforma traço frequente em diferença, que é a única coisa que pode separar operações. |
+| escalar | Hipótese que sobreviveu → nova rodada de 10/10 com o pacote ampliado (dias anteriores, semana, gaps, H1/H4, dólar). | Cada rodada parte do que a anterior não explicou. |
+
+Cuidados que custaram rodadas:
+- **O pacote de cada dia é cortado na hora da decisão.** H1 e diário do próprio dia vazaram o futuro uma vez.
+- **Agentes convergindo NÃO é evidência.** Já aconteceu de 4 de 10 apontarem "compressão" e o teste mostrar o oposto.
+- **A autópsia GERA hipóteses, não aprova nada.** Até hoje nenhuma hipótese dela passou no passo 2. O valor dela é produzir perguntas boas e descartar rápido.
+
+**2. Testar: só depois de congelar a definição.**
+- **Escrever a régua antes de olhar o resultado.** Limiar, janela e lado ficam fixos. Escolher depois de ver é ajuste, não teste.
+- **Três períodos, cada um com um papel.**
+  - Escolha (IS, 2022–set/25): só ele pode ser usado para decidir qualquer coisa.
+  - Confirmação (OOS, out/25–out/26): mesmo sinal e p<0,10.
+  - Virgem (out–dez/21): nunca tocado. Serve de último aviso: num caso os pesos que valiam no IS **inverteram** ali (correlação −0,50).
+- **Nulo e múltiplos testes.**
+  - Compare com o acaso por embaralhamento **por dia**, porque velas do mesmo dia não são independentes.
+  - Aplique Benjamini-Hochberg q=0,10 sobre todos os testes da rodada.
+  - Mão menor sempre reduz a queda, então compare com sortear a mesma quantidade de trades em 1 contrato.
+- **Bloco 0 (`PERGUNTAS_DE_OPERACAO.md`): em que condições a conclusão foi tirada?** Controle por hora, lado, volatilidade e trimestre. Quase todo "achado" de hoje era o horário ≥15h disfarçado.
+- **Os cinco usos (dono).** Toda informação é testada como: entrada, aviso de não entrar, tamanho da mão, stop e alvo. "Piora bastante" também é informação.
+
+**3. Decidir: painel completo e critério do dono.**
+- **O painel completo:** total, pior queda, fator de recuperação, fator de lucro, acerto, pior mês, % meses positivos, Sharpe, nos três períodos.
+- **O critério:** só muda se o acerto subir bastante E recuperação e o resto melhorarem, com no máximo uma pequena queda de lucro. Sem melhora evidente, não muda.
+
+**Lições que valem para qualquer estratégia:**
+- **Achado do mercado em geral não se transfere para dentro de uma estratégia.**
+  - "RSI ≤ 30 continua caindo" é verdade no WIN M15, mas nunca acontece num sinal da escada.
+  - Rompimento da faixa da 1ª hora e máxima de 10 dias, bons no mercado, ficam piores dentro dela.
+  - Meça sempre no **resultado da própria operação**.
+- **Alvo simétrico curto não mede estratégia de cauda.** Na escada, os 10% melhores trades fazem 174% do lucro. Qualquer medida de "acerto em ±1 ATR" erra o que importa. Alvo limitado sobe o acerto e corta 40% do lucro.
+- **Pesos aprendidos sobre muitas perguntas não sobrevivem à troca de regime.** A correlação dos pesos entre períodos ficou entre 0,02 e −0,29. Contagem simples, com sinal fixado de antemão, é mais robusta que peso estimado.
+- **Regra de estratégia é resposta; pergunta é universal.** O arquivo de perguntas não carrega gabarito de estratégia. A resposta "não" é tão válida quanto "sim".
+
+Memórias com os números: `escada_autopsia_*`, `banco_perguntas_pesos_refutado_*`, `estrategia_perguntas_v1_*`, `feedback_todo_teste_vira_aviso_mao_stop_alvo`, `feedback_sem_melhora_evidente_nao_muda`.
+
+## Bases de dados versionadas
+
+`data/*` fica fora do git (dezenas de GB), com duas exceções versionadas para a pesquisa rodar em outra máquina:
+- **`data/win_sem_leiloes/`** (14 MB): WIN$N M1 auditado, sem leilões, com IS, OOS e virgem. É a base de `scripts/daytrade/topos_fundos/dados.py`.
+- **`data/wdo-mt5/`** (47 MB): WDO@D M1 de 5 anos.
+
+O resto é regenerável da fonte, e o `.gitignore` explica cada caso.
+
 ## Testes rodam em paralelo — sempre
 
 `pyproject.toml` fixa `-n auto --dist load` (pytest-xdist). Suite inteira mede 92s serial → 35s paralela nesta máquina, e o ciclo "mede → decide → mede de novo" é o trabalho: suite lenta é o gargalo do projeto. **Todo teste novo obedece duas condições, senão o paralelismo quebra em falha intermitente:**
