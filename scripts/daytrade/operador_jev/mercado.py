@@ -176,3 +176,20 @@ def montar_pacote(mk: Mercado, dia: DiaMkt, k: int, estado: dict, eventos_dia: l
     L.append("")
     L.append("Decida agora (responda so o JSON).")
     return "\n".join(L)
+
+
+PREAMBULO = ("Mini-indice Bovespa (WIN), pontos; 1 ponto = R$ 0,20 por contrato; tick = 5 pontos. "
+             "Abaixo, o estado do mercado na vela M15 que acabou de fechar (so velas fechadas; a data real e omitida). "
+             "ATR M15 = media de 14 amplitudes verdadeiras; ATR diario = media de 14 amplitudes diarias ate ontem.")
+
+
+def montar_estado(mk: Mercado, dia: DiaMkt, k: int, pos=None) -> str:
+    """Estado textual para o endpoint de decisoes: so mercado (sem posicao/ordens/resultado do dia) -> as respostas
+    nao dependem da trajetoria da simulacao. Com `pos`, acrescenta a linha POSICAO (chamada de gestao)."""
+    est = dict(pos=pos, pend=None, pts=0, brl=0, ntrades=0)
+    txt = montar_pacote(mk, dia, k, est, [], [])
+    cab = txt.split("\nPOSICAO:")[0]
+    if pos:
+        linha = [x for x in txt.split("\n") if x.startswith("POSICAO:")][0]
+        cab += "\n" + linha + f" | entrada na vela {_hm(dia.m15_t[pos['k_ent']])}"
+    return PREAMBULO + "\n" + cab

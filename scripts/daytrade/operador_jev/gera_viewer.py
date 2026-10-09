@@ -24,6 +24,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--sessoes", default=str(AQUI / "sessoes"))
     ap.add_argument("--saida", default=str(AQUI / "viewer.html"))
+    ap.add_argument("--max-dias", type=int, default=60, help="maximo de dias embutidos (amostra espacada entre os dias com operacao + alguns sem)")
     ap.add_argument("--com-pacotes", action="store_true", help="embute o texto do pacote de cada decisao (arquivo maior)")
     a = ap.parse_args()
     pasta = Path(a.sessoes)
@@ -36,12 +37,28 @@ def main():
         sessoes.append(s)
     if not sessoes:
         raise SystemExit(f"nenhuma sessao em {pasta}")
+    if len(sessoes) > a.max_dias:
+        com = [s for s in sessoes if s["trades"]]
+        sem = [s for s in sessoes if not s["trades"]]
+        pega = lambda L, n: [L[int(i * len(L) / n)] for i in range(n)] if n < len(L) else L
+        sessoes = sorted(pega(com, int(a.max_dias * 0.85)) + pega(sem, a.max_dias - int(a.max_dias * 0.85)), key=lambda s: s["data"])
+    perguntas = {}
+    try:
+        import sys
+        sys.path.insert(0, str(AQUI))
+        from perguntas_jev import MERCADO, GESTAO
+        perguntas = {q[0]: dict(ref=q[2], tx=q[3]) for q in MERCADO + GESTAO}
+    except Exception:
+        pass
+    for s in sessoes:
+        s.pop("estado_exemplo", None)
     resumo = None
     rf = pasta / "_resumo.json"
     if rf.exists():
         resumo = json.loads(rf.read_text(encoding="utf-8"))
         resumo.get("nulo_aleatorio", {}).pop("amostra", None)
-    dados = json.dumps(limpa(dict(sessoes=sessoes, resumo=resumo)), ensure_ascii=False, separators=(",", ":"), allow_nan=False, default=float)
+        resumo["modelos"] = resumo.get("modelos") or {}
+    dados = json.dumps(limpa(dict(sessoes=sessoes, resumo=resumo, perguntas=perguntas)), ensure_ascii=False, separators=(",", ":"), allow_nan=False, default=float)
     dados = dados.replace("</", "<\\/").replace("<!--", "<\\!--")
     html = (AQUI / "viewer_template.html").read_text(encoding="utf-8").replace("__DADOS__", dados)
     Path(a.saida).write_text(html, encoding="utf-8")

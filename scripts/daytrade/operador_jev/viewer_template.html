@@ -63,6 +63,14 @@ tr.dim td{opacity:.35}
 .kpi small{display:block;color:var(--mute);font-size:11px}
 .kpi span{font-size:16px;font-weight:600}
 .raz{white-space:pre-wrap}
+.bar{display:flex;height:9px;border-radius:5px;overflow:hidden;background:var(--line);min-width:90px}
+.bar i{display:block;height:100%}
+.qj{display:grid;grid-template-columns:minmax(0,1fr) 150px;gap:2px 10px;padding:4px 0;border-bottom:1px dashed var(--line);align-items:center}
+.qj:last-child{border-bottom:0}
+.qj .tx{font-size:12.5px;overflow-wrap:anywhere}
+.qj small{color:var(--mute)}
+.pc0{background:var(--up)}.pc1{background:var(--down)}.pc2{background:var(--accent)}.pc3{background:var(--warn)}.pc4{background:var(--ind)}.pc5{background:#8f5fbf}
+.sc{font-size:11px;font-family:"JetBrains Mono",monospace}
 #dec{max-height:560px;overflow:auto;overflow-wrap:anywhere}
 </style>
 </head>
@@ -151,7 +159,7 @@ function init(){
     if(e.key==='ArrowRight'){stop();go(cur+1)} else if(e.key==='ArrowLeft'){stop();go(cur-1)} else if(e.key===' '){e.preventDefault();togglePlay()}
   });
   var tot=S.reduce(function(a,s){return a+s.resumo.total},0), custo=S.reduce(function(a,s){return a+s.custo_usd},0);
-  $('sub').textContent=S.length+' dia(s) | total R$ '+fmt(tot)+' | custo LLM US$ '+fmt(custo,3);
+  $('sub').textContent=(R&&R.painel&&R.dias&&R.dias.length>S.length)?(S.length+' dia(s) mostrados de '+R.dias.length+' avaliados | periodo: R$ '+fmt(R.painel.total)+' em '+R.painel.ops+' ops | custo LLM do periodo US$ '+fmt(R.custo_llm,2)):(S.length+' dia(s) | total R$ '+fmt(tot)+' | custo LLM US$ '+fmt(custo,3));
   renderNulos(); renderDias();
   setDay();
   var md=/d=(\d+)/.exec(location.hash); if(md&&S[+md[1]]){ di=+md[1]; $('selDia').value=di; setDay(); }
@@ -179,6 +187,36 @@ function stop(){ if(timer){clearInterval(timer);timer=null} $('bPlay').innerHTML
 
 function pontoEm(k){ var p=S[di].pontos; for(var i=0;i<p.length;i++) if(p[i].k===k) return p[i]; return null; }
 
+function barNoul(pv){ return '<div class="bar" title="P(sim)='+fmt(pv,2)+'"><i class="pc0" style="width:'+(pv*100)+'%"></i><i class="pc1" style="width:'+((1-pv)*100)+'%"></i></div>'; }
+function barChoice(pr){
+  var ks=Object.keys(pr), h='<div class="bar">';
+  ks.forEach(function(k,i){ h+='<i class="pc'+(i%6)+'" style="width:'+(pr[k]*100)+'%" title="'+esc(k)+' '+fmt(pr[k],2)+'"></i>'; });
+  return h+'</div>';
+}
+function rowJev(id,v){
+  var q=(D.perguntas||{})[id]||{tx:id,ref:''}, left='<div class="tx"><b>'+esc(id)+'</b> <small>('+esc(q.ref)+')</small> '+esc(q.tx)+'</div>', right='';
+  if(typeof v==='number'){ right=barNoul(v)+'<div class="sc">sim '+fmt(v,2)+'</div>'; }
+  else if(v && v.c!==undefined){
+    var ks=Object.keys(v.p), t='';
+    ks.forEach(function(k,i){ t+=(k===v.c?'<b>':'')+esc(k)+' '+fmt(v.p[k],2)+(k===v.c?'</b>':'')+(i<ks.length-1?' | ':''); });
+    right=barChoice(v.p)+'<div class="sc">'+t+'</div>';
+  } else if(v && v.s!==undefined){ right='<div class="sc">nivel esperado '+fmt(v.s,2)+' | conf '+fmt(v.k,2)+'</div>'; }
+  return '<div class="qj">'+left+'<div>'+right+'</div></div>';
+}
+function jevPanel(p){
+  var j=p.jev||{}, m=j.m, g=j.g, inf=j.info||{}, h='';
+  if(m && m.acao){
+    h+='<h2 style="margin-top:10px">Decisao (acao, stop, alvo, mao)</h2>';
+    ['acao','stop','alvo','mao'].forEach(function(id){ if(m[id]) h+=rowJev(id,m[id]); });
+    h+='<div class="mono mute" style="margin:4px 0">confianca da acao '+fmt((m.acao||{}).k,2)+' | fase '+esc(inf.fase||'')+(inf.modo_stop?' | stop '+esc(inf.modo_stop):'')+'</div>';
+  } else if(!m){ h+='<div class="mute">(sem resposta do Jev nesta vela)</div>'; }
+  if(g){ h+='<h2 style="margin-top:10px">Gestao da posicao</h2>'; Object.keys(g).forEach(function(id){ h+=rowJev(id,g[id]); }); }
+  if(m){
+    h+='<h2 style="margin-top:10px">Perguntas (barra verde = sim, vermelha = nao; categorias em cores)</h2>';
+    Object.keys(m).forEach(function(id){ if(['acao','stop','alvo','mao'].indexOf(id)<0) h+=rowJev(id,m[id]); });
+  }
+  return h;
+}
 function renderDec(){
   var s=S[di], b=s.bars[cur], p=pontoEm(cur), h='';
   var hfim=hm(b.t,15);
@@ -193,12 +231,12 @@ function renderDec(){
     } else if(a==='mover_stop'){ h+='<div class="mono" style="margin:6px 0">novo stop '+fmt(d.novo_stop,0)+'</div>'; }
     if(p.msgs&&p.msgs.length) h+='<div class="neg" style="margin:6px 0">'+p.msgs.map(esc).join('<br>')+'</div>';
     h+='<h2 style="margin-top:10px">Raciocinio</h2><div class="raz">'+esc(d.raciocinio)+'</div>';
-    h+='<h2 style="margin-top:10px">Perguntas consideradas</h2>';
+    if(p.jev){ h+=jevPanel(p); } else h+='<h2 style="margin-top:10px">Perguntas consideradas</h2>';
     (d.respostas||[]).forEach(function(r){
       var c=r.resposta==='sim'?'d-sim':(r.resposta==='nao'?'d-nao':'d-ind');
       h+='<div class="q"><span class="dot '+c+'"></span><div><b>'+esc(r.id)+'</b> '+esc(r.tema)+' <span class="mute">('+(r.resposta==='nao'?'nao':esc(r.resposta))+')</span><br><span class="mute">'+esc(r.porque)+'</span></div></div>';
     });
-    if(!(d.respostas||[]).length) h+='<div class="mute">(nenhuma)</div>';
+    if(!p.jev && !(d.respostas||[]).length) h+='<div class="mute">(nenhuma)</div>';
     h+='<div class="mono mute" style="margin-top:10px">modelo '+esc(p.modelo||'?')+' | US$ '+fmt(p.custo,4)+' | '+fmt(p.tempo,1)+'s | tokens '+esc(p.tokens_in)+'/'+esc(p.tokens_out)+(p.falha?' | FALHA: '+esc(p.falha):'')+'</div>';
   }
   var ev=s.eventos.filter(function(e){ return e.t>=b.t && e.t<hfim });
@@ -235,7 +273,16 @@ function renderNulos(){
     '<tr><td>Nulo 2: faixa p5 a p95</td><td class="n">'+fmt(a.p5)+' a '+fmt(a.p95)+'</td></tr>'+
     '<tr><td>Jev maior ou igual ao sorteio em</td><td class="n">'+fmt(a.pct_jev_ge,0)+'% dos sorteios</td></tr></table>'+
     '<div class="mute" style="margin-top:6px;font-size:12px">Nulo 2: mesma quantidade de entradas, lado aleatorio, limite no ultimo fechamento, mesmas distancias de stop e alvo e mesmos contratos do Jev, mesmo motor de execucao. Amostra pequena: nao conclua com poucos dias.</div>'+
-    '<div class="mono mute" style="margin-top:6px;font-size:12px">modelos que responderam: '+esc(JSON.stringify(R.modelos))+'</div>';
+    '<div class="mono mute" style="margin-top:6px;font-size:12px">modelos que responderam: '+esc(JSON.stringify(R.modelos))+'</div>'+painelHtml();
+}
+function painelHtml(){
+  if(!R||!R.painel) return '';
+  var P=R.painel, h='<h2 style="margin-top:14px">Painel do periodo</h2><table><tr><th>ops</th><th class="n">total R$</th><th class="n">pior queda</th><th class="n">fat. lucro</th><th class="n">acerto %</th><th class="n">pior mes</th><th class="n">% meses+</th><th class="n">Sharpe</th></tr>';
+  h+='<tr><td>'+P.ops+'</td><td class="n '+cls(P.total)+'">'+fmt(P.total)+'</td><td class="n">'+fmt(P.dd)+'</td><td class="n">'+fmt(P.fator_lucro)+'</td><td class="n">'+fmt(P.acerto,1)+'</td><td class="n">'+fmt(P.pior_mes)+'</td><td class="n">'+fmt(P.meses_pos,0)+'</td><td class="n">'+fmt(P.sharpe)+'</td></tr></table>';
+  if(R.relimiar){ h+='<h2 style="margin-top:10px">Re-limiar (offline)</h2><table><tr><th>limiar</th><th class="n">ops</th><th class="n">total R$</th><th class="n">pior queda</th><th class="n">acerto %</th></tr>';
+    Object.keys(R.relimiar).forEach(function(k){ var r=R.relimiar[k]; h+='<tr><td>'+k+'</td><td class="n">'+r.ops+'</td><td class="n '+cls(r.total)+'">'+fmt(r.total)+'</td><td class="n">'+fmt(r.dd)+'</td><td class="n">'+fmt(r.acerto,1)+'</td></tr>'; });
+    h+='</table>'; }
+  return h;
 }
 function renderDias(){
   var h='<tr><th>dia</th><th class="n">ops</th><th class="n">R$</th><th class="n">LLM US$</th></tr>';
