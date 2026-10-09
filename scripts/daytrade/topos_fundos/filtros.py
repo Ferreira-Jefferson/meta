@@ -1,4 +1,4 @@
-"""Filtros de entrada da v4.1, lidos na barra de confirmação (M15 fechada). Cada um devolve um array booleano
+"""Filtros de entrada da v4.2, lidos na barra de confirmação (M15 fechada). Cada um devolve um array booleano
 alinhado aos sinais: True = o filtro deixa operar. Venda = espelho da compra."""
 import numpy as np
 import pandas as pd
@@ -24,10 +24,6 @@ def lado_da_abertura(b, s):
     """Close da confirmação do lado a favor da abertura do pregão."""
     abertura = b.groupby("dia").open.transform("first")
     return (_no_sinal(b.close - abertura, s) * s.lado.to_numpy()) > 0
-
-
-def mms17_acima_mms34(b, s):
-    return _no_sinal(np.sign(ind.mms(b.close, 17) - ind.mms(b.close, 34)), s) * s.lado.to_numpy() == 1
 
 
 def mms72_open_inclinada(b, s):

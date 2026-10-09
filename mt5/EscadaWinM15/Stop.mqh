@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//| Stop.mqh — stop da v4.1. Espelha stop.py.                        |
+//| Stop.mqh — stop da v4.2 (= v4.1). Espelha stop.py.               |
 //|  - inicial: no pivô; se a MME38 do M15 está entre o pivô e a     |
 //|    entrada (a mais de 0,25 ATR da entrada), sobe para 0,2 ATR    |
 //|    além dela.                                                    |
@@ -25,8 +25,8 @@ double StopNoTick(double preco, int lado)
    return (lado == 1 ? MathFloor(preco / tick) : MathCeil(preco / tick)) * tick;
 }
 
-//--- Stop inicial da v4.1 para a entrada no close da barra de confirmação i.
-double StopInicialV41(int i, int lado, double preco_pivo)
+//--- Stop inicial para a entrada no close da barra de confirmação i.
+double StopInicial(int i, int lado, double preco_pivo)
 {
    double atr = g_barras[i].atr, entrada = g_barras[i].c, mme = g_mme38[i];
    double stop = preco_pivo;

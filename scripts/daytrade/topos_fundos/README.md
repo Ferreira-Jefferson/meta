@@ -1,4 +1,4 @@
-# Escada WIN M15 (v4.1)
+# Escada WIN M15 (v4.2)
 
 Robô de topos e fundos no WIN. Pesquisa completa (rodadas 2–16) no commit `eac5052`; estudos posteriores (saída, calendário, Supertrend) no histórico do git, nada adotado.
 
@@ -7,17 +7,19 @@ Robô de topos e fundos no WIN. Pesquisa completa (rodadas 2–16) no commit `ea
 | `dados.py` | períodos IS / OOS / virgem, M1 auditado → M15, contrato, ATR |
 | `indicadores.py` | médias móveis (MMS, MME, inclinação), estocástico, tendência MME 9/21/34 |
 | `escada.py` | pivôs ZigZag, estágio, pregões (arrays por dia) e sinais |
-| `filtros.py` | filtros de entrada: H1, abertura, MMS17×34, MMS72, sinal bom |
+| `filtros.py` | filtros de entrada: H1, abertura, MMS72, sinal bom |
 | `stop.py` | stop inicial (pivô + aperto MME38) e movimento (estrutura) |
 | `operacao.py` | entrada limitada, gestão da posição, resultado e resumo |
-| `estrategia.py` | monta a v4.1 e roda os três períodos |
+| `estrategia.py` | monta a v4.2 e roda os três períodos |
 | `auditoria_dados.py` | confere as bases M1 contra o calendário e a grade da B3 |
 
 Rodar: `.venv\Scripts\python.exe scripts/daytrade/topos_fundos/estrategia.py`
 
 Esperado (pts, 2 contratos, custo incluído):
-- IS: 387 operações, +76.768, DD 5.545.
-- OOS: 98 operações, +59.537, DD 3.623.
-- Virgem: 21 operações, +2.443.
+- IS: 443 operações, +83.994, DD 6.573.
+- OOS: 116 operações, +62.554, DD 3.602.
+- Virgem: 23 operações, +2.817.
+
+v4.2 = v4.1 sem o filtro MMS17×34 (2026-10-09). Esse filtro foi escolhido por um funil de 30 dias e, sem esses dias, perdia para a versão sem ele.
 
 Um stop novo é só um par de funções `inicial(s, D)` e `mover(stop, t, p, D)` passado para `estrategia.rodar`.

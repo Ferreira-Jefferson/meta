@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
 //| EscadaWinM15.mq5 — robô escada de topos e fundos no WIN, M15,    |
-//| versão v4.1 (adotada em 2026-10-08).                             |
+//| versão v4.2 (2026-10-09: v4.1 sem o filtro MMS17 x MMS34).       |
 //|                                                                  |
 //| Port de scripts/daytrade/topos_fundos/ (Python). Cada módulo em  |
 //| EscadaWinM15/ tem o mesmo papel do arquivo .py de mesmo assunto: |
@@ -8,7 +8,7 @@
 //|   Barras      M15 do contínuo montado do M1, TR e ATR(14)        |
 //|   Indicadores médias, estocástico, tendência H1 e H4             |
 //|   Escada      pivôs ZigZag 1,5 ATR e estágio da escada           |
-//|   Filtros     os 5 filtros de entrada                            |
+//|   Filtros     os 4 filtros de entrada                            |
 //|   Stop        stop inicial (MME38) e movimento pela estrutura    |
 //|   Ordens      entrada limitada, cancelamento, stop, zeragem      |
 //|   Registro    CSV das negociações                                |
@@ -17,7 +17,7 @@
 //|  1. Fundo confirmado acima do anterior (estágio >= 1) -> compra; |
 //|     topo abaixo do anterior -> venda.                            |
 //|  2. Filtros a favor: H1 (MME 9/21/34), lado da abertura do dia,  |
-//|     MMS17 x MMS34, MMS72 do open inclinada, e sinal bom          |
+//|     MMS72 do open inclinada e sinal bom                          |
 //|     (Estocástico 14 < 70 a favor OU H4 neutro).                  |
 //|  3. Ordem limitada no close da barra de confirmação, 2 contratos,|
 //|     válida por 3 barras; stop junto, no servidor.                |
@@ -29,7 +29,7 @@
 //| gráfico (o EA monta o M15 sozinho a partir do M1).               |
 //+------------------------------------------------------------------+
 #property copyright "EscadaWinM15"
-#property version   "1.00"
+#property version   "1.10"
 #property strict
 
 #include "EscadaWinM15/Calendario.mqh"
@@ -59,7 +59,7 @@ void GerenciaPosicao(int i, const Pivo &piv[])
    MoveStop(novo, MagicNumber);
 }
 
-//--- Sem posição nem entrada pendente: a barra confirmou um pivô que vira sinal da v4.1?
+//--- Sem posição nem entrada pendente: a barra confirmou um pivô que vira sinal da v4.2?
 void ProcuraEntrada(int i, const Pivo &piv[])
 {
    if(TemPosicao(MagicNumber) || TemEntradaPendente() || PosicaoDeOutro(MagicNumber)) return;
@@ -69,8 +69,8 @@ void ProcuraEntrada(int i, const Pivo &piv[])
    if(est == SEM_ESTAGIO || est < 1) return;
    if(g_barras[i].t + SEG_BARRA >= HoraCorte(g_barras[i].dia)) return;   // sem tempo de pregão para operar
    int lado = LadoDoPivo(piv[p]);
-   if(!PassaFiltrosV41(i, lado)) return;
-   double limite = g_barras[i].c, stop = StopInicialV41(i, lado, piv[p].preco);
+   if(!PassaFiltros(i, lado)) return;
+   double limite = g_barras[i].c, stop = StopInicial(i, lado, piv[p].preco);
    if((limite - stop) * lado <= 0) return;
    string motivo = StringFormat("escada %s est%d", lado == 1 ? "compra" : "venda", est);
    PrintFormat("SINAL %s: confirmação %s, limite %.0f, stop %.0f (pivô %.0f)", motivo,
@@ -105,7 +105,7 @@ int OnInit()
    IniciaSerie(g_h1); IniciaSerie(g_h4);
    g_ult_m1 = TimeCurrent() - DIAS_AQUECIMENTO * SEG_DIA;
    Sincroniza(false);
-   PrintFormat("EscadaWinM15 v4.1 pronto: %d barras M15 de aquecimento, H4 com %d blocos.", g_nbarras, g_h4.n);
+   PrintFormat("EscadaWinM15 v4.2 pronto: %d barras M15 de aquecimento, H4 com %d blocos.", g_nbarras, g_h4.n);
    return INIT_SUCCEEDED;
 }
 

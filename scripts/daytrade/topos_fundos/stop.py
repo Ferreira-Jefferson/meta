@@ -1,4 +1,4 @@
-"""Stop da v4.1. Duas peças que a operação chama:
+"""Stop da v4.2 (o mesmo da v4.1). Duas peças que a operação chama:
 
   inicial(s, D) -> preço do stop ao armar a entrada (s = sinal, D = pregão)
   mover(stop, t, p, D) -> stop que vale a partir da barra t+1, decidido com a barra t fechada
