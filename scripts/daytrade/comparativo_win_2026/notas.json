@@ -44,7 +44,7 @@
   "textos": [
    "EscadaWinM15.mq5 1.14 (robô ES do WinMaestro 2.04). Compra quando um fundo confirmado (ZigZag de 1,5 ATR no M15) fica acima do anterior. A venda é o espelho. Filtros a favor: tendência do H1 (MME 9/21/34), lado da abertura do dia, MMS17 acima da MMS34, MMS72 do open inclinada, e Estocástico 14 abaixo de 70 ou H4 neutro.",
    "Entrada limitada no fechamento da barra de confirmação, válida por 3 barras. Stop no pivô, apertado até 0,2 ATR além da MME38, e que sobe a cada novo pivô a favor. Sem alvo. Zera 5 minutos antes do fim do contínuo.",
-   "Operações do backtest em Python (WIN$N M1 sem leilões), 1 contrato como no Maestro. O mesmo motor casou com o Testador do MT5 em 128 de 131 operações no OOS (teste da v4.2). Testador da v4.1 pendente."
+   "Operações do Testador do MT5 (todos os ticks, WIN$N), 1 contrato como no Maestro. Ano a ano no Testador 2022–2026: +11.074 com R$2 por operação, contra +11.459 do backtest em Python (−3%). Dentro do Maestro, o robô ES repete o EA avulso em 11 de 11 entradas."
   ]
  }
 }
