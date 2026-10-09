@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//| Stop.mqh — stop da v4.2 (= v4.1). Espelha stop.py.               |
+//| Stop.mqh — stop da v4.1. Espelha stop.py.                        |
 //|  - inicial: no pivô; se a MME38 do M15 está entre o pivô e a     |
 //|    entrada (a mais de 0,25 ATR da entrada), sobe para 0,2 ATR    |
 //|    além dela.                                                    |

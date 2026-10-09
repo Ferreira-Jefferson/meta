@@ -1,7 +1,7 @@
-"""Robô escada WIN M15 v4.2 (v4.1 adotada em 2026-10-08; v4.2 = sem o filtro MMS17×34, 2026-10-09). Monta tudo e roda IS, OOS e o período virgem.
+"""Robô escada WIN M15 v4.1 (adotada em 2026-10-08; a v4.2 sem o MMS17×34 foi testada e revertida em 2026-10-09). Monta tudo e roda IS, OOS e o período virgem.
 
   1. Escada: fundo confirmado acima do anterior (estágio >= 1), ZigZag 1,5 ATR no M15. Venda = espelho.
-  2. Filtros a favor: H1 (MME 9/21/34), lado da abertura do dia, MMS72 do open subindo.
+  2. Filtros a favor: H1 (MME 9/21/34), lado da abertura do dia, MMS17 > MMS34 (close), MMS72 do open subindo.
   3. Só sinais bons: Estocástico 14 < 70 a favor OU H4 neutro. 2 contratos.
   4. Entrada limitada no close da confirmação (3 barras, enche se passar 2 ticks).
   5. Stop no pivô, apertado até 0,2 ATR além da MME38; sobe a cada novo pivô; sem alvo; zera no fim do pregão.
@@ -16,11 +16,12 @@ import indicadores as ind
 import operacao
 import stop
 
-FILTROS = (filtros.h1_a_favor, filtros.lado_da_abertura, filtros.mms72_open_inclinada, filtros.sinal_bom)
+FILTROS = (filtros.h1_a_favor, filtros.lado_da_abertura, filtros.mms17_acima_mms34,
+           filtros.mms72_open_inclinada, filtros.sinal_bom)
 
 
 def preparar(periodo):
-    """Barras M15 com os indicadores que o stop usa, pregões e sinais da v4.2 (já filtrados)."""
+    """Barras M15 com os indicadores que o stop usa, pregões e sinais da v4.1 (já filtrados)."""
     b = dados.m15(periodo)
     b["mme38"] = ind.mme(b.close, stop.MME_APERTO)
     dias = escada.pregoes(b)
@@ -40,5 +41,5 @@ if __name__ == "__main__":
     linhas = {p: operacao.resumo(rodar(p)) for p in dados.PERIODOS}
     t = pd.DataFrame(linhas).T
     pd.set_option("display.width", 200)
-    print("v4.2 (pts com 2 contratos, já com 10 pts de custo por contrato; R$ = pts x 0,20)")
+    print("v4.1 (pts com 2 contratos, já com 10 pts de custo por contrato; R$ = pts x 0,20)")
     print(t.round(2).to_string())

@@ -5,7 +5,7 @@
 //| (posicao virtual = soma dos deals com o magic dele) e mandando as|
 //| ordens dele com o magic dele.                                    |
 //|                                                                  |
-//| v2.04 (2026-10-09): robo ES (EscadaWinM15 v4.2, escada M15),      |
+//| v2.04 (2026-10-09): robo ES (EscadaWinM15 v4.1, escada M15),      |
 //| logica incluida de mt5/EscadaWinM15/; memoria da 2.03 convertida.|
 //| v2.03 (2026-10-08): parada diaria (Risco.mqh) sobre o capital    |
 //| fixo Risco_Capital: perda do dia -> sem entradas ate' amanha.    |

@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
 //| EscadaWinM15.mq5 — robô escada de topos e fundos no WIN, M15,    |
-//| versão v4.2 (2026-10-09: v4.1 sem o filtro MMS17 x MMS34).       |
+//| versão v4.1 (2026-10-09: volta do MMS17 x MMS34, menos queda).  |
 //|                                                                  |
 //| Port de scripts/daytrade/topos_fundos/ (Python). Cada módulo em  |
 //| EscadaWinM15/ tem o mesmo papel do arquivo .py de mesmo assunto: |
@@ -8,7 +8,7 @@
 //|   Barras      M15 do contínuo montado do M1, TR e ATR(14)        |
 //|   Indicadores médias, estocástico, tendência H1 e H4             |
 //|   Escada      pivôs ZigZag 1,5 ATR e estágio da escada           |
-//|   Filtros     os 4 filtros de entrada                            |
+//|   Filtros     os 5 filtros de entrada                            |
 //|   Stop        stop inicial (MME38) e movimento pela estrutura    |
 //|   Ordens      entrada limitada, cancelamento, stop, zeragem      |
 //|   Registro    CSV das negociações                                |
@@ -19,7 +19,7 @@
 //|  1. Fundo confirmado acima do anterior (estágio >= 1) -> compra; |
 //|     topo abaixo do anterior -> venda.                            |
 //|  2. Filtros a favor: H1 (MME 9/21/34), lado da abertura do dia,  |
-//|     MMS72 do open inclinada e sinal bom                          |
+//|     MMS17 x MMS34, MMS72 do open inclinada, e sinal bom          |
 //|     (Estocástico 14 < 70 a favor OU H4 neutro).                  |
 //|  3. Ordem limitada no close da barra de confirmação, 2 contratos,|
 //|     válida por 3 barras; stop junto, no servidor.                |
@@ -31,7 +31,7 @@
 //| gráfico (o EA monta o M15 sozinho a partir do M1).               |
 //+------------------------------------------------------------------+
 #property copyright "EscadaWinM15"
-#property version   "1.13"
+#property version   "1.14"
 #property strict
 
 #include "EscadaWinM15/Calendario.mqh"
@@ -54,7 +54,7 @@ input double CaixaInicial = 2000;      // Caixa (R$) quando o robô começou a o
 datetime g_ult_minuto = 0;
 
 //=================== decisões a cada M15 fechada ===================
-//--- O pivô confirmado na barra i vira sinal da v4.2? SINAL_OK, SINAL_FILTRADO (escada sem os filtros) ou SINAL_NENHUM.
+//--- O pivô confirmado na barra i vira sinal da v4.1? SINAL_OK, SINAL_FILTRADO (escada sem os filtros) ou SINAL_NENHUM.
 int AvaliaSinal(int i, const Pivo &piv[], int p)
 {
    if(p < 0) return SINAL_NENHUM;
@@ -120,7 +120,7 @@ int OnInit()
    GraficoInicia();
    g_ult_m1 = TimeCurrent() - DIAS_AQUECIMENTO * SEG_DIA;
    Sincroniza(false);
-   PrintFormat("EscadaWinM15 v4.2 pronto: %d barras M15 de aquecimento, H4 com %d blocos.", g_nbarras, g_h4.n);
+   PrintFormat("EscadaWinM15 v4.1 pronto: %d barras M15 de aquecimento, H4 com %d blocos.", g_nbarras, g_h4.n);
    MostraCaixa(CaixaInicial, Lotes, MagicNumber);
    return INIT_SUCCEEDED;
 }

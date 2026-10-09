@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//| Filtros.mqh — os filtros de entrada da v4.2, lidos na barra de   |
+//| Filtros.mqh — os filtros de entrada da v4.1, lidos na barra de   |
 //| confirmação (M15 fechada). Espelha filtros.py.                   |
 //| Cada função responde: "o filtro deixa operar este lado?"         |
 //+------------------------------------------------------------------+
@@ -21,6 +21,14 @@ bool LadoDaAbertura(int i, int lado)
    return (g_barras[i].c - abertura) * lado > 0;
 }
 
+//--- MMS17 acima da MMS34 (close) na compra; abaixo na venda.
+bool Mms17AcimaMms34(int i, int lado)
+{
+   double m17 = MMS(i, 17), m34 = MMS(i, 34);
+   if(m17 == SEM_VALOR || m34 == SEM_VALOR) return false;
+   return (m17 - m34) * lado > 0;
+}
+
 //--- MMS72 do open subindo (contra 3 barras atrás) na compra; caindo na venda.
 bool Mms72OpenInclinada(int i, int lado)
 {
@@ -38,10 +46,11 @@ bool SinalBom(int i, int lado)
    return nao_esticado || h4_neutro;
 }
 
-//--- Todos os filtros da v4.2.
+//--- Todos os filtros da v4.1.
 bool PassaFiltros(int i, int lado)
 {
-   return H1AFavor(lado) && LadoDaAbertura(i, lado) && Mms72OpenInclinada(i, lado) && SinalBom(i, lado);
+   return H1AFavor(lado) && LadoDaAbertura(i, lado) && Mms17AcimaMms34(i, lado)
+       && Mms72OpenInclinada(i, lado) && SinalBom(i, lado);
 }
 
 #endif

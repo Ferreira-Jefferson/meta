@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
 //| WinMaestro/EscadaWinM15.mqh
-//| Robo ES: escada de topos e fundos M15 v4.2 (sempre 1 contrato no Maestro).
+//| Robo ES: escada de topos e fundos M15 v4.1 (sempre 1 contrato no Maestro).
 //|
 //| A logica de SINAL e de STOP e' a MESMA do EA avulso: os arquivos de mt5/EscadaWinM15/
 //| (Calendario, Barras, Indicadores, Escada, Filtros, Stop) sao incluidos aqui dentro do
 //| namespace WES, sem copia. So' a execucao muda (desenho v2.2 sec. 7):
-//|  - sinal -> ENTRAR(limite no close da confirmacao, stop v4.2, validade de 3 barras M15);
+//|  - sinal -> ENTRAR(limite no close da confirmacao, stop v4.1, validade de 3 barras M15);
 //|  - posicao -> MANTER(stop que sobe a cada pivo a favor confirmado, sem alvo);
 //|  - validade vencida, entrada cancelada/recusada/perdida -> NADA;
 //|  - zeragem e corte: do maestro (fim do continuo - 5 min).
@@ -63,7 +63,7 @@ void GerePosicao(int i, const Pivo &piv[], const VistaRobo &v, Intencao &ped)
    }
 }
 
-//--- Sem posicao nem entrada armada: a barra i virou sinal da v4.2?
+//--- Sem posicao nem entrada armada: a barra i virou sinal da v4.1?
 void ProcuraEntrada(int i, const Pivo &piv[], Intencao &ped)
 {
    int p = PivoConfirmadoEm(piv, i);
