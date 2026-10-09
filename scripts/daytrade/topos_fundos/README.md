@@ -16,9 +16,11 @@ Robô de topos e fundos no WIN. Pesquisa completa (rodadas 2–16) no commit `ea
 Rodar: `.venv\Scripts\python.exe scripts/daytrade/topos_fundos/estrategia.py`
 
 Esperado (pts, 2 contratos, custo incluído):
-- IS: 443 operações, +83.994, DD 6.573.
-- OOS: 116 operações, +62.554, DD 3.602.
-- Virgem: 23 operações, +2.817.
+- IS: 485 operações, +63.664, DD 6.976.
+- OOS: 131 operações, +53.408, DD 5.273.
+- Virgem: 25 operações, +1.957.
+
+Em 2026-10-09 a comparação com o EA no Testador do MT5 mostrou um viés otimista no modelo: a barra que tocava o stop antes da entrada encher era contada como "ordem cancelada". Como o stop fica além do limite, o preço passa pelo limite antes, então na prática a entrada enche e sai no stop. Corrigido em `operacao.entrada_limitada`, o total caiu 24% no IS e 15% no OOS. Com a correção, o Python e o Testador (OOS, M1 OHLC) casam em 128 de 131 operações.
 
 v4.2 = v4.1 sem o filtro MMS17×34 (2026-10-09). Esse filtro foi escolhido por um funil de 30 dias e, sem esses dias, perdia para a versão sem ele.
 

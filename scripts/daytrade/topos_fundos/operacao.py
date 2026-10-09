@@ -1,8 +1,9 @@
 """Execução do robô: uma posição por vez por pregão, entrada limitada, stop plugável, zera no fim do pregão.
 
 Entrada: ordem limitada no close da barra de confirmação, válida por VALIDADE barras; só enche se o preço passar
-FURA pts além do limite (fila); preço = o limite, ou a abertura se ela já vier melhor. Cancela se o stop for tocado
-antes. Saída: stop (pelo pior entre a abertura e o stop) ou close da última barra do pregão. Sem alvo.
+FURA pts além do limite (fila); preço = o limite, ou a abertura se ela já vier melhor. O stop fica além do limite,
+então o preço passa pelo limite antes de chegar ao stop: barra que toca o stop também enche a entrada (e a operação
+sai no stop na mesma barra). Saída: stop (pelo pior entre a abertura e o stop) ou close da última barra do pregão.
 Resultado em pts: CONTRATOS x (movimento - CUSTO).
 """
 from types import SimpleNamespace
@@ -15,8 +16,8 @@ FURA, VALIDADE, CUSTO, CONTRATOS = 10, 3, 10, 2
 def entrada_limitada(D, t0, lado, lim, stop):
     o, h, l = D["open"], D["high"], D["low"]
     for t in range(t0, min(t0 + VALIDADE, len(o))):
-        if (l[t] <= stop) if lado == 1 else (h[t] >= stop): return None
-        if (l[t] <= lim - FURA) if lado == 1 else (h[t] >= lim + FURA):
+        tocou_stop = (l[t] <= stop) if lado == 1 else (h[t] >= stop)
+        if tocou_stop or ((l[t] <= lim - FURA) if lado == 1 else (h[t] >= lim + FURA)):
             return t, (min(o[t], lim) if lado == 1 else max(o[t], lim))
     return None
 
