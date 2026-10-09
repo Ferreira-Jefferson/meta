@@ -11,10 +11,10 @@ import yfinance as yf
 
 sys.path.insert(0, "src")
 from market_data_intraday.win_sem_leiloes import carrega_grade, fim_continuo  # noqa: E402
+from dados import PERIODOS  # noqa: E402
 
-BASES = {"out-dez/2021 (virgem)": ("data/win_sem_leiloes/m1_WIN$N_2021_virgem.parquet", "2021-10-08", "2021-12-31"),
-         "IS 2022-set/2025": ("data/win_sem_leiloes/m1_WIN$N_2022_2025.parquet", "2022-01-01", "2025-09-30"),
-         "OOS out/2025-out/2026": ("data/win_sem_leiloes/m1_WIN$N.parquet", "2025-10-01", "2026-10-06")}
+# fim inclusivo para o calendário (PERIODOS usa fim exclusivo)
+BASES = {nome: (arq, ini, str((pd.Timestamp(fim) - pd.Timedelta(days=1)).date())) for nome, (arq, ini, fim) in PERIODOS.items()}
 
 g = carrega_grade(None)
 ib = yf.download("^BVSP", start="2021-10-01", end="2026-10-08", progress=False, auto_adjust=False)
@@ -50,5 +50,4 @@ for nome, (arq, a, z) in BASES.items():
     print("  horários duplicados:", dup)
     if len(P):
         pd.set_option("display.width", 200); print(P.to_string(index=False))
-    P.to_csv("scripts/daytrade/topos_fundos/res_conf/auditoria_" + nome.split()[0].replace("/", "_") + ".csv", index=False)
 print("\nRESUMO"); print(pd.DataFrame(linhas).to_string(index=False))
