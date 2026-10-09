@@ -21,3 +21,7 @@ Esperado (pts, 2 contratos, custo incluído):
 - Virgem: 21 operações, +2.443.
 
 Um stop novo é só um par de funções `inicial(s, D)` e `mover(stop, t, p, D)` passado para `estrategia.rodar`.
+
+## Estudos
+
+- `estudos/saida_2026_10_09/`: trailing, alvo e gestão por contexto. Três analistas olharam 40 pregões sorteados do IS (`dossie.py`) e propuseram 19 hipóteses com vizinhos (`hipoteses.py`). O teste nos outros 338 pregões do IS (`testa.py`) mostrou que nenhuma melhora o total e o total/DD. O OOS não foi aberto.

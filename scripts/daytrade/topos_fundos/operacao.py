@@ -1,9 +1,10 @@
-"""Execução do robô: uma posição por vez por pregão, entrada limitada, stop plugável, zera no fim do pregão.
+"""Execução do robô: uma posição por vez por pregão, entrada limitada, stop e alvo plugáveis, zera no fim do pregão.
 
 Entrada: ordem limitada no close da barra de confirmação, válida por VALIDADE barras; só enche se o preço passar
 FURA pts além do limite (fila); preço = o limite, ou a abertura se ela já vier melhor. Cancela se o stop for tocado
-antes. Saída: stop (pelo pior entre a abertura e o stop) ou close da última barra do pregão. Sem alvo.
-Resultado em pts: CONTRATOS x (movimento - CUSTO).
+antes. Saída: stop (pelo pior entre a abertura e o stop), alvo opcional por ordem limitada (mesma regra de fila;
+pode ser parcial) ou close da última barra do pregão. Na mesma barra, o stop vale antes do alvo (conservador).
+Resultado em pts: soma por contrato de (movimento - CUSTO).
 """
 from types import SimpleNamespace
 import numpy as np
@@ -21,8 +22,9 @@ def entrada_limitada(D, t0, lado, lim, stop):
     return None
 
 
-def operar(sinais, dias, inicial, mover):
-    """sinais em ordem (seg, t0). Devolve um DataFrame com uma linha por operação."""
+def operar(sinais, dias, inicial, mover, alvo=None, contratos_alvo=CONTRATOS):
+    """sinais em ordem (seg, t0). alvo(t, p, D) -> preço da ordem limitada para t+1 (ou None); executa
+    `contratos_alvo` contratos uma vez, o resto segue no stop. Devolve um DataFrame com uma linha por operação."""
     livre_apos, out = {}, []
     for s in sinais.itertuples():
         if s.t0 <= livre_apos.get(s.seg, -1): continue
@@ -33,21 +35,30 @@ def operar(sinais, dias, inicial, mover):
         if ent is None: continue
         t_ent, px = ent
         if (px - stop) * lado <= 0: continue
-        p = SimpleNamespace(lado=lado, px=px, R=(px - stop) * lado, ext=px, pior=px, t_ent=t_ent)
-        saida, t_sai, motivo = c[-1], len(o) - 1, "fim"
+        p = SimpleNamespace(lado=lado, px=px, R=(px - stop) * lado, ext=px, pior=px, t_ent=t_ent, tc=s.t0 - 1,
+                            abertos=CONTRATOS)
+        saida, t_sai, motivo, pts, lim_alvo = c[-1], len(o) - 1, "fim", 0.0, None
         for t in range(t_ent, len(o)):
             ot = px if t == t_ent else o[t]
             if (l[t] <= stop) if lado == 1 else (h[t] >= stop):
                 saida, t_sai, motivo = (min(ot, stop) if lado == 1 else max(ot, stop)), t, "stop"
                 break
+            if lim_alvo is not None and ((h[t] >= lim_alvo + FURA) if lado == 1 else (l[t] <= lim_alvo - FURA)):
+                pa = max(ot, lim_alvo) if lado == 1 else min(ot, lim_alvo)
+                pts += contratos_alvo * ((pa - px) * lado - CUSTO); p.abertos -= contratos_alvo; lim_alvo = None
+                if p.abertos == 0:
+                    saida, t_sai, motivo = pa, t, "alvo"
+                    break
             p.ext = max(p.ext, h[t]) if lado == 1 else min(p.ext, l[t])
             p.pior = min(p.pior, l[t]) if lado == 1 else max(p.pior, h[t])
             stop = mover(stop, t, p, D)
+            if alvo is not None and p.abertos == CONTRATOS: lim_alvo = alvo(t, p, D)
         livre_apos[s.seg] = t_sai
         mov = (saida - px) * lado
+        pts += p.abertos * (mov - CUSTO)
         out.append(dict(dia=D["dia"], seg=s.seg, pos=s.pos, lado=lado, t_ent=t_ent, t_sai=t_sai, px=px, saida=saida,
                         stop_ini=stop_ini, R=p.R, mfe=(p.ext - px) * lado, mae=(px - p.pior) * lado, motivo=motivo,
-                        mov=mov, pts=CONTRATOS * (mov - CUSTO)))
+                        mov=mov, pts=pts))
     return pd.DataFrame(out)
 
 
