@@ -2,7 +2,7 @@
 
 **Regra.** Cada rodada usa dias NOVOS. Dia já usado em estudo (autópsia, escolha de pergunta, ablação, teste) não serve mais para teste. Nunca rodar a base inteira. O sorteio é aleatório, com seed registrada, e feito antes de ver o resultado da rodada; o resultado do Jev v1 do dia (`../sessoes_dec/{OOS,IS}/`) é a referência e não se roda de novo.
 
-Dias já usados (queimados para teste): **40** da v2 (`referencia.json`: 20 treino + 20 validação, escolhidos pelos extremos do v1), **50** da v3 (`rodada_v3_dias.json`) e **50** da v4 (`rodada_v4_dias.json`, seed 20261011). Dias com resultado v1: 372 (OOS 252 + IS 120); restam **232** fora dos 140 usados (a lista está em `rodada_v4_dias.json` > `pool_restante`: OOS 152 + IS 80; a v4 sorteou entre 185 + 97 e tirou 33 + 17). A próxima rodada sorteia entre eles (e exclui 2026-10-05, ver verificação de dado).
+Dias já usados (queimados para teste): **40** da v2 (`referencia.json`: 20 treino + 20 validação, escolhidos pelos extremos do v1), **50** da v3 (`rodada_v3_dias.json`) **50** da v4 (`rodada_v4_dias.json`, seed 20261011) e **50** da v5 (`rodada_v5_dias.json`, seed 20261012; restam **182** fora dos 190 usados: `rodada_v5_dias.json` > `pool_restante`, OOS 119 + IS 63). Abaixo, o texto da v4 (232 restantes antes da v5). Dias com resultado v1: 372 (OOS 252 + IS 120); restam **232** fora dos 140 usados (a lista está em `rodada_v4_dias.json` > `pool_restante`: OOS 152 + IS 80; a v4 sorteou entre 185 + 97 e tirou 33 + 17). A próxima rodada sorteia entre eles (e exclui 2026-10-05, ver verificação de dado).
 
 | rodada | dias | de onde | perguntas | resultado | custo | o que se aprendeu |
 |---|---|---|---|---|---|---|
@@ -11,6 +11,7 @@ Dias já usados (queimados para teste): **40** da v2 (`referencia.json`: 20 trei
 | **v2** validação | 20 (idem, outros dias) | `referencia.json` > validação | as mesmas | v1 -R$ 357 -> **A +R$ 3.023**, B +R$ 1.548 | A US$ 0,46; B US$ 0,31 | o ganho era regressão à média: dias escolhidos pelos extremos do v1 (ruído da API ~R$ 170/dia); 20 dias não validam |
 | **v3** | **50** (33 OOS + 17 IS, aleatórios, seed 20261010) | `rodada_v3_dias.json`, fora dos 40 da v2 | 8 de mercado + `v2_g_acao` + finais; estado 16 velas M15 sem DIARIO; duas etapas | v1 **-R$ 969** (134 ops) x v3 **-R$ 1.864** (265 ops); `zerar` limitado -R$ 2.251 | US$ 0,5035 (50 dias) + US$ 3,15 de ablações em treino | **a vantagem da v2 não replica em dias sorteados**: pareado -R$ 17,9/dia, IC95 [-94 ; +62]; v3 não passa do nulo (p 0,66); opera 2x mais (265 x 134) e 66% das saídas são `zerar` a mercado, que somam -R$ 7.073 |
 | **v4** | **50** (33 OOS + 17 IS, aleatórios, seed 20261011) | `rodada_v4_dias.json`, fora dos 90 da v2/v3 | as 8 da v3 + portão de direção (>= 0,20) + gestão "tese invalidada" + risco 6% do caixa + reentrada (máx. 3, espera 2 velas); `zerar` limitado | v1 **-R$ 1.105** (122 ops) x v3 L **-R$ 1.703** (269) x v4 **-R$ 857** (102) | v4 US$ 0,248 + v3 US$ 0,518 (mesmos dias) | **v4 -R$ 857**: pareado v4-v3 +R$ 16,9/dia (IC95 [-36 ; +75], p 0,59), v4-v1 +R$ 5,0/dia (p 0,86): **não se distingue de nenhum dos dois**; nulo livre p 0,70; o portão a 0,20 não cortou nada (o Jev já obedecia); o ganho sobre a v3 vem de operar 62% menos (reentrada/máx. 3 + gestão sem `zerar`), mas o stop vira a perda (52% das saídas, -R$ 3.730) |
+| **v5** | **50** (33 OOS + 17 IS, seed 20261012) | `rodada_v5_dias.json`, do pool restante da v4 | v3 viva (sem regras no pacote) + as 4 regras da v4 aplicadas pelo motor (resimulacao deterministica das mesmas chamadas) | v1 **-R$ 1.789** (115 ops) x v3 L **-R$ 793** (290) x v5 **+R$ 5** (33) | US$ 0,516 (v3; a v5 nao faz chamada) | **NAO COMPROVADA**: passou (a) p 0,083, (b) +5, (c) queda 537 x 2.725, mas **falhou (d)**: nulo com portao+regras p 0,56. v5 ~ zero porque opera 33 vezes em 50 dias |
 
 ## Detalhe da rodada v3 (50 dias novos)
 
@@ -109,3 +110,70 @@ v3 nos 50 dias novos US$ 0,518 + v4 US$ 0,248 + teste de 2 dias US$ 0,010 = **US
 - O portão de eficiência, a maior aposta da análise dos 30 dias ruins, **não funcionou como trava**: (1) o Jev que lê a regra a cumpre sozinho; (2) sem mínimo de velas, a 1ª hora passa sempre; (3) entradas a favor com direção comprovada, sorteadas ao acaso, perdem mais que entradas ao acaso (-1.905 contra -439) neste período: continuação não é o lado certo aqui.
 - **Pista a testar ao vivo (v5)**: regras determinísticas sobre as respostas do Jev sem que ele as leia (+R$ 665 em ablação, 48 ops, p 0,053 contra a v4 viva). Precisa de dias novos (restam 232) e de uma rodada própria; nada nos 140 dias queimados vale como validação.
 - Nota de método: a ablação "sem portão" deu o mesmo número que a v4 completa porque o Jev obedece à regra que lê; ablação que mexe só na regra, sem refazer as chamadas, esconde esse efeito. O contraste só aparece trocando as respostas de entrada (segunda tabela).
+
+
+## Rodada v5 - PRE-REGISTRO (escrito ANTES de sortear e rodar)
+
+**Hipotese (pos-hoc na v4, ablacao offline, +R$ 665 em 48 ops nos 50 dias da v4).** O Jev v3 (pacote e perguntas da v3, **sem** o bloco de regras/tese/risco no pacote: ele nao le as regras) decide as intencoes de entrada e de gestao; as 4 regras da v4 sao aplicadas pelo **motor**, de forma deterministica, por cima. E exatamente a configuracao "+ as 4 regras" da ablacao2 (`v4/decisoes_v4.py` com `CFG_V4`, nenhum numero mudado; sem minimo de velas no portao: isso seria ajuste novo, fica como ideia para a v6).
+
+**Regra exata (codigo: `v4/regras_v4.py` + `v4/decisoes_v4.py`, reusados sem alteracao; `v5/analisa_v5.py`).**
+1. Gestao: o Jev (pergunta `v2_g_acao` da v3) pode pedir `zerar`/`stop_pivo`, mas so vale se um fechamento M15 passou alem do ultimo swing (fractal de 2 velas, so de hoje) contra a posicao (o que valia na entrada ou o de agora); senao vira `manter`. Vela sem resposta logada = `manter`.
+2. Portao: sem posicao, so entra se a eficiencia direcional do dia na vela de decisao (|fech-abertura| / soma das amplitudes M15) >= 0,20 e a entrada a favor de (fech - abertura). Sem minimo de velas.
+3. Risco: perda do stop (distancia x R$ 0,20 x contratos) > 6% do caixa (R$ 2.000 + resultado do dia) -> 1 contrato; ainda > 6% -> nao entra.
+4. Max. 3 operacoes por dia; apos perda, espera >= 2 velas M15 desde a saida.
+Execucao = a da v3 L/v4: entrada limitada (3 velas), alvo limitado, stop a mercado, `zerar` limitado (SessaoL). Limiar do Jev 0,3, `typesafe/jev-1.13-20260917`, estado 16 velas M15.
+
+**Desenho.** 50 dias NOVOS do `pool_restante` de `rodada_v4_dias.json` (232 = OOS 152 + IS 80; 2026-10-05 ja excluido), sorteio simples estratificado proporcional (33 OOS + 17 IS), **seed 20261012** (registrada aqui antes de sortear). A v3 viva (etapa 1 + etapa 2 + gestao da v3, sem regras no pacote) roda **uma vez** nesses dias; a v3 pura (L) e a v5 vem das MESMAS chamadas (v5 = resimulacao deterministica com as respostas logadas: entradas da etapa 2 da v3 em toda vela; gestao = respostas `v2_g_acao` da v3 onde a v3 tinha posicao, `manter` onde nao ha resposta). v1 ja existe (`sessoes_dec`). Diferenca declarada em relacao a ablacao2: la a gestao usava respostas `v4_g_acao` (Jev vendo o bloco TESE DA POSICAO); aqui, como o Jev nao le as regras, usa `v2_g_acao` da v3.
+
+**Criterio de sucesso PRE-FIXADO (todos, ao mesmo tempo):**
+(a) v5 - v1 pareado por dia, p sign-flip < 0,10; (b) total v5 > 0; (c) pior queda v5 <= pior queda v1; (d) nulo COM O MESMO PORTAO E AS MESMAS REGRAS (entradas sorteadas entre as velas que passam o portao, lado a favor, regras 3-4 e gestao 1, mesmo numero de entradas por dia da v5), 300 sorteios: p(nulo >= v5) < 0,10.
+Se qualquer um falhar: a linha "perguntas + regras sobre o Jev" fica registrada como **nao comprovada**. Painel, pareado v5 - v3, nulo livre, tipo de dia, saidas por motivo e caixa sao reportados mas nao entram no criterio. A aplicacao da v5 aos 50 dias da v3 (3o conjunto) e DESCRITIVA e dentro da amostra (dias usados no estudo R2).
+
+
+## Resultado da rodada v5 (50 dias novos, 33 OOS + 17 IS)
+
+Dias: `rodada_v5_dias.json` (seed 20261012; pool restante apos a v5: **182** = OOS 119 + IS 63). Painel completo: `analise_R50_v5.txt` / `.json`; dias ruins: `dias_ruins_v5.json`. Codigo: `v5/sorteio_v5.py`, `v5/analisa_v5.py`, `v5/nulo_v5.py`. Sessoes da v3 viva: `sessoes_v3/R50v5/{M,L}`. Checagem: a v3 resimulada com as 4 regras desligadas reproduz o vivo (-793 = -793).
+
+**Veredito pelo criterio pre-fixado: NAO PASSOU. A linha "perguntas + regras sobre o Jev" fica registrada como NAO COMPROVADA.**
+
+| criterio | resultado | passou |
+|---|---|---|
+| (a) v5 - v1 pareado, p sign-flip < 0,10 | +R$ 35,9/dia, IC95 [-2,2 ; +76,5], p 0,083 | sim |
+| (b) total v5 > 0 | +R$ 5 | sim (por R$ 5) |
+| (c) pior queda v5 <= v1 | 537 x 2.725 | sim |
+| (d) nulo com portao+regras, p < 0,10 | nulo media +R$ 52 (p5 -578, p95 +700); p(nulo >= v5) = **0,563** | **NAO** |
+
+| | v1 | v3 (zerar a mercado) | v3 (zerar limitado) | v5 |
+|---|---|---|---|---|
+| total R$ | -1.789 | -125 | -793 | **+5** |
+| ops | 115 | 292 | 290 | 33 |
+| acerto | 44,3% | 44,5% | 43,4% | 54,5% |
+| fator de lucro | 0,70 | 0,99 | 0,91 | 1,00 |
+| pior queda R$ | 2.725 | 1.841 | 2.421 | 537 |
+| pior dia R$ | -283 | -391 | -457 | -122 |
+| dias positivos | 19/50 | 23/50 | 22/50 | 13/50 |
+| R$/dia | -36 | -2 | -16 | 0 |
+
+- Pareados: v5 - v1 +35,9/dia (p 0,083); **v5 - v3(L) +16,0/dia, IC95 [-36,9 ; +68,8], p 0,551**; v3(L) - v1 +19,9 (p 0,59). O ganho da v5 sobre o v1 vem de o v1 estar mal nestes dias (-1.789, pior que na v4/v3), nao de a v5 ganhar: a v5 fica em zero.
+- Nulos (300 sorteios): livre (qualquer vela, 2 lados) media -207, p5 -862, p95 +569, p(nulo >= v5) = 0,32; com o mesmo portao e as mesmas regras (504 pares dia-vela passam, mesmo numero de ordens preenchidas por dia = 33, geometrias das ordens da v5) media **+52**: entrar ao acaso dentro do portao + regras rende o mesmo que a v5.
+- Tipo de dia: 40 de rotacao: v1 -517, v3 L -2.063, v5 -54 (22 ops, 59% de acerto); 9 intermediarios: v1 -1.048, v3 +812, v5 +57; 1 direcional: v1 -224, v3 +458, v5 +2. OOS (33): v1 -1.021, v3 -1.409, v5 +17; IS (17): v1 -768, v3 +616, v5 -12.
+- Saidas (v5, 33): stop 16 (48%, -R$ 968, media -60), alvo 14 (42%, +952, media +68), fim do pregao 3 (+21). `zerar` 0 (v3 L: 161, -4.741). Ganho medio 63,3 x perda media 75,7: breakeven empirico 54,4%, acerto 54,5% (as duas leituras concordam: R$/trade ~0).
+- Caixa (escada R$ 2.000): v5 termina em R$ 1.974, minimo R$ 1.613, **nunca para** (0 trades pulados; opera pouco demais para perder caixa); v3 L para em 2026-06-11 (R$ 915, 69 pulados); v1 para em 2025-12-30 (R$ 904, 56 pulados). A curva e ilustrativa (dias esparsos).
+- Dias ruins da v5 (v5 < 0 ou v5 - v1 <= -R$ 300): 8 de 50, todos com 1-2 ops e um unico stop de R$ 46-122; 6 dos 8 sao dia de rotacao (eficiencia < 0,15). Nenhum passa de -R$ 122.
+- Hipotese pos-hoc nao verificada: o numero de ordens preenchidas da v5 (33 em 50 dias, 0,7/dia) e baixo; a ablacao da v4 dava 48 em 50.
+
+**Estabilidade (DESCRITIVA, dentro da amostra, sem chamadas novas; os dias foram usados em estudos anteriores, nao vale como teste):**
+
+| conjunto de dias | v1 | v3 L | v5 | v5 - v1 (R$/dia, IC95, p) | v5 - v3 (R$/dia, p) |
+|---|---|---|---|---|---|
+| 50 dias da v3 (R2; usados no estudo dos dias ruins) | -969 | -2.251 | **-585** (33 ops, F.L. 0,64) | +7,7 [-37,8 ; +56,7], p 0,76 | +33,3, p 0,36 |
+| 50 dias da v4 (onde nasceu a hipotese; gestao v3 em vez de v4 logada) | -1.105 | -1.703 | **+642** (48 ops, F.L. 1,48) | +34,9 [-13,3 ; +83,1], p 0,17 | +46,9, p 0,08 |
+
+A v5 e positiva so nos dias em que a hipotese foi formulada (+642, igual ao +665 da ablacao salvo a fonte da gestao); nos 50 dias novos fica em zero e nos 50 da v3 e negativa (-585, 7 de 50 dias positivos). Nao ha estabilidade.
+
+**Custo da rodada v5:** v3 viva nos 50 dias novos US$ 0,516 (3.950 chamadas, 0 falhas, 0 de 429); v5 US$ 0 (resimulacao); total **US$ 0,52**.
+
+**Aprendizado da v5.**
+- O que as regras fazem de forma robusta nos tres conjuntos: cortam o volume (290 -> 33 ops), a pior queda (2.421 -> 537) e o pior dia (-457 -> -122). Isso e custo e risco, nao edge: o resultado fica entre -585 e +642 conforme o conjunto, e dentro do nulo com o mesmo portao e as mesmas regras (p 0,56). Qualquer entrada sorteada dentro do portao + regras rende o mesmo que o Jev (+52 de media).
+- Nenhuma evidencia de que as perguntas do Jev acrescentam algo as regras. A pergunta que sobra e se as REGRAS (portao + risco + reentrada + gestao por tese) sozinhas, sobre uma entrada trivial, dao o mesmo: o nulo diz que sim.
+- Ideia para a v6 (NAO testada, nao fazia parte do pre-registro): mais de 5 velas M15 minimas no portao (R2G5-01 original pedia >= 6); na v4, 69 de 102 entradas foram nas 5 primeiras velas, quando a eficiencia e alta por construcao. Precisa de dias novos (restam 182).
