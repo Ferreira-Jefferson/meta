@@ -1,0 +1,388 @@
+{
+ "fazer": {
+  "2024_06_18:gap_fade_fechamento": [
+   3,
+   276.0,
+   3
+  ],
+  "2025_06_04:F2 falha na maxima da 1a hora (venda)": [
+   2,
+   137.0,
+   1
+  ],
+  "2023_11_03:Impulso das 2 primeiras velas acima da m\u00e1xima de ontem": [
+   2,
+   160.28571428571306,
+   2
+  ],
+  "2022_11_29:recuo_a_favor_tendencia": [
+   8,
+   446.3571428571392,
+   7
+  ],
+  "2023_11_03:Nova m\u00e1xima da tarde": [
+   1,
+   225.0,
+   1
+  ],
+  "2022_11_29:falha_de_queda_1a_hora": [
+   1,
+   -46.0,
+   0
+  ],
+  "2025_06_04:F5 compra suporte na rotacao da manha": [
+   1,
+   47.0,
+   1
+  ],
+  "2023_11_03:Recuo \u00e0 m\u00e9dia 8 em tend\u00eancia de alta": [
+   3,
+   232.28571428571308,
+   2
+  ],
+  "2025_08_01:F1 falha da minima de ontem (compra)": [
+   1,
+   53.5,
+   1
+  ],
+  "2022_11_16:venda pullback EMA20 em baixa": [
+   3,
+   172.0,
+   3
+  ],
+  "2024_05_16:F2 vende falha da maxima matinal": [
+   3,
+   63.80357142857102,
+   2
+  ],
+  "2023_03_20:Falha da alta inicial (venda)": [
+   1,
+   97.0,
+   1
+  ]
+ },
+ "vetos": {
+  "2023_08_21:vende_rompimento_stop_curto": {
+   "agiu": 112,
+   "bloq": 94,
+   "brl": 4386.110000000001,
+   "perderia": 43,
+   "ganharia": 48
+  },
+  "2024_06_18:rompimento_sem_volume": {
+   "agiu": 25,
+   "bloq": 15,
+   "brl": 1395.2900000000002,
+   "perderia": 5,
+   "ganharia": 10
+  },
+  "2023_08_21:vende_minima_nova_tarde": {
+   "agiu": 5,
+   "bloq": 4,
+   "brl": -69.57,
+   "perderia": 3,
+   "ganharia": 1
+  },
+  "2024_06_18:seguir_tarde": {
+   "agiu": 24,
+   "bloq": 7,
+   "brl": -246.57,
+   "perderia": 6,
+   "ganharia": 1
+  },
+  "2025_06_04:N4 vender minima nova depois das 15h": {
+   "agiu": 7,
+   "bloq": 5,
+   "brl": -73.57,
+   "perderia": 4,
+   "ganharia": 1
+  },
+  "2022_11_16:compra inversao de 1 vela": {
+   "agiu": 33,
+   "bloq": 9,
+   "brl": 335.56999999999994,
+   "perderia": 5,
+   "ganharia": 4
+  },
+  "2022_11_16:compra desvio de 1,5 ATR da VWAP": {
+   "agiu": 60,
+   "bloq": 5,
+   "brl": -162.93,
+   "perderia": 5,
+   "ganharia": 0
+  },
+  "2023_08_21:compra_queda_1atr": {
+   "agiu": 102,
+   "bloq": 12,
+   "brl": -48.74000000000001,
+   "perderia": 8,
+   "ganharia": 4
+  },
+  "2022_11_16:compra cada queda de 1 ATR": {
+   "agiu": 55,
+   "bloq": 4,
+   "brl": 5.459999999999994,
+   "perderia": 3,
+   "ganharia": 1
+  },
+  "2023_08_21:compra_esticado_vs_ema21": {
+   "agiu": 37,
+   "bloq": 0,
+   "brl": 0.0,
+   "perderia": 0,
+   "ganharia": 0
+  },
+  "2025_06_04:N1 comprar cada queda na baixa": {
+   "agiu": 32,
+   "bloq": 1,
+   "brl": -12.0,
+   "perderia": 1,
+   "ganharia": 0
+  },
+  "2025_08_01:N3 comprar queda no meio do dia": {
+   "agiu": 18,
+   "bloq": 0,
+   "brl": 0.0,
+   "perderia": 0,
+   "ganharia": 0
+  },
+  "2025_06_04:N2 vender minima na rotacao da manha": {
+   "agiu": 36,
+   "bloq": 32,
+   "brl": 845.4199999999997,
+   "perderia": 18,
+   "ganharia": 12
+  },
+  "2023_11_03:Vender a m\u00e1xima nova do dia": {
+   "agiu": 33,
+   "bloq": 3,
+   "brl": -207.82,
+   "perderia": 3,
+   "ganharia": 0
+  },
+  "2023_03_20:Comprar a 1\u00aa vela da abertura": {
+   "agiu": 3,
+   "bloq": 2,
+   "brl": 212.0,
+   "perderia": 0,
+   "ganharia": 1
+  },
+  "2022_11_29:comprar_maxima_nova_tarde": {
+   "agiu": 15,
+   "bloq": 10,
+   "brl": 830.0,
+   "perderia": 4,
+   "ganharia": 5
+  },
+  "2022_11_16:compra suporte minima de ontem": {
+   "agiu": 10,
+   "bloq": 2,
+   "brl": -34.31999999999999,
+   "perderia": 1,
+   "ganharia": 1
+  },
+  "2023_11_03:Comprar rompimento com alvo menor que o stop": {
+   "agiu": 8,
+   "bloq": 2,
+   "brl": 404.0,
+   "perderia": 1,
+   "ganharia": 1
+  },
+  "2024_01_19:compra teste da m\u00ednima de ontem": {
+   "agiu": 4,
+   "bloq": 0,
+   "brl": 0.0,
+   "perderia": 0,
+   "ganharia": 0
+  },
+  "2025_06_04:N3 comprar rompimento da manha": {
+   "agiu": 18,
+   "bloq": 3,
+   "brl": 405.0,
+   "perderia": 1,
+   "ganharia": 2
+  },
+  "2025_08_01:N1 comprar rompimento da 1a hora": {
+   "agiu": 10,
+   "bloq": 2,
+   "brl": 404.0,
+   "perderia": 1,
+   "ganharia": 1
+  },
+  "2024_06_18:vender_rali_1atr": {
+   "agiu": 77,
+   "bloq": 29,
+   "brl": 1054.25,
+   "perderia": 14,
+   "ganharia": 15
+  },
+  "2024_06_18:vender_maxima_nova": {
+   "agiu": 24,
+   "bloq": 8,
+   "brl": -194.61,
+   "perderia": 6,
+   "ganharia": 2
+  },
+  "2024_06_18:fade_impulso_cedo": {
+   "agiu": 13,
+   "bloq": 0,
+   "brl": 0.0,
+   "perderia": 0,
+   "ganharia": 0
+  },
+  "2022_11_29:vender_esticada_contra": {
+   "agiu": 14,
+   "bloq": 0,
+   "brl": 0.0,
+   "perderia": 0,
+   "ganharia": 0
+  },
+  "2025_06_04:N5 vender pavio de rejeicao na manha": {
+   "agiu": 4,
+   "bloq": 3,
+   "brl": -212.79000000000002,
+   "perderia": 3,
+   "ganharia": 0
+  },
+  "2023_11_03:Vender volume seco no fim da tarde": {
+   "agiu": 8,
+   "bloq": 3,
+   "brl": -174.0,
+   "perderia": 3,
+   "ganharia": 0
+  },
+  "2024_01_19:compra continua\u00e7\u00e3o do gap de alta": {
+   "agiu": 2,
+   "bloq": 1,
+   "brl": 95.86,
+   "perderia": 0,
+   "ganharia": 1
+  },
+  "2024_05_16:N3 compra rompimento da maxima da abertura": {
+   "agiu": 3,
+   "bloq": 1,
+   "brl": 496.0,
+   "perderia": 0,
+   "ganharia": 1
+  },
+  "2022_11_29:vender_gap_de_alta": {
+   "agiu": 2,
+   "bloq": 2,
+   "brl": -31.0,
+   "perderia": 1,
+   "ganharia": 1
+  },
+  "2022_11_29:vender_quebra_minima_cedo": {
+   "agiu": 7,
+   "bloq": 7,
+   "brl": 630.0899999999999,
+   "perderia": 2,
+   "ganharia": 5
+  },
+  "2024_05_16:N2 vende o fundo esticado": {
+   "agiu": 23,
+   "bloq": 23,
+   "brl": 1278.6699999999998,
+   "perderia": 9,
+   "ganharia": 13
+  },
+  "2024_01_19:vende nova m\u00ednima ap\u00f3s 13h": {
+   "agiu": 5,
+   "bloq": 3,
+   "brl": 19.0,
+   "perderia": 1,
+   "ganharia": 1
+  },
+  "2024_05_16:N4 vende rompimento da lateral da tarde": {
+   "agiu": 8,
+   "bloq": 5,
+   "brl": -175.0,
+   "perderia": 3,
+   "ganharia": 1
+  },
+  "2023_03_20:Vender m\u00ednima nova ap\u00f3s 14:30": {
+   "agiu": 6,
+   "bloq": 3,
+   "brl": -198.0,
+   "perderia": 3,
+   "ganharia": 0
+  },
+  "2025_08_01:N4 vender minima nova depois das 15h45": {
+   "agiu": 3,
+   "bloq": 3,
+   "brl": -175.0,
+   "perderia": 3,
+   "ganharia": 0
+  },
+  "2023_03_20:Comprar queda de 1 ATR": {
+   "agiu": 80,
+   "bloq": 0,
+   "brl": 0.0,
+   "perderia": 0,
+   "ganharia": 0
+  },
+  "2024_01_19:compra queda de 1 ATR da abertura": {
+   "agiu": 38,
+   "bloq": 0,
+   "brl": 0.0,
+   "perderia": 0,
+   "ganharia": 0
+  },
+  "2024_05_16:N1 compra cada minima nova (faca caindo)": {
+   "agiu": 17,
+   "bloq": 0,
+   "brl": 0.0,
+   "perderia": 0,
+   "ganharia": 0
+  },
+  "2023_03_20:Comprar defesa da m\u00ednima do dia": {
+   "agiu": 9,
+   "bloq": 0,
+   "brl": 0.0,
+   "perderia": 0,
+   "ganharia": 0
+  },
+  "2023_03_20:Comprar martelo (revers\u00e3o)": {
+   "agiu": 5,
+   "bloq": 0,
+   "brl": 0.0,
+   "perderia": 0,
+   "ganharia": 0
+  },
+  "2023_08_21:compra_repique_gap_pequeno": {
+   "agiu": 4,
+   "bloq": 0,
+   "brl": 0.0,
+   "perderia": 0,
+   "ganharia": 0
+  },
+  "2022_11_16:compra falha de fundo cedo (14h)": {
+   "agiu": 2,
+   "bloq": 1,
+   "brl": -32.0,
+   "perderia": 1,
+   "ganharia": 0
+  },
+  "2023_11_03:Vender rompimento de m\u00ednima curta acima da m\u00e9dia": {
+   "agiu": 1,
+   "bloq": 0,
+   "brl": 0.0,
+   "perderia": 0,
+   "ganharia": 0
+  },
+  "2024_01_19:vende rompimento de m\u00e1xima ap\u00f3s 15h": {
+   "agiu": 2,
+   "bloq": 1,
+   "brl": -40.0,
+   "perderia": 1,
+   "ganharia": 0
+  },
+  "2023_11_03:Vender o gap de alta": {
+   "agiu": 1,
+   "bloq": 1,
+   "brl": -73.0,
+   "perderia": 1,
+   "ganharia": 0
+  }
+ }
+}
