@@ -13,6 +13,7 @@
 //|   Ordens      entrada limitada, cancelamento, stop, zeragem      |
 //|   Registro    CSV das negociações                                |
 //|   Caixa       caixa informado + resultado do robô (só exibe)     |
+//|   Grafico     médias, pivôs, sinais, entrada e stop no gráfico   |
 //|                                                                  |
 //| REGRA                                                            |
 //|  1. Fundo confirmado acima do anterior (estágio >= 1) -> compra; |
@@ -30,7 +31,7 @@
 //| gráfico (o EA monta o M15 sozinho a partir do M1).               |
 //+------------------------------------------------------------------+
 #property copyright "EscadaWinM15"
-#property version   "1.11"
+#property version   "1.12"
 #property strict
 
 #include "EscadaWinM15/Calendario.mqh"
@@ -42,6 +43,7 @@
 #include "EscadaWinM15/Ordens.mqh"
 #include "EscadaWinM15/Registro.mqh"
 #include "EscadaWinM15/Caixa.mqh"
+#include "EscadaWinM15/Grafico.mqh"
 
 input double Lotes       = 2;          // Contratos por operação
 input ulong  MagicNumber = 41041015;   // Código que identifica as ordens deste robô
@@ -52,45 +54,54 @@ input double CaixaInicial = 2000;      // Caixa (R$) quando o robô começou a o
 datetime g_ult_minuto = 0;
 
 //=================== decisões a cada M15 fechada ===================
-//--- Com posição aberta: se a barra confirmou um pivô a favor, o stop sobe para ele.
-void GerenciaPosicao(int i, const Pivo &piv[])
+//--- O pivô confirmado na barra i vira sinal da v4.2? SINAL_OK, SINAL_FILTRADO (escada sem os filtros) ou SINAL_NENHUM.
+int AvaliaSinal(int i, const Pivo &piv[], int p)
 {
-   if(!TemPosicao(MagicNumber)) return;
-   int p = PivoConfirmadoEm(piv, i);
-   if(p < 0) return;
+   if(p < 0) return SINAL_NENHUM;
+   int est = Estagio(piv, p);
+   if(est == SEM_ESTAGIO || est < 1) return SINAL_NENHUM;
+   if(g_barras[i].t + SEG_BARRA >= HoraCorte(g_barras[i].dia)) return SINAL_NENHUM;   // sem tempo de pregão para operar
+   return PassaFiltros(i, LadoDoPivo(piv[p])) ? SINAL_OK : SINAL_FILTRADO;
+}
+
+//--- Com posição aberta: se a barra confirmou um pivô a favor, o stop sobe para ele.
+void GerenciaPosicao(const Pivo &piv[], int p)
+{
+   if(!TemPosicao(MagicNumber) || p < 0) return;
    double novo = StopPelaEstrutura(StopDaPosicao(), piv[p], LadoDaPosicao());
    MoveStop(novo, MagicNumber);
 }
 
-//--- Sem posição nem entrada pendente: a barra confirmou um pivô que vira sinal da v4.2?
-void ProcuraEntrada(int i, const Pivo &piv[])
+//--- Sinal bom, sem posição nem entrada pendente: envia a entrada limitada.
+void ProcuraEntrada(int i, const Pivo &piv[], int p, int sinal)
 {
+   if(sinal != SINAL_OK) return;
    if(TemPosicao(MagicNumber) || TemEntradaPendente() || PosicaoDeOutro(MagicNumber)) return;
-   int p = PivoConfirmadoEm(piv, i);
-   if(p < 0) return;
-   int est = Estagio(piv, p);
-   if(est == SEM_ESTAGIO || est < 1) return;
-   if(g_barras[i].t + SEG_BARRA >= HoraCorte(g_barras[i].dia)) return;   // sem tempo de pregão para operar
    int lado = LadoDoPivo(piv[p]);
-   if(!PassaFiltros(i, lado)) return;
    double limite = g_barras[i].c, stop = StopInicial(i, lado, piv[p].preco);
    if((limite - stop) * lado <= 0) return;
-   string motivo = StringFormat("escada %s est%d", lado == 1 ? "compra" : "venda", est);
+   string motivo = StringFormat("escada %s est%d", lado == 1 ? "compra" : "venda", Estagio(piv, p));
    PrintFormat("SINAL %s: confirmação %s, limite %.0f, stop %.0f (pivô %.0f)", motivo,
                TimeToString(g_barras[i].t, TIME_DATE | TIME_MINUTES), limite, stop, piv[p].preco);
-   EnviaEntrada(lado, limite, stop, Lotes, i, motivo);
+   if(EnviaEntrada(lado, limite, stop, Lotes, i, motivo)) DesenhaEntrada(i, limite, stop, VALIDADE_BARRAS);
 }
 
-//--- Uma M15 acabou de fechar: atualiza indicadores e, se for ao vivo, decide.
+//--- Uma M15 acabou de fechar: atualiza indicadores, desenha e, se for ao vivo, decide.
 void AoFecharBarra(int i, bool ao_vivo)
 {
    AtualizaIndicadores(i);
-   if(!ao_vivo) return;
+   bool desenha = DeveDesenhar(i);
+   if(!ao_vivo && !desenha) return;
    Pivo piv[];
    ZigZag(InicioDoDia(i), i, piv);
+   int p = PivoConfirmadoEm(piv, i);
+   int sinal = AvaliaSinal(i, piv, p);
+   if(desenha) DesenhaBarra(i, piv, p, sinal);
+   if(!ao_vivo) return;
    VenceEntrada(i);
-   GerenciaPosicao(i, piv);
-   ProcuraEntrada(i, piv);
+   GerenciaPosicao(piv, p);
+   ProcuraEntrada(i, piv, p, sinal);
+   if(TemPosicao(MagicNumber)) DesenhaStop(i, StopDaPosicao());
 }
 
 //--- Lê os minutos novos e processa as M15 que fecharam. Só a mais recente decide (as outras são atraso de dados).
@@ -106,6 +117,7 @@ int OnInit()
 {
    ConfiguraOrdens(MagicNumber);
    IniciaSerie(g_h1); IniciaSerie(g_h4);
+   GraficoInicia();
    g_ult_m1 = TimeCurrent() - DIAS_AQUECIMENTO * SEG_DIA;
    Sincroniza(false);
    PrintFormat("EscadaWinM15 v4.2 pronto: %d barras M15 de aquecimento, H4 com %d blocos.", g_nbarras, g_h4.n);
@@ -128,4 +140,5 @@ void OnDeinit(const int reason)
 {
    GravaNegocios(MagicNumber);
    Comment("");
+   GraficoLimpa();
 }
