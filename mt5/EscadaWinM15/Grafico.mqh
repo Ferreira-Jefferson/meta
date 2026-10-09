@@ -21,6 +21,8 @@
 #define SINAL_OK       2
 
 #define COR_MME38      clrOrange          // stop apertado
+#define COR_MMS17      clrAqua            // filtro MMS17 x MMS34 (close)
+#define COR_MMS34      clrYellow
 #define COR_MMS72      clrDodgerBlue      // MMS72 do open (inclinação)
 #define COR_H1_9       clrPlum            // tendência H1: MME 9 / 21 / 34
 #define COR_H1_21      clrMediumOrchid
@@ -102,7 +104,8 @@ void GraficoLimpa() { if(!MQLInfoInteger(MQL_TESTER)) ObjectsDeleteAll(0, GR_PRE
 //--- A barra i entra no desenho (dentro dos últimos GR_DIAS dias)?
 bool DeveDesenhar(int i) { return g_desenha && g_barras[i].t >= TimeCurrent() - GR_DIAS * SEG_DIA; }
 
-//--- Médias: MME38 e MMS72 do open (M15), MMEs 9/21/34 do último H1 fechado, abertura do dia.
+//--- Médias: MME38, MMS17 e MMS34 do close e MMS72 do open (M15), MMEs 9/21/34 do último H1
+//--- fechado, abertura do dia.
 void DesenhaMedias(int i)
 {
    double h1[3]; h1[0] = g_h1.mme9; h1[1] = g_h1.mme21; h1[2] = g_h1.mme34;
@@ -111,6 +114,8 @@ void DesenhaMedias(int i)
    {
       datetime t0 = g_barras[i - 1].t, t1 = g_barras[i].t;
       Segmento(NomeObj(i, "mme38"), t0, g_mme38[i - 1], t1, g_mme38[i], COR_MME38, 2);
+      Segmento(NomeObj(i, "mms17"), t0, MMS(i - 1, 17), t1, MMS(i, 17), COR_MMS17, 1);
+      Segmento(NomeObj(i, "mms34"), t0, MMS(i - 1, 34), t1, MMS(i, 34), COR_MMS34, 1);
       Segmento(NomeObj(i, "mms72"), t0, MMS(i - 1, 72, true), t1, MMS(i, 72, true), COR_MMS72, 2);
       Segmento(NomeObj(i, "h1_9"),  t0, g_h1_ant[0], t1, h1[0], COR_H1_9,  1, STYLE_DOT);
       Segmento(NomeObj(i, "h1_21"), t0, g_h1_ant[1], t1, h1[1], COR_H1_21, 1, STYLE_DOT);
