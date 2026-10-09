@@ -12,6 +12,7 @@
 
 #include "Mapa.mqh"
 #include "Memoria.mqh"
+#include "RiscoRegra.mqh"
 
 //--- ganchos dos modulos (definidos no EA e no EA de teste)
 int    Robo_Init(const int r, const VistaRobo &v);
@@ -126,52 +127,40 @@ bool   eAbsReal[NROBOS];
 bool   eAbsVirt[NROBOS];
 int    eNc[NROBOS];
 int    eExt = 0;
+//--- v2.03: resultado realizado do dia por robo, calculado junto com as fichas (spec 7.3): cada robo como se tivesse conta
+//    propria (preco medio da ficha; cada reducao realiza ao preco do deal), nunca pelo DEAL_PROFIT, que em NETTING e' o da
+//    posicao LIQUIDA que o deal reduziu (de outro robo ou do dono).
+double eResR[NROBOS];        // realizado de hoje + custos de hoje, por robo (R$)
+double eResEv[];             // um valor por deal de hoje que realizou (soma dos robos), na ordem do historico (pior acumulado)
+double eRzDeal[NROBOS];      // o que o deal em curso realizou por robo (Risco_FechaDeal soma no dia e zera)
+double eVp = 0.0;            // valor de 1 ponto por contrato (R$) = TICK_VALUE / TICK_SIZE
+long   eHojeMsc = 0;         // inicio de hoje (data do servidor) em ms
 
 void Est_Zera(const int r) { eF[r] = 0; ePm[r] = 0.0; eHora[r] = 0; eId[r] = 0; ePab[r] = 0; }
 
-void Est_Aplica(const int r, const int v, const double preco, const long t, const ulong tk, const int papel)
+// Deal do proprio robo: ficha, preco medio e realizado pela regra pura (Risco_Aplica); custo = comissao + taxa + swap do deal.
+void Est_Aplica(const int r, const int v, const double preco, const long t, const ulong tk, const int papel, const double custo)
 {
    int f0 = eF[r];
-   eF[r] += v;
+   eRzDeal[r] += Risco_Aplica(eF[r], ePm[r], v, preco, eVp) + custo;
    if(eF[r] == 0) { Est_Zera(r); return; }
-   if(f0 == 0 || Mae_Sinal(f0) != Mae_Sinal(eF[r])) { ePm[r] = preco; eHora[r] = t; eId[r] = tk; ePab[r] = papel; return; }
-   if(Mae_Abs(eF[r]) > Mae_Abs(f0)) ePm[r] = (ePm[r] * Mae_Abs(f0) + preco * Mae_Abs(v)) / Mae_Abs(eF[r]);
-}
-
-// Absorve na ficha de r o que der de v (v reduz |f| de r); devolve true se absorveu.
-bool Est_Absorve(const int r, int &v, const bool virtual_)
-{
-   if(v == 0 || eF[r] == 0 || Mae_Sinal(eF[r]) != -Mae_Sinal(v)) return false;
-   int a = MathMin(Mae_Abs(eF[r]), Mae_Abs(v));
-   eF[r] += Mae_Sinal(v) * a;
-   v -= Mae_Sinal(v) * a;
-   if(virtual_) eAbsVirt[r] = true; else eAbsReal[r] = true;
-   if(eF[r] == 0) Est_Zera(r);
-   return true;
+   if(f0 == 0 || Mae_Sinal(f0) != Mae_Sinal(eF[r])) { eHora[r] = t; eId[r] = tk; ePab[r] = papel; }
 }
 
 // Regra 7.1 da spec para um deal externo de volume assinado v (real ou virtual). Devolve true se absorveu ficha.
-// prior >= 0 (so' o virtual, B2-4): o robo cujo deal explica o Delta absorve primeiro; o resto segue a ordem fixa.
-bool Est_Externo(int v, const bool virtual_, const int prior = -1)
+// A conta e' a de Risco_Externo (RiscoRegra.mqh): prior >= 0 (so' o virtual, B2-4) absorve primeiro; absorcao real realiza
+// ao preco do deal externo (em eRzDeal, fechado por Est_Fichas); a virtual nao realiza.
+bool Est_Externo(int v, const bool virtual_, const int prior = -1, const double preco = 0.0)
 {
-   // 1. compensa a externa existente de sinal oposto
-   if(eExt != 0 && Mae_Sinal(eExt) != Mae_Sinal(v))
+   bool ab[NROBOS];
+   ArrayInitialize(ab, false);
+   bool absorveu = Risco_Externo(eF, ePm, eExt, v, virtual_, prior, preco, eVp, eRzDeal, ab);
+   for(int r = 0; r < NROBOS; r++)
    {
-      int c = MathMin(Mae_Abs(eExt), Mae_Abs(v));
-      eExt += Mae_Sinal(v) * c;
-      v -= Mae_Sinal(v) * c;
+      if(!ab[r]) continue;
+      if(virtual_) eAbsVirt[r] = true; else eAbsReal[r] = true;
+      if(eF[r] == 0) Est_Zera(r);
    }
-   if(v == 0) return false;
-   int soma = 0;
-   for(int r = 0; r < NROBOS; r++) soma += eF[r];
-   int liq = soma + eExt;
-   // 2. o que sobra e aumenta |liquida| -> externa
-   if(liq == 0 || Mae_Sinal(liq) == Mae_Sinal(v)) { eExt += v; return false; }
-   // 3. o que sobra e reduz: absorcao nas fichas do lado reduzido, ordem fixa GB, CM, DM, RE, C1 (o robo atribuido antes)
-   bool absorveu = false;
-   if(prior >= 0 && prior < NROBOS && Est_Absorve(prior, v, virtual_)) absorveu = true;
-   for(int r = 0; r < NROBOS && v != 0; r++) if(Est_Absorve(r, v, virtual_)) absorveu = true;
-   if(v != 0) eExt += v;
    return absorveu;
 }
 
@@ -205,7 +194,11 @@ int Est_RoboDoDelta(const int d)
 // Calcula as fichas a partir dos deals da janela. Efeitos colaterais (log de ABSORVIDA, bloqueio) so' uma vez por ticket.
 void Est_Fichas(void)
 {
-   for(int r = 0; r < NROBOS; r++) { Est_Zera(r); eAbsReal[r] = false; eAbsVirt[r] = false; eNc[r] = 0; }
+   for(int r = 0; r < NROBOS; r++) { Est_Zera(r); eAbsReal[r] = false; eAbsVirt[r] = false; eNc[r] = 0; eResR[r] = 0.0; eRzDeal[r] = 0.0; }
+   ArrayResize(eResEv, 0, 64);
+   eHojeMsc = (long)Mae_Dia(mzAgora) * 1000;
+   double tsz = mzCorr.SimboloD(SYMBOL_TRADE_TICK_SIZE);
+   eVp = tsz > 0.0 ? mzCorr.SimboloD(SYMBOL_TRADE_TICK_VALUE) / tsz : 0.0;   // 0 so' com o simbolo sem tick: Mae_Ambiente para tudo
    eExt = mzExtDesc;
    int run = mzExtDesc;       // liquida corrida
    int ncSoma = 0;
@@ -222,7 +215,7 @@ void Est_Fichas(void)
       {
          int r2, p2;
          int cl2 = Est_Classifica(i + 1, r2, p2);
-         if(cl2 == CL_EXTERNO && Est_VolDeal(i + 1) == -v && MathAbs(mzDeal[i + 1].time_msc - mzDeal[i].time_msc) <= 1000)
+         if(cl2 == CL_EXTERNO && Risco_ParAjuste(v, mzDeal[i].time_msc, Est_VolDeal(i + 1), mzDeal[i + 1].time_msc))
          {
             if(!Est_NaLista(mzDealsLog, mzDeal[i].ticket))
             {
@@ -236,16 +229,19 @@ void Est_Fichas(void)
          }
       }
       run += v;
-      if(cl == CL_ROBO)          Est_Aplica(robo, v, mzDeal[i].preco, mzDeal[i].time_msc, mzDeal[i].ticket, papel);
+      double custo = mzDeal[i].comissao + mzDeal[i].taxa + mzDeal[i].swap;
+      if(cl == CL_ROBO)          Est_Aplica(robo, v, mzDeal[i].preco, mzDeal[i].time_msc, mzDeal[i].ticket, papel, custo);
       else if(cl == CL_MAESTRO)
       {
-         // encerramento (sec. 1.2, RV2 N-4): todas as fichas a 0; a externa e' a liquida que sobra; sem absorcao nem bloqueio
+         // encerramento (sec. 1.2, RV2 N-4): todas as fichas a 0; a externa e' a liquida que sobra; sem absorcao nem bloqueio.
+         // Resultado do dia (spec 7.3): cada ficha sai ao preco do deal do C_CONTA; o custo do deal e' da conta, nao de um robo.
+         Risco_Encerra(eF, ePm, mzDeal[i].preco, eVp, eRzDeal);
          for(int r = 0; r < NROBOS; r++) Est_Zera(r);
          eExt = run - ncSoma;
       }
       else if(cl == CL_EXTERNO)
       {
-         bool absorveu = Est_Externo(v, false);
+         bool absorveu = Est_Externo(v, false, -1, mzDeal[i].preco);
          if(absorveu && !Est_NaLista(mzAbsVistas, mzDeal[i].ticket))
          {
             Est_PoeLista(mzAbsVistas, mzDeal[i].ticket, 500);
@@ -258,8 +254,9 @@ void Est_Fichas(void)
       {
          mzNaoClassTotal++;
          ncSoma += v;
-         if(robo >= 0 && robo < NROBOS) eNc[robo]++;
+         if(robo >= 0 && robo < NROBOS) { eNc[robo]++; eRzDeal[robo] += custo; }   // fora da ficha: so' o custo
       }
+      Risco_FechaDeal(eRzDeal, eResR, eResEv, mzDeal[i].time_msc, eHojeMsc);   // um evento por deal (soma dos robos)
    }
    mzSomaDeals = run - mzExtDesc;
    mzDelta = mzLiq - run;
@@ -558,7 +555,9 @@ void Est_Prazos(void)
    }
    mzBloqAuto = auto_ || mzAbsVirtual;
 }
-bool Mae_Bloqueio(void) { return mzBloqBotao || mzBloqAuto; }
+// v2.03: a parada diaria (mzBloqDia, Risco.mqh) e' um bloqueio como os outros: I4 cancela as E vivas e pode_entrar barra as
+// novas; sai sozinha no pregao seguinte (nao exige o botao).
+bool Mae_Bloqueio(void) { return mzBloqBotao || mzBloqAuto || mzBloqDia; }
 
 //+------------------------------------------------------------------+
 //| Vista e getters dos modulos (sec. 7)                             |

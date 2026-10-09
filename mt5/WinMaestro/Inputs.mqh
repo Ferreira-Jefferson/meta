@@ -12,6 +12,8 @@ input bool Ativo_CM = true;   // WinCincoMedias ligado
 input bool Ativo_DM = true;   // WinDeslocamentoMatinal ligado
 input bool Ativo_RE = true;   // WinRetanguloEma34 ligado
 input bool Ativo_C1 = true;   // Win_c1 ligado
+input double Risco_Capital = 1000;     // Capital da parada diaria, em R$ (fixo; nao e' o saldo da corretora)
+input double Risco_PerdaDiaPct = 10.0; // Parada diaria: resultado liquido realizado do dia dos robos <= -isto % do capital -> sem entrada nova ate' o pregao seguinte (0 = desligada)
 
 input group "WinGapBarra1"
 input double GB_StopPts = 1200; // Stop em pontos (ordem stop no servidor, nasce com a entrada)

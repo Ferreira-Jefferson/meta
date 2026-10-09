@@ -5,6 +5,8 @@
 //| (posicao virtual = soma dos deals com o magic dele) e mandando as|
 //| ordens dele com o magic dele.                                    |
 //|                                                                  |
+//| v2.03 (2026-10-08): parada diaria (Risco.mqh) sobre o capital    |
+//| fixo Risco_Capital: perda do dia -> sem entradas ate' amanha.    |
 //| v2.02 (2026-10-07): todos os achados da revisao de codigo 2      |
 //| (mt5/WinMaestro_v2_revisao_codigo_2.md); ver as notas.           |
 //| v2.01 (2026-10-07): todos os achados da revisao de codigo 1      |
@@ -25,8 +27,8 @@
 //|   M15 20261005 | C1 Win_c1 H1 80080002                           |
 //+------------------------------------------------------------------+
 #property copyright "WinMaestro"
-#property version   "2.02"
-#property description "WinMaestro v2.02: os 5 robos do WIN ao mesmo tempo, cada um com a sua ficha e o seu magic (conta NETTING)"
+#property version   "2.03"
+#property description "WinMaestro v2.03: os 5 robos do WIN ao mesmo tempo, cada um com a sua ficha e o seu magic (conta NETTING), com parada diaria por perda do dia"
 #property strict
 
 #include "WinMaestro\Inputs.mqh"
@@ -170,6 +172,11 @@ int OnInit()
 
    Log("INFO", "MAESTRO", "INICIO", StringFormat("WinMaestro v%s em %s; ligados: GB %s CM %s DM %s RE %s C1 %s; pasta %s", WM_VERSAO,
        _Symbol, Ativo_GB ? "sim" : "nao", Ativo_CM ? "sim" : "nao", Ativo_DM ? "sim" : "nao", Ativo_RE ? "sim" : "nao", Ativo_C1 ? "sim" : "nao", pasta));
+   double tsz = mzCorr.SimboloD(SYMBOL_TRADE_TICK_SIZE), tvl = mzCorr.SimboloD(SYMBOL_TRADE_TICK_VALUE);
+   string vp = StringFormat("valor do ponto R$%.2f por contrato (TICK_VALUE %.2f / TICK_SIZE %.2f)", tsz > 0.0 ? tvl / tsz : 0.0, tvl, tsz);
+   Log("INFO", "MAESTRO", "RISCO", Risco_PerdaDiaPct > 0.0 && Risco_Capital > 0.0 ?
+       StringFormat("parada diaria em -%.2f%% de R$%.0f = -R$%.2f de resultado liquido realizado do dia; %s", Risco_PerdaDiaPct, Risco_Capital, Risco_Capital * Risco_PerdaDiaPct / 100.0, vp) :
+       "parada diaria desligada; " + vp);
    Mae_Partida();
    EventSetMillisecondTimer(250);
    return INIT_SUCCEEDED;

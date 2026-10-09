@@ -1,4 +1,6 @@
-# WinMaestro v2.02
+# WinMaestro v2.03
+
+v2.03 (2026-10-08): **parada diária**. Quando o resultado líquido realizado do dia dos robôs chega a −`Risco_PerdaDiaPct`% de `Risco_Capital` (padrão −10% de R$1.000 = −R$100), nenhuma entrada nova sai até o pregão seguinte; as posições abertas seguem normalmente. Ver "Parada diária" abaixo.
 
 v2.02 (2026-10-07): todos os achados da revisão de código 2 corrigidos (`WinMaestro_v2_revisao_codigo_2.md`; achado por achado em `WinMaestro_implementacao_notas.md` §10).
 
@@ -31,9 +33,9 @@ A lógica de sinal de cada robô é a do EA avulso. Cada robô **declara o que q
 
 ## Arquivos
 
-- `mt5/WinMaestro.mq5` e a pasta `mt5/WinMaestro/` (núcleo: `Tipos`, `Snapshot`, `Mapa`, `Estado`, `Decide`, `Envia`, `Partida`; apoio: `Corretora`, `Memoria`, `Log`, `Grade`, `Inputs`; um `.mqh` por robô).
+- `mt5/WinMaestro.mq5` e a pasta `mt5/WinMaestro/` (núcleo: `Tipos`, `Snapshot`, `Mapa`, `Estado`, `Decide`, `Envia`, `Partida`, `Risco`; apoio: `Corretora`, `Memoria`, `Log`, `Grade`, `Inputs`, `RiscoRegra`; um `.mqh` por robô).
 - Desenho: `WinMaestro_ARQUITETURA_v2.md`. Regras de negócio: `WinMaestro_ESPECIFICACAO.md`. Notas: `WinMaestro_implementacao_notas.md`.
-- A v1.03 está guardada em `mt5/WinMaestro_v1.03_historico/`.
+- A v2.02 é recuperável pelo git (último commit com ela: `cd96a56`, ex.: `git show cd96a56:mt5/WinMaestro.mq5`). A v1.03 saiu do repositório na limpeza de 2026-10-07 (recuperável pelo git: `git show 257b1e4:mt5/WinMaestro_v1.03_historico/...`).
 
 ## Instalação
 
@@ -50,15 +52,35 @@ A lógica de sinal de cada robô é a do EA avulso. Cada robô **declara o que q
 - [ ] Conta NETTING (conta hedging deixa o EA sem mandar nada).
 - [ ] Sem SL/TP posto à mão na posição líquida, a não ser de propósito: se executar, o maestro trata como zeragem manual (bloqueia entradas até o botão).
 - [ ] Na rolagem do contrato: troque o gráfico para o contrato novo. A memória é por símbolo e começa limpa.
-- [ ] A memória gravada pela v2.01 é lida pela v2.02 (mesmo formato): trocar a v2.01 pela v2.02 conserva o mapa das ordens, os níveis e o bloqueio. A memória da v1.03 e a da v2.00 não são lidas: na primeira partida, sem posição nem ordem dos robôs aberta é o caso limpo. Com posição aberta da v1.03, a partida reconstrói o que puder do histórico; entrada sem registro vira ficha trocada e é zerada.
+- [ ] A memória gravada pela v2.02 e pela v2.01 é lida pela v2.03 (mesmo formato; a parada diária não grava nada, sai do histórico do dia): trocar a versão conserva o mapa das ordens, os níveis e o bloqueio. **O contrário não vale:** a v2.02 não lê a memória gravada pela v2.03 e parte sem ela; voltar para a v2.02 só com a conta zerada e sem ordens dos robôs. A memória da v1.03 e a da v2.00 não são lidas: na primeira partida, sem posição nem ordem dos robôs aberta é o caso limpo. Com posição aberta da v1.03, a partida reconstrói o que puder do histórico; entrada sem registro vira ficha trocada e é zerada.
 
 ## Inputs
 
 O grupo **Maestro** fica no topo, com os 5 liga/desliga `Ativo_GB` … `Ativo_C1` (padrão: ligados). Desligado: o robô não abre nada novo; se tiver ficha ou ordem viva, continua gerindo até zerar.
 
+No mesmo grupo, a parada diária:
+
+| Input | Padrão | O que é |
+|---|---|---|
+| `Risco_Capital` | 1000 | Capital em R$ sobre o qual a parada é calculada. Fixo, digitado pelo dono; **não** é o saldo da corretora |
+| `Risco_PerdaDiaPct` | 10.0 | Perda do dia, em % do capital, que liga a parada. **0 desliga** |
+
 Depois vêm os grupos dos robôs, iguais aos do WinSeletor, sem os inputs de magic, de lote (lote fixo = 1), `GB_ServerGMTOffsetH`, `GB_RegimeAutomatico`, `GB_FimContinuoMin` (o fim do contínuo vem da grade B3 embutida) e `RE_LimiteEquity`. `DM_RiscoMaxPct` vale sobre R$1.000 fixos.
 
 Mudar qualquer input reinicia o EA. Nada é cancelado nem fechado por isso: a memória guarda o mapa das ordens e os níveis pedidos.
+
+## Parada diária
+
+- **Resultado do dia** = soma do resultado realizado **hoje** por cada robô, calculado como se cada um tivesse conta própria: preço médio da ficha do robô; cada negócio que reduz a ficha realiza (preço de saída − preço médio) × lado × contratos × valor do ponto (`SYMBOL_TRADE_TICK_VALUE` / `SYMBOL_TRADE_TICK_SIZE`, R$0,20 no WIN), mais comissão + taxa + swap dos negócios do robô. Ficha aberta ontem e fechada hoje: o preço de entrada é o da ficha e só o realizado hoje conta. Posição aberta (flutuante) não entra. Ganhos compensam perdas.
+- **Não usa o lucro que a corretora põe no negócio** (`DEAL_PROFIT`): em conta NETTING ele é o da posição LÍQUIDA que o negócio reduziu, que pode ser de outro robô ou sua. Caso real de 2026-10-08 na demo: com −3 vendidos à mão, a entrada do CM (compra 1) recebeu −R$543,67 de lucro da corretora, que eram o prejuízo da venda manual; para o maestro o resultado do CM nesse negócio é R$0.
+- O valor do ponto que o EA usa aparece na linha `RISCO` do log na partida e no painel: confira que é R$0,20.
+- **Zeragem manual de uma ficha de robô** (absorvida, spec 7.1) conta como saída do robô ao preço do negócio manual: o que o robô ganhou ou perdeu até ali entra no dia dele. **O corte da conta** (`C_CONTA`) também: cada ficha zerada por ele sai ao preço dele. A comissão do negócio manual e a do `C_CONTA` não são de nenhum robô e não entram. Negócio manual que não zera ficha de robô não entra.
+- A parada **liga** quando o resultado acumulado do dia fica **menor ou igual** a −`Risco_PerdaDiaPct`% de `Risco_Capital` (com os padrões: −R$100,00 para; −R$99,90 não para).
+- Ligada: as entradas vivas que ainda não executaram são canceladas e nenhuma entrada nova sai. **Nada é fechado**: stops, saídas, alvos, zeragens, correções e o corte seguem normalmente.
+- Vale **até o pregão seguinte**, mesmo que um ganho depois traga o resultado de volta para cima do limite. Um negócio que zera várias fichas de uma vez conta uma vez só, pela soma. No dia seguinte sai sozinha (não precisa do botão).
+- Não depende de memória: liga pelos negócios do dia e, ligada, fica presa até a data mudar. Reiniciar o EA no meio do dia refaz a conta pelos negócios do dia (com a perda no histórico, a parada volta). Funciona igual no Testador.
+- **Saída de emergência:** pôr `Risco_PerdaDiaPct` = 0 no meio do dia reinicia o EA e desfaz a parada.
+- O painel mostra o resultado do dia total e por robô; a linha `RISCO` do log, ao ligar, também.
 
 ## Horários
 
@@ -97,11 +119,12 @@ Níveis: `INFO`, `AVISO`, `ALERTA` (também abre a janela de `Alert()`), `ERRO`.
 | `ENTROU`, `SAIU`, `EXTERNA`, `ABSORVIDA` | Cada deal, com papel; deal manual; zeragem manual absorvida nas fichas |
 | `STOP` | Nível pedido; S de emergência |
 | `ESTADO` | INVALIDO (conexão, trava) ou robô RESTRITO há muito tempo |
+| `RISCO` | Na partida, a configuração da parada diária; depois, a parada diária ligada (resultado, limite) e desligada (pregão novo) |
 | `CORRECAO`, `BLOQUEIO`, `DESBLOQUEIO`, `CORTE`, `EPISODIO`, `TRAVA`, `MEMORIA`, `AMBIENTE`, `DECISAO PERDIDA`, `AUTONEG` | o que o nome diz |
 
 ## Painel e botão
 
-O canto do gráfico mostra (só leitura): estado do EA (ok, INVALIDO, INERTE, PROTEGENDO, PARADO), líquida, externa, diferença entre a líquida e os deals, hora do corte, bloqueio e, por robô, ficha, situação, preço, S pedida, alvo, entrada viva e intenção.
+O canto do gráfico mostra (só leitura): estado do EA (ok, INVALIDO, INERTE, PROTEGENDO, PARADO), líquida, externa, diferença entre a líquida e os deals, hora do corte, bloqueio (`parada diaria (perda do dia)` quando é ela; `<motivo> + parada diaria` com o botão e a parada juntos), o resultado do dia em R$, em % do capital e por robô, o valor do ponto, com a situação da parada (desligada, não atingida, ATIVA) e, por robô, ficha, situação, preço, S pedida, alvo, entrada viva e intenção.
 
 **Diferença externa gravada pelo botão** (`externa` no painel): quando o botão é usado com uma diferença estável entre a líquida e os deals do dia (uma posição manual anterior ao dia, por exemplo), ela fica gravada para explicar essa posição. Ela deixa de valer sozinha no dia seguinte e, no mesmo dia, quando a líquida e os deals do dia ficam em 0 por 30 s.
 
@@ -118,5 +141,7 @@ Diferenças pequenas em relação aos EAs avulsos, mantidas de propósito (detal
 - **Corridas aceitas pelo desenho**: um stop de robô que dispara junto com o `C_CONTA` do corte inverte a líquida por até 30 s (o próximo `C_CONTA` corrige); uma saída de ticket 0 que executou e ficou mais de 30 s fora do histórico pode ser reenviada (a correção da ficha desfaz a inversão).
 
 ## Testes unitários
+
+Parada diária (v2.03): `mt5/testes/WinMaestro_TesteParada.mq5`, script com 37 verificações sobre as mesmas funções que o EA usa deal a deal (`WinMaestro/RiscoRegra.mqh`). Regra da parada: fronteira (−10% para, −9,99% não para), dois ganhos e um stop grande, stop antes dos ganhos (fica parado no dia), capital R$7.000, input 0 e pregão seguinte. Resultado por robô: o caso real de 2026-10-08 (manual −3 + entrada do CM → CM R$0, não −R$543,67), dois robôs em lados opostos, inversão, ficha de ontem fechada hoje, preço médio, zeragem manual absorvida, `C_CONTA`, pior acumulado com dois robôs, um deal que realiza duas fichas (`C_CONTA` com lados opostos e absorção dupla: um evento só), absorção parcial, deal não classificado, absorção virtual, virada do dia e par AJUSTE. Para rodar: copie para `MQL5\Experts\testes\` com a pasta `WinMaestro\` da v2.03 ao lado, compile, arraste para qualquer gráfico e leia a aba Experts (`OK 37/37`). Não manda ordem nem lê a conta.
 
 Removidos a pedido do dono em 2026-10-07 (`WinMaestro_Teste.mq5` + `WinMaestro/CorretoraFalsa.mqh`, 137 verificações com corretora falsa, nunca rodadas). Recuperar com `git show 988e8e4:mt5/WinMaestro_Teste.mq5` e `git show 988e8e4:mt5/WinMaestro/CorretoraFalsa.mqh`. O `#ifndef WINMAESTRO_TESTE` em `Corretora.mqh` ficou e não muda nada no EA de produção.

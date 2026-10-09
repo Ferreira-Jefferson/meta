@@ -46,6 +46,7 @@ struct SDealInfo
    double preco;
    double comissao;
    double taxa;
+   double swap;          // v2.03: custo do deal no resultado do dia (spec 7.3)
    double lucro;
    long   razao;
    string comentario;
@@ -170,6 +171,7 @@ public:
          d[n].preco      = HistoryDealGetDouble(tk, DEAL_PRICE);
          d[n].comissao   = HistoryDealGetDouble(tk, DEAL_COMMISSION);
          d[n].taxa       = HistoryDealGetDouble(tk, DEAL_FEE);
+         d[n].swap       = HistoryDealGetDouble(tk, DEAL_SWAP);
          d[n].lucro      = HistoryDealGetDouble(tk, DEAL_PROFIT);
          d[n].razao      = HistoryDealGetInteger(tk, DEAL_REASON);
          d[n].comentario = HistoryDealGetString(tk, DEAL_COMMENT);

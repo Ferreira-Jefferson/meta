@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
 //| WinMaestro/Tipos.mqh                                             |
-//| Constantes, tipos e o estado global do nucleo v2.02.             |
+//| Constantes, tipos e o estado global do nucleo v2.03.             |
 //| Desenho: mt5/WinMaestro_ARQUITETURA_v2.md (v2.2). "sec. n" aponta|
 //| para o desenho; "spec n" para WinMaestro_ESPECIFICACAO.md 1.0.   |
 //|                                                                  |
@@ -14,8 +14,9 @@
 
 #include "Corretora.mqh"
 
-#define WM_VERSAO "2.02"
-#define WM_VERSAO_MEM_COMPAT "2.01"   // memoria gravada pela 2.01: mesmo formato da 2.02, lida (o bloqueio com botao e os episodios atravessam a troca)
+#define WM_VERSAO "2.03"
+#define WM_VERSAO_MEM_COMPAT  "2.02"  // memoria gravada pela 2.02 e pela 2.01: mesmo formato da 2.03, lida (o bloqueio com botao
+#define WM_VERSAO_MEM_COMPAT2 "2.01"  // e os episodios atravessam a troca; a parada diaria da 2.03 nao grava nada)
 
 //--- robos (ordem fixa GB, CM, DM, RE, C1) e o MAESTRO (dono das ordens da conta, sec. 5)
 #define NROBOS 5
@@ -323,6 +324,7 @@ int      mzNaoClassTotal = 0;
 bool     mzDeltaEstavel = false;
 bool     mzTodosProvados = false;
 bool     mzBloqAuto = false;
+bool     mzBloqDia = false;          // v2.03: parada diaria (perda do dia), liga pelo historico do dia, travada em RAM ate' o dia virar (Risco.mqh)
 bool     mzAbsVirtual = false;
 datetime mzJanIni = 0;
 

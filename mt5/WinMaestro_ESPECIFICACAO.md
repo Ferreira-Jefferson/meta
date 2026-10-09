@@ -34,7 +34,7 @@ Um EA que roda a lógica dos 5 robôs (GB, CM, DM, RE, C1) ao mesmo tempo. Cada 
 | Magics | GB 80080601, CM 80080501, DM 80080101, RE 20261005, C1 80080002 |
 | Grade de horários | `data/b3_grade_horaria_win.csv` embutida em `Grade.mqh` (atualizar = recompilar) |
 
-**Inputs.** Grupo **Maestro no topo**, com os 5 liga/desliga `Ativo_GB` … `Ativo_C1` (padrão `true`). Robô desligado não abre nada novo; se tiver ficha ou ordem viva, continua gerindo até zerar. Depois vêm os grupos dos robôs como no WinSeletor, sem: os inputs de lote (lote = 1), `GB_ServerGMTOffsetH`, `GB_RegimeAutomatico`, `GB_FimContinuoMin` (vêm da grade) e `RE_LimiteEquity` (o `TesterStop` por equity pararia os cinco).
+**Inputs.** Grupo **Maestro no topo**, com os 5 liga/desliga `Ativo_GB` … `Ativo_C1` (padrão `true`). Robô desligado não abre nada novo; se tiver ficha ou ordem viva, continua gerindo até zerar. No mesmo grupo (v2.03): `Risco_Capital` (R$, padrão 1000) e `Risco_PerdaDiaPct` (padrão 10.0; 0 desliga), da parada diária (7.3). Depois vêm os grupos dos robôs como no WinSeletor, sem: os inputs de lote (lote = 1), `GB_ServerGMTOffsetH`, `GB_RegimeAutomatico`, `GB_FimContinuoMin` (vêm da grade) e `RE_LimiteEquity` (o `TesterStop` por equity pararia os cinco).
 
 Mudar input reinicia o EA e passa pela recuperação (seção 10). O `OnInit` reinicializa explicitamente toda variável global e chama `Reseta()` de cada módulo (P17).
 
@@ -190,6 +190,22 @@ Deal com magic que não é de robô (0 = manual, mesa, zeragem compulsória P11,
 Bloqueio = nenhuma E nova. Ao entrar: as E vivas são canceladas (com as S delas, 5.1) e os módulos recebem `ENTRADA_CANCELADA` (item 1.9). Nunca são barrados: S, cancelamentos, saídas por regra, zeragens, corte e correções.
 
 Causas: zeragem manual (7.1), cruzada que não fecha em 10 pregões (3.2), ordem sem desfecho há 10 min (4.4), correção repetida (8). Todas saem pelo **botão** `OBJ_BUTTON` "Desbloquear" (visível só com bloqueio; dois cliques em até 3 s; `OnChartEvent`): grava os tickets causadores como **reconhecidos** na memória, libera e loga `DESBLOQUEIO`. A recuperação só bloqueia de novo por evento não reconhecido. Depois do botão nenhum robô reenvia entrada cancelada.
+
+### 7.3 Parada diária (v2.03; decisão do dono, 2026-10-08)
+
+**Regra.** Quando o resultado líquido realizado do dia dos robôs fica **menor ou igual** a −`Risco_PerdaDiaPct`% de `Risco_Capital`, nenhuma entrada nova sai até o pregão seguinte. Com os padrões: −R$100,00 liga; −R$99,90 não liga.
+
+- **Capital** = `Risco_Capital`, digitado pelo dono. Não é o saldo nem o patrimônio da corretora.
+- **Resultado do dia** = Σ dos robôs do resultado realizado **hoje** (data do servidor) por cada robô, como se cada um tivesse conta própria, mais `DEAL_COMMISSION` + `DEAL_FEE` + `DEAL_SWAP` dos deals de hoje do robô. Posição aberta (flutuante) não entra. Ganhos compensam perdas.
+- **Realizado de um robô** = calculado junto com a ficha (1.3), pelos deals na ordem do histórico, com o preço médio da ficha: deal que aumenta |ficha| pondera o preço médio; deal que reduz realiza (preço do deal − preço médio) × lado da ficha × contratos × valor do ponto (`SYMBOL_TRADE_TICK_VALUE` / `SYMBOL_TRADE_TICK_SIZE`); deal que inverte fecha a parte antiga ao preço do deal e abre a nova a esse preço. Ficha de pregão anterior: o preço de entrada é o da ficha; só o que se realiza hoje entra.
+- **Saídas que não são deal do robô.** Ficha absorvida por zeragem manual (7.1) sai ao preço do deal externo e realiza. Fichas zeradas pelo `C_CONTA` (encerramento) saem ao preço do deal dele e realizam: o objetivo é quanto os robôs ganharam ou perderam hoje, e a posição deles fechou ali. O custo do deal externo e o do `C_CONTA` não são de nenhum robô e não entram; deal externo que não absorve ficha não entra. Absorção pelo deal externo **virtual** (Delta sem deal, 2.2) não tem preço e não realiza nada (ela bloqueia entradas de qualquer forma). Deal de robô não classificado (fora da ficha) entra só com o custo.
+- **Nunca o `DEAL_PROFIT`.** Em NETTING ele é o da posição LÍQUIDA que o deal reduziu, que pode ser de outro robô ou do dono. Caso real de 2026-10-08 (demo): líquida −3 por vendas manuais @204.591,67; a entrada do CM (compra 1 @207.310) recebeu `DEAL_PROFIT` −543,67, prejuízo da venda manual; o realizado do CM nesse deal é 0. Somado pelo `DEAL_PROFIT`, isso ligaria a parada com capital 1000 sem o robô ter perdido nada.
+- **Pelo pior acumulado.** A parada liga se em algum momento do dia o acumulado chegou ao limite, e vale até o pregão seguinte mesmo que um ganho depois traga o resultado de volta. O acumulado anda **por deal**: um deal que realiza várias fichas (absorção de mais de uma ficha, `C_CONTA` com fichas de lados opostos) entra uma vez, com a soma do que realizou em todas.
+- **Ao ligar:** é um bloqueio de entradas como o de 7.2 (as E vivas não executadas são canceladas, nenhuma E nova), mas **sem botão**. Nunca são barrados: S, cancelamentos, saídas, alvos, zeragens, correções e o corte. Nada é fechado.
+- **Liga pelo histórico, fica travada no dia.** O resultado é refeito a cada ciclo dos deals do dia no snapshot, e é isso que liga a parada (também depois de reinício e no Testador). Ligada, ela fica travada em RAM até a data do servidor mudar: uma re-derivação do histórico no meio do pregão (botão, recuo da janela, externa que cai, histórico incompleto) não a desfaz. Sem histórico lido vale o último cálculo e a trava (sem histórico nenhum robô é confiável e nenhuma entrada sai de qualquer forma).
+- **Desfaz sozinha** no pregão seguinte (data nova; o dia novo não tem deal, o acumulado volta a 0). Ressalva: reiniciar o EA no meio do dia limpa a trava e a parada é re-derivada do histórico do dia; pôr `Risco_PerdaDiaPct` = 0 reinicia o EA e a desliga (saída de emergência do dono).
+- **Sem memória.** Nada é gravado em `estado.txt`.
+- **Log** `RISCO`: a configuração e o valor do ponto na partida; ALERTA ao ligar (pior acumulado, resultado atual e por robô, limite); INFO ao desligar, com o motivo (pregão novo). **Painel:** resultado do dia em R$, em % do capital e por robô, o valor do ponto usado, e a situação da parada; com o bloqueio do botão e a parada ao mesmo tempo, os dois motivos.
 
 ## 8. Ficha trocada ou duplicada
 

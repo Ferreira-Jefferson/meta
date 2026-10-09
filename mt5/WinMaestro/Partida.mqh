@@ -9,6 +9,7 @@
 #define WINMAESTRO_PARTIDA_MQH
 
 #include "Decide.mqh"
+#include "Risco.mqh"
 
 void Robo_Exporta(const int r);   // gancho: modulo iniciado -> Exporta(); senao copia as chaves carregadas
 
@@ -222,7 +223,7 @@ void Mae_CarregaMemoria(void)
    bool valida = ok != 2;
    string porque = ok == 2 ? "estado.txt e estado.bak ausentes ou corrompidos" : "";
    string ver = Mem_Get("versao", "");
-   if(valida && ver != WM_VERSAO && ver != WM_VERSAO_MEM_COMPAT) { valida = false; porque = "memoria de outra versao (" + Mem_Get("versao", "?") + ")"; }
+   if(valida && ver != WM_VERSAO && ver != WM_VERSAO_MEM_COMPAT && ver != WM_VERSAO_MEM_COMPAT2) { valida = false; porque = "memoria de outra versao (" + Mem_Get("versao", "?") + ")"; }
    if(valida && (Mem_GetI("conta", -1) != mzCorr.ContaI(ACCOUNT_LOGIN) || Mem_Get("servidor", "") != mzCorr.ContaS(ACCOUNT_SERVER) || Mem_Get("simbolo", "") != _Symbol))
       { valida = false; porque = "memoria de outra conta, servidor ou simbolo"; }
    // copia para os modulos (Car_*)
@@ -540,7 +541,10 @@ void Mae_Painel(void)
    string est = !mzTravaMinha ? "INERTE (trava de outro grafico)" : (!mzBaseOk ? "INVALIDO" : (mzNaoNetting ? "INVALIDO (nao NETTING)" : (mzParado ? "PARADO (ambiente)" : (mzProtegendo ? "PROTEGENDO" : "ok"))));
    string s = StringFormat("WinMaestro v%s | %s | %s | %s\n", WM_VERSAO, _Symbol, TimeToString(mzAgora, TIME_DATE | TIME_SECONDS), est);
    s += StringFormat("liquida %+d | externa %+d | Delta %+d | corte %s | %s\n", mzLiq, mzExterna, mzDeltaResto,
-                     TimeToString(Mae_CDe(mzAgora), TIME_MINUTES), Mae_Bloqueio() ? "BLOQUEIO: " + (mzBloqBotao ? mzBloqMotivo : "automatico") : "entradas liberadas");
+                     TimeToString(Mae_CDe(mzAgora), TIME_MINUTES), Mae_Bloqueio() ? "BLOQUEIO: " + (mzBloqBotao ? mzBloqMotivo + (mzBloqDia ? " + parada diaria" : "") : (mzBloqDia ? "parada diaria (perda do dia)" : "automatico")) : "entradas liberadas");
+   s += StringFormat("resultado do dia R$%.2f (%.2f%% de R$%.0f; %s; ponto R$%.2f/contrato) | parada diaria %s\n", mzResDia, Risco_Pct(mzResDia), Risco_Capital, Risco_PorRobo(), eVp,
+                     !(Risco_PerdaDiaPct > 0.0 && Risco_Capital > 0.0) ? "desligada" :
+                     (mzBloqDia ? StringFormat("ATIVA (bateu -%.2f%%): sem entradas ate' o pregao seguinte", Risco_PerdaDiaPct) : StringFormat("em -%.2f%% (nao atingida)", Risco_PerdaDiaPct)));
    string sits[4] = {"zero", "legitima", "TROCADA", "DUPLICADA"};
    for(int r = 0; r < NROBOS; r++)
    {
@@ -598,6 +602,7 @@ bool Mae_CicloUm(void)
    Est_Correcoes();
    Est_Episodios();
    Est_Prazos();
+   Risco_Dia();                                               // v2.03: resultado do dia e parada diaria (entra em Mae_Bloqueio)
    Mae_Pronto();
    if(!mzParado) Est_Modulos();
    Dec_SCruzRelogio();                                        // relogio da S cruzada em todo ciclo com a base (B2-2)
@@ -664,7 +669,7 @@ void Mae_Reseta(void)
    mzProntoLogado = false; mzAmbVisto = false; mzProtegendo = false; mzParado = false; mzNaoNetting = false; mzAmbUlt = 0;
    mzSpecifiedOk = false; mzFillMercado = ORDER_FILLING_RETURN; mzPainelUlt = 0; mzBotaoClique = 0;
    mzExterna = 0; mzSomaDeals = 0; mzDelta = 0; mzDeltaResto = 0; mzNaoClassTotal = 0; mzDeltaEstavel = false; mzTodosProvados = false;
-   mzBloqAuto = false; mzAbsVirtual = false; mzJanIni = 0; mzGradeAvisoDia = 0; mzCasaChamadas = 0;
+   mzBloqAuto = false; mzBloqDia = false; mzBloqDiaLog = false; mzBloqDiaDia = 0; mzResDia = 0.0; ArrayInitialize(mzResDiaR, 0.0); mzAbsVirtual = false; mzJanIni = 0; mzGradeAvisoDia = 0; mzCasaChamadas = 0;
    mzTravaNome = ""; mzHbNome = ""; mzToken = 0.0; mzTravaMinha = false; mzHbAlheio = 0.0; mzHbAvancaDesde = 0; mzHbUltMuda = 0; mzTravaTentUlt = 0;
    mzRecarregar = false; mzTravaRemoveu = false; ArrayResize(mzCarK, 0); ArrayResize(mzCarV, 0); mzCarMesmoDia = false;
    Mem_Limpa(); mzMemUltimoTexto = "";
