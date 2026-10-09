@@ -25,7 +25,7 @@ bool LadoDaAbertura(int i, int lado)
 bool Mms72OpenInclinada(int i, int lado)
 {
    double agora = MMS(i, 72, true), antes = MMS(i - 3, 72, true);
-   if(agora == INVALIDO || antes == INVALIDO) return false;
+   if(agora == SEM_VALOR || antes == SEM_VALOR) return false;
    return (agora - antes) * lado > 0;
 }
 
@@ -33,7 +33,7 @@ bool Mms72OpenInclinada(int i, int lado)
 bool SinalBom(int i, int lado)
 {
    double k = Estocastico(i);
-   bool nao_esticado = k != INVALIDO && (lado == 1 ? k : 100 - k) < ESTOC_MAX;
+   bool nao_esticado = k != SEM_VALOR && (lado == 1 ? k : 100 - k) < ESTOC_MAX;
    bool h4_neutro = g_h4.n > AQUECIMENTO_H4 && Tendencia(g_h4) == 0;
    return nao_esticado || h4_neutro;
 }

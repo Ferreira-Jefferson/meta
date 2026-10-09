@@ -25,10 +25,10 @@ double ProximaMME(double anterior, double valor, int n, bool primeira)
    return a * valor + (1 - a) * anterior;
 }
 
-//--- Média simples do close (ou do open) das n barras até i. INVALIDO se não há barras suficientes.
+//--- Média simples do close (ou do open) das n barras até i. SEM_VALOR se não há barras suficientes.
 double MMS(int i, int n, bool do_open = false)
 {
-   if(i < n - 1) return INVALIDO;
+   if(i < n - 1) return SEM_VALOR;
    double s = 0;
    for(int k = i - n + 1; k <= i; k++) s += do_open ? g_barras[k].o : g_barras[k].c;
    return s / n;
@@ -37,10 +37,10 @@ double MMS(int i, int n, bool do_open = false)
 //--- %K "cru" do estocástico n na barra i.
 double EstocasticoCru(int i, int n)
 {
-   if(i < n - 1) return INVALIDO;
+   if(i < n - 1) return SEM_VALOR;
    double hh = g_barras[i].h, ll = g_barras[i].l;
    for(int k = i - n + 1; k < i; k++) { hh = MathMax(hh, g_barras[k].h); ll = MathMin(ll, g_barras[k].l); }
-   if(hh == ll) return INVALIDO;
+   if(hh == ll) return SEM_VALOR;
    return 100.0 * (g_barras[i].c - ll) / (hh - ll);
 }
 
@@ -50,9 +50,9 @@ double Estocastico(int i, int n = 14, int suav = 3)
    double s = 0;
    for(int k = i - suav + 1; k <= i; k++)
    {
-      if(k < 0) return INVALIDO;
+      if(k < 0) return SEM_VALOR;
       double x = EstocasticoCru(k, n);
-      if(x == INVALIDO) return INVALIDO;
+      if(x == SEM_VALOR) return SEM_VALOR;
       s += x;
    }
    return s / suav;

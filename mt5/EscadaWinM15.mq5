@@ -12,6 +12,7 @@
 //|   Stop        stop inicial (MME38) e movimento pela estrutura    |
 //|   Ordens      entrada limitada, cancelamento, stop, zeragem      |
 //|   Registro    CSV das negociações                                |
+//|   Caixa       caixa informado + resultado do robô (só exibe)     |
 //|                                                                  |
 //| REGRA                                                            |
 //|  1. Fundo confirmado acima do anterior (estágio >= 1) -> compra; |
@@ -29,7 +30,7 @@
 //| gráfico (o EA monta o M15 sozinho a partir do M1).               |
 //+------------------------------------------------------------------+
 #property copyright "EscadaWinM15"
-#property version   "1.10"
+#property version   "1.11"
 #property strict
 
 #include "EscadaWinM15/Calendario.mqh"
@@ -40,9 +41,11 @@
 #include "EscadaWinM15/Stop.mqh"
 #include "EscadaWinM15/Ordens.mqh"
 #include "EscadaWinM15/Registro.mqh"
+#include "EscadaWinM15/Caixa.mqh"
 
 input double Lotes       = 2;          // Contratos por operação
 input ulong  MagicNumber = 41041015;   // Código que identifica as ordens deste robô
+input double CaixaInicial = 2000;      // Caixa (R$) quando o robô começou a operar; o EA soma o resultado dele
 
 #define DIAS_AQUECIMENTO 120            // histórico lido na partida para as médias e o H4 já valerem
 
@@ -106,6 +109,7 @@ int OnInit()
    g_ult_m1 = TimeCurrent() - DIAS_AQUECIMENTO * SEG_DIA;
    Sincroniza(false);
    PrintFormat("EscadaWinM15 v4.2 pronto: %d barras M15 de aquecimento, H4 com %d blocos.", g_nbarras, g_h4.n);
+   MostraCaixa(CaixaInicial, Lotes, MagicNumber);
    return INIT_SUCCEEDED;
 }
 
@@ -113,14 +117,15 @@ void OnTick()
 {
    datetime agora = TimeCurrent();
    if(agora >= HoraCorte(DiaDe(agora))) FazCorte(MagicNumber);   // fim do dia: nada fica aberto
-   VigiaStopDaEntrada();
    datetime minuto = agora - (agora % 60);
    if(minuto == g_ult_minuto) return;          // barras só mudam na virada do minuto
    g_ult_minuto = minuto;
    Sincroniza(true);
+   MostraCaixa(CaixaInicial, Lotes, MagicNumber);
 }
 
 void OnDeinit(const int reason)
 {
    GravaNegocios(MagicNumber);
+   Comment("");
 }

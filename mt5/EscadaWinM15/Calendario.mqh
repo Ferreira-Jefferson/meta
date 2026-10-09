@@ -15,7 +15,7 @@
 
 //--- Grade da B3: a partir de cada data, a que horas acaba o contínuo.
 struct Vigencia { datetime inicio; int fim_min; };
-Vigencia GRADE[] = {
+Vigencia GRADE_FIM[] = {
    {D'2020.11.03', 18 * 60 + 25}, {D'2021.03.15', 17 * 60 + 55},
    {D'2021.11.08', 18 * 60 + 25}, {D'2022.03.14', 17 * 60 + 55},
    {D'2022.11.07', 18 * 60 + 25}, {D'2023.03.13', 17 * 60 + 55},
@@ -31,9 +31,9 @@ int MinutoDoDia(datetime t) { return (int)((t % SEG_DIA) / 60); }
 //--- Minuto do dia em que acaba o pregão contínuo, pela grade vigente na data.
 int FimContinuoMin(datetime dia)
 {
-   int fim = GRADE[0].fim_min;
-   for(int k = 0; k < ArraySize(GRADE); k++)
-      if(dia >= GRADE[k].inicio) fim = GRADE[k].fim_min;
+   int fim = GRADE_FIM[0].fim_min;
+   for(int k = 0; k < ArraySize(GRADE_FIM); k++)
+      if(dia >= GRADE_FIM[k].inicio) fim = GRADE_FIM[k].fim_min;
    return fim;
 }
 

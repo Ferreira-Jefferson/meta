@@ -15,7 +15,7 @@
 #define SEG_BARRA     900      // 15 minutos
 #define ATR_N         14
 #define ATR_MIN       5
-#define INVALIDO      -1.0
+#define SEM_VALOR      -1.0
 
 struct Barra
 {
@@ -24,7 +24,7 @@ struct Barra
    datetime dia;
    int      contrato;
    double   tr;
-   double   atr;        // INVALIDO enquanto houver menos de 5 TRs no contrato
+   double   atr;        // SEM_VALOR enquanto houver menos de 5 TRs no contrato
 };
 
 Barra    g_barras[];
@@ -66,7 +66,7 @@ double CalculaATR(int i)
       if(g_barras[k].contrato != g_barras[i].contrato) break;
       soma += g_barras[k].tr; n++;
    }
-   return n >= ATR_MIN ? soma / n : INVALIDO;
+   return n >= ATR_MIN ? soma / n : SEM_VALOR;
 }
 
 //--- Acrescenta a barra fechada ao histórico e calcula TR e ATR.

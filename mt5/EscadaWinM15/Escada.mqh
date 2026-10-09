@@ -42,7 +42,7 @@ int ZigZag(int ini, int fim, Pivo &piv[])
    for(int t = ini; t <= fim; t++)
    {
       double atr = g_barras[t].atr;
-      if(atr == INVALIDO) { hi = lo = t; continue; }
+      if(atr == SEM_VALOR) { hi = lo = t; continue; }
       if(g_barras[t].h >= g_barras[hi].h) hi = t;
       if(g_barras[t].l <= g_barras[lo].l) lo = t;
       double dist = atr * K_ZIGZAG;

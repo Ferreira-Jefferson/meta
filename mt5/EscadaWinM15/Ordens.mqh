@@ -5,7 +5,6 @@
 //|                                                                  |
 //|  - Entrada: ordem LIMITADA no close da barra de confirmação, já  |
 //|    com o stop (campo sl, no servidor). Vale por 3 barras M15.    |
-//|  - Se o preço tocar o stop antes de a entrada encher, cancela.   |
 //|  - Uma posição por vez; sem alvo; zera no corte do pregão.       |
 //+------------------------------------------------------------------+
 #ifndef ESCADA_ORDENS
@@ -23,7 +22,6 @@ struct Entrada
 {
    ulong  ticket;
    int    lado;
-   double stop;
    int    vence_na_barra;   // cancela quando esta barra M15 fechar
 };
 Entrada g_entrada;
@@ -71,7 +69,7 @@ bool EnviaEntrada(int lado, double limite, double stop, double lotes, int barra_
       return false;
    }
    g_entrada.ticket = ja_no_limite ? 0 : g_trade.ResultOrder();
-   g_entrada.lado = lado; g_entrada.stop = stop;
+   g_entrada.lado = lado;
    g_entrada.vence_na_barra = barra_conf + VALIDADE_BARRAS;
    return true;
 }
@@ -88,15 +86,6 @@ void CancelaEntrada(string motivo)
 void VenceEntrada(int barra_fechada)
 {
    if(TemEntradaPendente() && barra_fechada >= g_entrada.vence_na_barra) CancelaEntrada("validade de 3 barras");
-}
-
-//--- A cada tick: se o preço tocou o stop antes de a entrada encher, a operação perdeu o sentido.
-void VigiaStopDaEntrada()
-{
-   if(!TemEntradaPendente()) return;
-   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID), ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-   bool tocou = g_entrada.lado == 1 ? bid <= g_entrada.stop : ask >= g_entrada.stop;
-   if(tocou) CancelaEntrada("stop tocado antes do preenchimento");
 }
 
 //=================== posição ===================
