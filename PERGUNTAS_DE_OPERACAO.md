@@ -90,13 +90,30 @@ Juntas, as respostas certas levam um sinal que é quase cara ou coroa (+8 pts po
 - **A régua e a resposta certa dependem da estratégia.** Exemplo medido: na escada, "o preço já está esticado a favor?" deve ser **não**; nos robôs de tendência do Maestro, as melhores entradas acontecem justamente com o oscilador esticado, e exigir "não" piorou todos eles.
 - **Uma pergunta nova só acrescenta se separar os sinais que já passaram nas outras.** Quase tudo que mede tendência repete D2–D5.
 
+### O que se mediu nos outros robôs (2026-10-09)
+
+As mesmas perguntas D2–D7, com a mesma régua da escada, foram respondidas nas operações dos 5 robôs do Maestro (Cinco Médias, Deslocamento Matinal, Win_c1, Retângulo EMA34, GapBarra1). **Nenhuma separou de forma estável em nenhum deles.** Três situações apareceram, e o gabarito precisa distinguir as três:
+
+- **Embutida:** a estratégia já só opera com uma das respostas (o Win_c1 só entra a favor do H1; o Deslocamento só de manhã e do lado da abertura). A pergunta está certa, mas já foi respondida pelo próprio sinal.
+- **Não separa:** a resposta não muda o resultado daquela estratégia (para robôs de tendência e de horário fixo, o "preço esticado" e a média longa não importam). A pergunta continua valendo; a resposta dela, para essa estratégia, é "indiferente".
+- **Libera com sim/não:** a resposta muda o resultado nos dois períodos (só aconteceu na escada: D2, D5 e o gap).
+
+O que é universal, então, é a **lista de perguntas e o método**; a régua e a resposta certa são de cada estratégia. As perguntas D2–D7 descrevem bem estratégias de reversão como a escada. Para outros tipos, use também:
+
+| # | pergunta universal | para que tipo de estratégia |
+|---|---|---|
+| D10 | O horário da entrada faz parte da tese (a estratégia só existe numa janela do dia)? | robôs de abertura e de horário fixo |
+| D11 | O gap de abertura está a favor ou contra a operação, e já foi preenchido? | qualquer uma; na escada, gap a favor é **não** libera (pior com ele) |
+| D12 | O padrão próprio da estratégia (retângulo, faixa, rompimento) está confirmado e com tamanho típico em ATR? | robôs de padrão |
+| D13 | A tendência do tempo gráfico PRÓPRIO da estratégia está a favor? | robôs de tendência (costuma vir embutida) |
+
 ### Como montar o gabarito de outra estratégia
 
 1. Liste os sinais brutos da estratégia (antes de qualquer filtro), cada um com o resultado de operá-lo sozinho.
 2. Para cada pergunta D2–D7 (e outras que fizerem sentido), escolha uma régua concreta e responda sim/não em cada sinal, só com velas fechadas.
 3. Meça o resultado médio com sim e com não no período de escolha. Fique com a resposta que separa e anote a régua.
 4. Confira, sem mudar nada, num período que não foi usado, e compare com o acaso (sortear a mesma quantidade de sinais).
-5. Escreva o gabarito numa tabela igual à de cima. Se respondendo às perguntas com ele o resultado não for idêntico ao do robô, falta pergunta ou a régua está errada.
+5. Escreva o gabarito numa tabela igual à de cima, marcando cada pergunta como **libera com sim**, **libera com não**, **embutida** ou **indiferente**. Se respondendo às perguntas com ele o resultado não for idêntico ao do robô, falta pergunta ou a régua está errada.
 
 ---
 
