@@ -10,6 +10,21 @@ Perguntas para fazer antes, durante e depois de cada operação, e também ao pe
 - **Para cada resposta, pergunte também o contrário:** "e se for o oposto, o que eu faria?". Se a decisão seria a mesma nos dois casos, a pergunta não estava decidindo nada.
 - **O que já foi medido** aparece em *itálico*, logo depois da pergunta. São resultados do WIN (escada M15 e os outros robôs). Use como ponto de partida, não como verdade eterna.
 
+## Para uma IA responder a este arquivo
+
+Regras práticas, tiradas das primeiras autópsias de dias ruins feitas por IA (10 dias da escada, 2026-10-09):
+
+- **Momento.** Diga sempre se a resposta usa só o que se sabia até o instante da decisão (pode virar sinal) ou o dia inteiro (só explica). Numa autópsia, responda as duas versões separadas.
+- **Sem dado, sem invenção.** Se o material não responde a pergunta (notícia, exterior, livro, plataforma, estado emocional), escreva "sem dado". Se a data sugerir um evento (Copom, FOMC, payroll, vencimento, fim de mês), escreva "suspeita" e o motivo.
+- **Eventos pelo gráfico.** Em vez de adivinhar notícia, liste anomalias medidas, com a hora: volume acima de 2× a mediana daquele horário, vela acima de 2 ATR do tempo gráfico, ATR que dobra no dia.
+- **Unidades.** Dê distâncias em pontos, em ATR do tempo gráfico e em ATR diário (média simples de 14 amplitudes verdadeiras diárias até a véspera). Um é cerca de 15 vezes o outro no M15; misturar os dois inverte conclusões.
+- **Comparação precisa de referência.** Perguntas com "costuma", "se parece com as boas" ou "é normal" se respondem com o valor de hoje e o percentil dele numa tabela de referência (todas as operações, ou os dias bons). Sem a tabela, responda "sem referência".
+- **Um dia não testa nada.** O bloco 0 e as comparações servem para cruzar vários dias, não para concluir a partir de um.
+- **Stop.** Diga se o stop inicial foi o pivô ou o aperto, o resultado com cada um, e quantos R a mais teriam sobrevivido até o fim do dia.
+- **"Dia ruim"** = pregão com resultado negativo da estratégia. Informe também o tamanho em R, porque −0,1R e −2R pedem leituras diferentes.
+- **Material mínimo de uma autópsia:** operações com hora exata (M1) de entrada e saída e trajetória do stop; todos os sinais do dia com cada filtro; M15 dos dias anteriores com indicadores; M1 do dia com leilões; diário de 40 dias; H1 e H4; volume médio por horário dos 20 dias anteriores; calendário de eventos; o dólar no mesmo período; e uma tabela de referência das operações boas.
+
+
 ---
 
 ## 0. Antes de aceitar qualquer conclusão: em que condições ela foi tirada?
@@ -52,8 +67,8 @@ Este é o bloco mais importante. Uma conclusão ("isso funciona", "isso não fun
 13. Em que regime o mercado está agora (tendência, lateral, alta volatilidade, baixa liquidez), e o que mostra isso?
 14. Os tempos gráficos maiores concordam com o menor? Onde há divergência, qual deles costuma mandar nesta estratégia? *Na escada, a tendência do H1 a favor é filtro obrigatório; o H4 neutro também libera.*
 15. Onde o preço está em relação às referências do dia (abertura, máxima, mínima, fechamento anterior), da semana e do mês? *O lado da abertura do dia é filtro da escada; o preço contra a abertura do mês foi a única pista de regime mensal que melhorou alguma coisa.*
-16. Quanto o mercado já andou hoje em ATR, e quanto costuma andar num dia assim?
-17. A estrutura de topos e fundos está ficando mais forte ou mais fraca? O que indica isso (tamanho das pernas, tempo, volume)?
+16. Quanto o mercado já andou hoje (máxima − mínima desde a abertura) em ATR diário, e em que percentil isso fica entre os dias do histórico na mesma hora? Que fração da amplitude típica de um dia ainda sobra? *Nas autópsias de 10 dias ruins da escada, 8 entraram com o dia já tendo feito ≥ 0,75 ATR diário ("dia esgotado"); em teste nos dias bons e fora da amostra.*
+17. A estrutura de topos e fundos está ficando mais forte ou mais fraca? Liste os últimos pivôs (hora, preço, tamanho da perna em ATR, número de velas, volume) e compare as duas últimas pernas com a média das pernas do dia.
 18. Os ativos que costumam andar junto (dólar, índice americano, ações de maior peso) confirmam ou contradizem o movimento? *A confirmação cruzada WIN×WDO só apareceu como "estado anômalo", não como sinal.*
 19. Existe algo fora do normal hoje (volume, amplitude, velocidade, spread, buracos no gráfico) que torne o histórico menos parecido com o presente?
 20. Que informação eu estou ignorando porque ela não está no meu gráfico de costume?
@@ -89,7 +104,7 @@ Este é o bloco mais importante. Uma conclusão ("isso funciona", "isso não fun
 41. Existe algum evento nos próximos minutos ou horas que possa mudar o mercado de repente?
 42. O dia de hoje tem alguma característica de calendário (vencimento, véspera, início/fim de mês, dia da semana) que costume mudar o comportamento? *Dia da semana, quarta de vencimento e calendário foram testados e não viraram regra.*
 43. A primeira barra do dia ou o leilão estão contaminando a leitura? *O M1 do WIN contém os leilões (1ª barra e 18:24); estudos que não os removem leem preço que não é negociação contínua.*
-44. Os dias parecidos com hoje no histórico (mesmo gap, mesmo calendário, mesma volatilidade) se comportaram como?
+44. Quais são os dias do histórico mais parecidos com hoje (gap, amplitude até agora, volatilidade, calendário), e como a estratégia se saiu neles?
 
 ## 6. O sinal e a decisão de entrar
 
@@ -115,7 +130,7 @@ Este é o bloco mais importante. Uma conclusão ("isso funciona", "isso não fun
 
 ## 8. Stop
 
-61. Onde o stop precisa estar para só ser atingido se a tese estiver errada, e não pelo ruído normal?
+61. Onde o stop precisa estar para só ser atingido se a tese estiver errada, e não pelo ruído normal? Quantos R de stop teriam sobrevivido em dias parecidos, e esse stop cabe dentro da faixa já feita no dia? *Em 2 dos 10 dias ruins analisados, o aperto do stop pela MME38 transformou ganho em perda; nos outros, um stop maior só trocaria uma perda por outra.*
 62. Quanto o stop custa em reais com a mão de hoje, e isso cabe na perda aceitável?
 63. O stop está registrado na corretora? Se o computador ou a internet caírem agora, o que acontece?
 64. O que faz o stop se mover, e a regra de movimento é a mesma do backtest? *Na escada, o stop sobe a cada novo topo/fundo confirmado a favor e nunca recua.*
@@ -176,7 +191,7 @@ Este é o bloco mais importante. Uma conclusão ("isso funciona", "isso não fun
 101. Quanto custou a execução (deslize, fila, taxas) comparado com o que o modelo assume?
 102. Em que condições a operação aconteceu (hora, volume, regime, distância das médias)? Ela se parece com as boas ou com as ruins?
 103. Quanto a operação andou a favor e contra antes de sair? O stop e o alvo estavam no lugar certo?
-104. A perda foi normal, dentro da regra, ou foi erro? *Perda dentro da regra não é erro e não pede mudança.*
+104. A regra foi seguida (sim/não)? Havia alguma condição contra no momento da entrada (qual)? *Perda dentro da regra não é erro e não pede mudança.*
 105. O que uma linha no diário diria sobre esta operação?
 
 ## 15. Pesquisa: antes de acreditar numa ideia
