@@ -101,8 +101,129 @@ def _f(x):
     return f"{x:.0f}"
 
 
+def derivados_calc(o, h, l, c, v, vprev, ont, atrd, atr15) -> dict:
+    """Numeros DERIVADOS do pacote na vela k (funcao pura; arrays de HOJE ate a vela k fechada, indice <= k).
+
+    o,h,l,c,v: velas M15 de hoje (1a ... k). vprev: volumes das velas M15 anteriores a de hoje (>= 20 se houver).
+    ont = (max, min, fech) de ontem ou None. atrd/atr15: ATR diario (ate ontem) e ATR M15 (so passado).
+    So usa dados com indice <= k: nao ha como enxergar o futuro por construcao.
+    """
+    n = len(c)
+    ab, last = float(o[0]), float(c[-1])
+    d: dict = dict(n=n, ab=ab, last=last)
+    desl = last - ab
+    soma = float((h - l).sum())
+    amp = float(h.max() - l.min())
+    d.update(desl=desl, desl_atrd=desl / atrd if atrd else float("nan"), er=abs(desl) / soma if soma > 0 else 0.0,
+             desl_amp=abs(desl) / amp if amp > 0 else 0.0, amp=amp, amp_atrd=amp / atrd if atrd else float("nan"),
+             pct_acima_ab=float((c > ab).mean() * 100))
+    # volume da ultima vela contra as 10/20 anteriores (inclui velas de ontem no inicio do dia)
+    vv = np.concatenate([np.asarray(vprev, float), np.asarray(v, float)])
+    vl = vv[-1]
+    for m in (10, 20):
+        ref = vv[-1 - m:-1]
+        d[f"vol_r{m}"] = float(vl / ref.mean()) if len(ref) and ref.mean() > 0 else float("nan")
+    # extremos do dia e idade (velas desde a ultima vez em que o extremo foi tocado)
+    hi, lo = float(h.max()), float(l.min())
+    d.update(hi=hi, lo=lo, vel_hi=int(np.argmax(h[::-1])), vel_lo=int(np.argmin(l[::-1])))
+    d["rompeu_dia"] = ("alta" if n > 1 and last > h[:-1].max() else "baixa" if n > 1 and last < l[:-1].min() else "nenhum")
+    # devolucao do deslocamento maximo do dia
+    up, dn = hi - ab, ab - lo
+    if up >= dn and up > 0:
+        d.update(dev_lado="alta", dev=(hi - last) / up)
+    elif dn > 0:
+        d.update(dev_lado="baixa", dev=(last - lo) / dn)
+    else:
+        d.update(dev_lado="nenhum", dev=0.0)
+    # ontem
+    if ont is not None:
+        oh, ol, oc = ont
+        d.update(ont_h=oh, ont_l=ol, ont_c=oc, hoje_rompeu_ont_h=bool(hi > oh), hoje_rompeu_ont_l=bool(lo < ol))
+        d["pos_ont"] = "acima" if last > oh else "abaixo" if last < ol else "dentro"
+        d["dist_ont_h"] = last - oh
+        d["dist_ont_l"] = last - ol
+        d["pos_faixa_ont"] = (last - ol) / (oh - ol) if oh > ol else float("nan")
+        gap = ab - oc
+        d.update(gap=gap, gap_atrd=gap / atrd if atrd else float("nan"))
+        if gap != 0:
+            d["gap_preenchido"] = (ab - last) / gap          # 0 = na abertura; 1 = fechou o gap; <0 = ampliou
+            d["gap_max_preenchido"] = ((ab - lo) / gap) if gap > 0 else ((hi - ab) / -gap)
+        else:
+            d["gap_preenchido"] = d["gap_max_preenchido"] = None
+    else:
+        d.update(ont_h=None)
+    # faixa das 12 velas anteriores a ultima e a vela atual
+    if n >= 13:
+        fh, fl = float(h[-13:-1].max()), float(l[-13:-1].min())
+        d.update(faixa12=fh - fl, faixa12_atrd=(fh - fl) / atrd if atrd else float("nan"),
+                 f12_pos="acima" if last > fh else "abaixo" if last < fl else "dentro",
+                 ult_amp=float(h[-1] - l[-1]), ult_amp_atr=float((h[-1] - l[-1]) / atr15) if atr15 else float("nan"))
+    # ultimas 8 velas: faixa e volume
+    if n >= 8:
+        f8 = float(h[-8:].max() - l[-8:].min())
+        d.update(faixa8=f8, faixa8_atrd=f8 / atrd if atrd else float("nan"),
+                 vol8_rel=float(np.mean(v[-8:]) / np.mean(v)) if np.mean(v) > 0 else float("nan"))
+    # ultimo topo / fundo de swing de HOJE: fractal de 2 velas de cada lado, ja confirmado (indice <= k-2)
+    topo = fundo = None
+    for i in range(n - 3, 1, -1):
+        if topo is None and h[i] > max(h[i - 1], h[i - 2], h[i + 1], h[i + 2]):
+            topo = (i, float(h[i]))
+        if fundo is None and l[i] < min(l[i - 1], l[i - 2], l[i + 1], l[i + 2]):
+            fundo = (i, float(l[i]))
+        if topo and fundo:
+            break
+    d.update(swing_topo=topo, swing_fundo=fundo)
+    return d
+
+
+def linhas_derivadas(mk: "Mercado", dia: DiaMkt, k: int) -> list[str]:
+    """Linhas de texto DERIVADAS (ja calculadas) para o pacote da vela k fechada. So velas <= k e dias anteriores."""
+    b = mk.m15
+    data = dia.data
+    hoje = b[b.dia == data].iloc[: k + 1]
+    ant = b[b.dia < data]
+    dias_ant = [x for x in mk.dias if x < data]
+    ontem = mk.diario.loc[dias_ant[-1]] if dias_ant else None
+    atrd = float(mk.diario.loc[dias_ant[-1], "atr_d"]) if dias_ant else float("nan")
+    atr15 = float(hoje.atr_m15.iloc[-1])
+    ont = (float(ontem.high), float(ontem.low), float(ontem.close)) if ontem is not None else None
+    d = derivados_calc(hoje.open.to_numpy(float), hoje.high.to_numpy(float), hoje.low.to_numpy(float), hoje.close.to_numpy(float),
+                       hoje.real_volume.to_numpy(float), ant.real_volume.to_numpy(float)[-20:], ont, atrd, atr15)
+    return formata_derivados(d)
+
+
+def _f2(x):
+    return "n/d" if x is None or x != x else f"{x:.2f}"
+
+
+def formata_derivados(d: dict) -> list[str]:
+    f1 = _f2
+    L = ["DERIVADOS (calculados so com velas fechadas; ATRd = ATR diario ate ontem):"]
+    L.append(f"  Deslocamento desde a abertura: {d['desl']:+.0f} pts = {f1(d['desl_atrd'])} ATRd | amplitude do dia {d['amp']:.0f} pts = {f1(d['amp_atrd'])} ATRd")
+    L.append(f"  Eficiencia direcional do dia: |fech-abertura| / soma das amplitudes das {d['n']} velas = {f1(d['er'])} | |deslocamento| / amplitude do dia = {f1(d['desl_amp'])} | fechamentos acima da abertura: {d['pct_acima_ab']:.0f}% das velas")
+    L.append(f"  Volume da ultima vela / media das 10 anteriores = {f1(d['vol_r10'])} | / media das 20 anteriores = {f1(d['vol_r20'])} (as anteriores incluem velas de ontem no inicio do dia)")
+    L.append(f"  Maxima do dia {d['hi']:.0f} (ha {d['vel_hi']} velas desde que foi tocada) | minima do dia {d['lo']:.0f} (ha {d['vel_lo']} velas) | ultima vela fechou alem da max/min do dia ate a vela anterior: {d['rompeu_dia']}")
+    L.append(f"  Deslocamento maximo do dia a partir da abertura foi para {d['dev_lado']}; o preco devolveu {d['dev'] * 100:.0f}% dele")
+    if d.get("ont_h") is not None:
+        L.append(f"  Ontem: max {d['ont_h']:.0f} min {d['ont_l']:.0f} | ultimo fechamento esta {d['pos_ont']} da faixa de ontem ({d['dist_ont_h']:+.0f} pts da max de ontem, {d['dist_ont_l']:+.0f} pts da min; posicao {f1(d['pos_faixa_ont'])} da faixa) | hoje ja passou a max de ontem: {'sim' if d['hoje_rompeu_ont_h'] else 'nao'}, a min de ontem: {'sim' if d['hoje_rompeu_ont_l'] else 'nao'}")
+        if d["gap_preenchido"] is None:
+            L.append("  Gap: nenhum")
+        elif abs(d["gap_atrd"]) < 0.15:
+            L.append(f"  Gap: {d['gap']:+.0f} pts = {f1(d['gap_atrd'])} ATRd (irrelevante: menor que 0,15 ATRd; sem fracao de preenchimento)")
+        else:
+            L.append(f"  Gap: {d['gap']:+.0f} pts = {f1(d['gap_atrd'])} ATRd | agora {d['gap_preenchido'] * 100:.0f}% preenchido (negativo = gap ampliando; 100% = voltou ao fechamento de ontem) | maximo ja preenchido hoje {d['gap_max_preenchido'] * 100:.0f}%")
+    if "faixa12" in d:
+        L.append(f"  Faixa das 12 velas anteriores a ultima: {d['faixa12']:.0f} pts = {f1(d['faixa12_atrd'])} ATRd | ultima vela fechou {d['f12_pos']} dessa faixa | amplitude da ultima vela {d['ult_amp']:.0f} pts = {f1(d['ult_amp_atr'])} ATR M15")
+    if "faixa8" in d:
+        L.append(f"  Ultimas 8 velas: faixa {d['faixa8']:.0f} pts = {f1(d['faixa8_atrd'])} ATRd | volume medio dessas 8 / volume medio das velas de hoje = {f1(d['vol8_rel'])}")
+    t, f = d["swing_topo"], d["swing_fundo"]
+    L.append("  Ultimo topo de swing M15 de hoje (confirmado): " + (f"{t[1]:.0f} (ha {d['n'] - 1 - t[0]} velas; ultimo fechamento {d['last'] - t[1]:+.0f} pts dele)" if t else "nenhum")
+             + " | ultimo fundo de swing: " + (f"{f[1]:.0f} (ha {d['n'] - 1 - f[0]} velas; ultimo fechamento {d['last'] - f[1]:+.0f} pts dele)" if f else "nenhum"))
+    return L
+
+
 def montar_pacote(mk: Mercado, dia: DiaMkt, k: int, estado: dict, eventos_dia: list, decisoes_dia: list,
-                  n_velas=40) -> str:
+                  n_velas=40, derivados=False) -> str:
     """Pacote textual na vela M15 `k` JA FECHADA. So usa indices <= k e dias anteriores."""
     data = dia.data
     b = mk.m15
@@ -125,6 +246,8 @@ def montar_pacote(mk: Mercado, dia: DiaMkt, k: int, estado: dict, eventos_dia: l
     atr15 = hoje.atr_m15.iloc[-1]
     atrd = mk.diario.loc[dias_ant[-1], "atr_d"] if dias_ant else float("nan")
     L.append(f"ATR M15 (14): {atr15:.0f} pts | ATR diario (14, ate ontem): {atrd:.0f} pts")
+    if derivados:
+        L.extend(linhas_derivadas(mk, dia, k))
     L.append("")
     L.append("DIARIO (ultimos 10 dias fechados, mais antigo primeiro; d-1 = ontem): O H L C Volume")
     ult10 = dias_ant[-10:]
@@ -183,11 +306,11 @@ PREAMBULO = ("Mini-indice Bovespa (WIN), pontos; 1 ponto = R$ 0,20 por contrato;
              "ATR M15 = media de 14 amplitudes verdadeiras; ATR diario = media de 14 amplitudes diarias ate ontem.")
 
 
-def montar_estado(mk: Mercado, dia: DiaMkt, k: int, pos=None) -> str:
+def montar_estado(mk: Mercado, dia: DiaMkt, k: int, pos=None, derivados=False) -> str:
     """Estado textual para o endpoint de decisoes: so mercado (sem posicao/ordens/resultado do dia) -> as respostas
     nao dependem da trajetoria da simulacao. Com `pos`, acrescenta a linha POSICAO (chamada de gestao)."""
     est = dict(pos=pos, pend=None, pts=0, brl=0, ntrades=0)
-    txt = montar_pacote(mk, dia, k, est, [], [])
+    txt = montar_pacote(mk, dia, k, est, [], [], derivados=derivados)
     cab = txt.split("\nPOSICAO:")[0]
     if pos:
         linha = [x for x in txt.split("\n") if x.startswith("POSICAO:")][0]

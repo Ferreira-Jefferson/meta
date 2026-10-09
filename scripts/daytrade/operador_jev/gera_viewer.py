@@ -25,6 +25,7 @@ def main():
     ap.add_argument("--sessoes", default=str(AQUI / "sessoes"))
     ap.add_argument("--saida", default=str(AQUI / "viewer.html"))
     ap.add_argument("--max-dias", type=int, default=60, help="maximo de dias embutidos (amostra espacada entre os dias com operacao + alguns sem)")
+    ap.add_argument("--modulo-perguntas", default="perguntas_jev", help="modulo com MERCADO/GESTAO (ex.: perguntas_v2, em experimento_dia_positivo/)")
     ap.add_argument("--com-pacotes", action="store_true", help="embute o texto do pacote de cada decisao (arquivo maior)")
     a = ap.parse_args()
     pasta = Path(a.sessoes)
@@ -46,7 +47,10 @@ def main():
     try:
         import sys
         sys.path.insert(0, str(AQUI))
-        from perguntas_jev import MERCADO, GESTAO
+        sys.path.insert(0, str(AQUI / "experimento_dia_positivo"))
+        import importlib
+        mod = importlib.import_module(a.modulo_perguntas)
+        MERCADO, GESTAO = mod.MERCADO, mod.GESTAO
         perguntas = {q[0]: dict(ref=q[2], tx=q[3]) for q in MERCADO + GESTAO}
     except Exception:
         pass
