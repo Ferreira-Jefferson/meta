@@ -38,5 +38,13 @@
    "WinGapBarra1.mq5 v1.00, criado em outra sessão em 06/10. Mede o gap entre o call de ontem e o leilão de hoje. Se a 1ª barra M5 (09:00–09:05) fecha contra o gap, entra por ordem limitada no fechamento dela, no sentido da barra, válida até 09:35. Stop de 1.200 pts, sem alvo, zera às 18:20. Uma operação por dia; não opera no 1º pregão após o vencimento.",
    "Não tem a regra do gap de 1 ATR dos outros robôs: a estratégia dele é justamente operar o gap. Especificação e números em mt5/WinGapBarra1_LEIA-ME.md. Não foi medido em 2022–2025 neste comparativo."
   ]
+ },
+ "EscadaWinM15": {
+  "resumo": "v4.2 · escada de topos e fundos M15 · 1 contrato",
+  "textos": [
+   "EscadaWinM15.mq5 1.10 (robô ES do WinMaestro 2.04). Compra quando um fundo confirmado (ZigZag de 1,5 ATR no M15) fica acima do anterior. A venda é o espelho. Filtros a favor: tendência do H1 (MME 9/21/34), lado da abertura do dia, MMS72 do open inclinada, e Estocástico 14 abaixo de 70 ou H4 neutro.",
+   "Entrada limitada no fechamento da barra de confirmação, válida por 3 barras. Stop no pivô, apertado até 0,2 ATR além da MME38, e que sobe a cada novo pivô a favor. Sem alvo. Zera 5 minutos antes do fim do contínuo.",
+   "Operações do Testador do MT5 (cada tick, WIN$N), com 1 contrato como no Maestro. No OOS completo (out/25 a out/26), o Testador e o backtest em Python casam em 128 de 131 operações: R$10.702 contra R$10.682 com 2 contratos e custo. Com atraso aleatório de execução, R$9.970."
+  ]
  }
 }
