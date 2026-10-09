@@ -1,0 +1,38 @@
+{
+ "S10": [
+  "v2_dia_tipo",
+  "v2_estrutura",
+  "v2_lateral_morta",
+  "v2_seguimento",
+  "v2_preco_vs_ref",
+  "v2_tendencia_limpa",
+  "v2_perna_esgotada",
+  "v2_devolveu_50",
+  "v2_rompe_dia",
+  "v2_extremo_novo"
+ ],
+ "S8": [
+  "v2_dia_tipo",
+  "v2_estrutura",
+  "v2_lateral_morta",
+  "v2_seguimento",
+  "v2_preco_vs_ref",
+  "v2_tendencia_limpa",
+  "v2_perna_esgotada",
+  "v2_devolveu_50"
+ ],
+ "S6": [
+  "v2_dia_tipo",
+  "v2_estrutura",
+  "v2_lateral_morta",
+  "v2_seguimento",
+  "v2_tendencia_limpa",
+  "v2_perna_esgotada"
+ ],
+ "S4": [
+  "v2_dia_tipo",
+  "v2_estrutura",
+  "v2_lateral_morta",
+  "v2_seguimento"
+ ]
+}
