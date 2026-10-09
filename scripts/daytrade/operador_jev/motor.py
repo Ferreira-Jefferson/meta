@@ -140,10 +140,10 @@ class Sessao:
             if self.pend:
                 self._cancela(k, t_dec, "substituida por nova ordem")
             self.pend = dict(lado="compra" if dirn > 0 else "venda", dir=dirn, preco=preco, stop=stop, alvo=alvo, n=n,
-                             k_dec=k, last_k=k + val, validade=val)
+                             k_dec=k, last_k=k + val, validade=val, trail=bool(dec.get("trail")))
             self.ordens.append(dict(lado=self.pend["lado"], preco=preco, stop=stop, alvo=alvo, n=n, k_dec=k,
                                     validade=val, t=t_dec, estado="pendente", k_fim=None, fill=None, exit=None,
-                                    stops=[], pts=None, brl=None))
+                                    stops=[], pts=None, brl=None, trail=bool(dec.get("trail"))))
             self.eventos.append(dict(t=t_dec, tipo="ordem", texto=f"ordem {self.pend['lado']} limite {preco:.0f} x{n} stop {stop:.0f} alvo {alvo if alvo else '-'} validade {val} vela(s)"))
             return msgs
         rej("acao desconhecida")
@@ -186,7 +186,7 @@ class Sessao:
             cruzou = (l <= p["preco"] - self.fill) if p["dir"] > 0 else (h >= p["preco"] + self.fill)
             if cruzou:
                 self.pos = dict(lado=p["lado"], dir=p["dir"], n=p["n"], preco=p["preco"], stop=p["stop"], alvo=p["alvo"],
-                                k_ent=k, i_ent=i, stops=[dict(k=k, valor=p["stop"])])
+                                k_ent=k, i_ent=i, stops=[dict(k=k, valor=p["stop"])], trail=p.get("trail", False))
                 od = self.ordens[-1]
                 od["estado"] = "preenchida"
                 od["k_fim"] = k

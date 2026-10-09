@@ -133,32 +133,97 @@ def nulo_aleatorio(mk, dias_mkt, trades, sorteios=100, seed=7, hora_ini="09:15",
     return tot
 
 
+def main_decisoes(mk, dias, args):
+    from operador_decisoes import roda_dia_decisoes
+    from decisoes import Ctx
+    import jev_api
+    cli = jev_api.Cliente(args.modelo, args.max_custo_usd, max_simultaneas=args.paralelo_chamadas)
+    ctx = Ctx(mk)
+    saida = Path(args.saida)
+    saida.mkdir(parents=True, exist_ok=True)
+    pend = []
+    for i, d in enumerate(dias):
+        f = saida / f"{pd.Timestamp(d).date()}.json"
+        if f.exists() and not args.refazer:
+            try:
+                if json.loads(f.read_text(encoding="utf-8")).get("n_falhas", 0) == 0:
+                    continue
+            except Exception:
+                pass
+        pend.append((i, d))
+    print(f"[decisoes] modelo {args.modelo} | {len(dias)} dias, {len(pend)} a rodar (resto ja gravado) | limiar {args.limiar} | saida {saida}", flush=True)
+    print(CAB, flush=True)
+    t0 = time.time()
+    feitos = 0
+    with ThreadPoolExecutor(max_workers=max(1, args.paralelo_dias)) as ex:
+        futs = {ex.submit(roda_dia_decisoes, mk, ctx, cli, d, i + 1, args, saida): d for i, d in pend}
+        for f in as_completed(futs):
+            d = futs[f]
+            try:
+                s = f.result()
+            except Exception as e:
+                print(f"{pd.Timestamp(d).date()} ERRO: {type(e).__name__}: {e}", flush=True)
+                continue
+            feitos += 1
+            print(linha(s["data"], s["resumo"], s["custo_usd"], s["tempo_s"]) + (f" falhas {s['n_falhas']}" if s["n_falhas"] else "")
+                  + f"  [{feitos}/{len(pend)} | US$ {cli.custo:.3f} acumulado | {time.time() - t0:.0f}s | 429: {cli.rate_limit}]", flush=True)
+    print(f"Jev: {cli.chamadas} chamadas | US$ {cli.custo:.4f} | tokens in {cli.tokens_in} out {cli.tokens_out} | falhas {cli.falhas} | 429 {cli.rate_limit} | modelos {cli.modelos}", flush=True)
+    (saida / "_custo.json").write_text(json.dumps(dict(chamadas=cli.chamadas, custo=cli.custo, tokens_in=cli.tokens_in, tokens_out=cli.tokens_out,
+                                                       falhas=cli.falhas, rate_limit=cli.rate_limit, modelos=cli.modelos, tempo_s=time.time() - t0)), encoding="utf-8")
+    print(f"sessoes em {saida} ; avaliar: python avaliar.py --pasta {saida}", flush=True)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--inicio")
     ap.add_argument("--dias", type=int, default=1)
     ap.add_argument("--datas", help="lista AAAA-MM-DD separada por virgula (substitui --inicio/--dias)")
     ap.add_argument("--periodo", default="OOS", choices=["IS", "OOS", "virgem"])
-    ap.add_argument("--modelo", default="typesafe/jev-router")
+    ap.add_argument("--motor", default="decisoes", choices=["decisoes", "chat"],
+                    help="decisoes = endpoint /api/alpha/decisions do Jev (padrao); chat = router /chat/completions (antigo)")
+    ap.add_argument("--modelo", default=None, help="padrao: typesafe/jev-1.13-20260917 (decisoes) | typesafe/jev-router (chat)")
+    ap.add_argument("--limiar", type=float, default=0.5, help="decisoes: P(acao escolhida) minima para entrar")
+    ap.add_argument("--modo-entrada", default="argmax", choices=["argmax", "lado"],
+                    help="argmax: entra se a escolha do Jev for comprar/vender com P>=limiar (padrao); lado: compara so comprar x vender (ignora 'fora')")
+    ap.add_argument("--paralelo-velas", type=int, default=8, help="decisoes: chamadas de mercado simultaneas dentro de um dia")
+    ap.add_argument("--paralelo-chamadas", type=int, default=16, help="decisoes: teto global de requisicoes simultaneas")
+    ap.add_argument("--amostra", type=int, default=0, help="sorteia N dias do periodo (seed fixa) em vez de --inicio/--dias")
+    ap.add_argument("--seed", type=int, default=20261009)
+    ap.add_argument("--refazer", action="store_true", help="decisoes: nao pula dias ja gravados")
     ap.add_argument("--paralelo-dias", type=int, default=3)
-    ap.add_argument("--max-custo-usd", type=float, default=5.0)
+    ap.add_argument("--max-custo-usd", type=float, default=None, help="teto de custo (padrao: 5 chat, 30 decisoes)")
     ap.add_argument("--hora-ini", default="09:15")
     ap.add_argument("--hora-fim", default="17:30")
-    ap.add_argument("--saida", default=str(AQUI / "sessoes"))
+    ap.add_argument("--saida", default=None)
     ap.add_argument("--sorteios", type=int, default=100)
     ap.add_argument("--preco-in", type=float, default=1.0, help="so p/ estimativa (US$/Mtok)")
     ap.add_argument("--preco-out", type=float, default=4.0, help="so p/ estimativa (US$/Mtok)")
     args = ap.parse_args()
+    if args.max_custo_usd is None:
+        args.max_custo_usd = 30.0 if args.motor == "decisoes" else 5.0
+    if args.modelo is None:
+        args.modelo = "typesafe/jev-1.13-20260917" if args.motor == "decisoes" else "typesafe/jev-router"
+    if args.saida is None:
+        args.saida = str(AQUI / ("sessoes_dec" / Path(args.periodo) if args.motor == "decisoes" else "sessoes"))
 
     print("carregando dados...", flush=True)
     mk = Mercado.carregar()
     if args.datas:
         dias = [pd.Timestamp(x.strip()) for x in args.datas.split(",")]
+    elif args.amostra:
+        todos = mk.dias_do_periodo(args.periodo)
+        rng = np.random.default_rng(args.seed)
+        idx = sorted(rng.choice(len(todos), size=min(args.amostra, len(todos)), replace=False))
+        dias = [todos[i] for i in idx]
+    elif args.inicio is None and args.motor == "decisoes":
+        dias = mk.dias_do_periodo(args.periodo)
     else:
         lista = [d for d in mk.dias_do_periodo(args.periodo) if d >= pd.Timestamp(args.inicio)]
         dias = lista[: args.dias]
     if not dias:
         sys.exit("nenhum dia encontrado")
+    if args.motor == "decisoes":
+        return main_decisoes(mk, dias, args)
     cli = llm.Cliente(args.modelo, args.max_custo_usd)
     estima(mk, dias, cli, args.hora_ini, args.hora_fim, args.preco_in, args.preco_out)
     saida = Path(args.saida)

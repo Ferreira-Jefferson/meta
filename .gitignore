@@ -89,3 +89,4 @@ scripts/swing_lab/semanal_mmes_video/
 !data/win_sem_leiloes/
 !data/win_sem_leiloes/*.parquet
 !data/wdo-mt5/
+scripts/daytrade/operador_jev/sessoes_dec/
