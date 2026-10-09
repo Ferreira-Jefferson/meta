@@ -1,8 +1,10 @@
 """v1: estrategia de perguntas. Resultado por operacao assimetrica (limitada, stop k*ATR, trailing N velas, fim do dia)."""
 import sys, numpy as np, pandas as pd, warnings
 warnings.filterwarnings("ignore")
-BQ = r"C:\Users\Jeffe\Documents\study\meta\scripts\daytrade\topos_fundos\banco_perguntas"
-sys.path.insert(0, BQ); sys.path.insert(0, r"C:\Users\Jeffe\Documents\study\meta\scripts\daytrade\topos_fundos")
+from pathlib import Path
+RAIZ = next(p for p in (Path(r"C:\Users\Jeffe\Documents\projects\personal\meta"), Path(r"C:\Users\Jeffe\Documents\study\meta")) if p.exists())  # este PC; a outra maquina de reserva
+TF = RAIZ / "scripts/daytrade/topos_fundos"; BQ = str(TF / "banco_perguntas")
+sys.path.insert(0, BQ); sys.path.insert(0, str(TF))
 import catalogo as K
 FURA, VALIDADE, CUSTO = 10, 3, 10
 PER = ("IS", "OOS", "virgem")

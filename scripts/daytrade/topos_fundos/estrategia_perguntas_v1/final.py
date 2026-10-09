@@ -2,7 +2,7 @@
 import pickle, sys, numpy as np, pandas as pd
 from lib import *
 from prep import GEOS
-sys.path.insert(0, r"C:\Users\Jeffe\Documents\study\meta\scripts\daytrade\topos_fundos")
+sys.path.insert(0, str(TF))  # TF vem de lib (este PC; a outra maquina de reserva)
 import estrategia as ESC
 pd.set_option("display.width", 250); pd.set_option("display.max_columns", 40)
 

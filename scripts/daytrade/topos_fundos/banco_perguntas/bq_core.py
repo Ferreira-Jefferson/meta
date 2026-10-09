@@ -5,7 +5,7 @@ import sys, warnings
 from pathlib import Path
 import numpy as np, pandas as pd
 warnings.filterwarnings("ignore")
-RAIZ = Path(r"C:\Users\Jeffe\Documents\study\meta")
+RAIZ = next(p for p in (Path(r"C:\Users\Jeffe\Documents\projects\personal\meta"), Path(r"C:\Users\Jeffe\Documents\study\meta")) if p.exists())  # este PC; a outra maquina de reserva
 sys.path.insert(0, str(RAIZ / "scripts/daytrade/topos_fundos"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import dados, filtros, indicadores as ind  # noqa

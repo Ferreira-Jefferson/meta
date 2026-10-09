@@ -6,7 +6,8 @@ import sys
 from pathlib import Path
 import numpy as np
 import pandas as pd
-sys.path.insert(0, str(Path(r"C:\Users\Jeffe\Documents\study\meta\scripts\daytrade\topos_fundos")))
+RAIZ = next(p for p in (Path(r"C:\Users\Jeffe\Documents\projects\personal\meta"), Path(r"C:\Users\Jeffe\Documents\study\meta")) if p.exists())  # este PC; a outra maquina de reserva
+sys.path.insert(0, str(RAIZ / "scripts/daytrade/topos_fundos"))
 import dados, escada, filtros, indicadores as ind, operacao, stop  # noqa
 
 GAP_MIN_PTS, GAP_ATR_MAX, ANDOU_ATR_MIN, FAIXA_N, FAIXA_ATR_MAX = 5, 1.0, 0.5, 20, 1.5

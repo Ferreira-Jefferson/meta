@@ -43,7 +43,7 @@ print(pd.DataFrame(out).T.round(2).to_string())
 
 # ---- vizinhanca (descritiva, NAO usada p/ escolher) e sobreposicao com a escada
 import sys
-sys.path.insert(0, r"C:\Users\Jeffe\Documents\study\meta\scripts\daytrade\topos_fundos")
+sys.path.insert(0, str(TF))  # TF vem de lib (este PC; a outra maquina de reserva)
 import estrategia as ESC
 print("\nVIZINHANCA (K=99), R$ 2 contratos [ops]:")
 viz = {}
