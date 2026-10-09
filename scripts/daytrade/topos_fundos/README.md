@@ -1,6 +1,6 @@
 # Escada WIN M15 (v4.1)
 
-Robô de topos e fundos no WIN. Pesquisa completa (rodadas 2–16) no commit `eac5052`.
+Robô de topos e fundos no WIN. Pesquisa completa (rodadas 2–16) no commit `eac5052`; estudos posteriores (saída, calendário, Supertrend) no histórico do git, nada adotado.
 
 | arquivo | o que é |
 |---|---|
@@ -21,15 +21,3 @@ Esperado (pts, 2 contratos, custo incluído):
 - Virgem: 21 operações, +2.443.
 
 Um stop novo é só um par de funções `inicial(s, D)` e `mover(stop, t, p, D)` passado para `estrategia.rodar`.
-
-## Estudos
-
-- `estudos/saida_2026_10_09/`: trailing, alvo e gestão por contexto. Três analistas olharam 40 pregões sorteados do IS (`dossie.py`) e propuseram 19 hipóteses com vizinhos (`hipoteses.py`). O teste nos outros 338 pregões do IS (`testa.py`) mostrou que nenhuma melhora o total e o total/DD. O OOS não foi aberto.
-- `estudos/calendario_2026_10_09/`: não operar por calendário ou horário (vencimento, dia da semana, mês, feriado, faixas de hora), com os funis de 10 dias ruins e de 10 dias bons. Nada passa no IS com vizinhos, e os 3 candidatos que restaram falham no OOS.
-- `estudos/novas_2026_10_09/`: hipóteses de um analista que não olhou dados.
-  - Reentrada após stop: inerte, 9 casos no IS e 0 no OOS.
-  - Tirar filtros: tirar "lado da abertura" dá +13% no IS, mas a DD do OOS sobe 34%.
-  - Mão pela volatilidade: perde total.
-  - Robustez: validade da ordem e folga ficam em platô. A premissa de fila exigindo 15/20 pts (−22%/−30%) era um estresse errado: 1 tick além já garante o preenchimento. Com 5 pts dá IS +77.838 e OOS +65.036, acima do modelo atual. O custo a calibrar é o deslize nas saídas a mercado: cerca de −5% do IS por tick.
-- `estudos/supertrend_2026_10_09/`: Supertrend como filtro (M15 e H1), como trailing e como robô sozinho. Nada passa no critério.
-  - Pista de risco: o filtro do M15 com multiplicador 2 mantém o total do IS, a DD cai 35% no IS e 52% no OOS, mas o total do OOS cai 13%.

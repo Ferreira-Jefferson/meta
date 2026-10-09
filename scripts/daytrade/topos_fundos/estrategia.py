@@ -20,12 +20,10 @@ FILTROS_V41 = (filtros.h1_a_favor, filtros.lado_da_abertura, filtros.mms17_acima
                filtros.mms72_open_inclinada, filtros.sinal_bom)
 
 
-def preparar(periodo, colunas=None):
-    """Barras M15 com os indicadores que o stop usa, pregões e sinais da v4.1 (já filtrados).
-    colunas(b): acrescenta indicadores extras às barras antes de montar os pregões (estudos de saída)."""
+def preparar(periodo):
+    """Barras M15 com os indicadores que o stop usa, pregões e sinais da v4.1 (já filtrados)."""
     b = dados.m15(periodo)
     b["mme38"] = ind.mme(b.close, stop.MME_APERTO)
-    if colunas is not None: colunas(b)
     dias = escada.pregoes(b)
     s = escada.sinais(dias)
     ok = pd.Series(True, index=s.index)
