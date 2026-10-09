@@ -31,3 +31,5 @@ Um stop novo é só um par de funções `inicial(s, D)` e `mover(stop, t, p, D)`
   - Tirar filtros: tirar "lado da abertura" dá +13% no IS, mas a DD do OOS sobe 34%.
   - Mão pela volatilidade: perde total.
   - Robustez: validade da ordem e folga ficam em platô. A premissa de fila exigindo 15/20 pts (−22%/−30%) era um estresse errado: 1 tick além já garante o preenchimento. Com 5 pts dá IS +77.838 e OOS +65.036, acima do modelo atual. O custo a calibrar é o deslize nas saídas a mercado: cerca de −5% do IS por tick.
+- `estudos/supertrend_2026_10_09/`: Supertrend como filtro (M15 e H1), como trailing e como robô sozinho. Nada passa no critério.
+  - Pista de risco: o filtro do M15 com multiplicador 2 mantém o total do IS, a DD cai 35% no IS e 52% no OOS, mas o total do OOS cai 13%.
