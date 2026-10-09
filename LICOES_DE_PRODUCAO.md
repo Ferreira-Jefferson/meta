@@ -3760,6 +3760,57 @@ caminho do MOTOR e deixou descoberto o caminho do `live/`.
 > replicado para o segundo caminho.
 > **Pergunte à plataforma nova:** pergunta 116 (nova). (4.25, 7.1, 5.17)
 
+### 4.34 O número do backtest da entrada limitada do WIN era condicional a uma premissa de fila de 2 ticks que nunca foi calibrada — exigir 3-4 ticks tirou 22,5% a 29,5% do lucro
+
+Robô escada WIN M15 v4.1 (ainda em pesquisa, sem dinheiro real), 2026-10-09.
+A entrada é uma ordem limitada no `close` da barra de confirmação, e o backtest
+só a enche se o preço passar **10 pts (2 ticks) ALÉM do limite**. Esse "passar
+X pts" é todo o modelo de fila do WIN: o equivalente do `queue_ahead_qty` do
+WDO@ (itens 4.20 a 4.22), só que **o do WDO foi calibrado contra extrato real
+(`fidelidade.py`, Kaplan-Meier) e o do WIN nunca foi**. Os 10 pts foram
+escolhidos, não medidos.
+
+Teste de robustez nos **338 pregões de teste do IS** (base **+72.960 pts,
+DD 5.173**), variando só a premissa de preenchimento:
+
+| premissa | total (pts) | variação | DD |
+|---|---|---|---|
+| passar 10 pts (base, 2 ticks) | +72.960 | — | 5.173 |
+| passar 15 pts (3 ticks) | +56.560 | **−22,5%** | 7.030 |
+| passar 20 pts (4 ticks) | +51.450 | **−29,5%** | — |
+| limite 0,1 ATR mais FAVORÁVEL | — | **−33,6%** | — |
+| validade da ordem 2 / 4 / 6 barras | — | dentro de ±2% | — |
+| limite 1 tick PIOR | — | dentro de ±2% | — |
+
+Dois resultados, de natureza oposta. A validade da ordem e o limite um tick
+pior formam **platô** (±2%): o desenho não depende deles. A fila **não** é
+platô: um tick a mais de exigência custa ~22% e dois custam ~30%, e o DD sobe
+36% (5.173 para 7.030) no mesmo movimento. O limite 0,1 ATR mais favorável
+parece uma melhoria (preço de entrada melhor) e custa 33,6%, por **seleção
+adversa**: os dias de tendência, que carregam o lucro, são exatamente os que
+não voltam ao preço da ordem — pedir preço melhor troca os melhores pregões
+por pregões sem fill.
+
+**Diferença para o item 6.30.** Lá a fila do WIN@ não mordia, porque o alvo era
+longo, a posição durava horas e o giro era de 25 mil contratos por minuto.
+Aqui o que está em jogo é a ENTRADA colada no preço (limite no `close`, enche
+com 2 ticks de passagem) e o número morde em 3 a 4 ticks. "A fila não
+generaliza" também vale ao contrário: não generaliza nem de um lado da mesma
+ordem para o outro, nem de um robô para outro no mesmo instrumento.
+
+> **Regra (portável).** Quando o resultado de uma estratégia com entrada
+> limitada cai 20% a 30% ao mudar a premissa de fila de 2 para 3 ou 4 ticks, o
+> número do backtest é **condicional à fila** — descreve a premissa, não o
+> robô. Antes de dinheiro real, a fila tem de ser MEDIDA na plataforma (extrato
+> de ordens reais, com correção de censura, itens 4.20 a 4.22), por
+> instrumento, sem reaproveitar a calibração de outro ativo. Em toda medição
+> maker, **estresse a premissa de fila PARA CIMA** (3, 4 ticks) e reporte a
+> queda ao lado do número base. **Nunca otimize a fila para baixo**: a
+> premissa que maximiza o backtest é, por construção, a mais otimista, e a
+> otimização a escolheria. Corolário: um robô que passa em "10 pts" e perde um
+> quarto do lucro em "15 pts" não tem edge validado, tem edge CONDICIONAL.
+> **Pergunte à plataforma nova:** pergunta 146 (nova). (4.20, 4.22, 6.30, 6.38)
+
 ---
 
 ## Parte 5 — Dados, relógio e instrumento
@@ -9607,6 +9658,13 @@ dinheiro ou meses.
      do robô B no sentido contrário) passa por checagem de margem como abertura
      e pode ser recusado? O comentário da ordem sobrevive até o negócio — dá
      para marcar de qual robô veio sem depender do `magic`? (1.26, 1.1)
+146. Quantos contratos negociam no preço da minha ordem limitada, entre a
+     entrada no livro e o preenchimento, para ESTE instrumento? Calibrar por
+     instrumento (extrato de ordens reais, Kaplan-Meier para a censura); não
+     reaproveitar a calibração de outro ativo. Enquanto não houver número, a
+     premissa de fila do backtest tem de ser estressada PARA CIMA, e o
+     resultado reportado ao lado da queda: aqui, exigir 3 e 4 ticks em vez de 2
+     tirou 22,5% e 29,5% do lucro do IS. (4.34, 4.22)
 
 ---
 
