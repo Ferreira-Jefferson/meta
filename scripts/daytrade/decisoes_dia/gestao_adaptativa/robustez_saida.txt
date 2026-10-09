@@ -1,0 +1,13 @@
+ef>=0,20 (direcional) x rotacao: LODO adapt-fixa = -53; IC95 bootstrap dias [-1742; 1231]; dias+ 19 / dias- 6
+vol4>=1,0 (alta) x baixa: LODO adapt-fixa = 1771; IC95 bootstrap dias [330; 3581]; dias+ 13 / dias- 4
+a favor x contra o dia: LODO adapt-fixa = 2776; IC95 bootstrap dias [697; 5647]; dias+ 17 / dias- 2
+natureza: continuacao x resto: LODO adapt-fixa = 2403; IC95 bootstrap dias [879; 4170]; dias+ 22 / dias- 8
+ef x vol (4 regimes): LODO adapt-fixa = 500; IC95 bootstrap dias [-1772; 2638]; dias+ 19 / dias- 8
+FIXA(LODO) - ATUAL = 3434; IC95 [54; 7088]; dias+ 20 dias- 22
+ef corr(estado, R$ melhor-por-trade fixa stop2/sem) 0.08 | corr com 'indice do melhor stop' -0.07
+vol4 corr(estado, R$ melhor-por-trade fixa stop2/sem) -0.07 | corr com 'indice do melhor stop' 0.26
+volrel4 corr(estado, R$ melhor-por-trade fixa stop2/sem) -0.24 | corr com 'indice do melhor stop' 0.04
+hora corr(estado, R$ melhor-por-trade fixa stop2/sem) -0.07 | corr com 'indice do melhor stop' -0.18
+d_vwap corr(estado, R$ melhor-por-trade fixa stop2/sem) 0.02 | corr com 'indice do melhor stop' -0.15
+perna corr(estado, R$ melhor-por-trade fixa stop2/sem) 0.14 | corr com 'indice do melhor stop' -0.21
+a_favor corr(estado, R$ melhor-por-trade fixa stop2/sem) 0.23 | corr com 'indice do melhor stop' -0.02

@@ -1,0 +1,6 @@
+stop None alvo None -> R$ 4679 ops 100
+stop 2 alvo None -> R$ 7490 ops 64
+stop 1.5 alvo None -> R$ 7143 ops 71
+stop 1 alvo None -> R$ 7220 ops 76
+stop 1.5 alvo 3 -> R$ 5002 ops 87
+stop 1.5 alvo 2 -> R$ 3684 ops 94
