@@ -3760,56 +3760,80 @@ caminho do MOTOR e deixou descoberto o caminho do `live/`.
 > replicado para o segundo caminho.
 > **Pergunte à plataforma nova:** pergunta 116 (nova). (4.25, 7.1, 5.17)
 
-### 4.34 O número do backtest da entrada limitada do WIN era condicional a uma premissa de fila de 2 ticks que nunca foi calibrada — exigir 3-4 ticks tirou 22,5% a 29,5% do lucro
+### 4.34 A premissa de fila de 2 ticks do WIN foi estressada para o lado errado: o preenchimento com 1 tick além é garantido, e a fila não é risco relevante — o custo que sobra é o deslize das saídas a mercado
 
 Robô escada WIN M15 v4.1 (ainda em pesquisa, sem dinheiro real), 2026-10-09.
 A entrada é uma ordem limitada no `close` da barra de confirmação, e o backtest
 só a enche se o preço passar **10 pts (2 ticks) ALÉM do limite**. Esse "passar
-X pts" é todo o modelo de fila do WIN: o equivalente do `queue_ahead_qty` do
-WDO@ (itens 4.20 a 4.22), só que **o do WDO foi calibrado contra extrato real
-(`fidelidade.py`, Kaplan-Meier) e o do WIN nunca foi**. Os 10 pts foram
-escolhidos, não medidos.
+X pts" é todo o modelo de fila do WIN, o equivalente do `queue_ahead_qty` do
+WDO@ (itens 4.20 a 4.22). Os 10 pts foram escolhidos, não medidos.
 
-Teste de robustez nos **338 pregões de teste do IS** (base **+72.960 pts,
-DD 5.173**), variando só a premissa de preenchimento:
+**O ERRO (registrado, não apagado).** A primeira versão deste item testou a
+robustez da fila exigindo que o preço passasse **15 e 20 pts** além do limite, e
+leu a queda de **22,5% e 29,5%** do lucro (338 pregões do IS: base +72.960,
++56.560 e +51.450; DD 5.173 para 7.030) como "edge condicional à fila". Isso
+**não é estresse realista**. Pela prioridade preço-tempo, se houve negócio **1
+tick além** do meu limite (5 pts no WIN), **TODA a fila no meu preço já foi
+executada**: o preenchimento é garantido, qualquer que seja o tamanho da fila.
+Exigir 15-20 pts só descarta preenchimentos que aconteceriam com certeza, e por
+isso o total caía 22-30%. A queda media outra estratégia (a que só entra em
+pregões que andam 3-4 ticks contra a ordem), não a fila. O modelo de 10 pts (2
+ticks) já é MAIS conservador que o necessário. O falso alarme fez a conclusão
+anterior ("a fila é o risco, o robô só tem edge condicional") sair errada.
 
-| premissa | total (pts) | variação | DD |
-|---|---|---|---|
-| passar 10 pts (base, 2 ticks) | +72.960 | — | 5.173 |
-| passar 15 pts (3 ticks) | +56.560 | **−22,5%** | 7.030 |
-| passar 20 pts (4 ticks) | +51.450 | **−29,5%** | — |
-| limite 0,1 ATR mais FAVORÁVEL | — | **−33,6%** | — |
-| validade da ordem 2 / 4 / 6 barras | — | dentro de ±2% | — |
-| limite 1 tick PIOR | — | dentro de ±2% | — |
+**Medido agora (v4.1, IS 2022-set/25 e OOS out/25-out/26),** variando só a
+premissa de preenchimento:
 
-Dois resultados, de natureza oposta. A validade da ordem e o limite um tick
-pior formam **platô** (±2%): o desenho não depende deles. A fila **não** é
-platô: um tick a mais de exigência custa ~22% e dois custam ~30%, e o DD sobe
-36% (5.173 para 7.030) no mesmo movimento. O limite 0,1 ATR mais favorável
-parece uma melhoria (preço de entrada melhor) e custa 33,6%, por **seleção
-adversa**: os dias de tendência, que carregam o lucro, são exatamente os que
-não voltam ao preço da ordem — pedir preço melhor troca os melhores pregões
-por pregões sem fill.
+| premissa | IS ops | IS total | IS DD | OOS ops | OOS total |
+|---|---|---|---|---|---|
+| passar 10 pts (2 ticks, modelo atual) | 387 | +76.768 | 5.545 | 98 | +59.536 |
+| passar 5 pts (1 tick, preenchimento GARANTIDO) | 390 | +77.838 | igual | 99 | +65.036 |
+| só tocar, 0 pts (otimista, depende da fila) | — | +80.828 | — | — | +65.036 |
 
-**Diferença para o item 6.30.** Lá a fila do WIN@ não mordia, porque o alvo era
-longo, a posição durava horas e o giro era de 25 mil contratos por minuto.
-Aqui o que está em jogo é a ENTRADA colada no preço (limite no `close`, enche
-com 2 ticks de passagem) e o número morde em 3 a 4 ticks. "A fila não
-generaliza" também vale ao contrário: não generaliza nem de um lado da mesma
-ordem para o outro, nem de um robô para outro no mesmo instrumento.
+(A base do IS aqui, +76.768, difere da +72.960 da primeira versão porque a
+janela medida agora é mais longa, 2022-set/25.) Entre o modelo atual e o
+preenchimento garantido a diferença é pequena (IS +1,4%, OOS +9,2%), e o que
+sobra de incerteza é só se o toque EXATO preenche: entre +77.838 e +80.828 no
+IS, acima do modelo atual. **A fila não é risco relevante para este robô.**
 
-> **Regra (portável).** Quando o resultado de uma estratégia com entrada
-> limitada cai 20% a 30% ao mudar a premissa de fila de 2 para 3 ou 4 ticks, o
-> número do backtest é **condicional à fila** — descreve a premissa, não o
-> robô. Antes de dinheiro real, a fila tem de ser MEDIDA na plataforma (extrato
-> de ordens reais, com correção de censura, itens 4.20 a 4.22), por
-> instrumento, sem reaproveitar a calibração de outro ativo. Em toda medição
-> maker, **estresse a premissa de fila PARA CIMA** (3, 4 ticks) e reporte a
-> queda ao lado do número base. **Nunca otimize a fila para baixo**: a
-> premissa que maximiza o backtest é, por construção, a mais otimista, e a
-> otimização a escolheria. Corolário: um robô que passa em "10 pts" e perde um
-> quarto do lucro em "15 pts" não tem edge validado, tem edge CONDICIONAL.
-> **Pergunte à plataforma nova:** pergunta 146 (nova). (4.20, 4.22, 6.30, 6.38)
+**O custo real que sobra é o deslize nas saídas a MERCADO** (stop e zeramento
+no fim do dia). Já há 10 pts por contrato de custo (1 tick em cada ponta). Cada
+tick ADICIONAL de deslize na saída custa **R$2 por operação com 2 contratos**
+(no WIN, 1 tick = 5 pts = R$1 por contrato):
+
+| deslize adicional na saída | IS total | IS variação | OOS total | OOS variação |
+|---|---|---|---|---|
+| +0 tick (base) | +76.768 | — | +59.536 | — |
+| +1 tick | +72.898 (DD 5.773) | −5% | +58.556 | −1,6% |
+| +2 ticks | +69.028 | — | — | — |
+| +3 ticks | +65.158 | — | +56.596 | — |
+
+Referência do dono: no WDO ele perde ~R$5 por operação com deslize; lá 1 tick
+é R$5 por contrato, ou seja, ~1 tick. Esse deslize, e não a fila, é o que
+precisa de calibração real no WIN. O platô da validade da ordem (2/4/6 barras)
+e do limite 1 tick pior (±2%) da primeira versão continua valendo. O limite 0,1
+ATR mais FAVORÁVEL (−33,6%, seleção adversa: os dias de tendência, que carregam
+o lucro, não voltam ao preço da ordem) é outra pergunta, sobre o NÍVEL do
+limite, e não foi refeito aqui.
+
+**Diferença para o item 6.30.** Lá a fila do WIN@ não mordia porque o alvo era
+longo e o giro de 25 mil contratos por minuto. Aqui, com a entrada colada no
+preço, também não morde, pelo motivo mais simples: 1 tick além já garante o
+fill. "A fila não generaliza" continua valendo para o WDO@, cuja ordem fica
+parada esperando o toque exato; para entrada que só enche com passagem, a
+pergunta nem se coloca.
+
+> **Regra (portável, substitui a anterior).** Num modelo de ordem limitada, a
+> condição "o preço negociou pelo menos 1 tick ALÉM do limite" já garante o
+> preenchimento. Estressar a fila exigindo mais ticks além disso **não mede
+> fila: mede outra estratégia**, e dá falso alarme. A incerteza de fila mora
+> **só nos toques EXATOS no nível**: meça-a comparando "toque" (otimista) com
+> "1 tick além" (garantido). Se a diferença for pequena, a fila não importa
+> para aquele robô. O que precisa de calibração real é o **deslize das ordens a
+> mercado/stop**. Antes de chamar um resultado de "condicional à premissa X",
+> confirme que a variação de X é um cenário que pode acontecer com a ordem
+> real, e não uma exigência mais dura que o próprio livro.
+> **Pergunte à plataforma nova:** pergunta 146 (corrigida). (4.20, 4.22, 6.30, 6.38)
 
 ---
 
@@ -9658,13 +9682,10 @@ dinheiro ou meses.
      do robô B no sentido contrário) passa por checagem de margem como abertura
      e pode ser recusado? O comentário da ordem sobrevive até o negócio — dá
      para marcar de qual robô veio sem depender do `magic`? (1.26, 1.1)
-146. Quantos contratos negociam no preço da minha ordem limitada, entre a
-     entrada no livro e o preenchimento, para ESTE instrumento? Calibrar por
-     instrumento (extrato de ordens reais, Kaplan-Meier para a censura); não
-     reaproveitar a calibração de outro ativo. Enquanto não houver número, a
-     premissa de fila do backtest tem de ser estressada PARA CIMA, e o
-     resultado reportado ao lado da queda: aqui, exigir 3 e 4 ticks em vez de 2
-     tirou 22,5% e 29,5% do lucro do IS. (4.34, 4.22)
+146. As ordens limitadas que só TOCAM o preço (sem negociar além dele) são
+     preenchidas em que fração das vezes neste instrumento? E qual é o deslize
+     médio, em ticks, das saídas por stop e do zeramento a mercado? (4.34,
+     4.22)
 
 ---
 

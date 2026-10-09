@@ -30,4 +30,4 @@ Um stop novo é só um par de funções `inicial(s, D)` e `mover(stop, t, p, D)`
   - Reentrada após stop: inerte, 9 casos no IS e 0 no OOS.
   - Tirar filtros: tirar "lado da abertura" dá +13% no IS, mas a DD do OOS sobe 34%.
   - Mão pela volatilidade: perde total.
-  - Robustez: validade da ordem e folga ficam em platô. A **premissa de fila é sensível**: exigir 15/20 pts dá −22%/−30% no total.
+  - Robustez: validade da ordem e folga ficam em platô. A premissa de fila exigindo 15/20 pts (−22%/−30%) era um estresse errado: 1 tick além já garante o preenchimento. Com 5 pts dá IS +77.838 e OOS +65.036, acima do modelo atual. O custo a calibrar é o deslize nas saídas a mercado: cerca de −5% do IS por tick.
