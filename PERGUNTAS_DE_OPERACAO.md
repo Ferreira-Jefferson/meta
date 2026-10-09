@@ -49,28 +49,54 @@ Este arquivo não é um formulário para preencher; é um lembrete do que vale o
 - **Propor o teste.** Ao terminar, diga como transformaria o que viu numa regra mensurável e como testaria sem viés (em dias que não foram usados para ter a ideia).
 - **Melhorar este arquivo.** Se uma pergunta foi inútil, ambígua ou faltou alguma, proponha a mudança.
 
-## Perguntas que já provaram valor: a regra da escada
+## Perguntas de decisão: universais, com gabarito por estratégia
 
-As regras da escada WIN M15 (v4.1) são, no fundo, cinco perguntas cuja resposta separa os sinais que ganham dos que perdem. Elas são o modelo do que uma boa pergunta precisa ter: dá para responder com sim ou não usando só velas fechadas, e a resposta muda o resultado nos dois períodos, o de escolha e o de fora.
+As perguntas abaixo valem para qualquer estratégia. O que muda de uma estratégia para outra é o **gabarito**: qual resposta libera a ação, e com que régua concreta (qual média, qual tempo gráfico, qual limite) a pergunta é respondida. A resposta certa pode ser **sim** ou **não**; uma resposta "não" é tão útil quanto um "sim" quando o gabarito diz o que fazer com ela.
 
-Medido em todos os sinais da escada (fundo acima do anterior, ou topo abaixo), cada um operado sozinho; pontos por operação com 2 contratos e custo incluído (2026-10-09):
+O gabarito da escada WIN M15 (v4.1) foi conferido: respondendo estas perguntas com a régua da escada, o resultado é **idêntico** ao do robô nos três períodos (2022–25: 416 operações, +61.989 pts; out/25–out/26: 109, +52.605; out–dez/21: 23, +1.582; 2 contratos, custo incluído).
 
-| pergunta | 2022–25: sim × não | out/25–out/26: sim × não |
+### Entrada
+
+| # | pergunta universal | régua da escada | resposta que libera | sim × não nos sinais (2022–25 / fora da amostra, pts por operação) |
+|---|---|---|---|---|
+| D1 | A estrutura de topos e fundos já confirmou a virada a favor? | ZigZag de 1,5 ATR no M15; fundo acima do anterior (compra) ou topo abaixo (venda) | **sim** | é o próprio sinal |
+| D2 | A tendência do tempo gráfico maior, com a vela fechada, está contra a operação ou indefinida? | H1: fechamento × MME34 e MME9 × MME21 | **não** | não +44 × sim −32 / não +155 × sim −106 |
+| D3 | O preço está do lado contrário à abertura do dia? | fechamento da vela do sinal × abertura do pregão | **não** | não +22 × sim −34 / não +65 × sim −60 |
+| D4 | As médias rápida e lenta do tempo da operação estão contra a operação, ou empatadas? | MMS17 × MMS34 do fechamento, M15 | **não** | não +26 × sim −22 / não +63 × sim −31 |
+| D5 | A média longa está inclinada contra a operação, ou plana? | MMS72 da abertura das velas, agora × 3 velas atrás | **não** | não +52 × sim −51 / não +144 × sim −112 |
+| D6 | O preço já está esticado a favor (oscilador perto do extremo na direção da operação)? | Estocástico 14 (suav. 3) ≥ 70 a favor | **não**, ou D7 = sim | ver D7 |
+| D7 | O tempo gráfico ainda maior está sem tendência? | H4 (blocos 9–13, 13–17, 17–fim) neutro | **sim** libera mesmo com D6 = sim | (D6 não ou D7 sim) +30 × −46 / +76 × −89 |
+| D8 | Já existe uma posição aberta desta estratégia? | uma posição por vez | **não** | regra de execução |
+| D9 | Resta pregão suficiente para a operação? | a vela seguinte ainda é do pregão; zera 5 min antes do fim | **sim** | regra de execução |
+
+Juntas, as respostas certas levam um sinal que é quase cara ou coroa (+8 pts por operação em 2022–25) a +140; fora da amostra, de +28 a +396.
+
+### Execução, stop e saída
+
+| # | pergunta universal | gabarito da escada |
 |---|---|---|
-| O H1 fechado está em tendência a favor (MME 9/21/34)? | +44 × −32 | +155 × −106 |
-| O preço está do lado a favor da abertura do dia? | +22 × −34 | +65 × −60 |
-| A MMS17 está acima da MMS34 a favor? | +26 × −22 | +63 × −31 |
-| A MMS72 do open está inclinada a favor? | +52 × −51 | +144 × −112 |
-| O estocástico 14 está abaixo de 70 a favor, ou o H4 está neutro? | +30 × −46 | +76 × −89 |
-| **As cinco respostas são sim?** | **+140 × −30** | **+396 × −71** |
+| E1 | Como entrar sem pagar a mais? | ordem limitada no fechamento da vela do sinal; nunca a mercado |
+| E2 | Por quanto tempo a ordem vale, e o que acontece se o preço não voltar? | 3 velas M15; depois cancela |
+| S1 | Onde fica o ponto que, se atingido, prova que a tese estava errada? | o fundo (compra) ou topo (venda) que gerou o sinal |
+| S2 | Existe uma referência (média) entre esse ponto e a entrada, longe o bastante da entrada? | MME38 do M15 a mais de 0,25 ATR da entrada: **sim** → stop 0,2 ATR além dela |
+| S3 | Desde a entrada, formou-se um novo fundo (topo) confirmado a favor? | **sim** → o stop sobe (desce) para ele; nunca recua |
+| A1 | A estratégia precisa de alvo? | **não**: o ganho está nos dias que correm até o fim |
+| X1 | O pregão está terminando? | **sim** (5 min antes do fim do contínuo) → zera |
 
-O que essas perguntas ensinam:
+### O que essas perguntas ensinam
 
-- **Nenhuma sozinha basta;** cada uma separa pouco. Juntas, transformam um sinal que é quase cara ou coroa (+8 pts por operação) em +140.
-- **Todas olham o contexto, não a vela:** a tendência do tempo maior, o lado do dia, a direção das médias, o quanto o preço já esticou. As perguntas sobre a vela do sinal em si (padrões de vela, figuras, Fibonacci, médias curtas) não separaram nada.
-- **Uma pergunta nova só vale se separar os sinais que JÁ passaram nas cinco.** Separar o conjunto inteiro é fácil, porque quase tudo que mede tendência repete o que essas cinco já dizem.
+- **Nenhuma sozinha basta;** cada uma separa pouco. O valor está na combinação.
+- **As que funcionam olham o contexto, não a vela:** tempo maior, lado do dia, direção e inclinação das médias, quanto o preço já esticou. Perguntas só sobre a vela do sinal (padrões de vela, figuras, Fibonacci, médias curtas) não separaram nada na escada.
+- **A régua e a resposta certa dependem da estratégia.** Exemplo medido: na escada, "o preço já está esticado a favor?" deve ser **não**; nos robôs de tendência do Maestro, as melhores entradas acontecem justamente com o oscilador esticado, e exigir "não" piorou todos eles.
+- **Uma pergunta nova só acrescenta se separar os sinais que já passaram nas outras.** Quase tudo que mede tendência repete D2–D5.
 
-**Como medir o valor de uma pergunta nova:** escreva a resposta como sim/não calculável no momento do sinal; meça o resultado médio com sim e com não nos sinais da estratégia; faça isso no período de escolha e depois, sem mudar nada, num período que não foi usado; compare com o acaso (sortear a mesma quantidade de sinais). Se a separação não aparece fora, a pergunta não decide nada, por mais que pareça fazer sentido.
+### Como montar o gabarito de outra estratégia
+
+1. Liste os sinais brutos da estratégia (antes de qualquer filtro), cada um com o resultado de operá-lo sozinho.
+2. Para cada pergunta D2–D7 (e outras que fizerem sentido), escolha uma régua concreta e responda sim/não em cada sinal, só com velas fechadas.
+3. Meça o resultado médio com sim e com não no período de escolha. Fique com a resposta que separa e anote a régua.
+4. Confira, sem mudar nada, num período que não foi usado, e compare com o acaso (sortear a mesma quantidade de sinais).
+5. Escreva o gabarito numa tabela igual à de cima. Se respondendo às perguntas com ele o resultado não for idêntico ao do robô, falta pergunta ou a régua está errada.
 
 ---
 
