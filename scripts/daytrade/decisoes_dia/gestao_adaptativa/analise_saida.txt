@@ -1,0 +1,51 @@
+trades 100; dias 49; combos 120
+TETO (melhor gestao por trade, retrospectivo): R$ 16864 | atual R$ 4679 | melhor fixa (in-sample) R$ 10690 = stop 2 / alvo sem / nenhum
+ ciclo 0: n=23 atual 1424 teto 3224
+ ciclo 1: n=31 atual 2412 teto 7506
+ ciclo 2: n=46 atual 843 teto 6134
+
+POR NATUREZA (atual R$ / n): {np.str_('continuacao'): (1877, 43), np.str_('reversao'): (1189, 36), np.str_('rompimento'): (1613, 21)}
+
+Melhor fixa treino ciclos 0+1: stop 2 / alvo sem / t8 -> treino R$ 7987 (atual 3836); ciclo 2: 2383 (atual 843)
+
+| regime | n parametros | dentro (todos 50) adapt | ciclo0+1->2 adapt | fixa | atual | LODO adapt | LODO fixa | atual 50 |
+|---|---|---|---|---|---|---|---|---|
+| ef>=0,20 (direcional) x rotacao | 6 | 11161 | 1962 | 2383 | 843 | 8060 | 8112 | 4679 |
+   mapa (50 dias): {np.str_('dir'): 'stop 1.5 / alvo sem / nenhum', np.str_('rot'): 'stop 2 / alvo sem / t8'} | n: {np.str_('dir'): 60, np.str_('rot'): 40}
+   mapa (ciclos 0+1): {np.str_('dir'): 'stop 2 / alvo sem / t8', np.str_('rot'): 'stop 2 / alvo sem / nenhum'}
+| vol4>=1,0 (alta) x baixa | 6 | 11102 | 2759 | 2383 | 843 | 9884 | 8112 | 4679 |
+   mapa (50 dias): {np.str_('alta'): 'stop 2 / alvo sem / nenhum', np.str_('baixa'): 'stop 1 / alvo sem / nenhum'} | n: {np.str_('alta'): 49, np.str_('baixa'): 51}
+   mapa (ciclos 0+1): {np.str_('alta'): 'stop 2 / alvo sem / t8', np.str_('baixa'): 'stop 1.5 / alvo sem / nenhum'}
+| a favor x contra o dia | 6 | 11612 | 2383 | 2383 | 843 | 10888 | 8112 | 4679 |
+   mapa (50 dias): {np.str_('favor'): 'stop 1.5 / alvo sem / nenhum', np.str_('contra'): 'stop 0.75 / alvo sem / t2'} | n: {np.str_('favor'): 81, np.str_('contra'): 19}
+   mapa (ciclos 0+1): {np.str_('favor'): 'stop 2 / alvo sem / t8', np.str_('contra'): 'stop 2 / alvo sem / t8'}
+| natureza: continuacao x resto | 6 | 11185 | 2801 | 2383 | 843 | 10515 | 8112 | 4679 |
+   mapa (50 dias): {np.str_('cont'): 'stop 1 / alvo sem / nenhum', np.str_('resto'): 'stop 2 / alvo sem / t8'} | n: {np.str_('cont'): 43, np.str_('resto'): 57}
+   mapa (ciclos 0+1): {np.str_('cont'): 'stop 2 / alvo sem / nenhum', np.str_('resto'): 'stop 2 / alvo sem / t8'}
+| ef x vol (4 regimes) | 12 | 11442 | 2190 | 2383 | 843 | 8612 | 8112 | 4679 |
+   mapa (50 dias): {np.str_('dir/alta'): 'stop 2 / alvo sem / nenhum', np.str_('rot/alta'): 'stop 2 / alvo sem / t8', np.str_('dir/baixa'): 'stop 1 / alvo sem / nenhum', np.str_('rot/baixa'): 'stop 1 / alvo sem / t8'} | n: {np.str_('dir/alta'): 33, np.str_('rot/alta'): 16, np.str_('dir/baixa'): 27, np.str_('rot/baixa'): 24}
+   mapa (ciclos 0+1): {np.str_('dir/alta'): 'stop 2 / alvo sem / t8', np.str_('rot/alta'): 'stop 2 / alvo sem / t8', np.str_('dir/baixa'): 'stop 0.75 / alvo sem / t8', np.str_('rot/baixa'): 'stop 1.5 / alvo sem / nenhum'}
+
+LODO melhor fixa: usado acima. Atual total 4679
+
+Leave-one-cycle-out (adapt / fixa / atual):
+  ef>=0,20 (direcional) x rotacao | c0: 1506/1395/1424 ; c1: 5703/5936/2412 ; c2: 1962/2383/843
+  vol4>=1,0 (alta) x baixa | c0: 1406/1395/1424 ; c1: 5890/5936/2412 ; c2: 2759/2383/843
+  a favor x contra o dia | c0: 640/1395/1424 ; c1: 6156/5936/2412 ; c2: 2383/2383/843
+  natureza: continuacao x resto | c0: 1453/1395/1424 ; c1: 5918/5936/2412 ; c2: 2801/2383/843
+  ef x vol (4 regimes) | c0: 826/1395/1424 ; c1: 5048/5936/2412 ; c2: 2190/2383/843
+
+Top 8 combos fixos (50 dias, in-sample):
+  stop 2 / alvo sem / nenhum: R$ 10690
+  stop 1.5 / alvo sem / nenhum: R$ 10688
+  stop 2 / alvo sem / t8: R$ 10370
+  stop 1 / alvo sem / nenhum: R$ 10248
+  stop 1.5 / alvo sem / t8: R$ 10186
+  stop 1.5 / alvo sem / be1: R$ 9390
+  stop 2 / alvo sem / be1: R$ 9384
+  stop 1 / alvo sem / t8: R$ 9337
+Marginais: por stop {0.75: 3338, 1: 3506, 1.5: 3470, 2: 3573}
+por alvo {'0.75': 1256, '1': 1700, '1.5': 2726, '2': 3312, '3': 4328, 'None': 7507}
+por trailing {'nenhum': 4501, 'be1': 4006, 't2': 1830, 't4': 2694, 't8': 4327}
+
+Melhor gestao por trade -> fracao com alvo 'sem': 0.32 | stop medio 0.88

@@ -24,6 +24,11 @@ O robô, que junta todas as regras FAZER e NAO_FAZER de `regras/`, fechou este p
 
    Mudança que melhora o seu dia e piora o conjunto **não serve**. Marque-a como "ajustada ao dia" e não a proponha para o robô.
 
+## Sempre (dono, 2026-10-09)
+5. **Dinheiro na mesa:** qual era o MAIOR movimento aproveitável do dia (pts e R$ com as regras de execução) e POR QUE o robô não pegou — veto (qual), teto de ops, conflito de lados, regra ausente, saída cedo. Quando uma entrada bloqueada ganharia muito, pergunte sempre "por que não entrou e o que teria de fazer?".
+6. **Hipóteses diferentes, ordenadas pelo retorno:** busque a de MAIOR retorno possível (segura e replicável), sem descartar as menores.
+7. **Gestão adaptativa:** stop, alvo (ter ou não), trailing e quando mover devem poder variar com o estado observado (regime do dia, volatilidade, força da perna, hora), em vez de parâmetros fixos. Proponha mapeamentos estado→decisão e meça contra a versão fixa.
+
 ## Entrega
 
 - **`regras/c<N>_<AAAA_MM_DD>.py`**: as novas FAZER e NAO_FAZER, e os ajustes propostos como novas versões das funções. **Não edite** os arquivos `r_*.py` existentes.
