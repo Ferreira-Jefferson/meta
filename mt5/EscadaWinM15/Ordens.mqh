@@ -51,24 +51,32 @@ bool TemEntradaPendente()
 }
 
 //=================== entrada ===================
-//--- Envia a entrada limitada no preço `limite`, com o stop junto. Se o mercado já está no limite ou melhor,
-//--- a corretora recusa a limitada como "preço inválido"; aí a compra sai ao preço atual, que não é pior que o limite.
-bool EnviaEntrada(int lado, double limite, double stop, double lotes, int barra_conf, string motivo)
+//--- Preço do limite do lado de dentro do livro: se o mercado já passou dele, fica a 1 tick da melhor oferta.
+//--- Igual ao LimiteNoLivro do robô ES do WinMaestro (2026-10-09): a entrada NUNCA sai a mercado.
+double LimiteNoLivro(int lado, double limite)
 {
-   bool ok;
-   double preco_atual = lado == 1 ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   bool ja_no_limite = lado == 1 ? preco_atual <= limite : preco_atual >= limite;
-   if(ja_no_limite)
-      ok = lado == 1 ? g_trade.Buy(lotes, _Symbol, 0, stop, 0, motivo) : g_trade.Sell(lotes, _Symbol, 0, stop, 0, motivo);
-   else
-      ok = lado == 1 ? g_trade.BuyLimit(lotes, limite, _Symbol, stop, 0, ORDER_TIME_DAY, 0, motivo)
-                     : g_trade.SellLimit(lotes, limite, _Symbol, stop, 0, ORDER_TIME_DAY, 0, motivo);
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID), ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double tick = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+   if(lado == 1 && ask > 0.0 && limite >= ask)  return ask - tick;
+   if(lado == -1 && bid > 0.0 && limite <= bid) return bid + tick;
+   return limite;
+}
+
+//--- Envia a entrada limitada (nunca a mercado), com o stop junto. `limite` volta com o preço realmente pedido.
+bool EnviaEntrada(int lado, double &limite, double stop, double lotes, int barra_conf, string motivo)
+{
+   double pedido = LimiteNoLivro(lado, limite);
+   if(pedido != limite) PrintFormat("Limite %.0f já passou: entrada posta a 1 tick da melhor oferta, %.0f", limite, pedido);
+   limite = pedido;
+   if((limite - stop) * lado <= 0) { PrintFormat("Entrada %s não enviada: stop %.0f do lado errado do limite %.0f", motivo, stop, limite); return false; }
+   bool ok = lado == 1 ? g_trade.BuyLimit(lotes, limite, _Symbol, stop, 0, ORDER_TIME_DAY, 0, motivo)
+                       : g_trade.SellLimit(lotes, limite, _Symbol, stop, 0, ORDER_TIME_DAY, 0, motivo);
    if(!ok)
    {
       PrintFormat("ERRO ao enviar entrada %s: %d %s", motivo, g_trade.ResultRetcode(), g_trade.ResultRetcodeDescription());
       return false;
    }
-   g_entrada.ticket = ja_no_limite ? 0 : g_trade.ResultOrder();
+   g_entrada.ticket = g_trade.ResultOrder();
    g_entrada.lado = lado;
    g_entrada.vence_na_barra = barra_conf + VALIDADE_BARRAS;
    return true;

@@ -21,7 +21,7 @@
 //|  2. Filtros a favor: H1 (MME 9/21/34), lado da abertura do dia,  |
 //|     MMS17 x MMS34, MMS72 do open inclinada, e sinal bom          |
 //|     (Estocástico 14 < 70 a favor OU H4 neutro).                  |
-//|  3. Ordem limitada no close da barra de confirmação, 2 contratos,|
+//|  3. Ordem limitada no close da barra de confirmação, 1 contrato, |
 //|     válida por 3 barras; stop junto, no servidor.                |
 //|  4. Stop no pivô, apertado até 0,2 ATR além da MME38; sobe a cada|
 //|     novo pivô a favor. Sem alvo. Zera 5 min antes do fim do      |
@@ -31,7 +31,7 @@
 //| gráfico (o EA monta o M15 sozinho a partir do M1).               |
 //+------------------------------------------------------------------+
 #property copyright "EscadaWinM15"
-#property version   "1.17"
+#property version   "1.18"
 #property strict
 
 #include "EscadaWinM15/Calendario.mqh"
@@ -45,9 +45,9 @@
 #include "EscadaWinM15/Caixa.mqh"
 #include "EscadaWinM15/Grafico.mqh"
 
-input double Lotes       = 2;          // Contratos por operação
+input double Lotes       = 1;          // Contratos por operação
 input ulong  MagicNumber = 41041015;   // Código que identifica as ordens deste robô
-input double CaixaInicial = 2000;      // Caixa (R$) quando o robô começou a operar; o EA soma o resultado dele
+input double CaixaInicial = 1000;      // Caixa (R$) quando o robô começou a operar; o EA soma o resultado dele
 
 #define DIAS_AQUECIMENTO 120            // histórico lido na partida para as médias e o H4 já valerem
 

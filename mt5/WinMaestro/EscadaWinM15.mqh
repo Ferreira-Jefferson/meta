@@ -9,8 +9,8 @@
 //|  - posicao -> MANTER(stop que sobe a cada pivo a favor confirmado, sem alvo);
 //|  - validade vencida, entrada cancelada/recusada/perdida -> NADA;
 //|  - zeragem e corte: do maestro (fim do continuo - 5 min).
-//| Diferenca do avulso: o limite e' posto do lado de dentro do livro se o mercado ja' passou
-//| dele (nunca a mercado), como no GB.
+//| Entrada como no avulso (desde a 1.18 dele, 2026-10-09): o limite e' posto do lado de dentro
+//| do livro se o mercado ja' passou dele (nunca a mercado), como no GB.
 //+------------------------------------------------------------------+
 #ifndef WINMAESTRO_ESCADAWINM15_MQH
 #define WINMAESTRO_ESCADAWINM15_MQH
