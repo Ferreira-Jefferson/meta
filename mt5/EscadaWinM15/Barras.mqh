@@ -34,6 +34,16 @@ Barra    g_aberta;                // barra em formação
 bool     g_tem_aberta = false;
 datetime g_ult_m1     = 0;        // último minuto M1 já consumido
 
+//--- Esvazia o histórico. Trocar o tempo gráfico NÃO descarrega o EA: as globais sobrevivem ao OnDeinit/OnInit,
+//--- e sem isto o aquecimento seria empilhado em cima das barras antigas a cada troca.
+void ZeraBarras()
+{
+   ArrayFree(g_barras);
+   g_nbarras = 0;
+   g_tem_aberta = false;
+   g_ult_m1 = 0;
+}
+
 //--- Último índice (barra fechada mais recente).
 int UltimaBarra() { return g_nbarras - 1; }
 

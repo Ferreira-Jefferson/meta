@@ -72,6 +72,13 @@ SerieMaior g_h1, g_h4;
 
 void IniciaSerie(SerieMaior &s) { s.chave_aberta = 0; s.n = 0; }
 
+//--- Esvazia médias e séries maiores (mesmo motivo de ZeraBarras).
+void ZeraIndicadores()
+{
+   ArrayFree(g_mme38);
+   IniciaSerie(g_h1); IniciaSerie(g_h4);
+}
+
 //--- Fecha o bloco em formação: atualiza as MMEs com o fechamento dele.
 void FechaBloco(SerieMaior &s)
 {

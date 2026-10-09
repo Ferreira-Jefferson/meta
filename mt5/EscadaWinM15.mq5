@@ -31,7 +31,7 @@
 //| gráfico (o EA monta o M15 sozinho a partir do M1).               |
 //+------------------------------------------------------------------+
 #property copyright "EscadaWinM15"
-#property version   "1.15"
+#property version   "1.16"
 #property strict
 
 #include "EscadaWinM15/Calendario.mqh"
@@ -116,7 +116,8 @@ void Sincroniza(bool ao_vivo)
 int OnInit()
 {
    ConfiguraOrdens(MagicNumber);
-   IniciaSerie(g_h1); IniciaSerie(g_h4);
+   ZeraBarras(); ZeraIndicadores();            // troca de tempo gráfico reaproveita as globais
+   g_ult_minuto = 0;
    GraficoInicia();
    g_ult_m1 = TimeCurrent() - DIAS_AQUECIMENTO * SEG_DIA;
    Sincroniza(false);
