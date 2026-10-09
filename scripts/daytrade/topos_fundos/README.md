@@ -12,6 +12,7 @@ Robô de topos e fundos no WIN. Pesquisa completa (rodadas 2–16) no commit `ea
 | `operacao.py` | entrada limitada, gestão da posição, resultado e resumo |
 | `estrategia.py` | monta a v4.1 e roda os três períodos |
 | `auditoria_dados.py` | confere as bases M1 contra o calendário e a grade da B3 |
+| `acompanhamento.py` | resultado recente (backtest nos dados novos e EA real na conta) contra as faixas da v4.1 congelada: azar normal ou problema |
 
 Rodar: `.venv\Scripts\python.exe scripts/daytrade/topos_fundos/estrategia.py`
 
