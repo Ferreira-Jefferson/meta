@@ -1,0 +1,2187 @@
+[
+ {
+  "dia": "2022-02-09",
+  "tipo": "ruim",
+  "ef": 0.05,
+  "brl": -190.0,
+  "v3": -190.0,
+  "v2": -92.0,
+  "v1": -92.0,
+  "trades": [
+   {
+    "fonte": "2023_08_21:gap_preenchido",
+    "lado": "venda",
+    "contratos": 1,
+    "sinal": "09:30:00",
+    "ent": "09:34:00",
+    "sai": "12:22:00",
+    "preco": 112450.0,
+    "preco_sai": 112900.0,
+    "stop": 112900.0,
+    "alvo": 111550.0,
+    "motivo": "stop",
+    "pts": -460.0,
+    "brl": -92.0
+   },
+   {
+    "fonte": "2023_11_03:Rompimento da faixa da 1\u00aa hora a favor do gap",
+    "lado": "compra",
+    "contratos": 1,
+    "sinal": "12:30:00",
+    "ent": "12:43:00",
+    "sai": "14:05:00",
+    "preco": 113125.0,
+    "preco_sai": 112645.0,
+    "stop": 112645.0,
+    "alvo": null,
+    "motivo": "stop",
+    "pts": -490.0,
+    "brl": -98.0
+   }
+  ],
+  "log": [
+   {
+    "fazer": [
+     [
+      "2023_08_21:gap_preenchido",
+      "venda"
+     ]
+    ],
+    "vetos": {},
+    "entrou": "2023_08_21:gap_preenchido",
+    "nota": "",
+    "t": "09:30:00"
+   },
+   {
+    "fazer": [
+     [
+      "2023_11_03:Rompimento da faixa da 1\u00aa hora a favor do gap",
+      "compra"
+     ],
+     [
+      "2023_11_03:Recuo \u00e0 m\u00e9dia 8 em tend\u00eancia de alta",
+      "compra"
+     ],
+     [
+      "c2:C8 expansao_compressao",
+      "compra"
+     ]
+    ],
+    "vetos": {
+     "venda": [
+      "2022_11_29:vender_esticada_contra",
+      "2023_11_03:Vender a m\u00e1xima nova do dia",
+      "2024_06_18:vender_rali_1atr"
+     ]
+    },
+    "entrou": "2023_11_03:Rompimento da faixa da 1\u00aa hora a favor do gap",
+    "nota": "",
+    "t": "12:30:00"
+   },
+   {
+    "fazer": [
+     [
+      "2024_06_18:faixa_tarde",
+      "compra"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2023_08_21:compra_queda_1atr"
+     ]
+    },
+    "entrou": null,
+    "nota": "[2024_06_18:faixa_tarde VETADA por 1] ",
+    "t": "14:30:00"
+   },
+   {
+    "fazer": [
+     [
+      "2023_11_03:Recuo \u00e0 m\u00e9dia 8 em tend\u00eancia de alta",
+      "compra"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2024_06_18:rompimento_sem_volume"
+     ],
+     "venda": [
+      "2023_11_03:Vender volume seco no fim da tarde",
+      "2024_06_18:vender_rali_1atr"
+     ]
+    },
+    "entrou": null,
+    "nota": "[2023_11_03:Recuo \u00e0 m\u00e9dia 8 em tend\u00eancia de alta VETADA por 1] ",
+    "t": "14:45:00"
+   },
+   {
+    "fazer": [
+     [
+      "2024_06_18:faixa_tarde",
+      "venda"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2024_06_18:seguir_tarde"
+     ],
+     "venda": [
+      "2024_06_18:vender_rali_1atr"
+     ]
+    },
+    "entrou": null,
+    "nota": "[2024_06_18:faixa_tarde VETADA por 1] ",
+    "t": "15:00:00"
+   },
+   {
+    "fazer": [
+     [
+      "2024_06_18:faixa_tarde",
+      "compra"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2022_11_16:compra cada queda de 1 ATR",
+      "2023_08_21:compra_queda_1atr"
+     ]
+    },
+    "entrou": null,
+    "nota": "[2024_06_18:faixa_tarde VETADA por 2] ",
+    "t": "15:30:00"
+   }
+  ]
+ },
+ {
+  "dia": "2022-03-22",
+  "tipo": "ruim",
+  "ef": 0.116,
+  "brl": -70.61,
+  "v3": -70.61,
+  "v2": -70.61,
+  "v1": -70.61,
+  "trades": [
+   {
+    "fonte": "2022_11_29:recuo_a_favor_tendencia",
+    "lado": "compra",
+    "contratos": 1,
+    "sinal": "11:30:00",
+    "ent": "11:31:00",
+    "sai": "12:31:00",
+    "preco": 118010.0,
+    "preco_sai": 117856.96428571429,
+    "stop": 117856.96428571429,
+    "alvo": 118239.55357142857,
+    "motivo": "stop",
+    "pts": -163.0,
+    "brl": -32.61
+   },
+   {
+    "fonte": "2022_11_29:recuo_a_favor_tendencia",
+    "lado": "compra",
+    "contratos": 1,
+    "sinal": "13:30:00",
+    "ent": "13:30:00",
+    "sai": "15:26:00",
+    "preco": 117880.0,
+    "preco_sai": 117700.0,
+    "stop": 117700.0,
+    "alvo": 118150.0,
+    "motivo": "stop",
+    "pts": -190.0,
+    "brl": -38.0
+   }
+  ],
+  "log": [
+   {
+    "fazer": [
+     [
+      "2022_11_29:rompe_1a_hora_com_volume",
+      "compra"
+     ],
+     [
+      "c1:A4 barra_de_expansao",
+      "compra"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2024_05_16:N3 compra rompimento da maxima da abertura",
+      "2025_08_01:N1 comprar rompimento da 1a hora"
+     ],
+     "venda": [
+      "2024_06_18:vender_maxima_nova",
+      "2024_06_18:fade_impulso_cedo"
+     ]
+    },
+    "entrou": null,
+    "nota": "[2022_11_29:rompe_1a_hora_com_volume limitada agressiva] [c1:A4 barra_de_expansao VETADA por 2] ",
+    "t": "10:15:00"
+   },
+   {
+    "fazer": [
+     [
+      "2022_11_29:rompe_1a_hora_com_volume",
+      "compra"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2023_08_21:compra_queda_1atr",
+      "2025_08_01:N1 comprar rompimento da 1a hora"
+     ],
+     "venda": [
+      "2023_11_03:Vender a m\u00e1xima nova do dia",
+      "2024_06_18:vender_rali_1atr",
+      "2024_06_18:vender_maxima_nova",
+      "2025_06_04:N5 vender pavio de rejeicao na manha"
+     ]
+    },
+    "entrou": null,
+    "nota": "[2022_11_29:rompe_1a_hora_com_volume limitada agressiva] ",
+    "t": "10:30:00"
+   },
+   {
+    "fazer": [
+     [
+      "2022_11_29:rompe_1a_hora_com_volume",
+      "compra"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2023_03_20:Comprar martelo (revers\u00e3o)",
+      "2025_08_01:N1 comprar rompimento da 1a hora"
+     ],
+     "venda": [
+      "2024_06_18:vender_rali_1atr"
+     ]
+    },
+    "entrou": null,
+    "nota": "[2022_11_29:rompe_1a_hora_com_volume limitada agressiva] ",
+    "t": "10:45:00"
+   },
+   {
+    "fazer": [
+     [
+      "2022_11_29:rompe_1a_hora_com_volume",
+      "compra"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2023_03_20:Comprar martelo (revers\u00e3o)",
+      "2025_08_01:N1 comprar rompimento da 1a hora"
+     ],
+     "venda": [
+      "2022_11_29:vender_esticada_contra",
+      "2024_06_18:vender_rali_1atr"
+     ]
+    },
+    "entrou": null,
+    "nota": "[2022_11_29:rompe_1a_hora_com_volume limitada agressiva] ",
+    "t": "11:00:00"
+   },
+   {
+    "fazer": [
+     [
+      "2022_11_29:recuo_a_favor_tendencia",
+      "compra"
+     ]
+    ],
+    "vetos": {
+     "venda": [
+      "2025_06_04:N2 vender minima na rotacao da manha"
+     ]
+    },
+    "entrou": "2022_11_29:recuo_a_favor_tendencia",
+    "nota": "",
+    "t": "11:30:00"
+   },
+   {
+    "fazer": [
+     [
+      "2023_11_03:Recuo \u00e0 m\u00e9dia 8 em tend\u00eancia de alta",
+      "compra"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2022_11_16:compra inversao de 1 vela"
+     ],
+     "venda": [
+      "2024_06_18:vender_rali_1atr"
+     ]
+    },
+    "entrou": null,
+    "nota": "[2023_11_03:Recuo \u00e0 m\u00e9dia 8 em tend\u00eancia de alta VETADA por 1] ",
+    "t": "13:15:00"
+   },
+   {
+    "fazer": [
+     [
+      "2022_11_29:recuo_a_favor_tendencia",
+      "compra"
+     ]
+    ],
+    "vetos": {
+     "venda": [
+      "c1b:#8 vender_no_vwap_media_subindo"
+     ]
+    },
+    "entrou": "2022_11_29:recuo_a_favor_tendencia",
+    "nota": "",
+    "t": "13:30:00"
+   }
+  ]
+ },
+ {
+  "dia": "2023-06-02",
+  "tipo": "ruim",
+  "ef": 0.126,
+  "brl": -117.14,
+  "v3": -117.14,
+  "v2": -117.14,
+  "v1": -117.14,
+  "trades": [
+   {
+    "fonte": "2023_11_03:Recuo \u00e0 m\u00e9dia 8 em tend\u00eancia de alta",
+    "lado": "compra",
+    "contratos": 1,
+    "sinal": "12:15:00",
+    "ent": "12:15:00",
+    "sai": "15:03:00",
+    "preco": 113140.0,
+    "preco_sai": 112564.28571428571,
+    "stop": 112564.28571428571,
+    "alvo": 114129.28571428571,
+    "motivo": "stop",
+    "pts": -585.7,
+    "brl": -117.14
+   }
+  ],
+  "log": [
+   {
+    "fazer": [
+     [
+      "2023_11_03:Impulso das 2 primeiras velas acima da m\u00e1xima de ontem",
+      "compra"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2024_01_19:compra continua\u00e7\u00e3o do gap de alta"
+     ]
+    },
+    "entrou": null,
+    "nota": "[2023_11_03:Impulso das 2 primeiras velas acima da m\u00e1xima de ontem VETADA por 1] ",
+    "t": "09:30:00"
+   },
+   {
+    "fazer": [
+     [
+      "2025_06_04:F2 falha na maxima da 1a hora (venda)",
+      "venda"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2024_05_16:N3 compra rompimento da maxima da abertura"
+     ],
+     "venda": [
+      "2024_06_18:vender_maxima_nova",
+      "2025_06_04:N5 vender pavio de rejeicao na manha"
+     ]
+    },
+    "entrou": null,
+    "nota": "[2025_06_04:F2 falha na maxima da 1a hora (venda) VETADA por 2] ",
+    "t": "10:15:00"
+   },
+   {
+    "fazer": [
+     [
+      "2022_11_29:rompe_1a_hora_com_volume",
+      "compra"
+     ],
+     [
+      "2023_11_03:Rompimento da faixa da 1\u00aa hora a favor do gap",
+      "compra"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2022_11_16:compra inversao de 1 vela",
+      "2023_11_03:Comprar rompimento com alvo menor que o stop",
+      "2025_06_04:N3 comprar rompimento da manha",
+      "2025_08_01:N1 comprar rompimento da 1a hora"
+     ],
+     "venda": [
+      "2023_11_03:Vender a m\u00e1xima nova do dia",
+      "2024_06_18:vender_rali_1atr",
+      "2024_06_18:vender_maxima_nova",
+      "2024_06_18:fade_impulso_cedo"
+     ]
+    },
+    "entrou": null,
+    "nota": "[2022_11_29:rompe_1a_hora_com_volume limitada agressiva] [2023_11_03:Rompimento da faixa da 1\u00aa hora a favor do gap VETADA por 4] ",
+    "t": "10:30:00"
+   },
+   {
+    "fazer": [
+     [
+      "2022_11_29:rompe_1a_hora_com_volume",
+      "compra"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2025_08_01:N1 comprar rompimento da 1a hora"
+     ],
+     "venda": [
+      "2023_11_03:Vender a m\u00e1xima nova do dia",
+      "2024_06_18:vender_rali_1atr",
+      "2024_06_18:vender_maxima_nova"
+     ]
+    },
+    "entrou": null,
+    "nota": "[2022_11_29:rompe_1a_hora_com_volume limitada agressiva] ",
+    "t": "10:45:00"
+   },
+   {
+    "fazer": [
+     [
+      "2022_11_29:rompe_1a_hora_com_volume",
+      "compra"
+     ],
+     [
+      "2022_11_29:recuo_a_favor_tendencia",
+      "compra"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2023_08_21:compra_queda_1atr",
+      "2025_08_01:N1 comprar rompimento da 1a hora"
+     ]
+    },
+    "entrou": null,
+    "nota": "[2022_11_29:rompe_1a_hora_com_volume limitada agressiva] [2022_11_29:recuo_a_favor_tendencia VETADA por 2] ",
+    "t": "11:00:00"
+   },
+   {
+    "fazer": [
+     [
+      "2022_11_29:recuo_a_favor_tendencia",
+      "compra"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2023_08_21:compra_queda_1atr"
+     ],
+     "venda": [
+      "2025_06_04:N2 vender minima na rotacao da manha"
+     ]
+    },
+    "entrou": null,
+    "nota": "[2022_11_29:recuo_a_favor_tendencia VETADA por 1] ",
+    "t": "11:15:00"
+   },
+   {
+    "fazer": [
+     [
+      "2022_11_29:recuo_a_favor_tendencia",
+      "compra"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2023_08_21:compra_queda_1atr"
+     ],
+     "venda": [
+      "2025_06_04:N2 vender minima na rotacao da manha",
+      "c1b:#8 vender_no_vwap_media_subindo"
+     ]
+    },
+    "entrou": null,
+    "nota": "[2022_11_29:recuo_a_favor_tendencia VETADA por 1] ",
+    "t": "11:30:00"
+   },
+   {
+    "fazer": [
+     [
+      "2023_11_03:Recuo \u00e0 m\u00e9dia 8 em tend\u00eancia de alta",
+      "compra"
+     ],
+     [
+      "2024_06_18:recuo_tendencia",
+      "compra"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2022_11_16:compra inversao de 1 vela",
+      "2023_03_20:Comprar martelo (revers\u00e3o)",
+      "2023_08_21:compra_queda_1atr"
+     ],
+     "venda": [
+      "c1b:#8 vender_no_vwap_media_subindo"
+     ]
+    },
+    "entrou": null,
+    "nota": "[2023_11_03:Recuo \u00e0 m\u00e9dia 8 em tend\u00eancia de alta VETADA por 3] ",
+    "t": "11:45:00"
+   },
+   {
+    "fazer": [
+     [
+      "2024_06_18:recuo_tendencia",
+      "compra"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2023_08_21:compra_queda_1atr"
+     ]
+    },
+    "entrou": null,
+    "nota": "[2024_06_18:recuo_tendencia VETADA por 1] ",
+    "t": "12:00:00"
+   },
+   {
+    "fazer": [
+     [
+      "2023_11_03:Recuo \u00e0 m\u00e9dia 8 em tend\u00eancia de alta",
+      "compra"
+     ],
+     [
+      "2024_06_18:recuo_tendencia",
+      "compra"
+     ]
+    ],
+    "vetos": {},
+    "entrou": "2023_11_03:Recuo \u00e0 m\u00e9dia 8 em tend\u00eancia de alta",
+    "nota": "",
+    "t": "12:15:00"
+   },
+   {
+    "fazer": [
+     [
+      "2024_06_18:faixa_tarde",
+      "compra"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2023_08_21:compra_queda_1atr"
+     ],
+     "venda": [
+      "2024_06_18:seguir_tarde"
+     ]
+    },
+    "entrou": null,
+    "nota": "[2024_06_18:faixa_tarde VETADA por 1] ",
+    "t": "15:15:00"
+   },
+   {
+    "fazer": [
+     [
+      "2024_06_18:faixa_tarde",
+      "venda"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2022_11_16:compra inversao de 1 vela"
+     ],
+     "venda": [
+      "2024_06_18:vender_rali_1atr"
+     ]
+    },
+    "entrou": null,
+    "nota": "[2024_06_18:faixa_tarde VETADA por 1] ",
+    "t": "15:30:00"
+   }
+  ]
+ },
+ {
+  "dia": "2023-11-17",
+  "tipo": "ruim",
+  "ef": 0.007,
+  "brl": -54.5,
+  "v3": -54.5,
+  "v2": -54.5,
+  "v1": -54.5,
+  "trades": [
+   {
+    "fonte": "2023_03_20:Falha da alta inicial (venda)",
+    "lado": "venda",
+    "contratos": 1,
+    "sinal": "11:00:00",
+    "ent": "11:00:00",
+    "sai": "12:22:00",
+    "preco": 125735.0,
+    "preco_sai": 126160.0,
+    "stop": 126160.0,
+    "alvo": 125097.5,
+    "motivo": "stop",
+    "pts": -435.0,
+    "brl": -87.0
+   },
+   {
+    "fonte": "2024_06_18:faixa_tarde",
+    "lado": "venda",
+    "contratos": 1,
+    "sinal": "15:30:00",
+    "ent": "15:30:00",
+    "sai": "16:20:00",
+    "preco": 126275.0,
+    "preco_sai": 126102.5,
+    "stop": 126590.0,
+    "alvo": 126102.5,
+    "motivo": "alvo",
+    "pts": 162.5,
+    "brl": 32.5
+   }
+  ],
+  "log": [
+   {
+    "fazer": [
+     [
+      "2022_11_29:rompe_1a_hora_com_volume",
+      "compra"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2023_11_03:Comprar rompimento com alvo menor que o stop",
+      "2024_05_16:N3 compra rompimento da maxima da abertura",
+      "2025_06_04:N3 comprar rompimento da manha",
+      "2025_08_01:N1 comprar rompimento da 1a hora"
+     ],
+     "venda": [
+      "2024_06_18:vender_maxima_nova",
+      "2025_06_04:N5 vender pavio de rejeicao na manha"
+     ]
+    },
+    "entrou": null,
+    "nota": "[2022_11_29:rompe_1a_hora_com_volume limitada agressiva] ",
+    "t": "10:15:00"
+   },
+   {
+    "fazer": [
+     [
+      "2023_03_20:Falha da alta inicial (venda)",
+      "venda"
+     ],
+     [
+      "2025_08_01:F5 falha do rompimento da 1a hora (venda)",
+      "venda"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2023_08_21:compra_queda_1atr"
+     ],
+     "venda": [
+      "2025_06_04:N2 vender minima na rotacao da manha"
+     ]
+    },
+    "entrou": null,
+    "nota": "[2023_03_20:Falha da alta inicial (venda) VETADA por 1] ",
+    "t": "10:30:00"
+   },
+   {
+    "fazer": [
+     [
+      "2025_06_04:F5 compra suporte na rotacao da manha",
+      "compra"
+     ],
+     [
+      "2025_08_01:F5 falha do rompimento da 1a hora (venda)",
+      "venda"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2022_11_16:compra inversao de 1 vela",
+      "2023_08_21:compra_queda_1atr"
+     ],
+     "venda": [
+      "2024_06_18:vender_rali_1atr"
+     ]
+    },
+    "entrou": null,
+    "nota": "FAZER nos dois lados: nao entra",
+    "t": "10:45:00"
+   },
+   {
+    "fazer": [
+     [
+      "2023_03_20:Falha da alta inicial (venda)",
+      "venda"
+     ],
+     [
+      "2025_08_01:F5 falha do rompimento da 1a hora (venda)",
+      "venda"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2022_11_16:compra cada queda de 1 ATR",
+      "2023_08_21:compra_queda_1atr"
+     ]
+    },
+    "entrou": "2023_03_20:Falha da alta inicial (venda)",
+    "nota": "",
+    "t": "11:00:00"
+   },
+   {
+    "fazer": [
+     [
+      "2023_11_03:Recuo \u00e0 m\u00e9dia 8 em tend\u00eancia de alta",
+      "compra"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2023_08_21:compra_queda_1atr"
+     ]
+    },
+    "entrou": null,
+    "nota": "[2023_11_03:Recuo \u00e0 m\u00e9dia 8 em tend\u00eancia de alta VETADA por 1] ",
+    "t": "13:15:00"
+   },
+   {
+    "fazer": [
+     [
+      "2023_11_03:Recuo \u00e0 m\u00e9dia 8 em tend\u00eancia de alta",
+      "compra"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2022_11_16:compra inversao de 1 vela",
+      "2023_08_21:compra_queda_1atr"
+     ]
+    },
+    "entrou": null,
+    "nota": "[2023_11_03:Recuo \u00e0 m\u00e9dia 8 em tend\u00eancia de alta VETADA por 2] ",
+    "t": "13:30:00"
+   },
+   {
+    "fazer": [
+     [
+      "2023_11_03:Recuo \u00e0 m\u00e9dia 8 em tend\u00eancia de alta",
+      "compra"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2022_11_16:compra inversao de 1 vela"
+     ],
+     "venda": [
+      "2023_11_03:Vender volume seco no fim da tarde"
+     ]
+    },
+    "entrou": null,
+    "nota": "[2023_11_03:Recuo \u00e0 m\u00e9dia 8 em tend\u00eancia de alta VETADA por 1] ",
+    "t": "14:00:00"
+   },
+   {
+    "fazer": [
+     [
+      "2023_11_03:Recuo \u00e0 m\u00e9dia 8 em tend\u00eancia de alta",
+      "compra"
+     ],
+     [
+      "2024_06_18:faixa_tarde",
+      "venda"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2024_06_18:rompimento_sem_volume"
+     ],
+     "venda": [
+      "2023_11_03:Vender volume seco no fim da tarde",
+      "2024_06_18:vender_rali_1atr"
+     ]
+    },
+    "entrou": null,
+    "nota": "FAZER nos dois lados: nao entra",
+    "t": "14:15:00"
+   },
+   {
+    "fazer": [
+     [
+      "2024_06_18:faixa_tarde",
+      "venda"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2022_11_29:comprar_maxima_nova_tarde"
+     ],
+     "venda": [
+      "2023_11_03:Vender a m\u00e1xima nova do dia",
+      "2024_06_18:vender_rali_1atr"
+     ]
+    },
+    "entrou": null,
+    "nota": "[2024_06_18:faixa_tarde VETADA por 2] ",
+    "t": "14:30:00"
+   },
+   {
+    "fazer": [
+     [
+      "2024_06_18:faixa_tarde",
+      "venda"
+     ]
+    ],
+    "vetos": {
+     "venda": [
+      "2023_11_03:Vender volume seco no fim da tarde",
+      "2024_06_18:vender_rali_1atr"
+     ]
+    },
+    "entrou": null,
+    "nota": "[2024_06_18:faixa_tarde VETADA por 2] ",
+    "t": "14:45:00"
+   },
+   {
+    "fazer": [
+     [
+      "2024_06_18:faixa_tarde",
+      "venda"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2024_06_18:seguir_tarde"
+     ],
+     "venda": [
+      "2023_11_03:Vender volume seco no fim da tarde",
+      "2024_06_18:vender_rali_1atr"
+     ]
+    },
+    "entrou": null,
+    "nota": "[2024_06_18:faixa_tarde VETADA por 2] ",
+    "t": "15:00:00"
+   },
+   {
+    "fazer": [
+     [
+      "2024_06_18:faixa_tarde",
+      "venda"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2022_11_16:compra inversao de 1 vela",
+      "2022_11_29:comprar_maxima_nova_tarde",
+      "2024_06_18:seguir_tarde"
+     ],
+     "venda": [
+      "2023_11_03:Vender volume seco no fim da tarde",
+      "2024_06_18:vender_rali_1atr"
+     ]
+    },
+    "entrou": null,
+    "nota": "[2024_06_18:faixa_tarde VETADA por 2] ",
+    "t": "15:15:00"
+   },
+   {
+    "fazer": [
+     [
+      "2024_06_18:faixa_tarde",
+      "venda"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2024_06_18:seguir_tarde"
+     ]
+    },
+    "entrou": "2024_06_18:faixa_tarde",
+    "nota": "",
+    "t": "15:30:00"
+   }
+  ]
+ },
+ {
+  "dia": "2024-01-09",
+  "tipo": "ruim",
+  "ef": 0.106,
+  "brl": -134.0,
+  "v3": -117.0,
+  "v2": -117.0,
+  "v1": -117.0,
+  "trades": [
+   {
+    "fonte": "2024_06_18:gap_fade_fechamento",
+    "lado": "compra",
+    "contratos": 1,
+    "sinal": "09:15:00",
+    "ent": "09:15:00",
+    "sai": "09:25:00",
+    "preco": 133160.0,
+    "preco_sai": 133000.0,
+    "stop": 133000.0,
+    "alvo": 133940.0,
+    "motivo": "stop",
+    "pts": -170.0,
+    "brl": -34.0
+   },
+   {
+    "fonte": "2024_06_18:gap_fade_fechamento",
+    "lado": "compra",
+    "contratos": 1,
+    "sinal": "10:00:00",
+    "ent": "10:00:00",
+    "sai": "10:04:00",
+    "preco": 133105.0,
+    "preco_sai": 132895.0,
+    "stop": 132895.0,
+    "alvo": 133940.0,
+    "motivo": "stop",
+    "pts": -220.0,
+    "brl": -44.0
+   },
+   {
+    "fonte": "2022_11_29:falha_de_queda_1a_hora",
+    "lado": "compra",
+    "contratos": 1,
+    "sinal": "11:00:00",
+    "ent": "11:00:00",
+    "sai": "11:29:00",
+    "preco": 133010.0,
+    "preco_sai": 132740.0,
+    "stop": 132740.0,
+    "alvo": 133550.0,
+    "motivo": "stop",
+    "pts": -280.0,
+    "brl": -56.0
+   }
+  ],
+  "log": [
+   {
+    "fazer": [
+     [
+      "2024_06_18:gap_fade_fechamento",
+      "compra"
+     ]
+    ],
+    "vetos": {},
+    "entrou": "2024_06_18:gap_fade_fechamento",
+    "nota": "",
+    "t": "09:15:00"
+   },
+   {
+    "fazer": [
+     [
+      "2024_06_18:gap_fade_fechamento",
+      "compra"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "c3:N1 comprar apos queda forte"
+     ]
+    },
+    "entrou": null,
+    "nota": "[2024_06_18:gap_fade_fechamento VETADA por 1] ",
+    "t": "09:30:00"
+   },
+   {
+    "fazer": [
+     [
+      "2024_06_18:gap_fade_fechamento",
+      "compra"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "c3:N1 comprar apos queda forte"
+     ]
+    },
+    "entrou": null,
+    "nota": "[2024_06_18:gap_fade_fechamento VETADA por 1] ",
+    "t": "09:45:00"
+   },
+   {
+    "fazer": [
+     [
+      "2024_06_18:gap_fade_fechamento",
+      "compra"
+     ],
+     [
+      "2025_06_04:F5 compra suporte na rotacao da manha",
+      "compra"
+     ]
+    ],
+    "vetos": {},
+    "entrou": "2024_06_18:gap_fade_fechamento",
+    "nota": "",
+    "t": "10:00:00"
+   },
+   {
+    "fazer": [
+     [
+      "c2:P2 rompe faixa 1h com volume, alvo 1R",
+      "venda"
+     ],
+     [
+      "2022_11_16:venda rompe minima 1a hora",
+      "venda"
+     ],
+     [
+      "2024_06_18:rompe_faixa_1h",
+      "venda"
+     ],
+     [
+      "2025_06_04:F1 rompe minima da 1a hora (venda)",
+      "venda"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2023_08_21:compra_esticado_vs_ema21"
+     ],
+     "venda": [
+      "2023_08_21:vende_rompimento_stop_curto",
+      "2025_06_04:N2 vender minima na rotacao da manha"
+     ]
+    },
+    "entrou": null,
+    "nota": "[c2:P2 rompe faixa 1h com volume, alvo 1R VETADA por 2] ",
+    "t": "10:15:00"
+   },
+   {
+    "fazer": [
+     [
+      "2022_11_16:venda nova minima sob abertura/VWAP",
+      "venda"
+     ],
+     [
+      "2025_06_04:F1 rompe minima da 1a hora (venda)",
+      "venda"
+     ],
+     [
+      "c3g:G4 flip",
+      "venda"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2022_11_16:compra cada queda de 1 ATR",
+      "2023_08_21:compra_queda_1atr",
+      "2023_08_21:compra_esticado_vs_ema21"
+     ],
+     "venda": [
+      "2025_06_04:N2 vender minima na rotacao da manha"
+     ]
+    },
+    "entrou": null,
+    "nota": "[2022_11_16:venda nova minima sob abertura/VWAP VETADA por 1] ",
+    "t": "10:30:00"
+   },
+   {
+    "fazer": [
+     [
+      "2025_06_04:F1 rompe minima da 1a hora (venda)",
+      "venda"
+     ],
+     [
+      "2025_06_04:F5 compra suporte na rotacao da manha",
+      "compra"
+     ],
+     [
+      "c3g:G4 flip",
+      "venda"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2022_11_16:compra cada queda de 1 ATR",
+      "2022_11_16:compra inversao de 1 vela",
+      "2023_08_21:compra_queda_1atr",
+      "2023_08_21:compra_esticado_vs_ema21"
+     ]
+    },
+    "entrou": null,
+    "nota": "FAZER nos dois lados: nao entra",
+    "t": "10:45:00"
+   },
+   {
+    "fazer": [
+     [
+      "2022_11_29:falha_de_queda_1a_hora",
+      "compra"
+     ]
+    ],
+    "vetos": {
+     "venda": [
+      "2024_06_18:vender_rali_1atr"
+     ]
+    },
+    "entrou": "2022_11_29:falha_de_queda_1a_hora",
+    "nota": "",
+    "t": "11:00:00"
+   }
+  ]
+ },
+ {
+  "dia": "2024-07-10",
+  "tipo": "ruim",
+  "ef": 0.053,
+  "brl": -24.63,
+  "v3": -24.63,
+  "v2": -24.63,
+  "v1": -15.13,
+  "trades": [
+   {
+    "fonte": "2023_11_03:Impulso das 2 primeiras velas acima da m\u00e1xima de ontem",
+    "lado": "compra",
+    "contratos": 1,
+    "sinal": "09:30:00",
+    "ent": "09:30:00",
+    "sai": "09:35:00",
+    "preco": 128970.0,
+    "preco_sai": 128781.85714285714,
+    "stop": 128781.85714285714,
+    "alvo": 129283.57142857143,
+    "motivo": "stop",
+    "pts": -198.1,
+    "brl": -39.63
+   },
+   {
+    "fonte": "2022_11_16:venda pullback EMA20 em baixa",
+    "lado": "venda",
+    "contratos": 1,
+    "sinal": "11:15:00",
+    "ent": "11:15:00",
+    "sai": "18:24:00",
+    "preco": 128270.0,
+    "preco_sai": 128185.0,
+    "stop": 128605.67857142857,
+    "alvo": 127430.80357142857,
+    "motivo": "fim",
+    "pts": 75.0,
+    "brl": 15.0
+   }
+  ],
+  "log": [
+   {
+    "fazer": [
+     [
+      "2023_11_03:Impulso das 2 primeiras velas acima da m\u00e1xima de ontem",
+      "compra"
+     ]
+    ],
+    "vetos": {},
+    "entrou": "2023_11_03:Impulso das 2 primeiras velas acima da m\u00e1xima de ontem",
+    "nota": "",
+    "t": "09:30:00"
+   },
+   {
+    "fazer": [
+     [
+      "2023_11_03:Recuo \u00e0 m\u00e9dia 8 em tend\u00eancia de alta",
+      "compra"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2022_11_16:compra inversao de 1 vela",
+      "2023_08_21:compra_queda_1atr"
+     ],
+     "venda": [
+      "2024_06_18:vender_rali_1atr",
+      "c1b:#8 vender_no_vwap_media_subindo"
+     ]
+    },
+    "entrou": null,
+    "nota": "[2023_11_03:Recuo \u00e0 m\u00e9dia 8 em tend\u00eancia de alta VETADA por 2] ",
+    "t": "10:30:00"
+   },
+   {
+    "fazer": [
+     [
+      "c2:P2 rompe faixa 1h com volume, alvo 1R",
+      "venda"
+     ],
+     [
+      "2022_11_16:venda rompe minima 1a hora",
+      "venda"
+     ],
+     [
+      "2022_11_16:venda nova minima sob abertura/VWAP",
+      "venda"
+     ],
+     [
+      "2024_06_18:rompe_faixa_1h",
+      "venda"
+     ],
+     [
+      "2025_06_04:F1 rompe minima da 1a hora (venda)",
+      "venda"
+     ],
+     [
+      "c1:A4 barra_de_expansao",
+      "venda"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2022_11_16:compra cada queda de 1 ATR",
+      "2023_08_21:compra_queda_1atr"
+     ],
+     "venda": [
+      "2023_08_21:vende_rompimento_stop_curto",
+      "2025_06_04:N2 vender minima na rotacao da manha"
+     ]
+    },
+    "entrou": null,
+    "nota": "[c2:P2 rompe faixa 1h com volume, alvo 1R VETADA por 2] ",
+    "t": "10:45:00"
+   },
+   {
+    "fazer": [
+     [
+      "2022_11_16:venda nova minima sob abertura/VWAP",
+      "venda"
+     ],
+     [
+      "2025_06_04:F1 rompe minima da 1a hora (venda)",
+      "venda"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2022_11_16:compra cada queda de 1 ATR",
+      "2022_11_16:compra desvio de 1,5 ATR da VWAP",
+      "2023_08_21:compra_queda_1atr",
+      "2025_06_04:N1 comprar cada queda na baixa"
+     ],
+     "venda": [
+      "2024_06_18:rompimento_sem_volume",
+      "2025_06_04:N2 vender minima na rotacao da manha",
+      "c2:N5 vender com range e volume encolhendo"
+     ]
+    },
+    "entrou": null,
+    "nota": "[2022_11_16:venda nova minima sob abertura/VWAP VETADA por 3] ",
+    "t": "11:00:00"
+   },
+   {
+    "fazer": [
+     [
+      "2022_11_16:venda pullback EMA20 em baixa",
+      "venda"
+     ],
+     [
+      "2025_06_04:F1 rompe minima da 1a hora (venda)",
+      "venda"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2022_11_16:compra cada queda de 1 ATR",
+      "2022_11_16:compra inversao de 1 vela",
+      "2023_08_21:compra_queda_1atr"
+     ]
+    },
+    "entrou": "2022_11_16:venda pullback EMA20 em baixa",
+    "nota": "",
+    "t": "11:15:00"
+   }
+  ]
+ },
+ {
+  "dia": "2025-01-16",
+  "tipo": "ruim",
+  "ef": 0.122,
+  "brl": -24.0,
+  "v3": -24.0,
+  "v2": 5.0,
+  "v1": -56.0,
+  "trades": [
+   {
+    "fonte": "2024_06_18:gap_fade_fechamento",
+    "lado": "compra",
+    "contratos": 1,
+    "sinal": "09:15:00",
+    "ent": "09:15:00",
+    "sai": "10:16:00",
+    "preco": 123130.0,
+    "preco_sai": 122860.0,
+    "stop": 122860.0,
+    "alvo": 123545.0,
+    "motivo": "stop",
+    "pts": -280.0,
+    "brl": -56.0
+   },
+   {
+    "fonte": "2025_06_04:F1 rompe minima da 1a hora (venda)",
+    "lado": "venda",
+    "contratos": 1,
+    "sinal": "12:45:00",
+    "ent": "12:57:00",
+    "sai": "18:24:00",
+    "preco": 122235.0,
+    "preco_sai": 122065.0,
+    "stop": 122690.89285714286,
+    "alvo": 121323.21428571429,
+    "motivo": "fim",
+    "pts": 160.0,
+    "brl": 32.0
+   }
+  ],
+  "log": [
+   {
+    "fazer": [
+     [
+      "2024_06_18:gap_fade_fechamento",
+      "compra"
+     ]
+    ],
+    "vetos": {},
+    "entrou": "2024_06_18:gap_fade_fechamento",
+    "nota": "",
+    "t": "09:15:00"
+   },
+   {
+    "fazer": [
+     [
+      "2022_11_16:venda rompe minima 1a hora",
+      "venda"
+     ],
+     [
+      "2022_11_16:venda gap de baixa perde abertura",
+      "venda"
+     ],
+     [
+      "2025_06_04:F1 rompe minima da 1a hora (venda)",
+      "venda"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2023_08_21:compra_queda_1atr"
+     ],
+     "venda": [
+      "2023_08_21:vende_rompimento_stop_curto",
+      "2025_06_04:N2 vender minima na rotacao da manha"
+     ]
+    },
+    "entrou": null,
+    "nota": "[2022_11_16:venda rompe minima 1a hora VETADA por 2] ",
+    "t": "10:30:00"
+   },
+   {
+    "fazer": [
+     [
+      "2022_11_16:venda rompe minima 1a hora",
+      "venda"
+     ],
+     [
+      "2022_11_16:venda pullback EMA20 em baixa",
+      "venda"
+     ],
+     [
+      "2025_06_04:F1 rompe minima da 1a hora (venda)",
+      "venda"
+     ],
+     [
+      "2025_06_04:F3 recuo na media em tendencia de baixa",
+      "venda"
+     ],
+     [
+      "c3g:G4 flip",
+      "venda"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2023_08_21:compra_queda_1atr",
+      "2025_06_04:N1 comprar cada queda na baixa"
+     ],
+     "venda": [
+      "2025_06_04:N2 vender minima na rotacao da manha"
+     ]
+    },
+    "entrou": null,
+    "nota": "[2022_11_16:venda rompe minima 1a hora VETADA por 1] ",
+    "t": "11:00:00"
+   },
+   {
+    "fazer": [
+     [
+      "2022_11_16:venda pullback EMA20 em baixa",
+      "venda"
+     ],
+     [
+      "2025_06_04:F1 rompe minima da 1a hora (venda)",
+      "venda"
+     ],
+     [
+      "c3g:G4 flip",
+      "venda"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2022_11_16:compra inversao de 1 vela",
+      "2023_08_21:compra_queda_1atr"
+     ],
+     "venda": [
+      "2023_08_21:vende_rompimento_stop_curto"
+     ]
+    },
+    "entrou": null,
+    "nota": "[2022_11_16:venda pullback EMA20 em baixa VETADA por 1] ",
+    "t": "11:15:00"
+   },
+   {
+    "fazer": [
+     [
+      "2022_11_16:venda pullback EMA20 em baixa",
+      "venda"
+     ],
+     [
+      "2025_06_04:F1 rompe minima da 1a hora (venda)",
+      "venda"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2023_08_21:compra_queda_1atr"
+     ],
+     "venda": [
+      "2023_08_21:vende_rompimento_stop_curto"
+     ]
+    },
+    "entrou": null,
+    "nota": "[2022_11_16:venda pullback EMA20 em baixa VETADA por 1] ",
+    "t": "11:30:00"
+   },
+   {
+    "fazer": [
+     [
+      "2022_11_16:venda pullback EMA20 em baixa",
+      "venda"
+     ],
+     [
+      "2025_06_04:F1 rompe minima da 1a hora (venda)",
+      "venda"
+     ],
+     [
+      "2025_06_04:F3 recuo na media em tendencia de baixa",
+      "venda"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2023_08_21:compra_queda_1atr",
+      "2025_06_04:N1 comprar cada queda na baixa",
+      "2025_08_01:N3 comprar queda no meio do dia"
+     ],
+     "venda": [
+      "2025_06_04:N2 vender minima na rotacao da manha"
+     ]
+    },
+    "entrou": null,
+    "nota": "[2022_11_16:venda pullback EMA20 em baixa VETADA por 1] ",
+    "t": "11:45:00"
+   },
+   {
+    "fazer": [
+     [
+      "2022_11_16:venda nova minima sob abertura/VWAP",
+      "venda"
+     ],
+     [
+      "2025_06_04:F1 rompe minima da 1a hora (venda)",
+      "venda"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2023_08_21:compra_queda_1atr",
+      "2025_06_04:N1 comprar cada queda na baixa",
+      "2025_08_01:N3 comprar queda no meio do dia"
+     ],
+     "venda": [
+      "2024_06_18:rompimento_sem_volume",
+      "c2:N5 vender com range e volume encolhendo"
+     ]
+    },
+    "entrou": null,
+    "nota": "[2022_11_16:venda nova minima sob abertura/VWAP VETADA por 2] ",
+    "t": "12:00:00"
+   },
+   {
+    "fazer": [
+     [
+      "2025_06_04:F1 rompe minima da 1a hora (venda)",
+      "venda"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2022_11_16:compra cada queda de 1 ATR",
+      "2023_08_21:compra_queda_1atr",
+      "2025_06_04:N1 comprar cada queda na baixa",
+      "2025_08_01:N3 comprar queda no meio do dia"
+     ],
+     "venda": [
+      "c2:N5 vender com range e volume encolhendo"
+     ]
+    },
+    "entrou": null,
+    "nota": "[2025_06_04:F1 rompe minima da 1a hora (venda) VETADA por 1] ",
+    "t": "12:15:00"
+   },
+   {
+    "fazer": [
+     [
+      "2022_11_16:venda nova minima sob abertura/VWAP",
+      "venda"
+     ],
+     [
+      "2025_06_04:F1 rompe minima da 1a hora (venda)",
+      "venda"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2022_11_16:compra cada queda de 1 ATR",
+      "2022_11_16:compra desvio de 1,5 ATR da VWAP",
+      "2023_08_21:compra_queda_1atr",
+      "2025_06_04:N1 comprar cada queda na baixa",
+      "2025_08_01:N3 comprar queda no meio do dia"
+     ],
+     "venda": [
+      "2024_06_18:rompimento_sem_volume"
+     ]
+    },
+    "entrou": null,
+    "nota": "[2022_11_16:venda nova minima sob abertura/VWAP VETADA por 1] ",
+    "t": "12:30:00"
+   },
+   {
+    "fazer": [
+     [
+      "2025_06_04:F1 rompe minima da 1a hora (venda)",
+      "venda"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2022_11_16:compra desvio de 1,5 ATR da VWAP",
+      "2023_08_21:compra_queda_1atr",
+      "2025_06_04:N1 comprar cada queda na baixa"
+     ]
+    },
+    "entrou": "2025_06_04:F1 rompe minima da 1a hora (venda)",
+    "nota": "",
+    "t": "12:45:00"
+   }
+  ]
+ },
+ {
+  "dia": "2025-04-02",
+  "tipo": "ruim",
+  "ef": 0.035,
+  "brl": -91.42,
+  "v3": -120.0,
+  "v2": -120.0,
+  "v1": -87.11,
+  "trades": [
+   {
+    "fonte": "2022_11_16:venda pullback EMA20 em baixa",
+    "lado": "venda",
+    "contratos": 1,
+    "sinal": "13:00:00",
+    "ent": "13:00:00",
+    "sai": "16:58:00",
+    "preco": 131525.0,
+    "preco_sai": 131972.10714285713,
+    "stop": 131972.10714285713,
+    "alvo": 130407.23214285714,
+    "motivo": "stop",
+    "pts": -457.1,
+    "brl": -91.42
+   }
+  ],
+  "log": [
+   {
+    "fazer": [
+     [
+      "c2:P2 rompe faixa 1h com volume, alvo 1R",
+      "venda"
+     ],
+     [
+      "2022_11_16:venda rompe minima 1a hora",
+      "venda"
+     ],
+     [
+      "2023_03_20:Rompe m\u00ednima da 1\u00aa hora (venda)",
+      "venda"
+     ],
+     [
+      "2023_03_20:Recuo \u00e0 EMA21 em baixa (venda)",
+      "venda"
+     ],
+     [
+      "2023_08_21:rompe_minima_1h",
+      "venda"
+     ],
+     [
+      "2024_01_19:rompe m\u00ednima da 1\u00aa hora",
+      "venda"
+     ],
+     [
+      "2024_05_16:F1 vende rompimento da minima da 1a hora",
+      "venda"
+     ],
+     [
+      "2024_06_18:rompe_faixa_1h",
+      "venda"
+     ],
+     [
+      "2025_06_04:F1 rompe minima da 1a hora (venda)",
+      "venda"
+     ],
+     [
+      "2025_08_01:F5 falha do rompimento da 1a hora (venda)",
+      "venda"
+     ],
+     [
+      "c1:A4 barra_de_expansao",
+      "venda"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2023_08_21:compra_queda_1atr",
+      "2024_05_16:N1 compra cada minima nova (faca caindo)"
+     ],
+     "venda": [
+      "2023_08_21:vende_rompimento_stop_curto",
+      "2025_06_04:N2 vender minima na rotacao da manha",
+      "g:borda venda (venda)"
+     ]
+    },
+    "entrou": null,
+    "nota": "[c2:P2 rompe faixa 1h com volume, alvo 1R VETADA por 3] ",
+    "t": "10:45:00"
+   },
+   {
+    "fazer": [
+     [
+      "2022_11_16:venda gap de baixa perde abertura",
+      "venda"
+     ],
+     [
+      "2022_11_16:venda nova minima sob abertura/VWAP",
+      "venda"
+     ],
+     [
+      "2023_03_20:Rompe m\u00ednima da 1\u00aa hora (venda)",
+      "venda"
+     ],
+     [
+      "2023_08_21:rompe_minima_1h",
+      "venda"
+     ],
+     [
+      "2024_05_16:F1 vende rompimento da minima da 1a hora",
+      "venda"
+     ],
+     [
+      "2025_06_04:F1 rompe minima da 1a hora (venda)",
+      "venda"
+     ],
+     [
+      "2025_08_01:F5 falha do rompimento da 1a hora (venda)",
+      "venda"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2022_11_16:compra cada queda de 1 ATR",
+      "2023_03_20:Comprar queda de 1 ATR",
+      "2023_08_21:compra_queda_1atr",
+      "2023_08_21:compra_esticado_vs_ema21",
+      "2024_01_19:compra queda de 1 ATR da abertura",
+      "2024_05_16:N1 compra cada minima nova (faca caindo)",
+      "2025_06_04:N1 comprar cada queda na baixa"
+     ],
+     "venda": [
+      "2024_05_16:N2 vende o fundo esticado",
+      "2024_06_18:rompimento_sem_volume",
+      "2025_06_04:N2 vender minima na rotacao da manha",
+      "c2:N5 vender com range e volume encolhendo"
+     ]
+    },
+    "entrou": null,
+    "nota": "[2022_11_16:venda gap de baixa perde abertura VETADA por 4] ",
+    "t": "11:00:00"
+   },
+   {
+    "fazer": [
+     [
+      "2023_03_20:Rompe m\u00ednima da 1\u00aa hora (venda)",
+      "venda"
+     ],
+     [
+      "2023_08_21:rompe_minima_1h",
+      "venda"
+     ],
+     [
+      "2024_05_16:F1 vende rompimento da minima da 1a hora",
+      "venda"
+     ],
+     [
+      "2025_06_04:F1 rompe minima da 1a hora (venda)",
+      "venda"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2022_11_16:compra cada queda de 1 ATR",
+      "2023_03_20:Comprar queda de 1 ATR",
+      "2023_03_20:Comprar defesa da m\u00ednima do dia",
+      "2023_08_21:compra_queda_1atr",
+      "2023_08_21:compra_esticado_vs_ema21",
+      "2024_01_19:compra queda de 1 ATR da abertura",
+      "2024_05_16:N1 compra cada minima nova (faca caindo)",
+      "2025_06_04:N1 comprar cada queda na baixa"
+     ],
+     "venda": [
+      "2024_05_16:N2 vende o fundo esticado",
+      "2025_06_04:N2 vender minima na rotacao da manha",
+      "c2:N5 vender com range e volume encolhendo"
+     ]
+    },
+    "entrou": null,
+    "nota": "[2023_03_20:Rompe m\u00ednima da 1\u00aa hora (venda) VETADA por 3] ",
+    "t": "11:15:00"
+   },
+   {
+    "fazer": [
+     [
+      "2023_03_20:Rompe m\u00ednima da 1\u00aa hora (venda)",
+      "venda"
+     ],
+     [
+      "2024_05_16:F1 vende rompimento da minima da 1a hora",
+      "venda"
+     ],
+     [
+      "2025_06_04:F1 rompe minima da 1a hora (venda)",
+      "venda"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2022_11_16:compra inversao de 1 vela",
+      "2023_03_20:Comprar queda de 1 ATR",
+      "2023_08_21:compra_queda_1atr",
+      "2024_01_19:compra queda de 1 ATR da abertura"
+     ],
+     "venda": [
+      "g:borda venda (venda)"
+     ]
+    },
+    "entrou": null,
+    "nota": "[2023_03_20:Rompe m\u00ednima da 1\u00aa hora (venda) VETADA por 1] ",
+    "t": "11:30:00"
+   },
+   {
+    "fazer": [
+     [
+      "2022_11_16:venda pullback EMA20 em baixa",
+      "venda"
+     ],
+     [
+      "2023_03_20:Rompe m\u00ednima da 1\u00aa hora (venda)",
+      "venda"
+     ],
+     [
+      "2023_08_21:rompe_minima_1h",
+      "venda"
+     ],
+     [
+      "2023_08_21:recuo_ate_ema21",
+      "venda"
+     ],
+     [
+      "2024_05_16:F1 vende rompimento da minima da 1a hora",
+      "venda"
+     ],
+     [
+      "2025_06_04:F1 rompe minima da 1a hora (venda)",
+      "venda"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2023_08_21:compra_queda_1atr"
+     ],
+     "venda": [
+      "2023_08_21:vende_rompimento_stop_curto",
+      "2024_06_18:vender_rali_1atr"
+     ]
+    },
+    "entrou": null,
+    "nota": "[2022_11_16:venda pullback EMA20 em baixa VETADA por 2] ",
+    "t": "11:45:00"
+   },
+   {
+    "fazer": [
+     [
+      "2022_11_16:venda pullback EMA20 em baixa",
+      "venda"
+     ],
+     [
+      "2023_03_20:Recuo \u00e0 EMA21 em baixa (venda)",
+      "venda"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2023_08_21:compra_queda_1atr",
+      "c1:N1 spring_raso"
+     ],
+     "venda": [
+      "2024_06_18:vender_rali_1atr"
+     ]
+    },
+    "entrou": null,
+    "nota": "[2022_11_16:venda pullback EMA20 em baixa VETADA por 1] ",
+    "t": "12:00:00"
+   },
+   {
+    "fazer": [
+     [
+      "2023_03_20:Falha da alta inicial (venda)",
+      "venda"
+     ]
+    ],
+    "vetos": {
+     "venda": [
+      "2024_06_18:vender_rali_1atr"
+     ]
+    },
+    "entrou": null,
+    "nota": "[2023_03_20:Falha da alta inicial (venda) VETADA por 1] ",
+    "t": "12:30:00"
+   },
+   {
+    "fazer": [
+     [
+      "2023_03_20:Recuo \u00e0 EMA21 em baixa (venda)",
+      "venda"
+     ]
+    ],
+    "vetos": {
+     "venda": [
+      "c2:N4 vwap rotacao"
+     ]
+    },
+    "entrou": null,
+    "nota": "[2023_03_20:Recuo \u00e0 EMA21 em baixa (venda) VETADA por 1] ",
+    "t": "12:45:00"
+   },
+   {
+    "fazer": [
+     [
+      "2022_11_16:venda pullback EMA20 em baixa",
+      "venda"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2022_11_16:compra inversao de 1 vela",
+      "2023_03_20:Comprar martelo (revers\u00e3o)"
+     ]
+    },
+    "entrou": "2022_11_16:venda pullback EMA20 em baixa",
+    "nota": "",
+    "t": "13:00:00"
+   },
+   {
+    "fazer": [
+     [
+      "2022_11_16:venda rompe minima 1a hora",
+      "venda"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2022_11_16:compra cada queda de 1 ATR"
+     ],
+     "venda": [
+      "2023_08_21:vende_rompimento_stop_curto",
+      "2023_08_21:vende_minima_nova_tarde",
+      "2025_08_01:N4 vender minima nova depois das 15h45",
+      "g:borda venda (venda)"
+     ]
+    },
+    "entrou": null,
+    "nota": "[2022_11_16:venda rompe minima 1a hora VETADA por 4] ",
+    "t": "17:30:00"
+   }
+  ]
+ },
+ {
+  "dia": "2025-07-17",
+  "tipo": "ruim",
+  "ef": 0.059,
+  "brl": -17.24,
+  "v3": -17.24,
+  "v2": -17.24,
+  "v1": -17.24,
+  "trades": [
+   {
+    "fonte": "2024_06_18:gap_fade_fechamento",
+    "lado": "compra",
+    "contratos": 1,
+    "sinal": "09:15:00",
+    "ent": "09:15:00",
+    "sai": "09:44:00",
+    "preco": 136160.0,
+    "preco_sai": 136540.0,
+    "stop": 135575.0,
+    "alvo": 136540.0,
+    "motivo": "alvo",
+    "pts": 370.0,
+    "brl": 74.0
+   },
+   {
+    "fonte": "2022_11_16:venda pullback EMA20 em baixa",
+    "lado": "venda",
+    "contratos": 1,
+    "sinal": "11:00:00",
+    "ent": "11:00:00",
+    "sai": "11:52:00",
+    "preco": 136430.0,
+    "preco_sai": 136876.17857142858,
+    "stop": 136876.17857142858,
+    "alvo": 135314.55357142858,
+    "motivo": "stop",
+    "pts": -456.2,
+    "brl": -91.24
+   }
+  ],
+  "log": [
+   {
+    "fazer": [
+     [
+      "2024_06_18:gap_fade_fechamento",
+      "compra"
+     ]
+    ],
+    "vetos": {},
+    "entrou": "2024_06_18:gap_fade_fechamento",
+    "nota": "",
+    "t": "09:15:00"
+   },
+   {
+    "fazer": [
+     [
+      "2022_11_16:venda pullback EMA20 em baixa",
+      "venda"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2023_08_21:compra_queda_1atr"
+     ]
+    },
+    "entrou": "2022_11_16:venda pullback EMA20 em baixa",
+    "nota": "",
+    "t": "11:00:00"
+   },
+   {
+    "fazer": [
+     [
+      "2024_06_18:faixa_tarde",
+      "compra"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2023_08_21:compra_queda_1atr",
+      "2025_08_01:N3 comprar queda no meio do dia"
+     ],
+     "venda": [
+      "2024_06_18:rompimento_sem_volume",
+      "c2:N4 vwap rotacao"
+     ]
+    },
+    "entrou": null,
+    "nota": "[2024_06_18:faixa_tarde VETADA por 2] ",
+    "t": "13:15:00"
+   },
+   {
+    "fazer": [
+     [
+      "2022_11_16:venda pullback EMA20 em baixa",
+      "venda"
+     ],
+     [
+      "2024_06_18:faixa_tarde",
+      "compra"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2022_11_16:compra cada queda de 1 ATR",
+      "2023_08_21:compra_queda_1atr"
+     ],
+     "venda": [
+      "2024_06_18:rompimento_sem_volume"
+     ]
+    },
+    "entrou": null,
+    "nota": "FAZER nos dois lados: nao entra",
+    "t": "13:30:00"
+   },
+   {
+    "fazer": [
+     [
+      "2022_11_16:venda pullback EMA20 em baixa",
+      "venda"
+     ],
+     [
+      "2024_06_18:faixa_tarde",
+      "compra"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2022_11_16:compra inversao de 1 vela",
+      "2023_08_21:compra_queda_1atr"
+     ]
+    },
+    "entrou": null,
+    "nota": "FAZER nos dois lados: nao entra",
+    "t": "13:45:00"
+   },
+   {
+    "fazer": [
+     [
+      "2022_11_16:venda pullback EMA20 em baixa",
+      "venda"
+     ],
+     [
+      "2024_06_18:faixa_tarde",
+      "compra"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2023_08_21:compra_queda_1atr"
+     ],
+     "venda": [
+      "2023_11_03:Vender volume seco no fim da tarde",
+      "c2:N4 vwap rotacao"
+     ]
+    },
+    "entrou": null,
+    "nota": "FAZER nos dois lados: nao entra",
+    "t": "14:00:00"
+   },
+   {
+    "fazer": [
+     [
+      "2022_11_16:venda pullback EMA20 em baixa",
+      "venda"
+     ],
+     [
+      "2024_06_18:faixa_tarde",
+      "compra"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2023_08_21:compra_queda_1atr"
+     ],
+     "venda": [
+      "2023_11_03:Vender volume seco no fim da tarde",
+      "c2:N4 vwap rotacao"
+     ]
+    },
+    "entrou": null,
+    "nota": "FAZER nos dois lados: nao entra",
+    "t": "14:30:00"
+   },
+   {
+    "fazer": [
+     [
+      "2022_11_16:venda pullback EMA20 em baixa",
+      "venda"
+     ],
+     [
+      "2024_06_18:faixa_tarde",
+      "compra"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2023_08_21:compra_queda_1atr"
+     ],
+     "venda": [
+      "2023_11_03:Vender volume seco no fim da tarde",
+      "2024_06_18:rompimento_sem_volume"
+     ]
+    },
+    "entrou": null,
+    "nota": "FAZER nos dois lados: nao entra",
+    "t": "14:45:00"
+   },
+   {
+    "fazer": [
+     [
+      "2022_11_16:venda pullback EMA20 em baixa",
+      "venda"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2022_11_16:compra inversao de 1 vela"
+     ],
+     "venda": [
+      "2023_11_03:Vender volume seco no fim da tarde"
+     ]
+    },
+    "entrou": null,
+    "nota": "[2022_11_16:venda pullback EMA20 em baixa VETADA por 1] ",
+    "t": "15:00:00"
+   },
+   {
+    "fazer": [
+     [
+      "2024_06_18:faixa_tarde",
+      "venda"
+     ]
+    ],
+    "vetos": {
+     "compra": [
+      "2024_06_18:seguir_tarde"
+     ],
+     "venda": [
+      "2024_06_18:vender_rali_1atr"
+     ]
+    },
+    "entrou": null,
+    "nota": "[2024_06_18:faixa_tarde VETADA por 1] ",
+    "t": "15:30:00"
+   }
+  ]
+ }
+]
