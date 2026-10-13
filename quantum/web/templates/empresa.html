@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% from "macros.html" import sinal %}
+{% block title %}{{ ticker }} · Quantum{% endblock %}
+{% block content %}
+<p class="small muted"><a href="/empresas">← empresas</a></p>
+<h1>{{ ticker }} <em>{{ info.nome_comercial or info.nome }}</em></h1>
+<p class="lede">{{ info.nome }} · {{ info.setor or "setor não informado" }} · CNPJ {{ cnpj }}
+  {% if info.site_ri %} · <a href="{{ info.site_ri if info.site_ri.startswith('http') else 'https://' ~ info.site_ri }}" target="_blank" rel="noopener">site de RI ↗</a>{% endif %}
+  {% if outros|length > 1 %}<br><span class="small">outros tickers: {{ outros|join(", ") }}</span>{% endif %}
+  {% if info.financeira %}<br><span class="small aviso">Instituição financeira: EV/EBIT, ROIC e margens não se aplicam.</span>{% endif %}</p>
+
+{% if ind %}
+<div class="grid g4">
+  <div class="card kpi"><div class="l">Preço · valor de mercado</div><div class="v">R$ {{ ind.preco|num }}</div><div class="s">{{ ind.mcap|brl }} · liquidez {{ ind.liquidez|brl }}/dia</div></div>
+  <div class="card kpi"><div class="l">P/L · P/VP · EV/EBIT</div><div class="v">{{ ind.pl_ind|num(1) }} · {{ ind.pvp|num(2) }} · {{ ind.ev_ebit|num(1) }}</div><div class="s">LTM, balanço de {{ ind.dt_refer.date() if ind.dt_refer else "—" }}</div></div>
+  <div class="card kpi"><div class="l">ROE · ROIC</div><div class="v">{{ ind.roe|pct }} · {{ ind.roic|pct }}</div><div class="s">margem líquida {{ ind.margem_liquida|pct }} · EBIT {{ ind.margem_ebit|pct }}</div></div>
+  <div class="card kpi"><div class="l">Dividendos</div><div class="v">{{ ind.dy|pct }}</div><div class="s">média 3 anos {{ ind.dy_med_3a|pct }} · pagou nos 3: {{ "sim" if ind.pagou_3a else "não" }}</div></div>
+  <div class="card kpi"><div class="l">Momento 12−1 · 6m</div><div class="v {{ sinal(ind.mom_12_1) }}">{{ ind.mom_12_1|pct }}</div><div class="s">6 meses {{ ind.mom_6|pct }}</div></div>
+  <div class="card kpi"><div class="l">Risco</div><div class="v">{{ ind.vol_1a|pct }}</div><div class="s">volatilidade 1 ano · dív. líq./PL {{ ind.div_liq_pl|num }}</div></div>
+  <div class="card kpi"><div class="l">Receita · lucro (LTM)</div><div class="v">{{ ind.receita|brl }}</div><div class="s">lucro {{ ind.lucro_contr|brl }} · FCO {{ ind.fco|brl }}</div></div>
+  <div class="card kpi"><div class="l">Balanço</div><div class="v">{{ ind.pl_contr|brl }}</div><div class="s">PL · dívida {{ ind.divida|brl }} · caixa {{ ind.caixa|brl }}</div></div>
+</div>
+{% else %}<p class="vazio">Sem painel hoje: a empresa não tem negócio recente ou balanço entregue nos últimos 15 meses.</p>{% endif %}
+
+<h2>Posição em cada estratégia <span class="muted small">hoje, universo com liquidez ≥ R$ 500 mil/dia</span></h2>
+<div class="chips">{% for r in ranks %}
+  <span class="chip">{{ r.nome }}: {% if r.pos %}<b>{{ r.pos }}º</b> de {{ r.total }}{% else %}<span class="muted">fora</span>{% endif %}</span>{% endfor %}</div>
+
+<div class="filtros" style="margin-top:12px">
+  <form hx-post="/vigiar/{{ ticker }}" hx-target="#vig"><input type="hidden" name="ligar" value="1" /><button class="sec">Vigiar (pôr na lista curta)</button></form>
+  <form hx-post="/vigiar/{{ ticker }}" hx-target="#vig"><input type="hidden" name="ligar" value="0" /><button class="sec">Deixar de vigiar</button></form>
+  <span id="vig" class="small"></span>
+</div>
+
+<h2>Dados extraídos dos documentos <span class="muted small">proventos, releases, fatos relevantes</span></h2>
+<div hx-get="/parcial/extracoes?cnpj={{ cnpj|urlencode }}" hx-trigger="load"></div>
+
+<h2>Gráficos</h2>
+<div class="grid g2">
+  <div class="card"><h3>Retorno total (com proventos) × Ibovespa</h3><div id="g-preco" class="grafico"></div></div>
+  <div class="card"><h3>Receita, EBIT e lucro (LTM, R$)</h3><div id="g-fund" class="grafico"></div></div>
+  <div class="card"><h3>Múltiplos no fim de cada trimestre</h3><div id="g-mult" class="grafico"></div></div>
+  <div class="card"><h3>Proventos por ano (R$/ação)</h3><div id="g-div" class="grafico"></div></div>
+</div>
+
+<h2>Documentos publicados pelo RI <span class="muted small">via CVM/IPE</span></h2>
+<form class="filtros" onsubmit="return false">
+  <label>categoria<select id="f-cat"><option value="">todas</option>{% for c in categorias %}<option>{{ c }}</option>{% endfor %}</select></label>
+  <label>busca no assunto<input id="f-txt" /></label>
+</form>
+<div class="tabela-wrap" style="max-height:60vh"><table id="docs">
+  <thead><tr><th class="t">entrega</th><th class="t">categoria</th><th class="t">tipo</th><th class="t">assunto</th><th class="t">arquivo</th></tr></thead>
+  <tbody>{% for d in docs %}<tr data-cat="{{ d.categoria }}"><td class="t">{{ d.data_entrega }}</td><td class="t">{{ d.categoria }}</td>
+    <td class="t small">{{ d.tipo or d.especie or "" }}</td><td class="t quebra">{{ d.assunto or "" }}</td>
+    <td class="t"><a href="{{ d.link }}" target="_blank" rel="noopener">abrir ↗</a></td></tr>{% endfor %}</tbody>
+</table></div>
+{% if not docs %}<p class="vazio">Nenhum documento de RI na base para esta empresa.</p>{% endif %}
+{% if balancos_ligado %}<p class="small muted">Balanços.com.br está configurado (pago, por consulta).</p>{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function(){
+  var cat = document.getElementById('f-cat'), txt = document.getElementById('f-txt');
+  function filtra(){ var c = cat.value, t = txt.value.toLowerCase();
+    document.querySelectorAll('#docs tbody tr').forEach(function(tr){
+      var ok = (!c || tr.dataset.cat === c) && (!t || tr.textContent.toLowerCase().indexOf(t) >= 0);
+      tr.style.display = ok ? '' : 'none'; }); }
+  cat.addEventListener('change', filtra); txt.addEventListener('input', filtra);
+
+  fetch('/api/empresa/{{ ticker }}').then(function(r){ return r.json(); }).then(function(d){
+    Q.quando(function(){
+      Q.plot('g-preco', function(){ var c = Q.cores(); return [
+        { x: d.preco.datas, y: d.preco.acao, name: '{{ ticker }}', line: { color: c.amber, width: 2 } },
+        { x: d.preco.datas, y: d.preco.ibov, name: 'Ibovespa', line: { color: c.muted, width: 1.3 } }]; },
+        { yaxis: { type: 'log', gridcolor: Q.cores().grid } });
+      Q.plot('g-fund', function(){ var c = Q.cores(); return [
+        { x: d.fund.datas, y: d.fund.receita, name: 'Receita', line: { color: c.muted } },
+        { x: d.fund.datas, y: d.fund.ebit, name: 'EBIT', line: { color: c.amber } },
+        { x: d.fund.datas, y: d.fund.lucro_contr, name: 'Lucro', line: { color: c.green, width: 2 } }]; });
+      var m = d.multiplos;
+      Q.plot('g-mult', function(){ var c = Q.cores(); return [
+        { x: m.map(function(r){return r.data}), y: m.map(function(r){return r.pl}), name: 'P/L', line: { color: c.amber } },
+        { x: m.map(function(r){return r.data}), y: m.map(function(r){return r.ev_ebit}), name: 'EV/EBIT', line: { color: c.muted } },
+        { x: m.map(function(r){return r.data}), y: m.map(function(r){return r.pvp}), name: 'P/VP', yaxis: 'y2', line: { color: c.green, dash: 'dot' } }]; },
+        { yaxis2: { overlaying: 'y', side: 'right', showgrid: false, title: 'P/VP' } });
+      Q.plot('g-div', function(){ return [{ type: 'bar', x: d.divs.anos, y: d.divs.valor, name: 'R$/ação', marker: { color: Q.cores().amber } }]; });
+    });
+  });
+})();
+</script>
+{% endblock %}

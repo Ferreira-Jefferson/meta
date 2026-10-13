@@ -1,0 +1,20 @@
+<p class="small muted">{{ total }} documentos{% if total > 300 %} · mostrando 300{% endif %}</p>
+<div class="tabela-wrap" style="max-height:70vh"><table>
+  <thead><tr><th class="t">entrega</th><th class="t">ticker</th><th class="t">tipo</th><th class="t">método</th><th class="t">dados</th><th class="t">documento</th></tr></thead>
+  <tbody>{% for r in linhas %}{% set c = r.campos %}<tr>
+    <td class="t">{{ r.data_entrega }}</td>
+    <td class="t">{% if r.ticker %}<a href="/empresa/{{ r.ticker }}">{{ r.ticker }}</a>{% endif %}</td>
+    <td class="t small">{{ r.tipo_doc }}</td>
+    <td class="t small {{ 'ok' if r.status == 'ok' else ('erro' if r.status == 'sem_pdf' else 'aviso') }}">{{ r.metodo }} · {{ r.status }}{% if r.custo_usd %} · US$ {{ r.custo_usd|num(4) }}{% endif %}</td>
+    <td class="t quebra small">
+      {% if r.tipo_doc == "proventos" %}
+        {{ c.tipo or "?" }} · <b>R$ {{ c.valor_por_acao|num(4) }}</b>/ação · com {{ c.data_com or "—" }} · ex {{ c.data_ex or "—" }} · pgto {{ c.data_pagamento or "—" }}
+      {% elif r.tipo_doc == "release" %}
+        {{ c.unidade or "" }} · receita {{ c.receita_liquida|num(1) }} · EBITDA {{ c.ebitda|num(1) }} · lucro {{ c.lucro_liquido|num(1) }} · dív. líq. {{ c.divida_liquida|num(1) }}
+      {% elif r.tipo_doc == "fato_relevante" %}
+        {% for t in c.topicos or [] %}<span class="chip">{{ t }}</span> {% endfor %}<br><span class="muted">{{ (c.resumo or "")[:260] }}</span>
+      {% endif %}
+    </td>
+    <td class="t small"><a href="{{ r.link }}" target="_blank" rel="noopener">{{ (r.assunto or r.categoria or "abrir")[:50] }} ↗</a></td></tr>{% endfor %}</tbody>
+</table></div>
+<p class="small muted">Números de release lidos por regra pegam o primeiro valor da linha da métrica, que costuma ser o trimestre atual. Confira no PDF antes de usar.</p>

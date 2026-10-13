@@ -1,0 +1,20 @@
+{% from "macros.html" import sinal %}
+<p class="small muted">{{ total }} empresas · dados de {{ data }}{% if total > 400 %} · mostrando 400{% endif %}</p>
+<div class="tabela-wrap" style="max-height:70vh">
+<table>
+  <thead><tr><th class="t">ticker</th><th class="t">empresa</th><th class="t">setor</th>
+    {% for c in cols %}<th title="{{ INDICADORES[c][1] }}">{{ INDICADORES[c][0] }}</th>{% endfor %}</tr></thead>
+  <tbody>
+  {% for x in linhas %}
+    <tr><td class="t"><a href="/empresa/{{ x.ticker }}">{{ x.ticker }}</a></td>
+      <td class="t">{{ (x.nome_comercial or x.nome or "")[:34] }}</td><td class="t small muted">{{ (x.setor or "")[:28] }}</td>
+      <td>{{ x.mcap|brl }}</td><td>{{ x.liquidez|brl }}</td>
+      <td>{{ x.pl_ind|num(1) }}</td><td>{{ x.pvp|num(2) }}</td><td>{{ x.ev_ebit|num(1) }}</td>
+      <td class="{{ sinal(x.roe) }}">{{ x.roe|pct }}</td><td class="{{ sinal(x.roic) }}">{{ x.roic|pct }}</td>
+      <td class="{{ sinal(x.margem_liquida) }}">{{ x.margem_liquida|pct }}</td>
+      <td>{{ x.dy|pct }}</td><td>{{ x.dy_med_3a|pct }}</td>
+      <td class="{{ sinal(x.mom_12_1) }}">{{ x.mom_12_1|pct }}</td><td>{{ x.vol_1a|pct }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>

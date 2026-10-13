@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% from "macros.html" import selo, sinal, quatro_ds %}
+{% block title %}{{ e.nome }} · estudo{% endblock %}
+{% block content %}
+<p class="small muted"><a href="/estudos">← estudos</a> · rodada {{ rodada }}</p>
+<h1>{{ e.nome }} {{ selo(e.veredito) }}</h1>
+<p class="lede">{{ ESTRATEGIAS[e.estrategia].descricao if e.estrategia in ESTRATEGIAS else "" }}
+  Célula escolhida no IS: <b>N={{ e.escolha.n }}</b>, rebalanceamento a cada <b>{{ e.escolha.meses }} meses</b> (critério: maior {{ e.escolha.criterio }} no IS).</p>
+
+<h2>1 · Grade no IS <span class="muted small">a escolha veio daqui, e só daqui</span></h2>
+<div class="grid g2">
+  <div class="card"><h3>Sharpe por célula</h3><div id="g-grade" class="grafico"></div></div>
+  <div class="card"><h3>Excesso anual sobre o Ibovespa por célula</h3><div id="g-grade2" class="grafico"></div></div>
+</div>
+<p class="small muted">Se só uma célula isolada brilha e as vizinhas não, o resultado é frágil. Uma estratégia de verdade costuma ir bem numa região inteira da grade.</p>
+
+{% for nome, per in e.periodos.items() %}
+<h2>{{ loop.index + 1 }} · {{ nome }} <span class="muted small">{{ "escolha (não é teste)" if nome == "IS" else ("confirmação" if nome == "OOS" else "último aviso") }}</span></h2>
+<div class="grid g2">
+  <div class="card"><h3>Carteira × Ibovespa × CDI (base 1, log)</h3><div id="g-{{ nome }}" class="grafico"></div></div>
+  <div class="card"><h3>Contra o acaso ({{ per.nulo.sorteios }} carteiras sorteadas)</h3>
+    <div class="grid g2" style="margin-top:8px">
+      <div class="kpi"><div class="l">p-valor (Sharpe)</div><div class="v">{{ per.nulo.p_valor|num(3) }}</div>
+        <div class="s">{% if nome == "OOS" %}{{ "passa BH ✓" if e.bh_aprovada else "não passa BH" }}{% else %}indicativo{% endif %}</div></div>
+      <div class="kpi"><div class="l">Sharpe estratégia × sorteio</div><div class="v">{{ per.resumo.sharpe|num }}</div>
+        <div class="s">mediana do sorteio {{ per.nulo.sharpe_nulo_mediana|num }} · p95 {{ per.nulo.sharpe_nulo_p95|num }}</div></div>
+      <div class="kpi"><div class="l">CAGR estratégia × sorteio</div><div class="v">{{ per.resumo.cagr|pct }}</div>
+        <div class="s">mediana do sorteio {{ per.nulo.cagr_nulo_mediana|pct }}</div></div>
+      <div class="kpi"><div class="l">operações</div><div class="v">{{ per.operacoes }}</div><div class="s">ação × período de rebalanceamento</div></div>
+    </div>
+  </div>
+</div>
+{{ quatro_ds(per.metricas) }}
+{% endfor %}
+
+{% set ult = e.periodos.get("OOS", e.periodos.IS).ultima_carteira %}
+{% if ult %}<h3>Última carteira do último período medido</h3>
+<div class="chips">{% for x in ult %}<a class="chip" href="/empresa/{{ x.ticker }}">{{ x.posicao }}. {{ x.ticker }}</a>{% endfor %}</div>{% endif %}
+
+<p class="small muted" style="margin-top:32px">Premissas: {{ params.premissas }} · exportado em <code>quantum/dados/estudos/{{ rodada }}/</code></p>
+{% endblock %}
+
+{% block scripts %}
+<script>
+var E = {{ e_json|safe }};
+Q.quando(function(){
+  var g = E.grade_is, Ns = [...new Set(g.map(r => r.n))], Ms = [...new Set(g.map(r => r.meses))];
+  function mapa(campo){ return Ms.map(m => Ns.map(n => { var r = g.find(x => x.n === n && x.meses === m); return r ? r[campo] : null; })); }
+  function heat(id, campo, pct){
+    Q.plot(id, function(){ var z = mapa(campo); return [{ type: 'heatmap', x: Ns.map(n => 'N=' + n), y: Ms.map(m => m + ' meses'), z: z,
+      colorscale: [[0, Q.cores().red], [0.5, Q.cores().faint], [1, Q.cores().green]], zmid: 0,
+      text: z.map(l => l.map(v => v === null ? '' : (pct ? (v * 100).toFixed(1) + '%' : v.toFixed(2)))), texttemplate: '%{text}', showscale: false }]; },
+      { hovermode: 'closest', margin: { l: 80, r: 10, t: 10, b: 40 } });
+  }
+  heat('g-grade', 'sharpe', false); heat('g-grade2', 'excesso_ibov', true);
+  Object.keys(E.periodos).forEach(function(p){ Q.curva('g-' + p, E.periodos[p].serie, E.nome, true); });
+});
+</script>
+{% endblock %}

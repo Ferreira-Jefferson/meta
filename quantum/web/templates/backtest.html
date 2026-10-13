@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% from "macros.html" import faixa_periodos %}
+{% block content %}
+<h1>Backtest <em>livre</em></h1>
+<p class="lede">Explore à vontade no IS. Antes de olhar o OOS, anote a decisão que pretende confirmar: olhar o OOS várias vezes e ajustar até ficar bom faz dele um segundo IS.</p>
+{{ faixa_periodos(virgem) }}
+{% if sem_dados %}<p class="vazio">Sem dados. Rode a atualização no <a href="/">Painel</a>.</p>{% else %}
+<form class="filtros" style="margin-top:16px" hx-post="/backtest" hx-target="#res" hx-indicator="#res-ind">
+  <label>estratégia<select name="estrategia">{% for e in ESTRATEGIAS.values() %}<option value="{{ e.chave }}">{{ e.nome }}</option>{% endfor %}</select></label>
+  <label>nº de ações<select name="n">{% for k in [5, 10, 15, 20, 25, 30] %}<option {% if k == 10 %}selected{% endif %}>{{ k }}</option>{% endfor %}</select></label>
+  <label>rebalancear a cada<select name="meses">{% for k in [1, 3, 6, 9, 12] %}<option value="{{ k }}" {% if k == 3 %}selected{% endif %}>{{ k }} {{ "mês" if k == 1 else "meses" }}</option>{% endfor %}</select></label>
+  <label>período<select name="periodo">
+    <option value="IS">IS (escolha)</option><option value="OOS">OOS (confirmação)</option>
+    {% if virgem %}<option value="VIRGEM">VIRGEM</option>{% endif %}
+    <option value="TUDO">IS + OOS{% if virgem %} + VIRGEM{% endif %} (até {{ fim_max }})</option></select></label>
+  <label>liquidez mín. R$/dia<input name="liquidez_min" type="number" step="100000" value="{{ premissas.liquidez_min|int }}" /></label>
+  <label>custo % por lado<input name="custo_lado" type="number" step="0.01" value="{{ premissas.custo_lado * 100 }}" /></label>
+  <button>Rodar</button><span id="res-ind" class="carregando">rodando…</span>
+</form>
+<div id="res"><p class="vazio">Escolha os parâmetros e rode.</p></div>
+{% endif %}
+{% endblock %}

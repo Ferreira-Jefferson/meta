@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% from "macros.html" import selo, sinal, quatro_ds %}
+{% block content %}
+<h1>Busca da <em>melhor combinação</em></h1>
+<p class="lede">Todas as combinações de 1 a 3 indicadores, com direção fixada pela teoria e pesos iguais, em carteiras de 10 a 100 ações rebalanceadas a cada 3, 6 ou 12 meses. A escolha usa só o IS. Só as 5 finalistas são confirmadas no OOS.</p>
+<div class="filtros">
+  <form hx-post="/busca/rodar" hx-target="#msg-busca"><button {% if rodando %}disabled{% endif %}>Rodar nova busca</button></form>
+  <span id="msg-busca">{% if rodando %}<span class="aviso">busca em andamento…</span>{% endif %}</span>
+</div>
+
+{% if virgem %}{% set vr = virgem.resumo %}
+<h2>Teste final no VIRGEM <span class="muted small">{{ virgem.periodo }} · pré-registrado · teste único</span>
+  {% if virgem.passou %}<span class="selo confirmada">passou</span>{% else %}<span class="selo nao">não passou</span>{% endif %}</h2>
+<p class="small">Barata, subindo e calma: P/VP baixo + momento 6m + baixa volatilidade · 10 ações · rebalanceamento a cada 3 meses ·
+  pré-registro em <code>quantum/dados/estudos/{{ virgem_rodada }}/PREREGISTRO.md</code></p>
+<div class="grid g2">
+  <div class="card"><h3>Carteira × Ibovespa × CDI</h3><div id="g-virgem" class="grafico"></div></div>
+  <div class="card"><div class="grid g2">
+    <div class="kpi"><div class="l">retorno total</div><div class="v pos">{{ virgem.retorno_total|pct }}</div><div class="s">CAGR {{ vr.cagr|pct }} · Ibov {{ vr.cagr_ibov|pct }} · CDI {{ vr.cagr_cdi|pct }}</div></div>
+    <div class="kpi"><div class="l">Sharpe · queda máx</div><div class="v">{{ vr.sharpe|num }} · {{ vr.max_drawdown|pct }}</div><div class="s">beta {{ vr.beta|num }} · vol {{ vr.volatilidade|pct }}</div></div>
+    <div class="kpi"><div class="l">contra o sorteio</div><div class="v">p {{ virgem.nulo.p_valor|num(3) }}</div><div class="s">CAGR mediano do sorteio {{ virgem.nulo.cagr_nulo_mediana|pct }}</div></div>
+    <div class="kpi"><div class="l">acerto · payoff</div><div class="v">{{ vr.taxa_acerto|pct(0) }} · {{ vr.payoff|num }}</div><div class="s">ação × trimestre</div></div>
+  </div></div>
+</div>
+<details style="margin-top:8px"><summary>carteiras de cada trimestre</summary>
+  <ul class="small">{% for d, t in virgem.carteiras %}<li>{{ d }}: {{ t|join(", ") }}</li>{% endfor %}</ul></details>
+{% endif %}
+
+{% if not res %}<p class="vazio">Nenhuma busca ainda.</p>{% else %}
+<p class="small muted">Busca {{ rodada }} · {{ res.n_combinacoes }} combinações · {{ res.n_celulas }} backtests no IS</p>
+<details><summary>regras de escolha (fixadas antes de rodar)</summary><pre class="small" style="white-space:pre-wrap">{{ res.regras }}</pre></details>
+
+<h2>O passado previu o futuro?</h2>
+<div class="grid g2">
+  <div class="card">
+    <div class="grid g2">
+      <div class="kpi"><div class="l">Spearman · Sharpe IS × OOS</div><div class="v {{ sinal(res.spearman_is_oos) }}">{{ res.spearman_is_oos|num }}</div>
+        <div class="s">entre as {{ res.n_combinacoes }} combinações, na célula escolhida de cada uma</div></div>
+      <div class="kpi"><div class="l">Spearman · nota IS × Sharpe OOS</div><div class="v {{ sinal(res.spearman_nota_oos) }}">{{ res.spearman_nota_oos|num }}</div>
+        <div class="s">a nota robusta (mediana de 15 células)</div></div>
+    </div>
+    <p class="small">Perto de 0: o ranking da busca no passado não ordena o futuro, e a "melhor combinação" é sorte. Positivo e firme (≥ 0,3): o que funcionou antes tende a seguir funcionando. Negativo: o mercado inverteu.</p>
+  </div>
+  <div class="card"><h3>Cada ponto é uma combinação</h3><div id="g-disp" class="grafico"></div></div>
+</div>
+
+<h2>Finalistas <span class="muted small">confirmação no OOS + sorteio + Benjamini-Hochberg sobre 5</span></h2>
+<div class="tabela-wrap"><table>
+  <thead><tr><th class="t">combinação</th><th class="t">veredito</th><th>N · rebal.</th><th>nota IS</th>
+    <th>CAGR IS</th><th>CAGR OOS</th><th>Ibov OOS</th><th>CDI OOS</th><th>Sharpe OOS</th><th>queda máx OOS</th><th>acerto OOS</th><th>p OOS</th><th>BH</th></tr></thead>
+  <tbody>{% for f in res.finalistas %}{% set i = f.periodos.IS.resumo %}{% set o = f.periodos.OOS.resumo %}
+    <tr><td class="t">{{ f.nome }}</td><td class="t">{{ selo(f.veredito) }}</td><td>{{ f.n }} · {{ f.meses }}m</td><td>{{ f.nota_is|num }}</td>
+      <td>{{ i.cagr|pct }}</td><td class="{{ sinal(o.excesso_cdi) }}">{{ o.cagr|pct }}</td><td>{{ o.cagr_ibov|pct }}</td><td>{{ o.cagr_cdi|pct }}</td>
+      <td>{{ o.sharpe|num }}</td><td class="neg">{{ o.max_drawdown|pct }}</td><td>{{ o.taxa_acerto|pct }}</td>
+      <td>{{ f.periodos.OOS.nulo.p_valor|num(3) }}</td><td>{{ "✓" if f.bh_aprovada else "—" }}</td></tr>{% endfor %}</tbody>
+</table></div>
+
+{% for f in res.finalistas %}
+<h2>{{ loop.index }}. {{ f.nome }} <span class="muted small">N={{ f.n }}, a cada {{ f.meses }} meses</span> {{ selo(f.veredito) }}</h2>
+<div class="grid g2">
+  <div class="card"><h3>IS (escolha)</h3><div id="g-{{ loop.index }}-IS" class="grafico"></div></div>
+  <div class="card"><h3>OOS (confirmação)</h3><div id="g-{{ loop.index }}-OOS" class="grafico"></div></div>
+</div>
+<h3>Empresas que esta combinação escolhe hoje ({{ f.carteira_hoje|length }})</h3>
+<div class="chips">{% for c in f.carteira_hoje %}<a class="chip" href="/empresa/{{ c.ticker }}" title="{{ c.empresa }}">{{ loop.index }}. {{ c.ticker }}</a>{% endfor %}</div>
+<details style="margin-top:12px"><summary>4Ds no OOS</summary>{{ quatro_ds(f.periodos.OOS.metricas) }}</details>
+{% endfor %}
+
+<h2>Top 30 no IS <span class="muted small">só IS: é daqui que saem as finalistas</span></h2>
+<div class="tabela-wrap"><table>
+  <thead><tr><th>#</th><th class="t">combinação</th><th>nota IS (mediana 15 células)</th><th>estabilidade (pior metade)</th><th>melhor célula</th><th>Sharpe</th><th>CAGR</th><th>queda máx</th><th>acerto</th></tr></thead>
+  <tbody>{% for t in res.top_is %}<tr><td>{{ loop.index }}</td><td class="t">{{ t.nome }}</td><td>{{ t.nota_is|num }}</td>
+    <td class="{{ sinal(t.estabilidade_is) }}">{{ t.estabilidade_is|num }}</td><td>{{ t.n }} · {{ t.meses }}m</td><td>{{ t.is_sharpe|num }}</td>
+    <td>{{ t.is_cagr|pct }}</td><td class="neg">{{ t.is_max_dd|pct }}</td><td>{{ t.is_acerto|pct }}</td></tr>{% endfor %}</tbody>
+</table></div>
+<p class="small muted">Arquivos: <code>quantum/dados/estudos/{{ rodada }}/</code> (todas_combinacoes.csv, celulas_is.csv, busca.json).</p>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+var R = {{ res_json|safe }}, V = {{ virgem_json|safe }};
+if (V) Q.quando(function(){ Q.curva('g-virgem', V, 'Barata, subindo e calma', false); });
+if (R) Q.quando(function(){
+  Q.plot('g-disp', function(){ var c = Q.cores(); var fin = R.finalistas.map(f => f.nome);
+    var d = R.dispersao;
+    return [
+      { type: 'scatter', mode: 'markers', x: d.map(p => p.is_sharpe), y: d.map(p => p.oos_sharpe), text: d.map(p => p.nome),
+        name: 'combinações', marker: { color: c.muted, size: 6, opacity: .6 }, hovertemplate: '%{text}<br>IS %{x:.2f} · OOS %{y:.2f}<extra></extra>' },
+      { type: 'scatter', mode: 'markers', x: d.filter(p => fin.includes(p.nome)).map(p => p.is_sharpe),
+        y: d.filter(p => fin.includes(p.nome)).map(p => p.oos_sharpe), text: d.filter(p => fin.includes(p.nome)).map(p => p.nome),
+        name: 'finalistas', marker: { color: c.amber, size: 11 }, hovertemplate: '%{text}<extra></extra>' }]; },
+    { hovermode: 'closest', xaxis: { title: 'Sharpe IS', gridcolor: Q.cores().grid }, yaxis: { title: 'Sharpe OOS', gridcolor: Q.cores().grid } });
+  R.finalistas.forEach(function(f, k){ ['IS', 'OOS'].forEach(function(p){ Q.curva('g-' + (k + 1) + '-' + p, f.periodos[p].serie, f.nome, true); }); });
+});
+</script>
+{% endblock %}

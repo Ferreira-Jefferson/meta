@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% from "macros.html" import selo, sinal, faixa_periodos %}
+{% block content %}
+<h1>Análise <em>quantitativa</em> da B3</h1>
+<p class="lede">Regras objetivas aplicadas ao mercado inteiro, testadas no passado sem olhar o futuro. A escolha é feita no IS e só vale se o OOS confirmar.</p>
+{{ faixa_periodos(virgem) }}
+
+<h2>Base de dados</h2>
+<div id="status" hx-get="/parcial/status" hx-trigger="every 15s" hx-swap="innerHTML">
+  {% include "parciais/status.html" %}
+</div>
+
+<h2>Última rodada de estudos {% if rodada %}<span class="muted small">{{ rodada }}</span>{% endif %}</h2>
+{% if linhas %}
+<div class="tabela-wrap"><table>
+  <thead><tr><th class="t">estratégia</th><th class="t">veredito</th><th>N · rebal.</th>
+    <th>CAGR IS</th><th>Ibov IS</th><th>CAGR OOS</th><th>Ibov OOS</th><th>Sharpe OOS</th><th>queda máx OOS</th><th>p (nulo) OOS</th></tr></thead>
+  <tbody>
+  {% for e in linhas %}{% set i = e.periodos.IS.resumo %}{% set o = e.periodos.get("OOS", {}).get("resumo", {}) %}
+    <tr><td class="t"><a href="/estudo/{{ e.id }}">{{ e.nome }}</a></td><td class="t">{{ selo(e.veredito) }}</td>
+      <td>{{ e.escolha.n }} · {{ e.escolha.meses }}m</td>
+      <td class="{{ sinal(i.excesso_ibov) }}">{{ i.cagr|pct }}</td><td>{{ i.cagr_ibov|pct }}</td>
+      <td class="{{ sinal(o.excesso_ibov) }}">{{ o.cagr|pct }}</td><td>{{ o.cagr_ibov|pct }}</td>
+      <td>{{ o.sharpe|num }}</td><td class="neg">{{ o.max_drawdown|pct }}</td>
+      <td>{{ e.periodos.get("OOS", {}).get("nulo", {}).get("p_valor")|num(3) }}{% if e.bh_aprovada %} ✓{% endif %}</td></tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+<p class="small muted">✓ = passa Benjamini-Hochberg (q=0,10) entre todas as estratégias da rodada. "Confirmada" exige isso e bater Ibovespa e CDI no OOS.</p>
+{% else %}
+<p class="vazio">Nenhuma rodada ainda. Ela roda sozinha ao fim da atualização completa, ou em <a href="/estudos">Estudos</a>.</p>
+{% endif %}
+{% endblock %}

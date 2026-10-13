@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% from "macros.html" import faixa_periodos %}
+{% block content %}
+<h1>Estudo de <em>fator</em></h1>
+<p class="lede">O indicador separa vencedoras de perdedoras? O universo líquido é dividido em 5 grupos pelo indicador, cada grupo vira uma carteira de pesos iguais e todas rebalanceiam juntas. Um fator real mostra uma escada: grupo 1 &gt; 2 &gt; 3 &gt; 4 &gt; 5. Um top-N bonito sem essa escada costuma ser sorte.</p>
+{{ faixa_periodos(virgem) }}
+<form class="filtros" style="margin-top:16px" hx-post="/fatores" hx-target="#res" hx-indicator="#ind">
+  <label>indicador<select name="coluna">{% for k, v in INDICADORES.items() %}<option value="{{ k }}">{{ v[0] }}</option>{% endfor %}</select></label>
+  <label>grupo 1 =<select name="direcao"><option value="maior">maiores valores</option><option value="menor">menores valores</option></select></label>
+  <label>período<select name="periodo"><option>IS</option><option>OOS</option>{% if virgem %}<option>VIRGEM</option>{% endif %}</select></label>
+  <label>rebalancear a cada<select name="meses"><option value="1">1 mês</option><option value="3" selected>3 meses</option><option value="6">6 meses</option><option value="12">12 meses</option></select></label>
+  <button>Estudar</button><span id="ind" class="carregando">calculando…</span>
+</form>
+<div id="res"><p class="vazio">Escolha um indicador.</p></div>
+{% endblock %}

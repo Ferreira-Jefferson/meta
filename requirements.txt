@@ -14,3 +14,5 @@ requests>=2.31.0  # ja era usado (jev_noticias, social_arbitrage/deteccao_reddit
 python-dotenv>=1.0.0  # le .env (chaves de API) -- ja usado por jev_noticias_wdo
 pytrends>=4.9.2  # Google Trends nao tem API oficial; pytrends e' o cliente nao-oficial padrao do ecossistema Python para isto, puro-Python (so' requests+pandas por baixo) -- ver social_arbitrage/deteccao_trends.py
 
+pypdf>=6.0  # quantum/documentos.py: texto dos PDFs do RI; puro-Python, sem dependencia C (Windows)
+anthropic>=1.0  # quantum/documentos.py: reserva OPCIONAL com Haiku (desligada sem QUANTUM_HAIKU=1)

@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Fontes <em>de dados</em></h1>
+<p class="lede">Cada fonte baixa seus arquivos para <code>quantum/dados/brutos/&lt;fonte&gt;/</code> sem editar nada. Cada arquivo fica registrado no manifesto com URL, data da coleta, tamanho e sha256. O botão de cada cartão baixa só o que é novo daquela fonte; períodos fechados ficam congelados.</p>
+<p class="small muted">{{ total }} arquivos · {{ total_bytes|bytes }} · manifesto em <code>quantum/dados/manifesto.csv</code></p>
+
+<div class="grid g3">
+{% for c in cards %}
+  <div class="card">
+    <h3>{{ c.f.nome }} {% if not c.f.gratuita %}<span class="selo tranca">paga</span>{% else %}<span class="selo confirmada">gratuita</span>{% endif %}</h3>
+    <p class="small">{{ c.f.descricao }}</p>
+    <p class="small muted">{{ c.arquivos }} arquivos · {{ c.bytes|bytes }}<br>
+      última coleta: {{ c.ultima_coleta or "—" }}<br>
+      pasta: <code>brutos/{{ c.f.pasta }}</code> · <a href="{{ c.f.site }}" target="_blank" rel="noopener">origem ↗</a></p>
+    <div class="filtros">
+      <form hx-post="/fontes/{{ c.f.chave }}/atualizar" hx-target="#st-{{ c.f.chave }}" hx-swap="innerHTML">
+        <button class="sec" {% if ("fonte:" ~ c.f.chave) in em_curso %}disabled{% endif %}>Baixar novos arquivos</button></form>
+      <button class="sec" hx-get="/parcial/arquivos?fonte={{ c.f.chave }}" hx-target="#arquivos"
+              onclick="document.getElementById('f-fonte').value='{{ c.f.chave }}'">listar arquivos</button>
+    </div>
+    <div id="st-{{ c.f.chave }}" class="small">
+      {% if ("fonte:" ~ c.f.chave) in em_curso %}<span class="aviso" hx-get="/parcial/fonte/{{ c.f.chave }}" hx-trigger="load delay:5s" hx-swap="outerHTML">baixando…</span>
+      {% elif c.status %}<span class="{{ 'ok' if c.status == 'ok' else 'erro' }}">{{ c.status }} · {{ c.ultima_exec }} · {{ c.mensagem[:120] }}</span>{% endif %}
+    </div>
+  </div>
+{% endfor %}
+</div>
+<p class="small muted">DFP e ITR andam juntos: os últimos 12 meses de um ITR dependem da DFP do ano anterior, então qualquer dos dois reprocessa os dois. Ano corrente e anterior são rebaixados quando têm mais de 20h (reapresentações); anos fechados não.</p>
+
+<h2>Arquivos obtidos</h2>
+<form id="form-arquivos" class="filtros" hx-get="/parcial/arquivos" hx-target="#arquivos" hx-trigger="load, input changed delay:300ms from:input, change">
+  <label>fonte<select name="fonte" id="f-fonte"><option value="">todas</option>{% for c in cards %}<option value="{{ c.f.chave }}">{{ c.f.nome }}</option>{% endfor %}</select></label>
+  <label>grupo<select name="grupo"><option value="">todos</option>{% for g in grupos %}<option>{{ g }}</option>{% endfor %}</select></label>
+  <label>nome contém<input name="q" placeholder="ex.: 2024, PETR4, itr" /></label>
+  <label>coletado desde<input name="desde" type="date" /></label>
+  <label>ordenar<select name="ordem"><option value="caminho">caminho</option><option value="coletado_em">mais recente</option><option value="bytes">maior</option></select></label>
+</form>
+<div id="arquivos"></div>
+{% endblock %}

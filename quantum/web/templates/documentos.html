@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Documentos <em>do RI</em></h1>
+<p class="lede">Proventos, releases e fatos relevantes das empresas da lista curta, lidos direto do PDF. A leitura é <b>por regras, de graça</b>. O Haiku só entra quando as regras não acham o mínimo, e tem teto diário.</p>
+
+<div class="grid g4">
+  <div class="card kpi"><div class="l">Haiku (reserva paga)</div>
+    <div class="v {{ 'aviso' if haiku else 'muted' }}">{{ "ligado" if haiku else "desligado" }}</div>
+    <div class="s">{% if haiku %}hoje {{ n_hoje }}/{{ tetos[0] }} docs · US$ {{ usd_hoje|num(4) }} / {{ tetos[1]|num(2) }}{% else %}liga com QUANTUM_HAIKU=1 + credencial Anthropic{% endif %}</div></div>
+  <div class="card kpi"><div class="l">Gasto total com Haiku</div><div class="v">US$ {{ total_usd|num(4) }}</div><div class="s">claude-haiku-4-5 · US$ 1 / 5 por milhão de tokens</div></div>
+  {% for s in stats %}<div class="card kpi"><div class="l">{{ s.metodo }} · {{ s.status }}</div><div class="v">{{ s.n|int }}</div><div class="s">{% if s.custo %}US$ {{ s.custo|num(4) }}{% else %}grátis{% endif %}</div></div>{% endfor %}
+</div>
+
+<div class="filtros" style="margin-top:16px">
+  <form hx-post="/documentos/processar" hx-target="#msg-doc"><button {% if "fonte:cvm_docs" in em_curso %}disabled{% endif %}>Processar documentos novos</button></form>
+  <span id="msg-doc">{% if "fonte:cvm_docs" in em_curso %}<span class="aviso">processando…</span>{% endif %}</span>
+</div>
+
+<h2>Lista curta <span class="muted small">{{ curta|length }} empresas · só estas têm PDF lido</span></h2>
+<p class="small muted">Composição: as vigiadas (marque na página da empresa) e depois o topo de hoje de cada estratégia, começando pelas que o estudo confirmou. Evita gastar leitura e crédito com o mercado inteiro.</p>
+<div class="chips">{% for x in curta %}<a class="chip" href="/empresa/{{ x.ticker }}" title="{{ x.nome }} · {{ x.motivo }}">{{ x.ticker }} <span class="muted">· {{ x.motivo }}</span></a>{% endfor %}</div>
+
+<h2>Dados extraídos</h2>
+<form id="form-ext" class="filtros" hx-get="/parcial/extracoes" hx-target="#ext" hx-trigger="load, input changed delay:300ms from:input, change">
+  <label>ticker ou assunto<input name="q" /></label>
+  <label>tipo<select name="tipo"><option value="">todos</option><option value="proventos">proventos</option><option value="release">release de resultado</option><option value="fato_relevante">fato relevante</option></select></label>
+  <label>método<select name="metodo"><option value="">todos</option><option value="regras">regras (grátis)</option><option value="haiku">Haiku</option><option value="nenhum">nenhum</option></select></label>
+  <label>status<select name="status"><option value="">todos</option><option value="ok">ok</option><option value="incompleto">incompleto</option><option value="sem_pdf">sem PDF</option></select></label>
+</form>
+<div id="ext"></div>
+{% endblock %}
