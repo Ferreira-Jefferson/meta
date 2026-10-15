@@ -40,7 +40,7 @@ A lógica de sinal de cada robô é a do EA avulso. Cada robô **declara o que q
 ## Instalação
 
 1. A pasta `MQL5\Experts\` do terminal já tem `WinMaestro.mq5`, `WinMaestro.ex5` e a pasta `WinMaestro\` (o `.ex5` já compilado serve).
-2. Abra **um** gráfico do contrato vigente (ex.: WINV26). Qualquer tempo gráfico serve.
+2. Abra **um** gráfico do contrato vigente (ex.: WINZ26). Qualquer tempo gráfico serve.
 3. Arraste o WinMaestro para o gráfico, marque "Permitir Algo Trading" e confira os inputs.
 4. Espere a linha `PRONTO` no log: a partida espera 10 s de conexão estável. Cada robô começa a operar no primeiro ciclo em que o estado dele está provado.
 

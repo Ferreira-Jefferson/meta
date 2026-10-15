@@ -8,7 +8,7 @@ Configuração igual em todos os testes:
 
 | Campo | Valor |
 |---|---|
-| Símbolo | WINV26 |
+| Símbolo | WINZ26 |
 | Período | 13/08/2026 a 30/09/2026 |
 | Modelagem | Todos os ticks com base em ticks reais |
 | Depósito | 1000 |
