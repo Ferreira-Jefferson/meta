@@ -1,0 +1,22 @@
+<div class="grid g4">
+  <div class="card kpi"><div class="l">Companhias (CVM)</div><div class="v">{{ st.empresas }}</div><div class="s">{{ st.tickers }} tickers no FCA</div></div>
+  <div class="card kpi"><div class="l">Balanços</div><div class="v">{{ st.demonstracoes }}</div><div class="s">último entregue {{ st.ultimo_balanco or "—" }}</div></div>
+  <div class="card kpi"><div class="l">Preços (Yahoo)</div><div class="v">{{ st.tickers_preco }}</div><div class="s">até {{ st.ultimo_preco or "—" }}</div></div>
+  <div class="card kpi"><div class="l">Documentos de RI</div><div class="v">{{ st.documentos }}</div><div class="s">fatos relevantes, releases, proventos</div></div>
+</div>
+<div class="filtros" style="margin-top:16px">
+  <form hx-post="/atualizar" hx-target="#status" class="linha">
+    <input type="hidden" name="estudar" value="1" />
+    <button {% if st.em_curso %}disabled{% endif %}>Atualizar tudo agora</button>
+  </form>
+  <a href="/fontes">gerenciar fontes uma a uma →</a>
+  {% if st.em_curso %}<span class="aviso">em andamento: {{ st.em_curso|join(", ") }}</span>{% endif %}
+</div>
+<details {% if st.em_curso %}open{% endif %}><summary>execuções recentes</summary>
+<div class="tabela-wrap"><table>
+  <thead><tr><th class="t">etapa</th><th class="t">início</th><th class="t">fim</th><th class="t">status</th><th class="t">mensagem</th></tr></thead>
+  <tbody>{% for x in st.execucoes %}<tr><td class="t">{{ x.etapa }}</td><td class="t">{{ x.inicio }}</td><td class="t">{{ x.fim or "" }}</td>
+    <td class="t {{ 'ok' if x.status == 'ok' else ('erro' if x.status == 'erro' else 'aviso') }}">{{ x.status }}</td>
+    <td class="t quebra small">{{ (x.mensagem or "")[:180] }}</td></tr>{% endfor %}</tbody>
+</table></div>
+</details>

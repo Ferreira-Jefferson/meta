@@ -1,0 +1,32 @@
+{% from "macros.html" import quatro_ds, sinal %}
+<h2>{{ est.nome }} <span class="muted small">N={{ params.n }} · a cada {{ params.meses }}m · {{ params.inicio }} → {{ params.fim }} · {{ periodo }} · {{ segundos|num(1) }}s</span></h2>
+{% if periodo == "OOS" %}<p class="nota small">Você está olhando o OOS. Se mudar parâmetro depois disto, o OOS deixa de confirmar qualquer coisa.</p>{% endif %}
+<div class="grid g2">
+  <div class="card"><h3>Carteira × Ibovespa × CDI (base 1, log)</h3><div id="b-curva" class="grafico"></div></div>
+  <div class="card"><h3>Queda a partir do topo</h3><div id="b-dd" class="grafico"></div></div>
+</div>
+<div class="card" style="margin-top:16px"><h3>Retorno por ano</h3><div id="b-anual" class="grafico" style="min-height:260px"></div></div>
+<h2>Os 4Ds</h2>
+{{ quatro_ds(m) }}
+<h3>Carteiras por rebalanceamento (retorno de cada ação no período)</h3>
+<div class="tabela-wrap" style="max-height:50vh"><table>
+  <thead><tr><th class="t">decisão</th><th class="t">ações</th></tr></thead>
+  <tbody>{% for c in carteiras %}<tr><td class="t">{{ c.data }}</td><td class="t quebra">
+    {% for a in c.acoes %}<a href="/empresa/{{ a.ticker }}">{{ a.ticker }}</a> <span class="{{ sinal(a.ret) }} small">{{ a.ret|pct(0) }}</span>{% if not loop.last %} · {% endif %}{% endfor %}</td></tr>{% endfor %}</tbody>
+</table></div>
+<script>
+(function(){
+  var G = {{ graf|safe }};
+  Q.quando(function(){
+    Q.curva('b-curva', G.serie, '{{ est.nome }}', true);
+    Q.plot('b-dd', function(){ return [{ x: G.dd.datas, y: G.dd.v, fill: 'tozeroy', name: 'queda', line: { color: Q.cores().red, width: 1 } }]; },
+      { yaxis: { tickformat: '.0%', gridcolor: Q.cores().grid } });
+    var anos = Object.keys(G.anual);
+    Q.plot('b-anual', function(){ var c = Q.cores(); return [
+      { type: 'bar', x: anos, y: anos.map(a => G.anual[a].carteira), name: 'Carteira', marker: { color: c.amber } },
+      { type: 'bar', x: anos, y: anos.map(a => G.anual[a].ibov), name: 'Ibovespa', marker: { color: c.muted } },
+      { type: 'bar', x: anos, y: anos.map(a => G.anual[a].cdi), name: 'CDI', marker: { color: c.green } }]; },
+      { barmode: 'group', yaxis: { tickformat: '.0%', gridcolor: Q.cores().grid } });
+  });
+})();
+</script>

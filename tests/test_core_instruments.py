@@ -25,6 +25,7 @@ from core.instruments import (
     InstrumentEconomics,
     economics_for,
     front_month_contract,
+    vencimento_win,
 )
 
 
@@ -142,17 +143,33 @@ def test_front_month_contract_win_regra_confirmada_contra_mt5_real():
 
 def test_front_month_contract_win_virada_bimestral():
     """WIN rola a cada DOIS meses -- o mesmo contrato (out/2026) e' o
-    corrente durante agosto E setembro inteiros, e so' muda para
-    dezembro/2026 na virada de setembro para outubro."""
-    assert front_month_contract("WIN", date(2026, 8, 1)) == "WINV26"
+    corrente de 19/08 ate' 13/10, e so' muda para
+    dezembro/2026 no vencimento de outubro (quarta mais proxima do dia 15,
+    14/10/2026) — NAO no dia 1o do mes."""
+    assert front_month_contract("WIN", date(2026, 8, 1)) == "WINQ26"  # Q vence 19/08
+    assert front_month_contract("WIN", date(2026, 8, 19)) == "WINV26"
     assert front_month_contract("WIN", date(2026, 9, 30)) == "WINV26"
-    assert front_month_contract("WIN", date(2026, 10, 1)) == "WINZ26"
+    assert front_month_contract("WIN", date(2026, 10, 1)) == "WINV26"
+    assert front_month_contract("WIN", date(2026, 10, 13)) == "WINV26"
+    assert front_month_contract("WIN", date(2026, 10, 14)) == "WINZ26"
+    assert front_month_contract("WIN", date(2026, 10, 15)) == "WINZ26"
+
+
+def test_vencimento_win_quarta_mais_proxima_do_dia_15():
+    assert vencimento_win(2026, 10) == date(2026, 10, 14)  # 15 = quinta
+    assert vencimento_win(2026, 12) == date(2026, 12, 16)  # 15 = terca
+    assert vencimento_win(2026, 2) == date(2026, 2, 18)    # 15 = domingo -> +3
+    assert vencimento_win(2026, 6) == date(2026, 6, 17)    # 15 = segunda
+    assert all(vencimento_win(2026, m).weekday() == 2 for m in (2, 4, 6, 8, 10, 12))
 
 
 def test_front_month_contract_win_dezembro_vira_o_ano():
     """Dezembro (mes par, cai no proprio ciclo) nao tem par seguinte no
-    mesmo ano -- vira Fevereiro do ano SEGUINTE."""
-    assert front_month_contract("WIN", date(2026, 12, 5)) == "WING27"
+    mesmo ano -- vira Fevereiro do ano SEGUINTE (so' depois do vencimento
+    de 16/12; antes disso o WINZ26 ainda e' o corrente)."""
+    assert front_month_contract("WIN", date(2026, 12, 5)) == "WINZ26"
+    assert front_month_contract("WIN", date(2026, 12, 16)) == "WING27"
+    assert front_month_contract("WIN", date(2026, 12, 20)) == "WING27"
 
 
 def test_front_month_contract_raiz_desconhecida_levanta():

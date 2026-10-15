@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}Quantum{% endblock %}</title>
+  <script>
+    (function(){ try { if (localStorage.getItem('quantum-tema') === 'dark') document.documentElement.setAttribute('data-theme','dark'); } catch(e){} })();
+  </script>
+  <link rel="stylesheet" href="/static/css/tokens.css?v={{ v('css/tokens.css') }}" />
+  <link rel="stylesheet" href="/static/css/quantum.css?v={{ v('css/quantum.css') }}" />
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" defer></script>
+  <script src="https://unpkg.com/htmx.org@1.9.12" defer></script>
+  <script src="/static/js/graficos.js?v={{ v('js/graficos.js') }}" defer></script>
+</head>
+<body>
+  <header class="chrome">
+    <a class="brand" href="/">Quan<em>tum</em></a>
+    <nav>
+      {% for href, chave, rotulo in [("/", "painel", "Painel"), ("/empresas", "empresas", "Empresas"),
+           ("/estrategias", "estrategias", "Estratégias"), ("/estudos", "estudos", "Estudos"), ("/busca", "busca", "Busca"),
+           ("/backtest", "backtest", "Backtest"), ("/fatores", "fatores", "Fatores"), ("/documentos", "documentos", "Documentos"), ("/fontes", "fontes", "Fontes")] %}
+        <a href="{{ href }}" {% if pagina == chave %}aria-current="page"{% endif %}>{{ rotulo }}</a>
+      {% endfor %}
+    </nav>
+    <div class="meta">
+      <span>B3 · análise quantitativa</span>
+      <button id="tema" class="theme-toggle" aria-label="Alternar tema">◐</button>
+    </div>
+  </header>
+  <main class="page">
+    {% block content %}{% endblock %}
+  </main>
+  <script>
+    document.getElementById('tema').addEventListener('click', function(){
+      var r = document.documentElement, escuro = r.getAttribute('data-theme') === 'dark';
+      if (escuro) r.removeAttribute('data-theme'); else r.setAttribute('data-theme','dark');
+      try { localStorage.setItem('quantum-tema', escuro ? 'light' : 'dark'); } catch(e){}
+      if (window.Q && Q.redesenhar) Q.redesenhar();
+    });
+  </script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

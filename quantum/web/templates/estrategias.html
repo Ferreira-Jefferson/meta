@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% from "macros.html" import selo %}
+{% block content %}
+<h1>Estratégias <em>— as receitas</em></h1>
+<p class="lede">Cada estratégia é uma regra fechada: fatores, direção e filtros. A carteira abaixo é o que a regra mandaria comprar hoje ({{ data or "sem dados" }}), em pesos iguais. O veredito vem da última rodada de estudos. Sem "confirmada", a carteira de hoje é só aritmética.</p>
+<form class="filtros" method="get"><label>ações por carteira<select name="n" onchange="this.form.submit()">
+  {% for k in [5, 10, 15, 20, 30] %}<option {% if k == n %}selected{% endif %}>{{ k }}</option>{% endfor %}</select></label></form>
+<div class="grid g2">
+{% for e in ESTRATEGIAS.values() %}{% set v = vered.get(e.chave) %}
+  <div class="card">
+    <h3>{{ e.nome }} {{ selo(v.veredito if v else None) }}</h3>
+    <p class="small">{{ e.descricao }}</p>
+    <p class="small muted">fatores: {% for f in e.fatores %}{{ INDICADORES[f.coluna][0] }} {{ "↑" if f.maior_melhor else "↓" }}{% if not loop.last %} + {% endif %}{% endfor %}
+      {% if e.excluir_financeiras %} · sem financeiras{% endif %}{% if e.exige_lucro %} · só lucrativas{% endif %}{% if e.exige_pagou_3a %} · pagou proventos nos 3 anos{% endif %}
+      <br>origem: {{ e.origem }}</p>
+    {% if v %}<p class="small">estudo: N={{ v.escolha.n }}, a cada {{ v.escolha.meses }} meses · <a href="/estudo/{{ v.id }}">ver estudo IS/OOS →</a></p>{% endif %}
+    {% set c = cart.get(e.chave, []) %}
+    {% if c %}
+    <div class="tabela-wrap"><table>
+      <thead><tr><th>#</th><th class="t">ticker</th>{% for f in e.fatores %}<th>{{ INDICADORES[f.coluna][0] }}</th>{% endfor %}<th>nota</th></tr></thead>
+      <tbody>{% for x in c %}<tr><td>{{ loop.index }}</td><td class="t"><a href="/empresa/{{ x.ticker }}">{{ x.ticker }}</a></td>
+        {% for f in e.fatores %}<td>{% if f.coluna in ["pl_ind", "pvp", "ev_ebit", "div_liq_pl"] %}{{ x[f.coluna]|num }}{% else %}{{ x[f.coluna]|pct }}{% endif %}</td>{% endfor %}
+        <td>{{ x.nota|num(3) }}</td></tr>{% endfor %}</tbody>
+    </table></div>
+    {% else %}<p class="vazio">Sem carteira (sem dados ou nenhuma elegível).</p>{% endif %}
+  </div>
+{% endfor %}
+</div>
+{% endblock %}

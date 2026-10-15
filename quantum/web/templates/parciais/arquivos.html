@@ -1,0 +1,13 @@
+<p class="small muted">{{ total }} arquivos · {{ total_bytes|bytes }}{% if paginas > 1 %} · página {{ pagina }} de {{ paginas }}{% endif %}</p>
+<div class="tabela-wrap" style="max-height:65vh"><table>
+  <thead><tr><th class="t">arquivo</th><th class="t">fonte / grupo</th><th class="t">coletado em</th><th>tamanho</th><th class="t">origem</th><th class="t">sha256</th></tr></thead>
+  <tbody>{% for x in linhas %}<tr>
+    <td class="t">{{ x.nome }}</td><td class="t small">{{ x.fonte }} / {{ x.grupo }}</td><td class="t small">{{ x.coletado_em }}</td>
+    <td>{{ x.bytes|bytes }}</td>
+    <td class="t small">{% if x.url.startswith("http") %}<a href="{{ x.url }}" target="_blank" rel="noopener">{{ x.url[:60] }}{% if x.url|length > 60 %}…{% endif %}</a>{% else %}{{ x.url }}{% endif %}</td>
+    <td class="t small muted" title="{{ x.sha256 }}">{{ x.sha256[:12] }}…</td></tr>{% endfor %}</tbody>
+</table></div>
+{% if paginas > 1 %}<div class="filtros" style="margin-top:8px">
+  {% if pagina > 1 %}<button class="sec" hx-get="/parcial/arquivos" hx-include="#form-arquivos" hx-vals='{"pagina": {{ pagina - 1 }}}' hx-target="#arquivos">← anterior</button>{% endif %}
+  {% if pagina < paginas %}<button class="sec" hx-get="/parcial/arquivos" hx-include="#form-arquivos" hx-vals='{"pagina": {{ pagina + 1 }}}' hx-target="#arquivos">próxima →</button>{% endif %}
+</div>{% endif %}

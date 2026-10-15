@@ -1,0 +1,56 @@
+{% macro sinal(x) -%}{% if x is not none and x == x %}{% if x > 0 %}pos{% elif x < 0 %}neg{% endif %}{% endif %}{%- endmacro %}
+
+{% macro selo(veredito) -%}
+  {% if veredito == "confirmada" %}<span class="selo confirmada">confirmada no OOS</span>
+  {% elif veredito and veredito.startswith("promissora") %}<span class="selo promissora">promissora · sem significância</span>
+  {% elif veredito %}<span class="selo nao">{{ veredito }}</span>{% endif %}
+{%- endmacro %}
+
+{% macro faixa_periodos(virgem) %}
+<div class="periodos">
+  {% for p in PERIODOS %}
+    <span class="periodo"><b>{{ p.nome }}</b> {{ p.inicio.strftime("%m/%Y") }} → {% if p.fim.year > 2090 %}hoje{% else %}{{ p.fim.strftime("%m/%Y") }}{% endif %}
+      · {{ p.papel }}{% if p.nome == "VIRGEM" %} {% if virgem %}<span class="selo promissora">revelado</span>{% else %}<span class="selo tranca">trancado</span>{% endif %}{% endif %}</span>
+  {% endfor %}
+</div>
+{% endmacro %}
+
+{# Os 4Ds do vídeo: rentabilidade, risco, ciclos, técnicos #}
+{% macro quatro_ds(m) %}
+{% set r = m.rentabilidade %}{% set k = m.risco %}{% set c = m.ciclos %}{% set t = m.tecnicos %}
+<div class="grid g4">
+  <div class="card kpi"><div class="l">1 · CAGR carteira</div><div class="v {{ sinal(r.excesso_ibov) }}">{{ r.cagr|pct }}</div>
+    <div class="s">Ibov {{ r.cagr_ibov|pct }} · CDI {{ r.cagr_cdi|pct }}</div></div>
+  <div class="card kpi"><div class="l">1 · Excesso s/ Ibov</div><div class="v {{ sinal(r.excesso_ibov) }}">{{ r.excesso_ibov|pct }}</div>
+    <div class="s">s/ CDI {{ r.excesso_cdi|pct }} · bateu Ibov em {{ r.anos_bate_ibov }}/{{ r.anos }} anos</div></div>
+  <div class="card kpi"><div class="l">2 · Sharpe (s/ CDI)</div><div class="v">{{ k.sharpe|num }}</div>
+    <div class="s">Sortino {{ k.sortino|num }} · beta {{ k.beta|num }}</div></div>
+  <div class="card kpi"><div class="l">2 · Queda máxima</div><div class="v neg">{{ k.max_drawdown|pct }}</div>
+    <div class="s">Ibov {{ k.max_drawdown_ibov|pct }} · {{ k.dias_drawdown }} pregões submerso</div></div>
+  <div class="card kpi"><div class="l">2 · Volatilidade</div><div class="v">{{ k.volatilidade|pct }}</div>
+    <div class="s">Ibov {{ k.volatilidade_ibov|pct }} · pior mês {{ k.pior_mes|pct }}</div></div>
+  <div class="card kpi"><div class="l">3 · Captura alta / queda</div><div class="v">{{ c.captura_alta|num }} / {{ c.captura_queda|num }}</div>
+    <div class="s">meses positivos {{ c.meses_positivos|pct(0) }}</div></div>
+  <div class="card kpi"><div class="l">4 · Taxa de acerto</div><div class="v">{{ t.taxa_acerto|pct }}</div>
+    <div class="s">{{ t.operacoes }} operações · bate Ibov {{ t.bate_ibov|pct(0) }}</div></div>
+  <div class="card kpi"><div class="l">4 · Payoff</div><div class="v">{{ t.payoff|num }}</div>
+    <div class="s">ganho {{ t.ganho_medio|pct }} · perda {{ t.perda_media|pct }} · giro {{ t.giro_medio|pct(0) }}</div></div>
+</div>
+{% if c.regimes %}
+<h3>3 · Ciclos do Ibovespa (pernas de ±20%)</h3>
+<div class="tabela-wrap"><table>
+  <thead><tr><th class="t">perna</th><th class="t">de</th><th class="t">até</th><th>Ibovespa</th><th>carteira</th><th>diferença</th></tr></thead>
+  <tbody>{% for g in c.regimes %}<tr>
+    <td class="t">{{ "▲ alta" if g.tipo == "alta" else "▼ queda" }}</td><td class="t">{{ g.inicio }}</td><td class="t">{{ g.fim }}</td>
+    <td class="{{ sinal(g.ibov) }}">{{ g.ibov|pct }}</td><td class="{{ sinal(g.carteira) }}">{{ g.carteira|pct }}</td>
+    <td class="{{ sinal(g.carteira - g.ibov) }}">{{ (g.carteira - g.ibov)|pct }}</td></tr>{% endfor %}</tbody>
+</table></div>
+{% endif %}
+<h3>1 · Ano a ano</h3>
+<div class="tabela-wrap"><table>
+  <thead><tr><th class="t">ano</th><th>carteira</th><th>Ibovespa</th><th>100% CDI</th><th>vs Ibov</th></tr></thead>
+  <tbody>{% for ano, a in r.anual.items() %}<tr><td class="t">{{ ano }}</td>
+    <td class="{{ sinal(a.carteira) }}">{{ a.carteira|pct }}</td><td class="{{ sinal(a.ibov) }}">{{ a.ibov|pct }}</td><td>{{ a.cdi|pct }}</td>
+    <td class="{{ sinal((a.carteira or 0) - (a.ibov or 0)) }}">{{ ((a.carteira or 0) - (a.ibov or 0))|pct }}</td></tr>{% endfor %}</tbody>
+</table></div>
+{% endmacro %}

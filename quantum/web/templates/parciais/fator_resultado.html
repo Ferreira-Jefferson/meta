@@ -1,0 +1,30 @@
+{% from "macros.html" import sinal %}
+<h2>{{ nome }} <span class="muted small">grupo 1 = {{ "maiores" if direcao == "maior" else "menores" }} · {{ res.periodo }}</span></h2>
+<div class="grid g2">
+  <div class="card"><h3>Curva de cada grupo (base 1, log)</h3><div id="f-curvas" class="grafico"></div></div>
+  <div class="card"><h3>CAGR por grupo × Ibovespa</h3><div id="f-barras" class="grafico"></div></div>
+</div>
+<div class="tabela-wrap" style="margin-top:16px"><table>
+  <thead><tr><th class="t">grupo</th><th>CAGR</th><th>excesso Ibov</th><th>Sharpe</th><th>volatilidade</th><th>queda máx</th><th>acerto</th><th>anos bate Ibov</th></tr></thead>
+  <tbody>{% for g in res.grupos %}<tr><td class="t">{{ g.grupo }}{% if loop.first %} (melhor){% elif loop.last %} (pior){% endif %}</td>
+    <td class="{{ sinal(g.cagr) }}">{{ g.cagr|pct }}</td><td class="{{ sinal(g.excesso_ibov) }}">{{ g.excesso_ibov|pct }}</td>
+    <td>{{ g.sharpe|num }}</td><td>{{ g.volatilidade|pct }}</td><td class="neg">{{ g.max_drawdown|pct }}</td>
+    <td>{{ g.taxa_acerto|pct }}</td><td>{{ g.anos_bate_ibov }}</td></tr>{% endfor %}</tbody>
+</table></div>
+<script>
+(function(){
+  var R = {{ graf|safe }};
+  Q.quando(function(){
+    var s0 = R.grupos[0].serie;
+    Q.plot('f-curvas', function(){ var c = Q.cores();
+      var cores = [c.green, c.amber, c.faint, c.muted, c.red];
+      var t = R.grupos.map(function(g, i){ return { x: g.serie.datas, y: g.serie.carteira, name: 'G' + g.grupo, line: { color: cores[i], width: i === 0 || i === 4 ? 2 : 1 } }; });
+      t.push({ x: s0.datas, y: s0.ibov, name: 'Ibovespa', line: { color: c.strong, width: 1, dash: 'dot' } });
+      return t; }, { yaxis: { type: 'log', gridcolor: Q.cores().grid } });
+    Q.plot('f-barras', function(){ var c = Q.cores(); return [
+      { type: 'bar', x: R.grupos.map(g => 'G' + g.grupo), y: R.grupos.map(g => g.cagr), name: 'CAGR', marker: { color: c.amber } },
+      { type: 'scatter', mode: 'lines', x: R.grupos.map(g => 'G' + g.grupo), y: R.grupos.map(g => g.cagr_ibov), name: 'Ibovespa', line: { color: c.muted, dash: 'dash' } }]; },
+      { yaxis: { tickformat: '.0%', gridcolor: Q.cores().grid } });
+  });
+})();
+</script>

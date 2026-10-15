@@ -41,7 +41,7 @@ uma tabela por papel teria dez linhas identicas -- as constantes
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 
 
 #: 1 ponto de uma ACAO da B3 vale R$1,00 -- o preco ja e' em reais por acao.
@@ -202,6 +202,15 @@ FUTURES_ROLLOVER_MONTHS: dict[str, tuple[int, ...]] = {
 }
 
 
+def vencimento_win(ano: int, mes: int) -> date:
+    """Vencimento do WIN de um mes par: a quarta-feira mais proxima do dia 15."""
+    d15 = date(ano, mes, 15)
+    dif = 2 - d15.weekday()  # quarta = 2
+    if dif < -3:
+        dif += 7
+    return d15 + timedelta(days=dif)
+
+
 def front_month_contract(root: str, today: date) -> str:
     """Codigo do contrato de vencimento (RAIZ+LETRA+ANO2, ex. `"WDOV26"`)
     que a regra FIXA de rolagem da B3 diz que deveria ser o CORRENTE (front
@@ -227,6 +236,17 @@ def front_month_contract(root: str, today: date) -> str:
             f"sem regra de rolagem declarada para a raiz {root!r} -- ver "
             f"`core.instruments.FUTURES_ROLLOVER_MONTHS`."
         )
+    if root == "WIN":
+        # O WIN nao vence no 1o dia do mes: vence na quarta-feira mais
+        # proxima do dia 15 (mesma regra de `Grade_VencimentoWIN`, em
+        # mt5/WinMaestro/Grade.mqh). Ate' la o contrato do mes de `today`
+        # ainda e' o corrente. No proprio dia do vencimento ja conta como
+        # vencido (mesma convencao do WDO acima). Feriado que desloque o
+        # vencimento nao e' modelado — o fallback por volume cobre.
+        for ano in (today.year, today.year + 1):
+            for m in meses:
+                if vencimento_win(ano, m) > today:
+                    return f"{root}{FUTURES_MONTH_LETTERS[m - 1]}{ano % 100:02d}"
     mes_alvo = next((m for m in meses if m > today.month), None)
     ano_alvo = today.year if mes_alvo is not None else today.year + 1
     if mes_alvo is None:

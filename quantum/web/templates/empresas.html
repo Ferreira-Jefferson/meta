@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Empresas <em>listadas</em></h1>
+<p class="lede">Uma linha por empresa, no ticker mais líquido. Indicadores calculados no último pregão com o último balanço entregue à CVM.</p>
+{% if sem_dados %}<p class="vazio">Sem dados ainda. Rode a atualização no <a href="/">Painel</a>.</p>{% else %}
+<form class="filtros" hx-get="/parcial/empresas" hx-target="#lista" hx-trigger="load, input changed delay:300ms from:input, change">
+  <label>busca<input name="q" placeholder="ticker ou nome" /></label>
+  <label>setor<select name="setor"><option value="">todos</option>{% for s in setores %}<option>{{ s }}</option>{% endfor %}</select></label>
+  <label>liquidez mín. (R$/dia)<select name="liq_min">
+    <option value="0">qualquer</option><option value="100000">100 mil</option><option value="500000" selected>500 mil</option>
+    <option value="1000000">1 mi</option><option value="5000000">5 mi</option></select></label>
+  <label>ordenar por<select name="ordem">
+    {% for c in ["liquidez", "mcap", "pl_ind", "pvp", "ev_ebit", "roe", "roic", "margem_liquida", "dy", "dy_med_3a", "mom_12_1", "vol_1a"] %}
+      <option value="{{ c }}">{{ INDICADORES[c][0] }}</option>{% endfor %}</select></label>
+  <label>sentido<select name="desc"><option value="1">maior primeiro</option><option value="0">menor primeiro</option></select></label>
+  <span class="carregando">carregando…</span>
+</form>
+<div id="lista"></div>
+{% endif %}
+{% endblock %}

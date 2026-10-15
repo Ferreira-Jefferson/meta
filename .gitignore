@@ -89,3 +89,7 @@ scripts/swing_lab/semanal_mmes_video/
 !data/win_sem_leiloes/
 !data/win_sem_leiloes/*.parquet
 !data/wdo-mt5/
+
+# quantum: base de dados local (centenas de MB, reprocessavel; ver quantum/dados/README.md)
+quantum/dados/*
+!quantum/dados/README.md

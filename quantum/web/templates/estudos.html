@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% from "macros.html" import selo, sinal, faixa_periodos %}
+{% block content %}
+<h1>Estudos <em>IS → OOS</em></h1>
+<p class="lede">O protocolo foi fixado antes de rodar e vale igual para toda estratégia:</p>
+<ol class="small" style="max-width:90ch">
+  <li><b>Grade no IS:</b> N ∈ {5, 10, 15, 20, 30} × rebalanceamento a cada {3, 6, 12} meses, medida só no período de escolha.</li>
+  <li><b>Escolha:</b> a célula de maior Sharpe no IS. Nada do OOS entra nessa decisão.</li>
+  <li><b>Confirmação:</b> só a célula escolhida roda no OOS.</li>
+  <li><b>Nulo:</b> {{ sorteios }} carteiras com as mesmas N ações sorteadas do mesmo universo e calendário. p = fração de sorteios com Sharpe ≥ o da estratégia.</li>
+  <li><b>Múltiplos testes:</b> Benjamini-Hochberg (q={{ q|num(2) }}) sobre os p do OOS de todas as estratégias da rodada.</li>
+  <li><b>Virgem:</b> trancado até ser revelado de propósito. A revelação fica registrada.</li>
+</ol>
+<p class="nota small">O p do IS aparece, mas não é teste: a célula foi escolhida justamente por ser a melhor das 15 no IS. Quem testa é o OOS. Custo de 0,10% por lado sobre o giro, liquidez ≥ R$ 500 mil/dia, decisão no fechamento e execução no pregão seguinte.</p>
+{{ faixa_periodos(virgem) }}
+
+<div class="filtros" style="margin-top:16px">
+  <form hx-post="/estudos/rodar" hx-target="#msg"><button {% if "estudos" in em_curso %}disabled{% endif %}>Rodar nova rodada</button></form>
+  <span id="msg">{% if "estudos" in em_curso %}<span class="aviso">rodada em andamento desde {{ em_curso["estudos"] }}</span>{% endif %}</span>
+</div>
+
+{% if linhas %}
+<h2>Rodada {{ rodada }}</h2>
+<div class="tabela-wrap"><table>
+  <thead><tr><th class="t">estratégia</th><th class="t">veredito</th><th>N · rebal.</th>
+    <th>ações (média · mín)</th><th>Sharpe IS</th><th>excesso IS</th><th>Sharpe OOS</th><th>excesso Ibov OOS</th><th>excesso CDI OOS</th><th>p OOS</th><th>BH</th>
+    {% if virgem %}<th>excesso VIRGEM</th>{% endif %}</tr></thead>
+  <tbody>{% for e in linhas %}{% set i = e.periodos.IS %}{% set o = e.periodos.get("OOS") %}
+    <tr><td class="t"><a href="/estudo/{{ e.id }}">{{ e.nome }}</a></td><td class="t">{{ selo(e.veredito) }}</td>
+      <td>{{ e.escolha.n }} · {{ e.escolha.meses }}m</td>
+      <td>{% set a = (o or i).get("acoes_por_rebal") %}{% if a %}{{ a.media|num(0) }} · {{ a.minimo }}{% else %}—{% endif %}</td>
+      <td>{{ i.resumo.sharpe|num }}</td><td class="{{ sinal(i.resumo.excesso_ibov) }}">{{ i.resumo.excesso_ibov|pct }}</td>
+      {% if o %}<td>{{ o.resumo.sharpe|num }}</td><td class="{{ sinal(o.resumo.excesso_ibov) }}">{{ o.resumo.excesso_ibov|pct }}</td>
+      <td class="{{ sinal(o.resumo.excesso_cdi) }}">{{ o.resumo.excesso_cdi|pct }}</td><td>{{ o.nulo.p_valor|num(3) }}</td>
+      <td>{{ "✓" if e.bh_aprovada else "—" }}</td>{% else %}<td colspan="5">—</td>{% endif %}
+      {% if virgem %}{% set vg = e.periodos.get("VIRGEM") %}<td class="{{ sinal(vg.resumo.excesso_ibov if vg else None) }}">{{ (vg.resumo.excesso_ibov if vg else None)|pct }}</td>{% endif %}</tr>{% endfor %}</tbody>
+</table></div>
+{% else %}<p class="vazio">Nenhuma rodada ainda.</p>{% endif %}
+
+{% if rodadas|length > 1 %}
+<h3>Todas as rodadas</h3>
+<ul class="small">{% for r in rodadas %}<li>{% if r.rodada == rodada %}<b>{{ r.rodada }}</b> (em exibição){% else %}<a href="/estudos?rodada={{ r.rodada }}">{{ r.rodada }}</a>{% endif %}
+  · {{ r.n }} estratégias{% if "_N" in r.rodada %} · N fixo (exploratória: o OOS já tinha sido visto){% endif %} · <code>quantum/dados/estudos/{{ r.rodada }}/</code></li>{% endfor %}</ul>
+{% endif %}
+
+<h2>Período virgem</h2>
+{% if virgem %}
+<p>Já revelado. Ele agora é OOS comum: não existe "segunda virgindade". Use-o como confirmação extra, nunca para escolher.</p>
+{% else %}
+<p class="small">Revele só quando tiver UMA decisão pronta para o último teste. Depois de revelado, ele perde a virgindade para sempre e a revelação fica registrada.</p>
+<form class="linha" hx-post="/virgem/revelar" hx-target="#msg-virgem">
+  <label>motivo<input name="motivo" size="50" placeholder="ex.: confirmar a Fórmula Mágica escolhida em 2026-10" /></label>
+  <label>digite REVELAR<input name="confirmo" size="10" /></label>
+  <button class="sec">Revelar período virgem</button>
+</form>
+<div id="msg-virgem"></div>
+{% endif %}
+{% endblock %}
