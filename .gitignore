@@ -93,3 +93,10 @@ scripts/swing_lab/semanal_mmes_video/
 # quantum: base de dados local (centenas de MB, reprocessavel; ver quantum/dados/README.md)
 quantum/dados/*
 !quantum/dados/README.md
+
+# worktree de meta-quantum (mesmo repo, outro checkout)
+meta-quantum/
+
+# caches/runtime de olhar_para_tras
+scripts/daytrade/olhar_para_tras/__pycache__/
+scripts/daytrade/olhar_para_tras/llm_cache.jsonl
